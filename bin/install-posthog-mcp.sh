@@ -135,8 +135,8 @@ write_env() {
     if [ "${#signing_key}" -lt 32 ]; then
         signing_key="$(random_hex)"
     fi
-    umask 077
-    cat > "$ENV_FILE" <<EOF
+    # Only this file holds a secret, so keep the strict umask out of the rest of the script.
+    (umask 077 && cat > "$ENV_FILE") <<EOF
 NODE_ENV=production
 PORT=3001
 REDIS_URL=redis://redis7:6379/$REDIS_DB
