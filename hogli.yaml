@@ -1290,3 +1290,7 @@ environment:
         bin_script: rasterize-recording-file
         description: 'Render a recording JSONL file to video with the rasterizer'
         hidden: true
+    install:posthog:hobby:
+        bin_script: install-posthog-hobby.sh
+        description: 'Install the hobby stack on an AWS instance, asking only for the domain'
+        hidden: true
