@@ -1294,3 +1294,7 @@ environment:
         bin_script: install-posthog-hobby.sh
         description: 'Install the hobby stack on an AWS instance, asking only for the domain'
         hidden: true
+    install:posthog:mcp:
+        bin_script: install-posthog-mcp.sh
+        description: 'Add the PostHog MCP server to a running hobby install'
+        hidden: true
