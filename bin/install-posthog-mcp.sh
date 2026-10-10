@@ -8,6 +8,9 @@
 #   sudo bash install-posthog-mcp.sh phx_...     # install or update, then test with this personal API key
 #   sudo bash install-posthog-mcp.sh --remove    # stop and remove the MCP server
 #
+# It also replaces /etc/systemd/system/posthog.service, so one boot service starts PostHog
+# and then the MCP server, and stops the MCP server first: sudo systemctl stop|start posthog
+#
 # The MCP server runs as the Docker container "posthog-mcp" and listens on port 8787.
 # Allow inbound TCP 8787 in the security group, only from the people who use it.
 # Every request needs a PostHog personal API key, the same as the PostHog API.
@@ -28,6 +31,7 @@ ENV_FILE="$MCP_DIR/mcp.env"
 PORT="${POSTHOG_MCP_PORT:-8787}"
 IMAGE="${POSTHOG_MCP_IMAGE:-ghcr.io/posthog/posthog-mcp:latest}"
 CONTAINER="posthog-mcp"
+BOOT_UNIT="/etc/systemd/system/posthog.service"
 # PostHog itself uses Redis databases 0, 1 and 15.
 REDIS_DB=4
 INIT_REQUEST='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"install-posthog-mcp","version":"1.0"}}}'
@@ -205,6 +209,60 @@ check_posthog_reachable() {
 }
 
 # ---------------------------------------------------------------------------
+# Start on boot
+# ---------------------------------------------------------------------------
+write_boot_unit() {
+    # $1: "with-mcp" adds the MCP server to the PostHog boot service, anything else leaves it out.
+    local mcp_start="" mcp_stop="" description="PostHog (docker compose)"
+    if [ "$1" = "with-mcp" ]; then
+        description="PostHog (docker compose) and the PostHog MCP server"
+        mcp_start="ExecStartPost=/usr/bin/env docker start $CONTAINER"
+        mcp_stop="ExecStop=-/usr/bin/env docker stop $CONTAINER"
+    fi
+    cat > "$BOOT_UNIT" <<EOF
+[Unit]
+Description=$description
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=$INSTALL_DIR
+ExecStart=/usr/bin/env docker compose up -d --no-build
+$mcp_start
+$mcp_stop
+ExecStop=/usr/bin/env docker compose stop
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable posthog.service >/dev/null 2>&1
+}
+
+install_boot_service() {
+    step "Starting the MCP server on boot"
+    if ! command -v systemctl >/dev/null 2>&1; then
+        warn "systemd is not available. Docker restarts the MCP server, but not the rest of PostHog, after a reboot."
+        return
+    fi
+    if [ ! -f "$INSTALL_DIR/docker-compose.yml" ]; then
+        warn "No docker-compose.yml in $INSTALL_DIR, so the boot service was not changed."
+        return
+    fi
+    if [ -f "$BOOT_UNIT" ]; then
+        cp "$BOOT_UNIT" "$BOOT_UNIT.bak"
+    fi
+    write_boot_unit with-mcp
+    # systemd now owns the MCP container's start and stop, so Docker must not start it on its own.
+    docker update --restart no "$CONTAINER" >/dev/null
+    ok "Replaced $BOOT_UNIT: it starts PostHog, then the MCP server (previous version: $BOOT_UNIT.bak)"
+}
+
+# ---------------------------------------------------------------------------
 # Optional end-to-end test with a personal API key
 # ---------------------------------------------------------------------------
 tool_text() {
@@ -325,6 +383,7 @@ print_client_setup() {
 
     Allow inbound TCP $PORT in this instance's security group, only from the people who use it.
     Logs: sudo docker logs -f $CONTAINER    Settings: $ENV_FILE    Update: re-run this script
+    Stop or start PostHog and the MCP server together: sudo systemctl stop posthog  /  sudo systemctl start posthog
 EOF
 }
 
@@ -337,6 +396,10 @@ remove() {
     fi
     rm -rf "$MCP_DIR"
     ok "Settings removed"
+    if [ -f "$BOOT_UNIT" ] && grep -q "$CONTAINER" "$BOOT_UNIT"; then
+        write_boot_unit without-mcp
+        ok "Boot service $BOOT_UNIT starts only PostHog again"
+    fi
 }
 
 main() {
@@ -353,6 +416,7 @@ main() {
     pull_image
     start_container
     check_posthog_reachable
+    install_boot_service
     print_client_setup
 
     local key="${1:-}"
