@@ -284,16 +284,31 @@ fetch_posthog_repo() {
     ok "PostHog source at commit $(git -C posthog rev-parse --short HEAD)"
 }
 
+# Docker Compose fills ${CADDY_HOST} into the Caddyfile from .env when it reads the compose
+# file. Without it, Caddy falls back to localhost:8000 and nothing answers on port 80 or 443.
+caddy_host() {
+    if [ "$HTTP_ONLY" = 1 ]; then
+        echo "http://"
+    else
+        echo "${DOMAIN}, http://, https://"
+    fi
+}
+
+set_env_value() {
+    if grep -q "^$1=" .env; then
+        sed -i -E "s|^$1=.*|$1=$2|" .env
+    else
+        echo "$1=$2" >> .env
+    fi
+}
+
 write_env() {
     cd "$INSTALL_DIR"
     if [ -f .env ]; then
         # Never regenerate secrets: that logs everyone out and breaks encrypted data.
-        sed -i -E "s|^DOMAIN=.*|DOMAIN=${DOMAIN}|" .env
-        if grep -q '^HTTP_ONLY=' .env; then
-            sed -i -E "s|^HTTP_ONLY=.*|HTTP_ONLY=${HTTP_ONLY}|" .env
-        else
-            echo "HTTP_ONLY=${HTTP_ONLY}" >> .env
-        fi
+        set_env_value DOMAIN "${DOMAIN}"
+        set_env_value HTTP_ONLY "${HTTP_ONLY}"
+        set_env_value CADDY_HOST "\"$(caddy_host)\""
         ok "Kept the existing .env (secrets unchanged)"
         return
     fi
@@ -305,6 +320,8 @@ BROWSERLESS_SECRET=$(openssl rand -hex 32)
 DOMAIN=${DOMAIN}
 HTTP_ONLY=${HTTP_ONLY}
 TLS_BLOCK=
+CADDY_TLS_BLOCK=
+CADDY_HOST="$(caddy_host)"
 REGISTRY_URL=posthog/posthog
 POSTHOG_APP_TAG=${POSTHOG_APP_TAG}
 EOF
@@ -394,9 +411,6 @@ services:
     temporal-django-worker:
         environment:
             SITE_URL: ${SITE_URL}
-    proxy:
-        environment:
-            CADDY_HOST: 'http://'
 EOF
 }
 
