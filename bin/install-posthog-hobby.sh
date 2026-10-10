@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 #
 # PostHog hobby installer for a single AWS EC2 instance.
-# It asks one question: the domain that PostHog will be served on.
+# It asks one question: the address that PostHog will be served on.
 #
-#   sudo bash install-posthog-hobby.sh                       # prompts for the domain
-#   sudo bash install-posthog-hobby.sh posthog.example.com   # no prompts at all
+#   sudo bash install-posthog-hobby.sh                       # prompts for the address
+#   sudo bash install-posthog-hobby.sh posthog.example.com   # HTTPS with a Let's Encrypt certificate
+#   sudo bash install-posthog-hobby.sh 10.0.1.25             # plain HTTP on an IP address, no TLS
+#   sudo bash install-posthog-hobby.sh http://posthog.internal   # plain HTTP on a domain, no TLS
+#
+# Plain HTTP sends logins and data unencrypted. Use it only on a private network or VPN.
 #
 # Before you run it:
 #   1. Instance: 4 vCPU / 16 GB RAM or more (t3.xlarge, m6i.xlarge, m7g.xlarge), 50 GB+ gp3 disk.
 #      Ubuntu 22.04/24.04, Debian 12 or Amazon Linux 2023. x86_64 and arm64 both work.
-#   2. Security group: allow inbound TCP 80 and 443 from anywhere (and 22 for SSH).
-#   3. DNS: an A record for your domain pointing at the instance's public IP
+#   2. Security group: allow inbound TCP 80 (and 443 for HTTPS) from your users, and 22 for SSH.
+#   3. HTTPS only: an A record for your domain pointing at the instance's public IP
 #      (attach an Elastic IP so it does not change on restart).
 #
 # Optional environment overrides (none of these prompt):
@@ -90,25 +94,50 @@ normalize_domain() {
     echo "$d" | tr '[:upper:]' '[:lower:]'
 }
 
+is_ipv4() {
+    local IFS=. octet
+    # shellcheck disable=SC2206
+    local parts=($1)
+    [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    for octet in "${parts[@]}"; do
+        [ "$((10#$octet))" -le 255 ] || return 1
+    done
+}
+
 ask_domain() {
     local raw="${1:-}"
     if [ -z "$raw" ] && [ -f "$INSTALL_DIR/.env" ]; then
         raw="$(grep -E '^DOMAIN=' "$INSTALL_DIR/.env" | head -1 | cut -d= -f2- || true)"
-        [ -n "$raw" ] && info "Using the domain from the existing install: $raw"
+        if [ -n "$raw" ] && grep -qE '^HTTP_ONLY=1' "$INSTALL_DIR/.env"; then
+            raw="http://$raw"
+        fi
+        [ -n "$raw" ] && info "Using the address from the existing install: $raw"
     fi
     while [ -z "$raw" ]; do
         echo
-        echo "${BOLD}Which domain will PostHog be hosted on?${RESET} (for example: posthog.example.com)"
-        read -r -p "> " raw </dev/tty || die "No domain given."
+        echo "${BOLD}Which address will PostHog be hosted on?${RESET}"
+        echo "  A domain such as posthog.example.com gets HTTPS. An IP address or http://… runs plain HTTP."
+        read -r -p "> " raw </dev/tty || die "No address given."
     done
     DOMAIN="$(normalize_domain "$raw")"
-    if [[ "$DOMAIN" =~ ^[0-9.]+$ ]]; then
-        die "'$DOMAIN' is an IP address. Let's Encrypt needs a domain name: create a DNS A record and use that."
+    HTTP_ONLY=0
+    if [[ "$raw" == http://* ]] || [[ "$DOMAIN" =~ ^[0-9.]+$ ]]; then
+        HTTP_ONLY=1
     fi
-    if ! [[ "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$ ]]; then
+    if [[ "$DOMAIN" =~ ^[0-9.]+$ ]]; then
+        is_ipv4 "$DOMAIN" || die "'$DOMAIN' is not a valid IPv4 address."
+    elif ! [[ "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] \
+        || { [ "$HTTP_ONLY" = 0 ] && ! [[ "$DOMAIN" =~ \.[a-z]{2,}$ ]]; }; then
         die "'$DOMAIN' does not look like a valid domain name."
     fi
-    ok "Domain: $DOMAIN"
+    if [ "$HTTP_ONLY" = 1 ]; then
+        SITE_URL="http://${DOMAIN}"
+        ok "Address: $SITE_URL (plain HTTP, no TLS)"
+        warn "Logins and data travel unencrypted. Only use this on a private network or VPN."
+    else
+        SITE_URL="https://${DOMAIN}"
+        ok "Address: $SITE_URL"
+    fi
 }
 
 check_resources() {
@@ -182,7 +211,9 @@ install_docker() {
         apt-get update -qq
         apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null
     else
-        dnf install -y -q docker >/dev/null
+        # dnf is locked to the release the AMI shipped with. Take docker from the newest
+        # release, so instances launched from an older AMI skip the broken build below.
+        dnf install -y -q --releasever=latest docker >/dev/null
         local arch plugin_dir=/usr/local/lib/docker/cli-plugins
         arch="$(uname -m)"
         mkdir -p "$plugin_dir"
@@ -206,7 +237,7 @@ upgrade_amazon_linux_docker() {
     [ "$PKG" = dnf ] && rpm -q docker >/dev/null 2>&1 || return 0
     local before after
     before="$(rpm -q docker)"
-    dnf upgrade -y -q docker >/dev/null 2>&1 || warn "Could not upgrade the docker package"
+    dnf upgrade -y -q --releasever=latest docker >/dev/null 2>&1 || warn "Could not upgrade the docker package"
     after="$(rpm -q docker)"
     if [ "$before" != "$after" ]; then
         systemctl restart docker
@@ -258,6 +289,11 @@ write_env() {
     if [ -f .env ]; then
         # Never regenerate secrets: that logs everyone out and breaks encrypted data.
         sed -i -E "s|^DOMAIN=.*|DOMAIN=${DOMAIN}|" .env
+        if grep -q '^HTTP_ONLY=' .env; then
+            sed -i -E "s|^HTTP_ONLY=.*|HTTP_ONLY=${HTTP_ONLY}|" .env
+        else
+            echo "HTTP_ONLY=${HTTP_ONLY}" >> .env
+        fi
         ok "Kept the existing .env (secrets unchanged)"
         return
     fi
@@ -267,6 +303,7 @@ POSTHOG_SECRET=$(openssl rand -hex 28)
 ENCRYPTION_SALT_KEYS=$(openssl rand -hex 16)
 BROWSERLESS_SECRET=$(openssl rand -hex 32)
 DOMAIN=${DOMAIN}
+HTTP_ONLY=${HTTP_ONLY}
 TLS_BLOCK=
 REGISTRY_URL=posthog/posthog
 POSTHOG_APP_TAG=${POSTHOG_APP_TAG}
@@ -286,6 +323,8 @@ write_compose_files() {
     # header a client sends. So trusting the proxy chain is safe, and PostHog sees real
     # visitor IPs instead of Caddy's Docker address.
     printf '\n# Added by install-posthog-hobby.sh\nTRUST_ALL_PROXIES=true\n' >> .env.services
+
+    write_http_only_override
 
     mkdir -p compose share
     # The compose directory is mounted at /compose, so call the helper by its absolute path.
@@ -322,6 +361,43 @@ for host, port in SERVICES:
 EOF
     chmod +x compose/start compose/temporal-django-worker compose/wait
     ok "Compose files written"
+}
+
+# docker-compose.hobby.yml hardcodes https:// URLs and a Caddy site with TLS. Docker Compose
+# merges docker-compose.override.yml on top automatically, so plain HTTP lives there.
+write_http_only_override() {
+    if [ "$HTTP_ONLY" != 1 ]; then
+        rm -f docker-compose.override.yml
+        return
+    fi
+    # Without this, Django marks cookies HTTPS-only and redirects to https://, so login fails.
+    printf 'SECURE_COOKIES=false\n' >> .env.services
+    cat > docker-compose.override.yml <<EOF
+# Written by install-posthog-hobby.sh for plain HTTP. Remove it and re-run the script for HTTPS.
+services:
+    web:
+        environment:
+            SITE_URL: ${SITE_URL}
+            LIVESTREAM_HOST: ${SITE_URL}/livestream
+            OBJECT_STORAGE_PUBLIC_ENDPOINT: ${SITE_URL}
+    worker:
+        environment:
+            SITE_URL: ${SITE_URL}
+            OBJECT_STORAGE_PUBLIC_ENDPOINT: ${SITE_URL}
+    plugins:
+        environment:
+            SITE_URL: ${SITE_URL}
+            OBJECT_STORAGE_PUBLIC_ENDPOINT: ${SITE_URL}
+    asyncmigrationscheck:
+        environment:
+            SITE_URL: ${SITE_URL}
+    temporal-django-worker:
+        environment:
+            SITE_URL: ${SITE_URL}
+    proxy:
+        environment:
+            CADDY_HOST: 'http://'
+EOF
 }
 
 download_geoip() {
@@ -361,8 +437,34 @@ public_ip() {
     echo "${ip:-}"
 }
 
+check_ip_address() {
+    local addrs
+    addrs=" $(hostname -I 2>/dev/null || true) $(ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | paste -sd' ' || true) "
+    if [[ "$addrs" == *" $DOMAIN "* ]]; then
+        ok "$DOMAIN is an address of this machine (private network)"
+    elif [ "$DOMAIN" = "$(public_ip)" ]; then
+        ok "$DOMAIN is this instance's public IP"
+    else
+        warn "$DOMAIN is not an address of this machine. Check that it reaches this instance."
+    fi
+    info "Reminder: the security group must allow inbound TCP 80 from the machines that will use PostHog."
+}
+
 check_dns() {
     local my_ip dns_ips
+    if [[ "$DOMAIN" =~ ^[0-9.]+$ ]]; then
+        check_ip_address
+        return
+    fi
+    if [ "$HTTP_ONLY" = 1 ]; then
+        if getent hosts "$DOMAIN" >/dev/null 2>&1; then
+            ok "$DOMAIN resolves"
+        else
+            warn "$DOMAIN does not resolve from this machine. Check your DNS."
+        fi
+        info "Reminder: the security group must allow inbound TCP 80 from the machines that will use PostHog."
+        return
+    fi
     my_ip="$(public_ip)"
     dns_ips="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u | paste -sd' ' || true)"
     if [ -z "$my_ip" ]; then
@@ -480,7 +582,7 @@ print_summary() {
     local healthy="$1"
     echo
     if [ "$healthy" = 0 ]; then
-        echo "${GREEN}${BOLD}🎉 PostHog is installed.${RESET} Open ${BOLD}https://${DOMAIN}${RESET} and create your account."
+        echo "${GREEN}${BOLD}🎉 PostHog is installed.${RESET} Open ${BOLD}${SITE_URL}${RESET} and create your account."
     else
         echo "${YELLOW}${BOLD}PostHog is installed, but it was not healthy yet when the script finished.${RESET}"
         echo "It may still be migrating. Check again in a few minutes:  curl http://localhost/_health"
@@ -533,7 +635,7 @@ main() {
     step "Waiting for PostHog to boot"
     local healthy=0
     wait_for_health || healthy=1
-    if [ "$healthy" = 0 ]; then
+    if [ "$healthy" = 0 ] && [ "$HTTP_ONLY" = 0 ]; then
         step "Checking HTTPS"
         check_https || true
     fi
