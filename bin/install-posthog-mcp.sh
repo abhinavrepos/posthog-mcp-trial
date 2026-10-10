@@ -8,8 +8,11 @@
 #   sudo bash install-posthog-mcp.sh phx_...     # install or update, then test with this personal API key
 #   sudo bash install-posthog-mcp.sh --remove    # stop and remove the MCP server
 #
-# It also replaces /etc/systemd/system/posthog.service, so one boot service starts PostHog
-# and then the MCP server, and stops the MCP server first: sudo systemctl stop|start posthog
+# The MCP server becomes the "mcp" service of PostHog's Docker Compose project
+# (docker-compose.mcp.yml, listed in COMPOSE_FILE in the install's .env), so every
+# "docker compose up -d" / "docker compose down" in the install directory includes it.
+# It also writes /etc/systemd/system/posthog.service: "docker compose up -d" at boot and
+# "docker compose down" at shutdown. Data lives in Docker volumes, which "down" keeps.
 #
 # The MCP server runs as the Docker container "posthog-mcp" and listens on port 8787.
 # Allow inbound TCP 8787 in the security group, only from the people who use it.
@@ -31,6 +34,7 @@ ENV_FILE="$MCP_DIR/mcp.env"
 PORT="${POSTHOG_MCP_PORT:-8787}"
 IMAGE="${POSTHOG_MCP_IMAGE:-ghcr.io/posthog/posthog-mcp:latest}"
 CONTAINER="posthog-mcp"
+COMPOSE_MCP_FILE="docker-compose.mcp.yml"
 BOOT_UNIT="/etc/systemd/system/posthog.service"
 # PostHog itself uses Redis databases 0, 1 and 15.
 REDIS_DB=4
@@ -77,9 +81,13 @@ find_posthog() {
     ok "Web container: $WEB"
 
     PROJECT="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$WEB")"
-    NETWORK="$(docker inspect -f '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "$WEB" | awk '{print $1}')"
-    [ -n "$NETWORK" ] || die "Could not find the Docker network of $WEB."
-    ok "Docker network: $NETWORK"
+    local workdir
+    workdir="$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$WEB")"
+    if [ -n "$workdir" ] && [ -f "$workdir/docker-compose.yml" ]; then
+        INSTALL_DIR="$workdir"
+    fi
+    [ -f "$INSTALL_DIR/docker-compose.yml" ] || die "Could not find PostHog's docker-compose.yml. Set POSTHOG_INSTALL_DIR to the install directory."
+    ok "Install directory: $INSTALL_DIR (compose project $PROJECT)"
 
     REDIS="$(docker ps --filter "label=com.docker.compose.service=redis7" \
         --filter "label=com.docker.compose.project=$PROJECT" --format '{{.Names}}' | head -1)"
@@ -168,14 +176,50 @@ pull_image() {
     die "Could not pull $IMAGE. Check that this machine can reach ghcr.io."
 }
 
+write_compose_service() {
+    step "Adding the MCP server to PostHog's Docker Compose project"
+    cat > "$INSTALL_DIR/$COMPOSE_MCP_FILE" <<EOF
+# Written by install-posthog-mcp.sh. Remove it with: sudo bash install-posthog-mcp.sh --remove
+services:
+    mcp:
+        image: $IMAGE
+        container_name: $CONTAINER
+        restart: unless-stopped
+        env_file: $ENV_FILE
+        ports:
+            - '$PORT:3001'
+        depends_on:
+            - redis7
+            - web
+        logging:
+            driver: json-file
+            options:
+                max-size: 10m
+                max-file: '3'
+EOF
+    # Compose reads COMPOSE_FILE from .env, so plain "docker compose" commands include the MCP server.
+    local files="docker-compose.yml"
+    if [ -f "$INSTALL_DIR/docker-compose.override.yml" ]; then
+        files="$files:docker-compose.override.yml"
+    fi
+    files="$files:$COMPOSE_MCP_FILE"
+    touch "$INSTALL_DIR/.env"
+    sed -i '/^COMPOSE_FILE=/d' "$INSTALL_DIR/.env"
+    printf 'COMPOSE_FILE=%s\n' "$files" >> "$INSTALL_DIR/.env"
+    if ! (cd "$INSTALL_DIR" && docker compose config --services | grep -qx mcp); then
+        die "Docker Compose rejected $INSTALL_DIR/$COMPOSE_MCP_FILE. The error is above."
+    fi
+    ok "COMPOSE_FILE=$files"
+}
+
 start_container() {
     step "Starting the MCP server"
-    docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
-    if ! docker run -d --name "$CONTAINER" --restart unless-stopped \
-        --network "$NETWORK" -p "$PORT:3001" --env-file "$ENV_FILE" \
-        --log-opt max-size=10m --log-opt max-file=3 \
-        "$IMAGE" >/dev/null; then
-        die "Docker could not start the MCP server. The error is above."
+    # A container from an earlier version of this script ran outside Compose under the same name.
+    if [ -z "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$CONTAINER" 2>/dev/null)" ]; then
+        docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+    fi
+    if ! (cd "$INSTALL_DIR" && docker compose up -d --no-build --no-deps --force-recreate mcp); then
+        die "Docker Compose could not start the MCP server. The error is above."
     fi
     local _
     for _ in $(seq 1 60); do
@@ -211,17 +255,18 @@ check_posthog_reachable() {
 # ---------------------------------------------------------------------------
 # Start on boot
 # ---------------------------------------------------------------------------
-write_boot_unit() {
-    # $1: "with-mcp" adds the MCP server to the PostHog boot service, anything else leaves it out.
-    local mcp_start="" mcp_stop="" description="PostHog (docker compose)"
-    if [ "$1" = "with-mcp" ]; then
-        description="PostHog (docker compose) and the PostHog MCP server"
-        mcp_start="ExecStartPost=/usr/bin/env docker start $CONTAINER"
-        mcp_stop="ExecStop=-/usr/bin/env docker stop $CONTAINER"
+install_boot_service() {
+    step "Setting up start on boot and stop on shutdown"
+    if ! command -v systemctl >/dev/null 2>&1; then
+        warn "systemd is not available, so PostHog will not start automatically after a reboot."
+        return
+    fi
+    if [ -f "$BOOT_UNIT" ] && [ ! -f "$BOOT_UNIT.bak" ]; then
+        cp "$BOOT_UNIT" "$BOOT_UNIT.bak"
     fi
     cat > "$BOOT_UNIT" <<EOF
 [Unit]
-Description=$description
+Description=PostHog and the PostHog MCP server (docker compose)
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
@@ -231,35 +276,17 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=$INSTALL_DIR
 ExecStart=/usr/bin/env docker compose up -d --no-build
-$mcp_start
-$mcp_stop
-ExecStop=/usr/bin/env docker compose stop
+# "down" removes the containers and the network. The data stays in the Docker volumes.
+ExecStop=/usr/bin/env docker compose down
 TimeoutStartSec=600
+TimeoutStopSec=300
 
 [Install]
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
     systemctl enable posthog.service >/dev/null 2>&1
-}
-
-install_boot_service() {
-    step "Starting the MCP server on boot"
-    if ! command -v systemctl >/dev/null 2>&1; then
-        warn "systemd is not available. Docker restarts the MCP server, but not the rest of PostHog, after a reboot."
-        return
-    fi
-    if [ ! -f "$INSTALL_DIR/docker-compose.yml" ]; then
-        warn "No docker-compose.yml in $INSTALL_DIR, so the boot service was not changed."
-        return
-    fi
-    if [ -f "$BOOT_UNIT" ]; then
-        cp "$BOOT_UNIT" "$BOOT_UNIT.bak"
-    fi
-    write_boot_unit with-mcp
-    # systemd now owns the MCP container's start and stop, so Docker must not start it on its own.
-    docker update --restart no "$CONTAINER" >/dev/null
-    ok "Replaced $BOOT_UNIT: it starts PostHog, then the MCP server (previous version: $BOOT_UNIT.bak)"
+    ok "$BOOT_UNIT runs \"docker compose up -d\" at boot and \"docker compose down\" at shutdown"
 }
 
 # ---------------------------------------------------------------------------
@@ -383,12 +410,16 @@ print_client_setup() {
 
     Allow inbound TCP $PORT in this instance's security group, only from the people who use it.
     Logs: sudo docker logs -f $CONTAINER    Settings: $ENV_FILE    Update: re-run this script
-    Stop or start PostHog and the MCP server together: sudo systemctl stop posthog  /  sudo systemctl start posthog
+    PostHog and the MCP server stop and start together: sudo systemctl stop posthog  /  sudo systemctl start posthog
 EOF
 }
 
 remove() {
     step "Removing the PostHog MCP server"
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        sed -i "/^COMPOSE_FILE=.*$COMPOSE_MCP_FILE/d" "$INSTALL_DIR/.env"
+    fi
+    rm -f "$INSTALL_DIR/$COMPOSE_MCP_FILE"
     if docker rm -f "$CONTAINER" >/dev/null 2>&1; then
         ok "Container removed"
     else
@@ -396,10 +427,7 @@ remove() {
     fi
     rm -rf "$MCP_DIR"
     ok "Settings removed"
-    if [ -f "$BOOT_UNIT" ] && grep -q "$CONTAINER" "$BOOT_UNIT"; then
-        write_boot_unit without-mcp
-        ok "Boot service $BOOT_UNIT starts only PostHog again"
-    fi
+    info "The boot service still runs docker compose up -d / down, now without the MCP server."
 }
 
 main() {
@@ -414,6 +442,7 @@ main() {
     check_port
     write_env
     pull_image
+    write_compose_service
     start_container
     check_posthog_reachable
     install_boot_service
