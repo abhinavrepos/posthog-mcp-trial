@@ -37,11 +37,15 @@ export interface Clip {
 
 function findChrome(): string {
     if (config.clip.chromePath) return config.clip.chromePath
-    const base = join(homedir(), '.cache/puppeteer/chrome-headless-shell')
-    const versions = existsSync(base) ? readdirSync(base).sort().reverse() : []
-    for (const v of versions) {
-        const p = join(base, v, 'chrome-headless-shell-linux64/chrome-headless-shell')
-        if (existsSync(p)) return p
+    // The project's own copy first (the service runs as a non-root user), then puppeteer's default.
+    for (const cache of [process.env.PUPPETEER_CACHE_DIR, join(ROOT, '.cache/puppeteer'), join(homedir(), '.cache/puppeteer')]) {
+        if (!cache) continue
+        const base = join(cache, 'chrome-headless-shell')
+        const versions = existsSync(base) ? readdirSync(base).sort().reverse() : []
+        for (const v of versions) {
+            const p = join(base, v, 'chrome-headless-shell-linux64/chrome-headless-shell')
+            if (existsSync(p)) return p
+        }
     }
     throw new Error('chrome-headless-shell not found. Run `pnpm install` (puppeteer downloads it) or set CHROME_HEADLESS_SHELL.')
 }
