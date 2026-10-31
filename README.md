@@ -42,6 +42,34 @@ suggests a likely cause from the error and replay frames. Structured Jira fields
 Claude's reading, and Claude's reading wins over the keyword matching. When Claude fails, triage
 still completes and the report notes it.
 
+## Replay clip page
+
+`http://<host>:8080/replays` turns any session replay into an MP4. PostHog's own "export to
+video" needs a rasterizer worker that the self-hosted hobby install does not run, so this page
+does the job with the same renderer.
+
+1. Paste a PostHog replay link (or a session id). The page shows the client, user, date and
+   length, and the key moments: errors, rage clicks and dead clicks. Click a moment to start the
+   clip 5 seconds before it.
+2. Pick a start time and a length (10 to 120 seconds) and make the clip. Jobs queue one at a
+   time, and the page shows progress.
+3. Watch it, download it (the file name says client, user, date and range), copy a share link
+   that expires, or open the replay in PostHog at that second.
+
+The page also lists recent clips and has a "Get MP4" bookmark button: drag it to the bookmarks
+bar, and while you watch a replay in PostHog, click it to open that replay here. Each Jira
+triage comment links here too ("Make another clip").
+
+Access: the page uses the PostHog login. Browsers send cookies to every port of a host, so when
+you are logged in to PostHog on the same host name, you are logged in here. The service checks
+the session with PostHog, and only people who can open the project get in. If PostHog moves to
+another host name, put both behind one domain or set `SESSION_COOKIE_DOMAIN` in PostHog so the
+cookie is shared.
+
+Every inspection, clip, view, download and share link goes to `logs/audit.jsonl`. Clips are
+deleted after `CLIP_RETENTION_DAYS` (default 30), and each person can make `CLIPS_PER_HOUR`
+clips (default 20).
+
 ## Layout
 
 | Path | What |
