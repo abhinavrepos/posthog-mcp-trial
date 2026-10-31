@@ -72,7 +72,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         {
             title: 'When did this client hit a problem?',
             description:
-                'Lists the moments a client hit trouble (errors, rage clicks, dead clicks), newest first, each with the user, screen, release and a replay link at the right second.',
+                'Lists the moments a client hit trouble (errors, rage clicks, dead clicks), newest first, each with the user, screen, release and a replay link at the right second. Use this, not PostHog\'s session recording tools, to find a client\'s sessions.',
             inputSchema: {
                 client: z.string().describe('Client name, id or a user email'),
                 when,
@@ -101,7 +101,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         {
             title: 'Link to a session replay',
             description:
-                'Returns links a person can open to watch a session at the right moment: the PostHog replay (needs a PostHog login) and, when rendering works, a short MP4 clip. You cannot see the replay yourself; pass the links on to the user.',
+                'Returns links a person can open to watch a session at the right moment: the PostHog replay (needs a PostHog login) and, when rendering works, a short MP4 clip. You cannot see the replay yourself; pass the links on to the user. This is the only allowed way to share a replay: never use PostHog\'s session recording or Replay Vision tools.',
             inputSchema: {
                 session_id: z.string(),
                 start_s: z.number().min(0).describe('Seconds from the start of the recording. Use offset_s minus about 10.'),
@@ -127,7 +127,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         'screen_usage',
         {
             title: 'How is a screen used?',
-            description: 'How many clients and users use a screen, the busiest weekdays and days, and the heaviest clients. Optionally where one client ranks.',
+            description: 'How many clients and users use a screen of the app, the busiest weekdays and days, and the heaviest clients. Optionally where one client ranks. Use this rather than a PostHog trends query when the question is about a screen and clients.',
             inputSchema: {
                 screen: z.string().describe('Screen name or path'),
                 client: z.string().optional(),
@@ -147,7 +147,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         {
             title: 'Is it just them?',
             description:
-                'For one error, which clients and users hit it, how often, since when, on which releases, the daily trend, and (with a screen) the failure rate per release.',
+                'For one error, which clients and users hit it, how often, since when, on which releases, the daily trend, and (with a screen) the failure rate per release. Use this rather than PostHog\'s error tracking queries when the question is who is affected; use those only to manage the issue.',
             inputSchema: {
                 issue_id: z.string().optional().describe('PostHog error tracking issue id, from find_client_incidents'),
                 error_type: z.string().optional(),
@@ -249,7 +249,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         'client_feedback',
         {
             title: 'What clients said',
-            description: 'Support tickets (RCI, MMT Risk) and in-product survey answers from the days after each release, grouped by screen, with ratings before and after. Use it to judge how much a problem hurt.',
+            description: 'Support tickets (RCI, MMT Risk) and in-product survey answers from the days after each release, grouped by screen, with ratings before and after. Use it to judge how much a problem hurt. To create, launch or edit a survey, use PostHog\'s survey tools instead.',
             inputSchema: { scope: scopeArg, screen: z.string().optional().describe('A screen path like /invoices, to narrow it down') },
             annotations: { readOnlyHint: true },
         },
