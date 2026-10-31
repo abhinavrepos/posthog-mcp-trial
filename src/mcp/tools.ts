@@ -9,7 +9,22 @@ import { errorImpact } from '../core/impact.ts'
 import { bestPerSession, findIncidents } from '../core/incidents.ts'
 import { config } from '../core/config.ts'
 import { replayUrl } from '../core/posthog.ts'
-import { scopes, view, viewMarkdown, type Scope, type View } from '../core/releases.ts'
+import {
+    evidenceMarkdown,
+    feedbackMarkdown,
+    outcomesMarkdown,
+    recompute,
+    recordVerdict,
+    releasesMarkdown,
+    resolveScope,
+    setLink,
+    syncReleases,
+    ticketRelease,
+    evidenceMarkdown as ticketText,
+    keptNames,
+    quarters,
+} from '../core/releases.ts'
+import { addComment } from '../jira/client.ts'
 import { renderReport } from '../core/report.ts'
 import { resolveClient, resolveScreen } from '../core/resolve.ts'
 import { struggleSessions } from '../core/silent.ts'
@@ -184,154 +199,177 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         }
     )
 
-    // ------------------------------------------------------------------ release insights
-    // These read the numbers the release dashboard stored (Jira tickets matched to PostHog
-    // counts). No replay content, and no PostHog query per call.
-    const findScope = (q?: string): Scope | undefined => {
-        const all = scopes()
-        if (!q || q.trim().toLowerCase() === 'all') return all[0]
-        const want = q.trim().toLowerCase()
-        return all.find((x) => x.label.toLowerCase() === want || x.id.toLowerCase() === want || x.id.toLowerCase() === `r:${want}`)
-    }
-    const noScope = (q?: string) => text(`No release, quarter or group called "${q}". Options: ${scopes().map((x) => x.label).join(', ')}`)
-    const link = (s: Scope, page = '') => `${config.service.publicUrl}/releases${page}?scope=${encodeURIComponent(s.id)}`
-    const scopeArg = z.string().optional().describe('A release like "26.10.0", a quarter like "Q3 2026", a custom group name, or "all" (default).')
-    const ticketLine = (t: View['tickets'][number]) =>
-        `| ${t.key} | ${t.summary} | ${t.release} | ${t.type} | ${t.link?.event || t.link?.screen || 'not linked'} | ${t.usage?.clients_after ?? '-'} | ${Math.round(t.scores.value * 100)} | ${Math.round(t.scores.risk * 100)} | ${t.scores.impact} |`
-    const ticketHead = '| Ticket | Summary | Release | Type | Linked to | Clients | Value | Risk | Impact |\n|---|---|---|---|---|---|---|---|---|'
-
-    server.registerTool(
-        'release_insights',
-        {
-            title: 'Release insights',
-            description:
-                'Summary of a release, quarter, custom group or all kept releases: findings in plain words, the tickets with most impact and most risk, and release health. Tickets come from Jira; impact is measured from PostHog event counts (reach, adoption, fixes, errors, rage clicks, support tickets). Never replay content.',
-            inputSchema: { scope: scopeArg, top: z.number().int().min(1).max(20).default(5) },
-            annotations: { readOnlyHint: true },
-        },
-        async ({ scope, top }) => {
-            if (!scopes()[0]?.releases.length) return text('No releases yet. Sync the release dashboard first (/releases, "Sync now").')
-            const s = findScope(scope)
-            if (!s) return noScope(scope)
-            return text(viewMarkdown(view(s.id), top) + `\n\nOpen it: ${link(s)}`)
-        }
-    )
+    // ------------------------------------------------------------------ release outcomes
+    // Facts about the tickets each Jira release shipped, from the numbers the service stored
+    // (src/core/releases.ts). The model judges what is risky; people's verdicts are saved.
+    const scopeArg = z.string().optional().describe('A release like "26.10.0", a quarter like "Q3 2026", "last 3", a range like "26.5.0..26.8.0", or "all" (default).')
+    const noScope = (q?: string) =>
+        text(`Nothing called "${q}". Releases: ${keptNames().join(', ')}. Quarters: ${quarters().map((x) => x.label).join(', ')}. Or "all", "last 3", "26.5.0..26.8.0".`)
+    const empty = () => text('No releases stored yet. Call refresh_releases first.')
 
     server.registerTool(
         'list_releases',
         {
-            title: 'List releases, quarters and groups',
-            description: 'The kept releases with date, ticket count, clients on the release, errors per 1,000 sessions before and after, support tickets and health; plus the quarters and custom groups that can be passed as a scope.',
+            title: 'List releases',
+            description: 'The kept Jira releases with their dates and headline facts (clients on the release, errors and rage clicks per 1,000 sessions before and after, support tickets, survey rating), and the quarters you can ask for.',
             inputSchema: {},
             annotations: { readOnlyHint: true },
         },
-        async () => {
-            const v = view('all')
-            const lines = ['| Release | Date | Tickets | Clients on it | Errors / 1k sessions (before → after) | Rage / 1k | Support | Health |', '|---|---|---|---|---|---|---|---|']
-            for (const r of [...v.releases].reverse()) {
-                lines.push(`| ${r.name} | ${r.date}${r.open ? ' (still counting)' : ''} | ${r.tickets} | ${r.clients_on_version ?? '-'} / ${r.clients_active} | ${r.errors_per_1k_before} → ${r.errors_per_1k} | ${r.rage_per_1k_before} → ${r.rage_per_1k} | ${r.support} | ${r.health}${r.health_reasons.length ? ` (${r.health_reasons.join(', ')})` : ''} |`)
-            }
-            const groups = scopes().filter((x) => x.kind === 'quarter' || x.kind === 'group')
-            lines.push('', 'Quarters and groups: ' + groups.map((g) => `${g.label} (${g.releases.join(', ')})`).join('; '))
-            return text(lines.join('\n'))
-        }
+        async () => text(releasesMarkdown())
     )
 
     server.registerTool(
-        'release_tickets',
+        'release_outcomes',
         {
-            title: 'Rank tickets',
-            description: 'Tickets in a scope ranked by impact, value, risk or clients reached, optionally filtered by type, screen, event or words. Value and risk are 0 to 100; impact is the larger of the two.',
-            inputSchema: {
-                scope: scopeArg,
-                sort: z.enum(['impact', 'value', 'risk', 'reach']).default('impact'),
-                type: z.string().optional().describe('Jira issue type, e.g. Story or Bug'),
-                search: z.string().optional().describe('Words in the key, summary, screen or event'),
-                limit: z.number().int().min(1).max(100).default(15),
-                include_unranked: z.boolean().default(false).describe('Also list tasks, hidden tickets and tickets with no link'),
-            },
+            title: 'Tickets by outcome',
+            description:
+                'Every ticket shipped in a release, quarter or range, sorted into groups by what happened afterwards in PostHog: more errors, more rage clicks, clients complained, fixed something, adopted, low uptake, too new, no clear change, cannot measure. Each ticket comes with its numbers and any saved verdict. Facts only: deciding what is risky is up to you. Start here.',
+            inputSchema: { scope: scopeArg },
             annotations: { readOnlyHint: true },
         },
-        async ({ scope, sort, type, search, limit, include_unranked }) => {
-            const s = findScope(scope)
-            if (!s) return noScope(scope)
-            const v = view(s.id)
-            const q = (search || '').toLowerCase()
-            const key = { impact: (t: View['tickets'][number]) => t.scores.impact, value: (t: View['tickets'][number]) => t.scores.value, risk: (t: View['tickets'][number]) => t.scores.risk, reach: (t: View['tickets'][number]) => t.usage?.clients_after ?? -1 }[sort]
-            const list = v.tickets
-                .filter((t) => include_unranked || (t.link && !t.hidden && v.settings.ticket_types.includes(t.type)))
-                .filter((t) => !type || t.type.toLowerCase() === type.toLowerCase())
-                .filter((t) => !q || `${t.key} ${t.summary} ${t.link?.screen || ''} ${t.link?.event || ''}`.toLowerCase().includes(q))
-                .sort((a, b) => key(b) - key(a))
-                .slice(0, limit)
-            return text(`${s.label}: ${list.length} tickets by ${sort}\n\n${ticketHead}\n${list.map(ticketLine).join('\n')}\n\nOpen them: ${link(s, '/tickets')}`)
+        async ({ scope }) => {
+            if (!keptNames().length) return empty()
+            const sc = resolveScope(scope)
+            return sc ? text(outcomesMarkdown(sc)) : noScope(scope)
         }
     )
 
     server.registerTool(
-        'ticket_impact',
+        'ticket_evidence',
         {
-            title: 'One ticket in detail',
-            description: 'Everything measured for one Jira ticket: how it is linked to PostHog and why, use before and after the release, errors and rage clicks on its screen, support tickets and new errors that followed, and each score.',
+            title: 'One ticket in full',
+            description: 'All evidence for one Jira ticket: what it is linked to in PostHog and why, use before and after week by week, errors and rage clicks on its screen, new error types, the support tickets and survey comments that followed (in the clients\' words), and earlier verdicts.',
             inputSchema: { key: z.string().describe('Jira key, e.g. ACP-230') },
             annotations: { readOnlyHint: true },
         },
-        async ({ key }) => {
-            const v = view('all')
-            const t = v.tickets.find((x) => x.key.toLowerCase() === key.trim().toLowerCase())
-            if (!t) return text(`${key} is not in the kept releases.`)
-            const r = v.releases.find((x) => x.name === t.release)!
-            const sc = t.link?.screen ? v.screens[t.release]?.[t.link.screen] : undefined
-            const per100 = (n: number, d: number) => (d ? Math.round((n / d) * 1000) / 10 : 0)
-            const lines = [`## ${t.key}: ${t.summary}`, `${t.type} in release ${t.release} (${r.date}), measured ${r.days} days before and after${r.open ? ' (still counting)' : ''}.`]
-            lines.push(`- Linked to: ${t.link ? `${t.link.screen || ''}${t.link.event ? ` (event ${t.link.event})` : ''}` : 'nothing'}. Why: ${t.link_reason}.`)
-            if (t.usage) lines.push(`- Use: ${t.usage.before} → ${t.usage.after}; people ${t.usage.users_before} → ${t.usage.users_after}; clients ${t.usage.clients_before} → ${t.usage.clients_after} of ${r.clients_active} active.`)
-            if (sc) {
-                lines.push(`- On ${t.link!.screen}: errors per 100 sessions ${per100(sc.errors_before, sc.sessions_before)} → ${per100(sc.errors_after, sc.sessions_after)}; rage clicks per 100 sessions ${per100(sc.rage_before, sc.sessions_before)} → ${per100(sc.rage_after, sc.sessions_after)}.`)
-                lines.push(`- Screen problems count for this ticket: ${t.risk_owner ? `yes${t.shares_screen_with.length ? `, shared with ${t.shares_screen_with.join(', ')}` : ''}` : 'no (they go to the tickets that changed how the screen already worked)'}.`)
-                if (sc.support.length) lines.push(`- Support tickets after: ${sc.support.map((x) => `${x.key} "${x.summary}"`).join('; ')}.`)
-            }
-            const errs = r.new_errors.filter((e) => e.path === t.link?.screen)
-            if (errs.length) lines.push(`- New errors on the screen: ${errs.map((e) => `${e.type}: ${e.message} (${e.occurrences} times, ${e.clients} clients)`).join('; ')}.`)
-            const s = t.scores
-            lines.push(`- Scores (0-100): value ${Math.round(s.value * 100)}, risk ${Math.round(s.risk * 100)}, impact ${s.impact}. Parts: ${(['reach', 'adoption', 'fixes', 'errors', 'friction', 'support'] as const).filter((k) => s[k] !== null).map((k) => `${k} ${Math.round(s[k]! * 100)}`).join(', ')}.`)
-            if (t.weekly.length) lines.push(`- Week by week: ${t.weekly.map((w) => `${w.week} ${w.n}`).join(', ')}.`)
-            lines.push(`\nOpen it: ${config.service.publicUrl}/releases/tickets?open=${encodeURIComponent(t.key)}`)
-            return text(lines.join('\n'))
+        async ({ key }) => text(evidenceMarkdown(key.trim().toUpperCase()) || `${key} is not in the kept releases.`)
+    )
+
+    server.registerTool(
+        'client_feedback',
+        {
+            title: 'What clients said',
+            description: 'Support tickets (RCI, MMT Risk) and in-product survey answers from the days after each release, grouped by screen, with ratings before and after. Use it to judge how much a problem hurt.',
+            inputSchema: { scope: scopeArg, screen: z.string().optional().describe('A screen path like /invoices, to narrow it down') },
+            annotations: { readOnlyHint: true },
+        },
+        async ({ scope, screen }) => {
+            if (!keptNames().length) return empty()
+            const sc = resolveScope(scope)
+            return sc ? text(feedbackMarkdown(sc, screen)) : noScope(scope)
         }
     )
 
     server.registerTool(
-        'compare_releases',
+        'record_verdict',
         {
-            title: 'Compare two scopes',
-            description: 'Side by side: two releases, quarters or groups, with tickets shipped, average value and risk, errors and rage clicks per 1,000 sessions, new errors, support tickets and releases at risk, plus the top tickets of each.',
-            inputSchema: { a: z.string().describe('e.g. "Q3 2026" or "26.8.0"'), b: z.string().describe('e.g. "Q2 2026" or "26.7.0"') },
-            annotations: { readOnlyHint: true },
+            title: 'Save a verdict',
+            description:
+                'Saves a verdict on a ticket: risky, watch or fine, with the reason. Future calls show it next to the ticket, so later reviews build on it. Only call this after the person agreed with the verdict, and pass their name in decided_by. Optionally posts it as a comment on the Jira ticket.',
+            inputSchema: {
+                key: z.string(),
+                verdict: z.enum(['risky', 'watch', 'fine']),
+                reason: z.string().min(5).describe('Why, citing the numbers or client words'),
+                decided_by: z.string().describe('Who agreed to it, e.g. "Priya (PM)", or "claude" if nobody reviewed it'),
+                post_to_jira: z.boolean().default(false),
+            },
+            annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
         },
-        async ({ a, b }) => {
-            const sa = findScope(a)
-            const sb = findScope(b)
-            if (!sa) return noScope(a)
-            if (!sb) return noScope(b)
-            const [va, vb] = [view(sa.id), view(sb.id)]
-            const avg = (v: View, f: (r: View['releases'][number]) => number) => (v.releases.length ? Math.round((v.releases.reduce((x, r) => x + f(r), 0) / v.releases.length) * 10) / 10 : 0)
-            const rows: [string, number, number][] = [
-                ['Tickets shipped', va.kpis.tickets, vb.kpis.tickets],
-                ['Average value', va.kpis.avg_value, vb.kpis.avg_value],
-                ['Average risk', va.kpis.avg_risk, vb.kpis.avg_risk],
-                ['Errors per 1k sessions after release', avg(va, (r) => r.errors_per_1k), avg(vb, (r) => r.errors_per_1k)],
-                ['Rage clicks per 1k sessions after release', avg(va, (r) => r.rage_per_1k), avg(vb, (r) => r.rage_per_1k)],
-                ['New errors', va.kpis.new_errors, vb.kpis.new_errors],
-                ['Support tickets', va.kpis.support, vb.kpis.support],
-                ['Releases at risk', va.kpis.at_risk, vb.kpis.at_risk],
-            ]
-            const lines = [`## ${sa.label} vs ${sb.label}`, `| | ${sa.label} | ${sb.label} |`, '|---|---|---|', ...rows.map(([k, x, y]) => `| ${k} | ${x} | ${y} |`)]
-            for (const v of [va, vb]) {
-                const top = v.tickets.filter((t) => t.link && !t.hidden && v.settings.ticket_types.includes(t.type)).slice(0, 5)
-                lines.push('', `### Top tickets: ${v.scope.label}`, ticketHead, ...top.map(ticketLine))
+        async ({ key, verdict, reason, decided_by, post_to_jira }) => {
+            const k = key.trim().toUpperCase()
+            let row
+            try {
+                row = recordVerdict(k, verdict, reason, decided_by)
+            } catch (e) {
+                return text((e as Error).message)
             }
-            return text(lines.join('\n'))
+            let jira = ''
+            if (post_to_jira) {
+                try {
+                    await addComment(k, `**Release review: ${verdict}** (${decided_by})\n\n${reason}\n\n_From PostHog Lens release outcomes._`)
+                    jira = ' Posted to Jira.'
+                } catch (e) {
+                    jira = ` Saved, but Jira refused the comment: ${(e as Error).message.slice(0, 160)}`
+                }
+            }
+            return text(`Saved: ${k} (${row.release}) is ${verdict}, by ${decided_by}.${jira}`)
         }
+    )
+
+    server.registerTool(
+        'correct_ticket_link',
+        {
+            title: 'Fix how a ticket is linked',
+            description:
+                'When a ticket is linked to the wrong screen or event (or none), set the right one, then its numbers are recounted. screen_problems says whether errors, rage clicks and complaints on the screen count for this ticket ("auto" lets the rules decide). reset=true goes back to the automatic link.',
+            inputSchema: {
+                key: z.string(),
+                screen: z.string().optional().describe('Screen path, e.g. /settings'),
+                event: z.string().optional().describe('PostHog event name, e.g. theme_changed'),
+                screen_problems: z.enum(['auto', 'count', 'ignore']).default('auto'),
+                reset: z.boolean().default(false),
+                changed_by: z.string().describe('Who asked for the change'),
+            },
+            annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+        },
+        async ({ key, screen, event, screen_problems, reset, changed_by }) => {
+            const k = key.trim().toUpperCase()
+            const release = ticketRelease(k)
+            if (!release) return text(`${k} is not in the kept releases.`)
+            if (reset) setLink(k, null, changed_by)
+            else {
+                if (!screen && !event) return text('Give a screen, an event, or both (or reset=true).')
+                if (screen && !screen.startsWith('/')) return text('A screen is a path that starts with /, e.g. /invoices.')
+                setLink(k, { screen, event, ...(screen_problems === 'auto' ? {} : { risk: screen_problems === 'count' }) }, changed_by)
+            }
+            await recompute(release)
+            return text(`Updated and recounted.\n\n${ticketText(k)}`)
+        }
+    )
+
+    server.registerTool(
+        'refresh_releases',
+        {
+            title: 'Refresh from Jira and PostHog',
+            description: 'Reads the releases and tickets from Jira again and recounts everything in PostHog (about 15 seconds). The service also does this every 6 hours.',
+            inputSchema: {},
+            annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+        },
+        async () => {
+            const r = await syncReleases()
+            return text(`Refreshed ${r.releases.length} releases (${r.releases[0]} to ${r.releases.at(-1)}), ${r.tickets} tickets, in ${r.seconds} s.${r.dropped.length ? ` No longer kept: ${r.dropped.join(', ')}.` : ''}`)
+        }
+    )
+
+    server.registerPrompt(
+        'review_release',
+        {
+            title: 'Review a release',
+            description: 'Judge which tickets in a release (or quarter) are risky, from the outcomes and what clients said.',
+            argsSchema: { scope: z.string().optional().describe('e.g. 26.10.0, Q3 2026, last 3') },
+        },
+        ({ scope }) => ({
+            messages: [
+                {
+                    role: 'user',
+                    content: {
+                        type: 'text',
+                        text: `Review the release outcomes for ${scope || 'the latest release'} with the PostHog Lens tools.
+
+1. Call release_outcomes${scope ? ` with scope "${scope}"` : ' with scope "last 1"'}. Then client_feedback for the same scope.
+2. For each ticket in "More errors", "More rage clicks", "Clients complained" or "Low uptake", call ticket_evidence.
+3. Decide for each of those tickets: risky, watch or fine. Weigh:
+   - how many clients are affected, and whether they are large ones;
+   - whether it blocks work (errors, failed exports) or only annoys (rage clicks);
+   - whether it is growing or fading week by week, and whether a later release fixed it;
+   - what clients actually said, in support tickets and surveys;
+   - earlier verdicts on the same ticket, and why they were made.
+   A ticket that shares a screen with others may not be the cause: say so.
+4. Reply with a short table (ticket, verdict, one-line reason with numbers), then the 2 or 3 things to act on first. Mention what went well (adopted, fixed) in one line.
+5. Ask me which verdicts to save. Only then call record_verdict, with decided_by set to who agreed. Do not invent numbers: use only what the tools returned.`,
+                    },
+                },
+            ],
+        })
     )
 }

@@ -7,7 +7,7 @@ import { after, describe, test } from 'node:test'
 const dir = mkdtempSync(join(tmpdir(), 'triage-rel-'))
 process.env.TRIAGE_DB = join(dir, 'test.db')
 const { db } = await import('../src/core/db.ts')
-const { autoLink, sameWord, quarterOf, scoreTicket, saveReleaseSettings, releaseSettings, DEFAULT_SETTINGS } = await import('../src/core/releases.ts')
+const { autoLink, sameWord, quarterOf, classify, releaseSettings, resolveScope } = await import('../src/core/releases.ts')
 const { RELEASES, versionAt } = await import('../src/core/release-plan.ts')
 const { CLIENTS } = await import('../src/core/catalog.ts')
 after(() => {
@@ -101,67 +101,74 @@ describe('word matching', () => {
 
 describe('quarters', () => {
     test('calendar quarters', () => {
-        assert.deepEqual(quarterOf('2026-10-26', 1), { id: 'q:2026-4', label: 'Q4 2026' })
-        assert.deepEqual(quarterOf('2026-01-12', 1), { id: 'q:2026-1', label: 'Q1 2026' })
+        assert.equal(quarterOf('2026-10-26', 1), 'Q4 2026')
+        assert.equal(quarterOf('2026-01-12', 1), 'Q1 2026')
     })
     test('a fiscal year starting in April is named after the year it ends', () => {
-        assert.deepEqual(quarterOf('2026-04-13', 4), { id: 'q:FY2027-1', label: 'FY27 Q1' })
-        assert.deepEqual(quarterOf('2026-03-09', 4), { id: 'q:FY2026-4', label: 'FY26 Q4' })
+        assert.equal(quarterOf('2026-04-13', 4), 'FY27 Q1')
+        assert.equal(quarterOf('2026-03-09', 4), 'FY26 Q4')
     })
 })
 
-describe('scores', () => {
-    const snap = {
-        release: '26.10.0',
-        totals: { clients_after: 20 },
-        screens: {
-            '/invoices': { sessions_after: 400, sessions_before: 400, errors_after: 40, errors_before: 0, rage_after: 10, rage_before: 0, support: [{ key: 'SUP-1' }, { key: 'SUP-2' }] },
-            '/clients': { sessions_after: 200, sessions_before: 200, errors_after: 0, errors_before: 0, rage_after: 2, rage_before: 30, support: [] },
-        },
-        new_errors: [{ path: '/invoices', clients: 4 }],
-    } as never
-    const w = DEFAULT_SETTINGS.weights
+describe('outcome groups', () => {
+    const sc = (o: Record<string, unknown> = {}) => ({
+        sessions_after: 400,
+        sessions_before: 400,
+        errors_after: 0,
+        errors_before: 0,
+        rage_after: 0,
+        rage_before: 0,
+        support: [],
+        survey: { answers_before: 0, answers_after: 0, rating_before: null, rating_after: null, comments_after: [] },
+        ...o,
+    })
+    const snap = (screens: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+        ({ release: '26.10.0', date: '2026-10-26', window: { days: 30, open: false }, totals: { clients_after: 100 }, screens, new_errors: [], tickets: [], ...extra }) as never
+    const t = (o: Record<string, unknown>) => ({ key: 'ACP-1', type: 'Story', summary: 's', link_reason: 'r', risk_owner: false, shares_screen_with: [], usage: null, ...o }) as never
+    const groups = (tk: never, sn: never) => classify(tk, sn).groups
 
-    test('a widely used new feature scores high on value and none on risk', () => {
-        const s = scoreTicket({ link: { screen: '/invoices', event: 'invoice_template_used' }, risk_owner: false, usage: { after: 160, clients_after: 18 } } as never, snap, w, 0.5)
-        assert.equal(s.direction, 'value')
-        assert.ok(s.reach >= 0.89)
-        assert.equal(s.risk, 0)
-        assert.ok(s.impact >= 80)
+    test('a new feature used by most clients is adopted; one used by few has low uptake', () => {
+        const s = snap({ '/invoices': sc() })
+        assert.deepEqual(groups(t({ link: { screen: '/invoices', event: 'e' }, usage: { after: 900, before: 0, users_after: 400, clients_after: 86 } }), s), ['adopted'])
+        assert.deepEqual(groups(t({ link: { screen: '/invoices', event: 'e' }, usage: { after: 9, before: 0, users_after: 4, clients_after: 3 } }), s), ['low_uptake'])
     })
-    test('the ticket that changed a screen carries its new errors and support tickets', () => {
-        const s = scoreTicket({ link: { screen: '/invoices' }, risk_owner: true, usage: { after: 900, clients_after: 20 } } as never, snap, w, 0.5)
-        assert.equal(s.direction, 'risk')
-        assert.equal(s.errors, 1)
-        assert.equal(s.support, 0.5)
-        assert.ok(s.impact >= 70)
+    test('the ticket that changed a screen gets its new errors, rage clicks and complaints', () => {
+        const s = snap(
+            { '/invoices': sc({ errors_after: 60, rage_after: 30, support: [{ key: 'SUP-1' }] }) },
+            { new_errors: [{ path: '/invoices', clients: 10, type: 'TypeError', message: 'x', occurrences: 60 }] }
+        )
+        const g = groups(t({ link: { screen: '/invoices' }, risk_owner: true, usage: { after: 5000, before: 5000, clients_after: 99 } }), s)
+        assert.deepEqual(g.sort(), ['complaints', 'errors', 'rage'])
+        assert.deepEqual(groups(t({ link: { screen: '/invoices', event: 'e' }, risk_owner: false, usage: { after: 50, clients_after: 40 } }), s), ['adopted'], 'a feature next to it is not blamed')
     })
-    test('a new feature on the same screen is not credited with a fix', () => {
-        const s = scoreTicket({ type: 'Story', link: { screen: '/clients', event: 'client_health_viewed' }, risk_owner: true, usage: { after: 50, clients_after: 10 } } as never, snap, w, 0.5)
-        assert.equal(s.fixes, null)
+    test('a drop in survey rating counts as a complaint', () => {
+        const s = snap({ '/clients': sc({ survey: { answers_before: 40, answers_after: 38, rating_before: 4.2, rating_after: 3.1, comments_after: [] } }) })
+        assert.deepEqual(groups(t({ link: { screen: '/clients' }, risk_owner: true, usage: { after: 1, clients_after: 1 } }), s), ['complaints'])
     })
-    test('a fix is credited when rage clicks drop', () => {
-        const s = scoreTicket({ link: { screen: '/clients' }, risk_owner: true, usage: { after: 300, clients_after: 15 } } as never, snap, w, 0.5)
-        assert.ok(s.fixes! >= 0.9)
-        assert.equal(s.direction, 'value')
+    test('a bug fix is credited when errors halve; a new feature on that screen is not', () => {
+        const s = snap({ '/reports/revenue': sc({ errors_before: 100, errors_after: 20 }) })
+        assert.deepEqual(groups(t({ type: 'Bug', link: { screen: '/reports/revenue' }, risk_owner: true, usage: { after: 1, clients_after: 1 } }), s), ['fixed'])
+        assert.ok(!groups(t({ type: 'Story', link: { screen: '/reports/revenue', event: 'e' }, risk_owner: true, usage: { after: 1, clients_after: 1 } }), s).includes('fixed'))
     })
-    test('weights change the ranking without new data', () => {
-        const t = { link: { screen: '/invoices' }, risk_owner: true, usage: { after: 900, clients_after: 20 } } as never
-        const a = scoreTicket(t, snap, w, 0.5)
-        const b = scoreTicket(t, snap, { ...w, errors: 0, support: 0, friction: 1 }, 0.5)
-        assert.ok(b.risk < a.risk)
+    test('unlinked tickets cannot be measured; quiet new releases are too new to tell', () => {
+        assert.deepEqual(groups(t({ link: null }), snap({})), ['unmeasured'])
+        const fresh = snap({ '/dashboard': sc() }, { window: { days: 5, open: true } })
+        assert.deepEqual(groups(t({ link: { screen: '/dashboard' }, risk_owner: true, usage: { after: 10, clients_after: 9 } }), fresh), ['too_new'])
     })
 })
 
-describe('settings', () => {
-    test('defaults, saving and refusing bad values', () => {
+describe('settings and scopes', () => {
+    test('settings come from the environment, and unsafe property names are refused', () => {
         assert.equal(releaseSettings().keep, 12)
-        saveReleaseSettings({ keep: 8, fiscal_start_month: 4, weights: { ...DEFAULT_SETTINGS.weights, reach: 5 } })
+        process.env.RELEASES_KEEP = '8'
+        process.env.RELEASES_CLIENT_PROPERTY = 'client_id) OR 1=1 --'
         assert.equal(releaseSettings().keep, 8)
-        assert.equal(releaseSettings().weights.reach, 5)
-        assert.throws(() => saveReleaseSettings({ client_property: "client_id) OR 1=1 --" }), /plain property name/)
-        assert.throws(() => saveReleaseSettings({ keep: 0 }), /between 1 and 52/)
-        assert.throws(() => saveReleaseSettings({ support_jql: 'project = SUP; delete' }), /only filter/)
+        assert.equal(releaseSettings().client_property, 'client_id')
+        delete process.env.RELEASES_KEEP
+        delete process.env.RELEASES_CLIENT_PROPERTY
+    })
+    test('an unknown scope is undefined when nothing is stored', () => {
+        assert.equal(resolveScope('Q9 1999'), undefined)
     })
 })
 

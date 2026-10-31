@@ -22,7 +22,6 @@ import { addAttachment, addComment, addLabels, getIssue, hasTriageComment, issue
 import { registerTools } from '../mcp/tools.ts'
 import { audit } from './access.ts'
 import { keptReleases, syncReleases, syncStatus } from '../core/releases.ts'
-import { handleReleases } from './releases-page.ts'
 import { handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
 
 const ai = makeAi()
@@ -165,10 +164,9 @@ const server = createServer(async (req, res) => {
         if (url.pathname === '/webhooks/jira' && req.method === 'POST') return await handleWebhook(req, res)
         if (url.pathname.startsWith('/clips/') && req.method === 'GET') return serveClip(req, res, url)
         if (url.pathname === '/') {
-            res.writeHead(302, { location: '/releases' })
+            res.writeHead(302, { location: '/replays' })
             return res.end()
         }
-        if (await handleReleases(req, res, url)) return
         if (await handleReplays(req, res, url)) return
         if (url.pathname === '/mcp') return await handleMcp(req, res)
         if (url.pathname === '/status') {

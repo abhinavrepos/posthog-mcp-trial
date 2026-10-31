@@ -1,8 +1,7 @@
 # Five-minute demo
 
-Before the demo: `scripts/demo-prep.sh --reset-board` (a few minutes). Open four tabs:
-the mock Jira board (`:4000`), PostHog Lens (`:8080/releases`), PostHog (`:80`),
-and Claude Code in this folder.
+Before the demo: `scripts/demo-prep.sh --reset-board` (a few minutes). Open three tabs:
+the mock Jira board (`:4000`), PostHog (`:80`), and Claude Code in this folder.
 
 ## 1. The problem (30 s)
 
@@ -43,27 +42,26 @@ hands back links. It never sees the replay itself: replays stay with people who 
 
 > Which other clients are affected, and is it getting worse?
 
-## 5. Release insights (90 s)
+## 5. Release review with Claude (90 s)
 
-Open `http://<host>:8080/releases`. The tabs at the top are Overview, Tickets, Releases & groups,
-Compare, How it works and Settings. The "Showing" picker carries across them.
+In Claude Code, run the prompt `/mcp__ticket-triage__review_release Q3 2026`, or just ask:
 
-- **Findings**, in plain words:
-  - Bulk send (26.8.0) reached every client.
-  - The 26.5.0 chart engine broke the revenue report for 17 clients, and 26.6.0 fixed it.
-  - The 26.10.0 currency change is behind today's export bug.
-- **Impact map**: wins bottom right, problems up top. Click ACP-230 to see its numbers: errors
-  0 → 15 per 100 sessions, the support tickets, and why it is linked to Invoices.
-- **Compare**: Q3 2026 against Q2 2026, with the top tickets of each.
-- **How it works**: one page with every rule and the current weights, for "where do these
-  numbers come from?".
-- **Customise**: drag "Support tickets" to 10 and watch the ranking change. Admins can save it
-  as the default.
-- **Copy summary** gives Markdown for the stakeholder email.
-- In Claude: "Which ticket in Q3 2026 had the most impact, and which was the riskiest?" Then
-  "Tell me everything about ACP-230" (`ticket_impact`).
+> Review Q3 2026. Which tickets were risky, and what went well?
 
-Access: a stakeholder can have "Release insights only". They see this page and no replays.
+Claude calls `release_outcomes`, `client_feedback` and `ticket_evidence`, then answers with a
+verdict table:
+
+- **ACP-200** (26.7.0, new client filters): risky. Rage clicks rose from 0 to 18 per 100
+  sessions, four support tickets said "where did search go?", and the survey rating fell
+  from 4.2 to 3.1.
+- **ACP-211** (26.8.0): fixed it.
+- **ACP-210** Bulk send: adopted by 77% of clients, with one small support ticket.
+
+Say "save ACP-200 as risky, decided by me". `record_verdict` stores it, and the next review shows
+it.
+
+Point out that the numbers come from Jira and PostHog by fixed rules, and Claude only judges
+them. Ask "why is ACP-230 grouped under errors?" and it quotes the rule and the counts.
 
 ## 6. Close (30 s)
 

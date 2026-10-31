@@ -6,9 +6,9 @@
 //                 recording get the same file, so it is stored once.
 //   clip_holders  who has which clip: made it, and whether they saved it
 //   audit         sign-ins, views, downloads, shares and access changes
-//   releases, release_tickets, release_snapshots, release_groups
-//                 the release dashboard: the last N Jira releases (default 12), their tickets and
-//                 how each ticket is linked to PostHog, computed numbers, and custom groups
+//   releases, release_tickets, release_snapshots, release_verdicts
+//                 release outcomes for the MCP tools: the last N Jira releases (default 12), their
+//                 tickets and how each is linked to PostHog, the counted facts, and verdicts
 //
 // What gets deleted (see pruneOldClips in service/replays.ts):
 //   a clip nobody saved, CLIP_RETENTION_DAYS (14) after it was last asked for;
@@ -120,6 +120,20 @@ const MIGRATIONS: string[] = [
         created_by TEXT NOT NULL,
         created_at TEXT NOT NULL
     );`,
+
+    // 3: the release dashboard became MCP tools: no more groups or insights role; verdicts instead.
+    `UPDATE people SET role = 'none' WHERE role = 'insights';
+    DROP TABLE release_groups;
+    CREATE TABLE release_verdicts (
+        id INTEGER PRIMARY KEY,
+        ticket TEXT NOT NULL,
+        release TEXT NOT NULL,
+        verdict TEXT NOT NULL CHECK (verdict IN ('risky', 'watch', 'fine')),
+        reason TEXT NOT NULL,
+        source TEXT NOT NULL,
+        at TEXT NOT NULL
+    );
+    CREATE INDEX release_verdicts_ticket ON release_verdicts (ticket, id);`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

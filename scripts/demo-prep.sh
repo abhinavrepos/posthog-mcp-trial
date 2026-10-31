@@ -29,6 +29,7 @@ pnpm -s sessions
 
 echo "==> Filling history up to now"
 pnpm -s seed
+pnpm -s seed:feedback
 
 echo "==> Waiting for the recordings to be stored"
 sleep 30

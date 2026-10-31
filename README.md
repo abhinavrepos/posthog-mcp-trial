@@ -3,7 +3,8 @@
 PostHog Lens is a PostHog extension with three parts:
 
 - **Ticket triage**: Jira tickets arrive with the evidence attached.
-- **Release insights**: each Jira release's tickets, ranked by what they did for clients.
+- **Release outcomes** (MCP tools for Claude): what each Jira release's tickets did in PostHog,
+  sorted into groups, with client feedback. Claude judges the risk; people's verdicts are saved.
 - **Replay clips**: replay clips with per-person access.
 
 The site is at `http://<host>:8080`. `APP_NAME` and `APP_TAG` rename it.
@@ -39,8 +40,7 @@ Two ticket types, set by the Jira issue type:
   client, the trend and a release comparison.
 
 MCP tools: `resolve_client`, `find_client_incidents`, `get_replay_link`, `screen_usage`, `error_blast_radius`,
-`find_silent_issues`, `triage_ticket`, and for releases `release_insights`, `list_releases`,
-`release_tickets`, `ticket_impact` and `compare_releases`.
+`find_silent_issues` and `triage_ticket`. For releases, see Release outcomes below.
 
 Claude never sees replay content. `get_replay_link` returns links for a person to open (the
 PostHog replay, which needs a PostHog login, and a signed MP4 clip). No tool returns frames,
@@ -75,8 +75,7 @@ PostHog on the same host. What they may do is set per person on `/replays/admin`
 | Role | Can |
 | --- | --- |
 | No access | Nothing (the default for PostHog users not listed) |
-| Release insights only | The release dashboard, nothing else (for stakeholders) |
-| Watch clips | Also make and watch clips, fix ticket links and make release groups |
+| Watch clips | Make and watch clips on this site |
 | Watch, download and share | Also download MP4s and create share links |
 | Admin | Also manage access, settings and clips, and see the activity log |
 
@@ -115,118 +114,111 @@ renamed `*.imported`.
 
 Each person can make `CLIPS_PER_HOUR` clips (default 20).
 
-## Release insights
+## Release outcomes
 
-`/releases` matches each Jira release (a version of the `ACP` project) with how clients used the
-product before and after it shipped. It keeps the last 12 releases.
+Claude reads these through MCP tools; there is no web page. The service gathers facts, and the
+model judges them:
 
-**Sync.** Every 6 hours, or on "Sync now", the service:
+```
+Jira releases + tickets ──┐
+Support tickets (RCI, MMT)─┼──▶ sync every 6 h ──▶ facts per ticket, sorted into groups ──▶ MCP ──▶ Claude
+PostHog events + surveys ──┘     (src/core/releases.ts, stored in run/triage.db)                 │
+                                                                     verdicts (risky/watch/fine) ◀┘
+```
 
-1. reads the released versions and their tickets from Jira;
-2. links each ticket to the screen it changed, and to a PostHog event when one fits;
-3. counts the following from PostHog, from the release date to the next release (at most 30
-   days), and over the same number of days before:
-   - use of that screen or event;
-   - clients and users;
-   - errors and rage clicks on the screen;
-   - new error types;
-   - support tickets (RCI and MMT Risk) about the screen.
+**1. Jira.** It reads the last 12 released versions of the `ACP` project with their tickets,
+plus the support tickets.
 
-The numbers are stored per release in `run/triage.db`. Releases older than the kept number are
-deleted, with their tickets.
+**2. Linking.** Each ticket is linked to the screen it changed. The first rule that matches
+wins:
 
-**Linking a ticket.** The first match wins:
+1. a link someone set;
+2. its Jira component;
+3. words in the ticket.
 
-1. a link someone set on the page;
-2. its Jira component, through the component map (or a screen of that name);
-3. words in the ticket that name a screen.
+On top of the screen, an event is linked when its name shares a feature word with the ticket
+title and it first appeared within three weeks of the release. That is what a new feature looks
+like.
 
-On top of the screen, an event is linked when its name shares a word with the ticket title and
-it first appeared within three weeks of the release. That is what a new feature looks like.
-Bugs and tasks never take a new event. Every ticket shows why it was linked, and anyone with
-"Watch clips" can change the link or leave the ticket out of the ranking.
+**3. Counting.** From the release date to the next release (at most 30 days), and the same
+number of days before, it counts in PostHog:
 
-**Scores**, each from 0 to 100:
+- use of the screen or event, and the clients and people behind it;
+- errors and rage clicks per 100 sessions on the screen, and new error types;
+- in-product survey answers (`survey sent` events);
+- support tickets about the screen.
 
-- **Value**: reach (share of active clients), adoption (use of its event), and fixes (errors or
-  rage clicks that went away on its screen).
-- **Risk**: new or more errors, more rage clicks, and support tickets.
-- **Impact**: the larger of value and risk.
+**4. Groups.** Plain thresholds sort each ticket into groups; they are listed in `OUTCOMES` and
+`THRESHOLDS`, and a ticket can be in several.
 
-Who carries a screen's problems:
-
-- By default, the tickets that changed how the screen already worked, meaning those with no
-  event of their own.
-- If every ticket on the screen added an event, they share it.
-- Anyone can switch this per ticket.
-
-The scores show activity where a ticket changed the product, not proof that the ticket caused
-it, and the page says so.
-
-**Pages.** One scope picker (all kept releases, a quarter, a custom group or one release)
-carries across the pages, and every page has its own link:
-
-| Page | What |
+| Group | Rule |
 | --- | --- |
-| Overview | Headline numbers, findings, impact map, top value and top risk, errors before and after each release |
-| Tickets | Ranked tickets with search and filters, and each ticket's detail and link editor |
-| Releases & groups | The release table, the automatic quarters, and custom groups |
-| Compare | Any two scopes side by side |
-| How it works | Where every number comes from, with the current settings filled in |
-| Settings (admins) | Sources, rules and default weights |
+| More errors after the release | Errors on its screen rose by 1+ per 100 sessions, or a new error type hit 2+ clients |
+| More rage clicks | Rage clicks rose by 2+ per 100 sessions |
+| Clients complained | Support tickets about its screen, or the survey rating fell by 0.8+ |
+| Fixed something | Errors or rage clicks on its screen halved (bug fixes and changes to existing screens) |
+| Adopted | Its new event was used by 30%+ of active clients |
+| Low uptake | Its new event was used by under 10% of active clients |
+| Too new to tell | Released under 14 days ago, nothing stands out yet |
+| No clear change | Linked, but none of the above |
+| Can't measure | No screen or event (often tasks) |
 
-**Features:**
+**Who carries a screen's problems.** By default, the tickets that changed how the screen already
+worked, meaning those with no event of their own. If every ticket on the screen added an event,
+they share it.
 
-- headline numbers, plain-language findings, an impact map (value against risk) and errors
-  before and after each release;
-- the ranked tickets, with week-by-week use, before/after numbers, support tickets and new
-  errors;
-- a release table;
-- **views**:
-  - the last 12 releases;
-  - automatic quarters (calendar or fiscal, set by the year's start month);
-  - custom groups;
-  - any single release;
-  - **Compare with** for any two of these.
-- **Customise**: weights for the six signals. They apply at once for the viewer, and admins can
-  save them as the default.
-- **Copy summary**: Markdown for an email or Confluence.
-- **Settings** (admins):
-  - the Jira project and support JQL;
-  - releases kept and days measured;
-  - the year start;
-  - ranked ticket types;
-  - the client and version properties;
-  - the component map;
-  - reach for whole-screen links.
+**5. Judging.** Claude decides what is risky, from these facts, what clients said, and earlier
+verdicts. Once a person agrees, `record_verdict` saves the verdict (and can post it to Jira), so
+the next review builds on it. No score or formula judges risk. Claude only uses numbers the tools
+returned.
 
-**No AI makes these numbers.** They are Jira data and PostHog counts, put through the rules
-above. Findings are sentences filled in from the numbers.
+**Tools:**
 
-**Claude reads the same stored numbers** through five MCP tools:
-
-| Tool | What it gives |
+| Tool | What it does |
 | --- | --- |
-| `release_insights` | A summary of a scope |
-| `list_releases` | Releases, quarters and groups |
-| `release_tickets` | Ranked and filtered tickets |
-| `ticket_impact` | One ticket in full |
-| `compare_releases` | Two scopes side by side |
+| `list_releases` | Kept releases with headline facts, and the quarters |
+| `release_outcomes` | Tickets of a release, quarter or range, sorted into the groups, each with its facts and verdict. Start here. |
+| `ticket_evidence` | One ticket in full: link and why, week by week, errors, support tickets and survey comments in the clients' words, verdict history |
+| `client_feedback` | Support tickets and survey answers after each release, by screen |
+| `record_verdict` | Saves risky, watch or fine with the reason (optionally as a Jira comment) |
+| `correct_ticket_link` | Fixes a wrong link and recounts |
+| `refresh_releases` | Reads Jira and PostHog again now |
 
-For example, ask "which Q3 ticket hurt the most clients, and what fixed it?" The tools see
-event counts and ticket text only, never replays. To connect Claude Code over HTTP:
+**Prompt `review_release`:** it walks Claude through a review (outcomes, feedback, then the
+evidence for anything that looks wrong) and ends with a verdict table that you confirm before
+anything is saved. In Claude Code it is `/mcp__ticket-triage__review_release 26.10.0`.
+
+**Scopes** are a release (`26.10.0`), a quarter (`Q3 2026`, or `FY27 Q1` with a fiscal year),
+`last 3`, a range (`26.5.0..26.8.0`) or `all`.
+
+**Settings** are environment variables:
+
+| Variable | What |
+| --- | --- |
+| `RELEASES_JIRA_PROJECT` | The Jira project (default `ACP`) |
+| `RELEASES_SUPPORT_JQL` | Which support tickets count |
+| `RELEASES_KEEP` | Releases kept (12) |
+| `RELEASES_WINDOW_DAYS` | Days measured (30) |
+| `RELEASES_FISCAL_START_MONTH` | Month the year starts (1) |
+| `RELEASES_CLIENT_PROPERTY` | Event property that names the client (`client_id`) |
+| `RELEASES_VERSION_PROPERTY` | Event property with the release name (`app_version`; empty to match by date only) |
+| `RELEASES_COMPONENT_SCREENS` | JSON map from Jira component to screen, e.g. `{"Billing":"/invoices"}` |
+
+To connect Claude Code over HTTP:
 
 ```bash
 claude mcp add --transport http posthog-lens http://<host>:8080/mcp --header "Authorization: Bearer <MCP_TOKEN>"
 ```
 
+The local `.mcp.json` server has the same tools.
+
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `src/core/` | Shared logic: resolution, incidents, usage, impact, silent issues, clips, severity, report; `releases.ts` (release insights), `db.ts` (SQLite) |
+| `src/core/` | Shared logic: resolution, incidents, usage, impact, silent issues, clips, severity, report; `releases.ts` (release outcomes), `db.ts` (SQLite) |
 | `src/jira/` | Jira Cloud REST v3 client, webhook signatures, Markdown ↔ ADF |
-| `src/service/` | The web service: webhooks, signed clip links, MCP over HTTP, `/releases`, `/replays`, admin |
+| `src/service/` | The web service: webhooks, signed clip links, MCP over HTTP, `/replays`, admin |
 | `src/mcp/` | MCP tools and the stdio entry point |
 | `src/mock-jira/` | Stand-in Jira with the same REST calls and an issue UI |
 | `demo-app/` | Acme Portal, the demo B2B app with a planted bug |
@@ -250,7 +242,7 @@ scripts/demo-prep.sh --reset-board          # starts everything, records session
 ```
 
 Then open the mock Jira at `http://<host>:4000` (no login) and file an example ticket. Its
-**Releases** page lists the ACP releases the dashboard reads.
+**Releases** page lists the ACP releases the release tools read.
 
 For Claude Code, `.mcp.json` registers the stdio server. Claude Code asks once to approve a
 project MCP server. Remote MCP clients use `http://<host>:8080/mcp` with
@@ -263,7 +255,8 @@ Commands: `pnpm test`, `pnpm typecheck`, `scripts/stack.sh start|stop|restart|st
 Acme Portal has 120 clients and about 840 users. The 20 named clients in
 `src/core/catalog.ts` are the ones the demo app, the recorded sessions and the example tickets
 use. The other 100 are generated the same way every time, so the history has a realistic size
-(about 290,000 events over 14 months).
+(about 290,000 events over 14 months), plus about 2,800 in-product survey answers
+(`pnpm seed:feedback`), which turn sour while a screen is broken for that client.
 
 Acme Portal ships a release every month, named like `26.1.0`. The plan in
 `src/core/release-plan.ts` is the single source for both the mock Jira's ACP releases (with 50
@@ -299,10 +292,10 @@ kept unchanged.
   `JIRA_RCI_ISSUE_TYPE` and `JIRA_RISK_ISSUE_TYPE` to your issue type names. Custom fields are
   optional: `JIRA_FIELD_CLIENT`, `JIRA_FIELD_USER_EMAIL`, `JIRA_FIELD_SCREEN` and
   `JIRA_FIELD_OCCURRED_AT` (for example `customfield_10042`).
-- **Release insights**: on `/releases`, Settings, set the Jira project that holds your releases,
-  the support JQL, and the PostHog properties that name the client and the release. Leave the
-  release property empty if your events don't carry one; matching then uses release dates only.
-  Map your Jira components to screens. `JIRA_PUBLIC_URL` sets where ticket links open.
+- **Release outcomes**: set the `RELEASES_*` variables above. Leave `RELEASES_VERSION_PROPERTY`
+  empty if your events don't carry the release; matching then uses release dates only. If you
+  use PostHog surveys, their answers are read automatically. `JIRA_PUBLIC_URL` sets where ticket
+  links open.
 - **PostHog**: point `POSTHOG_HOST` at your instance and create a personal API key with the
   scopes `query:read`, `session_recording:read`, `error_tracking:read`, `person:read`,
   `group:read` and `project:read`. Your app must register `client_id` and `client_name` as super

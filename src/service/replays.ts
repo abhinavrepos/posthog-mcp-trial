@@ -472,8 +472,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
 // ------------------------------------------------------------------ pages
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 
-const CSS = `:root{--bg:#f5f6f8;--card:#fff;--ink:#1c2230;--muted:#636b7c;--line:#e0e3ea;--accent:#1d4ed8;--accent-ink:#fff;--err:#b42318;--ok:#067647;--chip:#eef2ff}
-@media (prefers-color-scheme:dark){:root{--bg:#12151c;--card:#1b1f29;--ink:#e7e9ee;--muted:#9aa2b2;--line:#2c3240;--accent:#6b8afd;--accent-ink:#0b1020;--err:#f97066;--ok:#47cd89;--chip:#252c3d}}
+const CSS = `:root{color-scheme:light;--bg:#f5f6f8;--card:#fff;--ink:#1c2230;--muted:#636b7c;--line:#e0e3ea;--accent:#1d4ed8;--accent-ink:#fff;--err:#b42318;--ok:#067647;--chip:#eef2ff}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 header{display:flex;align-items:center;gap:18px;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--card);flex-wrap:wrap}
 .brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px;color:var(--ink);text-decoration:none;letter-spacing:.01em}
@@ -501,7 +500,7 @@ export const PAGE_CSS = () => CSS
 
 export const APP_NAME = process.env.APP_NAME || 'PostHog Lens'
 export const APP_TAG = process.env.APP_TAG ?? 'for ION'
-export type Section = 'Releases' | 'Replay clips' | 'Admin'
+export type Section = 'Replay clips' | 'Admin'
 
 /** The header on every page: the product name, the sections this person may open, and sign out. */
 export function headerHtml(v: Viewer | undefined, section: Section): string {
@@ -509,7 +508,6 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
     if (!v) return `<header>${brand}</header>`
     const tabs = (
         [
-            ['Releases', '/releases', 'insights'],
             ['Replay clips', '/replays', 'watch'],
             ['Admin', '/replays/admin', 'admin'],
         ] as const
@@ -535,15 +533,10 @@ const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Sign i
 }
 
 function noAccessHtml(v: Viewer): string {
-    if (can(v.role, 'insights')) {
-        return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
-<body>${headerHtml(v, 'Replay clips')}<main style="max-width:560px"><div class="card"><h2>Replay clips are not part of your access</h2>
-<p>You can see <a href="/releases">release insights</a>. Replays can show client data, so watching them needs the "Watch clips" role from an admin.</p></div></main></body></html>`
-    }
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No access · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
 <body>${headerHtml(v, 'Replay clips')}<main style="max-width:560px"><div class="card"><h2>You don't have access to replay clips</h2>
 <p>You're signed in as <b>${esc(v.email)}</b>, but no admin has given you access yet. Replays can show client data, so access is given person by person.</p>
-<p class="muted small">Ask a PostHog admin to give you a role on the admin page: "Release insights only", or "Watch clips" for replays too.</p></div></main></body></html>`
+<p class="muted small">Ask a PostHog admin to give you the "Watch clips" role on the admin page.</p></div></main></body></html>`
 }
 
 function pageHtml(v: Viewer): string {
