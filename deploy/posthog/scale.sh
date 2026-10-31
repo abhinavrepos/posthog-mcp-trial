@@ -94,6 +94,21 @@ for i in $(seq 1 60); do
     sleep 5
 done
 
+echo "==> Database for the plugin job queue (the current Node image needs it)"
+if ! docker compose exec -T db psql -U posthog -Atc "select 1 from pg_database where datname='cyclotron_node'" | grep -q 1; then
+    docker compose exec -T db psql -U posthog -qc "create database cyclotron_node"
+fi
+docker compose exec -T db psql -U posthog -d cyclotron_node -qc "create table if not exists _lens_migrations (name text primary key)"
+for f in $(ls posthog/rust/cyclotron-node-migrations/*.sql | sort); do
+    n=$(basename "$f")
+    if ! docker compose exec -T db psql -U posthog -d cyclotron_node -Atc "select 1 from _lens_migrations where name='$n'" | grep -q 1; then
+        docker compose exec -T db psql -U posthog -d cyclotron_node -v ON_ERROR_STOP=1 -q < "$f"
+        docker compose exec -T db psql -U posthog -d cyclotron_node -qc "insert into _lens_migrations values ('$n')"
+        echo "    applied $n"
+    fi
+done
+docker compose up -d plugins plugins-cdp-worker >/dev/null
+
 echo "==> Kafka retention: ${RETENTION_HOURS} h, at most ${RETENTION_GB} GB per partition"
 rpk cluster config set log_retention_ms $(( RETENTION_HOURS * 3600 * 1000 )) >/dev/null
 rpk cluster config set retention_bytes $(( RETENTION_GB * 1024 * 1024 * 1024 )) >/dev/null

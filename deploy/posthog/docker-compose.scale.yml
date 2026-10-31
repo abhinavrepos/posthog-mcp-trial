@@ -59,6 +59,7 @@ services:
             NODE_OPTIONS: --max-old-space-size=${PLUGINS_HEAP_MB:-3072}
             PERSONHOG_ENABLED: 'true'
             PERSONHOG_ADDR: personhog-router:50052
+            CYCLOTRON_NODE_DATABASE_URL: postgres://posthog:posthog@db:5432/cyclotron_node
 
     # A separate worker that sends destination requests (webhooks and the like), sharing the queue with
     # plugins, so a slow destination cannot hold up everything else plugins does.
@@ -74,6 +75,7 @@ services:
             NODE_OPTIONS: --max-old-space-size=${PLUGINS_HEAP_MB:-3072}
             PERSONHOG_ENABLED: 'true'
             PERSONHOG_ADDR: personhog-router:50052
+            CYCLOTRON_NODE_DATABASE_URL: postgres://posthog:posthog@db:5432/cyclotron_node
 
     ingestion-error-tracking:
         <<: *node
@@ -82,6 +84,7 @@ services:
         environment:
             PERSONHOG_ENABLED: 'true'
             PERSONHOG_ADDR: personhog-router:50052
+            CYCLOTRON_NODE_DATABASE_URL: postgres://posthog:posthog@db:5432/cyclotron_node
     ingestion-sessionreplay:
         <<: *node
     ingestion-logs:
