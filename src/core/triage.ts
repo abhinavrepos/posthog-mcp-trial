@@ -136,9 +136,8 @@ export async function triage(ticket: Ticket, opts: TriageOptions = {}): Promise<
 
     if (opts.ai?.hypothesis && (report.incident || report.struggle)) {
         try {
-            const { clipFrames } = await import('./clip.ts')
-            const frames = report.clip ? await clipFrames(report.clip.file, [2, report.clip.video_duration_s / 2, report.clip.video_duration_s - 2]) : []
-            report.hypothesis = await opts.ai.hypothesis(report, frames)
+            // Event and error data only: replay frames never go to Claude.
+            report.hypothesis = await opts.ai.hypothesis(report, [])
         } catch (e) {
             notes.push(`Claude could not suggest a cause (${(e as Error).message}).`)
         }

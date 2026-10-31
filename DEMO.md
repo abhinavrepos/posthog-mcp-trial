@@ -35,10 +35,10 @@ On the board, click **Client bug: PDF export stuck**. Point out how vague the ti
 
 In Claude Code (approve the `ticket-triage` MCP server once):
 
-> When did Brightwater last hit an error on invoices, and show me what Ben saw.
+> When did Brightwater last hit an error on invoices? Give me the replay link.
 
-Claude calls `find_client_incidents`, then `get_replay_clip`. Claude looks at the frames, so it
-can describe the screen.
+Claude calls `find_client_incidents`, then `get_replay_link`. It answers from event data and
+hands back links. It never sees the replay itself: replays stay with people who have a login.
 
 > Which other clients are affected, and is it getting worse?
 
