@@ -4,7 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { SCREENS } from '../core/catalog.ts'
-import { clipFrames, renderClip } from '../core/clip.ts'
+import { renderClip } from '../core/clip.ts'
 import { errorImpact } from '../core/impact.ts'
 import { bestPerSession, findIncidents } from '../core/incidents.ts'
 import { clipUrl } from '../core/links.ts'
@@ -71,39 +71,37 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
             const incidents = await findIncidents({ clientId: best.id, from: win.from, to: win.to, pathname: screenPath(screen), email, limit: 100 })
             const sessions = bestPerSession(incidents).slice(0, 10)
             return json(
-                `${best.name}: ${incidents.length} trouble events in ${sessions.length} sessions (${win.label}). One row per session, most useful first. Use get_replay_clip with session_id and recording.offset_s to see it.`,
+                `${best.name}: ${incidents.length} trouble events in ${sessions.length} sessions (${win.label}). One row per session, most useful first. Use get_replay_link with session_id and recording.offset_s to see it.`,
                 sessions
             )
         }
     )
 
+    // Replays can show sensitive client data. This tool hands back links for people to open; it
+    // never returns frames, video bytes or anything else from the recording itself.
     server.registerTool(
-        'get_replay_clip',
+        'get_replay_link',
         {
-            title: 'Clip a session replay',
+            title: 'Link to a session replay',
             description:
-                'Renders part of a session recording to MP4 and returns a link plus a few frames, so you can see what the user saw. Rendering takes 10 to 30 seconds the first time.',
+                'Returns links a person can open to watch a session at the right moment: the PostHog replay (needs a PostHog login) and, when rendering works, a short MP4 clip. You cannot see the replay yourself; pass the links on to the user.',
             inputSchema: {
                 session_id: z.string(),
                 start_s: z.number().min(0).describe('Seconds from the start of the recording. Use offset_s minus about 10.'),
                 duration_s: z.number().min(3).max(120).default(30),
-                frames: z.number().int().min(0).max(4).default(3).describe('How many frames to return as images'),
             },
             annotations: { readOnlyHint: true },
         },
-        async ({ session_id, start_s, duration_s, frames }) => {
-            const clip = await renderClip({ sessionId: session_id, startOffsetS: start_s, durationS: duration_s })
-            const at = frames ? Array.from({ length: frames }, (_, i) => ((i + 0.5) * clip.video_duration_s) / frames) : []
-            const images = await clipFrames(clip.file, at)
-            return {
-                content: [
-                    {
-                        type: 'text',
-                        text: `Clip of ${session_id} from ${clip.start_offset_s}s to ${clip.end_offset_s}s: ${clipUrl(clip.name)}\nFull replay: ${replayUrl(session_id, clip.start_offset_s)}\n${clip.cached ? 'From cache.' : `Rendered in ${clip.render_s.toFixed(1)} s.`} Frames at ${at.map((t) => `${t.toFixed(0)}s`).join(', ')} follow.`,
-                    },
-                    ...images.map((b) => ({ type: 'image' as const, data: b.toString('base64'), mimeType: 'image/png' })),
-                ],
+        async ({ session_id, start_s, duration_s }) => {
+            const lines = [`Replay in PostHog from ${Math.floor(start_s)}s (PostHog login needed): ${replayUrl(session_id, start_s)}`]
+            try {
+                const clip = await renderClip({ sessionId: session_id, startOffsetS: start_s, durationS: duration_s })
+                lines.push(`MP4 clip, ${Math.round(clip.video_duration_s)} s (link expires): ${clipUrl(clip.name)}`)
+            } catch (e) {
+                lines.push(`No MP4 clip: rendering is not available (${(e as Error).message.split('\n')[0].slice(0, 120)}).`)
             }
+            lines.push('These links are for the user to open. The replay content is not available to you.')
+            return text(lines.join('\n'))
         }
     )
 

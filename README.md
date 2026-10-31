@@ -30,9 +30,12 @@ Two ticket types, set by the Jira issue type:
 - **MMT Risk** (a risk review of a screen): exposure, the main error, one replay per affected
   client, the trend and a release comparison.
 
-MCP tools: `resolve_client`, `find_client_incidents`, `get_replay_clip` (returns frames as
-images, so Claude can see the screen), `screen_usage`, `error_blast_radius`,
+MCP tools: `resolve_client`, `find_client_incidents`, `get_replay_link`, `screen_usage`, `error_blast_radius`,
 `find_silent_issues` and `triage_ticket`.
+
+Claude never sees replay content. `get_replay_link` returns links for a person to open (the
+PostHog replay, which needs a PostHog login, and a signed MP4 clip). No tool returns frames,
+video or recording data, and the optional cause suggestion uses event and error data only.
 
 Optional: with `ANTHROPIC_API_KEY` set, Claude (`claude-opus-5-5`) reads messy tickets and
 suggests a likely cause from the error and replay frames. Structured Jira fields always win over
