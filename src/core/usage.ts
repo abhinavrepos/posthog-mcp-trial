@@ -1,5 +1,6 @@
 // "How many clients use this screen, and when?" Usage of one screen over a period.
 import { hogql } from './posthog.ts'
+import { P } from './props.ts'
 
 export interface ScreenUsage {
     pathname: string
@@ -20,16 +21,16 @@ const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Satur
 export async function screenUsage(pathname: string, opts: { days?: number; clientId?: string } = {}): Promise<ScreenUsage> {
     const days = opts.days ?? 30
     const values = { path: pathname, days }
-    const scope = `event = '$pageview' AND timestamp > now() - toIntervalDay({days}) AND notEmpty(toString(properties.client_id))`
+    const scope = `event = '$pageview' AND timestamp > now() - toIntervalDay({days}) AND notEmpty(toString(${P.client}))`
 
     const [totals, everyone, weekday, busiest, top] = await Promise.all([
         hogql(
-            `SELECT count(DISTINCT toString(properties.client_id)) AS clients, count(DISTINCT person_id) AS users,
+            `SELECT count(DISTINCT toString(${P.client})) AS clients, count(DISTINCT person_id) AS users,
                     count(DISTINCT toString(properties.$session_id)) AS sessions, count() AS pageviews
              FROM events WHERE ${scope} AND toString(properties.$pathname) = {path}`,
             values
         ),
-        hogql(`SELECT count(DISTINCT toString(properties.client_id)) AS clients FROM events WHERE ${scope}`, values),
+        hogql(`SELECT count(DISTINCT toString(${P.client})) AS clients FROM events WHERE ${scope}`, values),
         hogql(
             `SELECT toDayOfWeek(timestamp) AS dow, count() AS pageviews
              FROM events WHERE ${scope} AND toString(properties.$pathname) = {path}
@@ -43,7 +44,7 @@ export async function screenUsage(pathname: string, opts: { days?: number; clien
             values
         ),
         hogql(
-            `SELECT toString(properties.client_id) AS client_id, any(toString(properties.client_name)) AS client_name,
+            `SELECT toString(${P.client}) AS client_id, any(toString(${P.clientName})) AS client_name,
                     count() AS pageviews, count(DISTINCT person_id) AS users, max(timestamp) AS last_seen
              FROM events WHERE ${scope} AND toString(properties.$pathname) = {path}
              GROUP BY client_id ORDER BY pageviews DESC LIMIT 100`,

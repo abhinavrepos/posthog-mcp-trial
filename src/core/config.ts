@@ -1,6 +1,7 @@
-// Settings come from the environment, with .secrets.env (git-ignored) filling anything unset.
+// Settings come from the environment, with an env file filling anything unset: .secrets.env
+// (git-ignored) by default, or the file TRIAGE_ENV_FILE names. .env.example lists every setting.
 import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -15,13 +16,41 @@ function loadEnvFile(path: string): void {
         const key = line.slice(0, eq).trim()
         let value = line.slice(eq + 1).trim()
         if (/^(['"]).*\1$/.test(value)) value = value.slice(1, -1)
-        if (process.env[key] === undefined) process.env[key] = value
+        else value = value.replace(/\s+#.*$/, '') // "KEY=value   # comment"
+        // An empty value in the file means "not set", so the default applies.
+        if (value !== '' && process.env[key] === undefined) process.env[key] = value
     }
 }
-loadEnvFile(join(ROOT, '.secrets.env'))
+const envFile = process.env.TRIAGE_ENV_FILE || '.secrets.env'
+export const ENV_FILE = isAbsolute(envFile) ? envFile : join(ROOT, envFile)
+loadEnvFile(ENV_FILE)
 
 const env = (k: string, d = ''): string => process.env[k] ?? d
 const stripSlash = (s: string) => s.replace(/\/+$/, '')
+// Property names go into HogQL as identifiers, so only plain names are allowed.
+const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/
+function propName(key: string, fallback: string, optional = false): string {
+    const v = env(key, fallback).trim()
+    if (optional && (v === '' || v === 'none')) return ''
+    if (!IDENT.test(v)) throw new Error(`${key} must be a plain property name (letters, digits, _ and $), got "${v}"`)
+    return v
+}
+
+export interface Screen {
+    path: string
+    name: string
+    aliases: string[]
+}
+/** Your app's screens, so tickets that say "the invoices page" find /invoices. From SCREENS_FILE (JSON). */
+function loadScreens(): Screen[] | undefined {
+    const file = env('SCREENS_FILE')
+    if (!file) return undefined
+    const path = isAbsolute(file) ? file : join(ROOT, file)
+    const list = JSON.parse(readFileSync(path, 'utf8')) as Screen[]
+    if (!Array.isArray(list) || !list.every((x) => typeof x.path === 'string' && x.path.startsWith('/') && typeof x.name === 'string'))
+        throw new Error(`${file} must be a JSON list of {"path": "/invoices", "name": "Invoices", "aliases": ["billing"]}`)
+    return list.map((x) => ({ path: x.path, name: x.name, aliases: (x.aliases || []).map((a) => String(a).toLowerCase()) }))
+}
 
 export const config = {
     posthog: {
@@ -32,6 +61,25 @@ export const config = {
         projectId: env('POSTHOG_PROJECT_ID'),
         projectToken: env('POSTHOG_PROJECT_TOKEN'), // phc_… public ingestion token
         personalApiKey: env('POSTHOG_PERSONAL_API_KEY'), // phx_… read access for queries and snapshots
+        // Only used by setup and load-test scripts, never by the service.
+        adminEmail: env('POSTHOG_ADMIN_EMAIL'),
+        adminPassword: env('POSTHOG_ADMIN_PASSWORD'),
+        // PostHog's own MCP server, if Claude should have it too (pnpm mcp:config writes .mcp.json).
+        // https://mcp.posthog.com/mcp for PostHog Cloud, or your own copy for a self-hosted PostHog.
+        mcpUrl: env('POSTHOG_MCP_URL'),
+        mcpApiKey: env('POSTHOG_MCP_API_KEY'), // a separate personal key, without session_recording:read
+    },
+    // How your events name things. The defaults match the demo app.
+    properties: {
+        client: propName('PROP_CLIENT_ID', process.env.RELEASES_CLIENT_PROPERTY || 'client_id'), // event property: client id
+        clientName: propName('PROP_CLIENT_NAME', 'client_name'), // event property: client display name
+        version: propName('PROP_APP_VERSION', process.env.RELEASES_VERSION_PROPERTY ?? 'app_version', true), // event property: release, '' if none
+        personEmail: propName('PROP_PERSON_EMAIL', 'email'), // person property: the user's email
+    },
+    screens: loadScreens(),
+    app: {
+        name: env('APP_NAME', 'PostHog Lens'),
+        tag: env('APP_TAG', 'for ION'),
     },
     jira: {
         baseUrl: stripSlash(env('JIRA_BASE_URL', 'http://localhost:4000')),

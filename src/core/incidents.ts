@@ -1,6 +1,7 @@
 // "When did this client hit this?" Trouble moments (exceptions, rage clicks, dead clicks) for a
 // client, each linked to the session recording and the offset into it.
 import { hogql, replayUrl } from './posthog.ts'
+import { P } from './props.ts'
 
 export type IncidentKind = 'exception' | 'rageclick' | 'dead_click'
 
@@ -56,9 +57,9 @@ export function elementLabel(chain: string): string | undefined {
 export async function findIncidents(q: IncidentQuery): Promise<Incident[]> {
     const kinds = q.kinds?.length ? q.kinds : (Object.keys(EVENT_FOR) as IncidentKind[])
     const rows = await hogql(
-        `SELECT event, timestamp, toString(properties.client_id) AS client_id, toString(properties.client_name) AS client_name,
-                coalesce(nullIf(toString(person.properties.email), ''), distinct_id) AS user,
-                toString(properties.$pathname) AS pathname, toString(properties.app_version) AS app_version,
+        `SELECT event, timestamp, toString(${P.client}) AS client_id, toString(${P.clientName}) AS client_name,
+                coalesce(nullIf(toString(${P.email}), ''), distinct_id) AS user,
+                toString(properties.$pathname) AS pathname, toString(${P.version}) AS app_version,
                 toString(properties.$session_id) AS session_id,
                 toString(properties.$exception_types[1]) AS error_type,
                 toString(properties.$exception_values[1]) AS error_message,
@@ -66,10 +67,10 @@ export async function findIncidents(q: IncidentQuery): Promise<Incident[]> {
                 elements_chain
          FROM events
          WHERE event IN {events}
-           AND toString(properties.client_id) = {client}
+           AND toString(${P.client}) = {client}
            AND timestamp >= {from} AND timestamp < {to}
            AND ({pathname} = '' OR toString(properties.$pathname) = {pathname})
-           AND ({email} = '' OR lower(toString(person.properties.email)) = {email})
+           AND ({email} = '' OR lower(toString(${P.email})) = {email})
          ORDER BY timestamp DESC
          LIMIT {limit}`,
         {

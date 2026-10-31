@@ -2,6 +2,7 @@
 // clipping. All of it comes from event data; nothing is read from the recording itself.
 import { elementLabel } from './incidents.ts'
 import { getRecording, hogql } from './posthog.ts'
+import { P } from './props.ts'
 
 export interface Moment {
     offset_s: number
@@ -26,8 +27,8 @@ export async function recordingInfo(sessionId: string): Promise<RecordingInfo> {
     const start = Date.parse(meta.start_time)
     const rows = await hogql(
         `SELECT event, timestamp, toString(properties.$pathname) AS path,
-                coalesce(nullIf(toString(person.properties.email), ''), distinct_id) AS user,
-                toString(properties.client_name) AS client, toString(properties.app_version) AS version,
+                coalesce(nullIf(toString(${P.email}), ''), distinct_id) AS user,
+                toString(${P.clientName}) AS client, toString(${P.version}) AS version,
                 toString(properties.$exception_types[1]) AS etype, toString(properties.$exception_values[1]) AS evalue,
                 elements_chain
          FROM events

@@ -498,8 +498,8 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 
 export const PAGE_CSS = () => CSS
 
-export const APP_NAME = process.env.APP_NAME || 'PostHog Lens'
-export const APP_TAG = process.env.APP_TAG ?? 'for ION'
+export const APP_NAME = config.app.name
+export const APP_TAG = config.app.tag
 export type Section = 'Replay clips' | 'Admin'
 
 /** The header on every page: the product name, the sections this person may open, and sign out. */

@@ -18,6 +18,7 @@
     "src",
     "demo-app/*.ts",
     "scripts/*.ts",
+    "deploy/**/*.ts",
     "test"
   ],
   "exclude": [

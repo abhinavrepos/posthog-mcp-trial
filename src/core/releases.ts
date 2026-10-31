@@ -65,8 +65,9 @@ export function releaseSettings(): ReleaseSettings {
         keep: intEnv('RELEASES_KEEP', 12, 1, 52),
         window_days: intEnv('RELEASES_WINDOW_DAYS', 30, 7, 120),
         fiscal_start_month: intEnv('RELEASES_FISCAL_START_MONTH', 1, 1, 12),
-        client_property: prop('RELEASES_CLIENT_PROPERTY', 'client_id') || 'client_id',
-        version_property: prop('RELEASES_VERSION_PROPERTY', 'app_version'),
+        // PROP_CLIENT_ID and PROP_APP_VERSION; the RELEASES_* names still work.
+        client_property: prop('RELEASES_CLIENT_PROPERTY', config.properties.client) || config.properties.client,
+        version_property: prop('RELEASES_VERSION_PROPERTY', config.properties.version),
         component_screens,
     }
 }

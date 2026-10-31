@@ -1,0 +1,7 @@
+[
+    { "path": "/dashboard", "name": "Dashboard", "aliases": ["home", "overview"] },
+    { "path": "/invoices", "name": "Invoices", "aliases": ["invoice", "billing", "pdf", "export", "statement"] },
+    { "path": "/clients", "name": "Clients", "aliases": ["client list", "customers", "accounts"] },
+    { "path": "/reports/revenue", "name": "Revenue report", "aliases": ["revenue", "report", "forecast", "chart"] },
+    { "path": "/settings", "name": "Settings", "aliases": ["preferences", "profile", "team", "users"] }
+]

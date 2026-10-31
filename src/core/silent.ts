@@ -2,6 +2,7 @@
 // any exception: rage clicks, dead clicks, the same action repeated, or a long stay.
 import { hogql, replayUrl } from './posthog.ts'
 import { recordingSpans } from './incidents.ts'
+import { P } from './props.ts'
 
 export interface StruggleSession {
     session_id: string
@@ -44,13 +45,13 @@ export function struggleScore(s: Pick<StruggleSession, 'rageclicks' | 'dead_clic
 export async function struggleSessions(q: { clientId: string; pathname?: string; from: Date; to: Date; limit?: number }): Promise<StruggleSession[]> {
     const rows = await hogql(
         `SELECT toString(properties.$session_id) AS sid,
-                any(coalesce(nullIf(toString(person.properties.email), ''), distinct_id)) AS user,
+                any(coalesce(nullIf(toString(${P.email}), ''), distinct_id)) AS user,
                 any(toString(properties.$pathname)) AS pathname,
                 min(timestamp) AS start, dateDiff('second', min(timestamp), max(timestamp)) AS duration_s,
                 countIf(event = '$rageclick') AS rageclicks, countIf(event = '$dead_click') AS dead_clicks,
                 countIf(event = '$exception') AS exceptions
          FROM events
-         WHERE toString(properties.client_id) = {client}
+         WHERE toString(${P.client}) = {client}
            AND timestamp >= {from} AND timestamp < {to}
            AND notEmpty(toString(properties.$session_id))
            AND ({path} = '' OR toString(properties.$pathname) = {path})
