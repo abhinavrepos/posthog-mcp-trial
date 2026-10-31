@@ -363,6 +363,21 @@ async function metricTotals(teamId: number): Promise<Record<string, number>> {
 const diff = (a: Record<string, number>, b: Record<string, number>) =>
     Object.fromEntries(Object.entries(b).map(([k, v]) => [k, v - (a[k] || 0)]).filter(([, v]) => v !== 0))
 const HOOK = `Load test webhook ${RUN}`
+/**
+ * Webhooks actually sent for this run's purchases, from the destination's own log (one "Function
+ * completed" line per call). PostHog's app_metrics2 counters over-count on this install (every plugin
+ * counter came out about 1.3x the real number), so they are reported but not trusted.
+ */
+async function hookCalls(fnId: string): Promise<{ events: number; calls: number }> {
+    const [events, calls] = (
+        await ch(
+            `SELECT uniqExact(extract(message, '/events/([0-9a-f-]{36})/')), count() FROM log_entries WHERE log_source_id = '${fnId}' AND message LIKE 'Function completed%' AND timestamp > now() - INTERVAL 1 DAY FORMAT TSV`
+        )
+    )
+        .split('\t')
+        .map(Number)
+    return { events, calls }
+}
 const delivered = (m: Record<string, number>) => m[`${HOOK} · success · succeeded`] || 0
 
 async function main() {
@@ -402,8 +417,8 @@ async function main() {
     let hooks = 0
     let stableSince = Date.now()
     while (Date.now() - drainStart < Number(opt['drain-minutes']) * 60_000) {
-        const [n, m] = await Promise.all([countRun(project.id), metricTotals(project.id)])
-        const h = delivered(m) - delivered(metricsBefore)
+        const [n, c] = await Promise.all([countRun(project.id), hookCalls(fnId)])
+        const h = c.events - 1 // minus the probe
         if (n !== landed || h !== hooks) stableSince = Date.now()
         landed = n
         hooks = h
@@ -419,7 +434,9 @@ async function main() {
     const geo = await countRun(project.id, "JSONExtractString(properties, '$geoip_country_code') != ''")
     const exceptions = await countRun(project.id, "event = '$exception'")
     const fnMetrics = diff(metricsBefore, await metricTotals(project.id))
-    hooks = delivered(fnMetrics)
+    const calls = await hookCalls(fnId)
+    hooks = calls.events - 1 // minus the probe
+    const duplicates = calls.calls - calls.events
     const failures = Object.entries(fnMetrics).filter(([k]) => / · failure · |fail|error|dropped|disabled|degraded/.test(k))
     const warnings = await ch(
         `SELECT type, count() FROM ingestion_warnings WHERE team_id = ${project.id} AND timestamp >= '${fromTime}' GROUP BY type ORDER BY 2 DESC LIMIT 10 FORMAT TSV`
@@ -449,7 +466,7 @@ async function main() {
         drain_seconds: drainSeconds,
         geoip_filled: `${geo} of ${landed - exceptions}`,
         exceptions: `${exceptions} of ${sent.acceptedExceptions}`,
-        webhook: { probe_delivered_after_s: probeSeconds, purchases_accepted: sent.acceptedPurchases, delivered: hooks },
+        webhook: { probe_delivered_after_s: probeSeconds, purchases_accepted: sent.acceptedPurchases, delivered: hooks, sent_twice: duplicates, metrics_counter_says: delivered(fnMetrics) },
         persons_in_project: persons,
         function_metrics: fnMetrics,
         function_failures: Object.fromEntries(failures),
@@ -463,7 +480,7 @@ async function main() {
     mkdirSync(dir, { recursive: true })
     writeFileSync(join(dir, `${RUN}.json`), JSON.stringify({ ...report, samples }, null, 2))
     console.log(JSON.stringify(report, null, 2))
-    const ok = report.missing === 0 && report.webhook.delivered === report.webhook.purchases_accepted && failures.length === 0 && restarted.length === 0 && http.failed === 0
+    const ok = report.missing === 0 && report.webhook.delivered === report.webhook.purchases_accepted && duplicates === 0 && failures.length === 0 && restarted.length === 0 && http.failed === 0
     log(ok ? 'PASS: nothing lost, no failures, no restarts' : 'FAIL: see the report above')
     process.exit(ok ? 0 : 1)
 }
