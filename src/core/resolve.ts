@@ -84,7 +84,8 @@ export async function resolveClient(input: { text: string; emails?: string[]; cl
 
     for (const email of input.emails || []) {
         const byEmail = await clientsForEmail(email)
-        for (const c of byEmail) add({ ...c, confidence: 0.99, via: 'email', events_90d: c.events })
+        // An email is the strongest evidence: it is added first, and a name match never displaces it.
+        for (const c of byEmail) add({ ...c, confidence: 1, via: 'email', events_90d: c.events })
         if (!byEmail.length) {
             const domain = email.split('@')[1]
             for (const c of domain ? await clientsForDomain(domain) : []) {
@@ -97,7 +98,9 @@ export async function resolveClient(input: { text: string; emails?: string[]; cl
     const text = [input.clientHint, input.text].filter(Boolean).join(' ')
     for (const c of all) {
         const score = scoreClientName(text, c)
-        if (score >= 0.5) add({ id: c.id, name: c.name, confidence: score, via: score === 0.95 ? 'id' : 'name', events_90d: c.events })
+        // An id that is also a word of the name ("nordlicht") reads better as a name match.
+        const viaId = score === 0.95 && !tokens(c.name).includes(c.id.toLowerCase())
+        if (score >= 0.5) add({ id: c.id, name: c.name, confidence: score, via: viaId ? 'id' : 'name', events_90d: c.events })
         // An explicit hint (a structured Jira field) that names the id exactly wins outright.
         if (input.clientHint && input.clientHint.trim().toLowerCase() === c.id) {
             add({ id: c.id, name: c.name, confidence: 1, via: 'id', events_90d: c.events })

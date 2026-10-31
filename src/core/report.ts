@@ -93,7 +93,10 @@ function renderRci(r: TriageReport): string {
         lines.push('', '### What happened')
         lines.push(`- **${when(i.timestamp)}**: ${describeIncident(i)} on \`${i.pathname}\` (v${i.app_version})`)
         for (const o of r.other_sessions.slice(0, 3)) lines.push(`- ${when(o.timestamp)}: ${describeIncident(o)} (${o.user}, another session)`)
-        if (r.search) lines.push(`- Found by searching ${r.search.step}.`)
+        if (r.search) {
+            const exact = r.search.step.startsWith('the time in the ticket')
+            lines.push(exact ? `- Found in ${r.search.step}.` : `- Nothing matched the time in the ticket (${u.window.label}), so the search widened to ${r.search.step}.`)
+        }
     } else if (r.struggle) {
         const s = r.struggle
         lines.push('', '### What happened', `- No error was recorded. The session at **${when(s.start)}** shows the user struggling: ${s.signals.join(', ')}.`)

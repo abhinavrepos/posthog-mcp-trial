@@ -162,7 +162,6 @@ async function clientIncident(report: TriageReport, parsed: ParsedTicket, client
         found = await findIncidents({ clientId: client.id, from: a.window.from, to: a.window.to, pathname: a.pathname, email: a.email, limit: 100 })
         if (found.length) {
             report.search = { step: a.step, window: a.window }
-            if (a !== attempts[0]) report.notes.push(`Nothing matched ${attempts[0].step}; the match came from ${a.step}.`)
             break
         }
     }

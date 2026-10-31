@@ -32,7 +32,11 @@ running() {
 
 start_one() {
     if running "$1"; then echo "$1 already running (pid $(cat "run/$1.pid"))"; return; fi
-    nohup node --import tsx "$(entry "$1")" >>"logs/$1.log" 2>&1 &
+    # Run as the unprivileged "triage" user when started by root: the renderer's Chrome opens
+    # untrusted recordings and must not run as root.
+    local as=()
+    if [ "$(id -u)" = 0 ] && id triage >/dev/null 2>&1; then as=(runuser -u triage --); fi
+    nohup "${as[@]}" env PUPPETEER_CACHE_DIR="$PWD/.cache/puppeteer" HOME=/var/lib/triage node --import tsx "$(entry "$1")" >>"logs/$1.log" 2>&1 &
     echo $! >"run/$1.pid"
     for _ in $(seq 1 40); do
         # Any HTTP answer (the mock Jira UI may answer 401) means the process is up.
