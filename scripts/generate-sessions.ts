@@ -29,7 +29,7 @@ interface Plan {
     scenario: 'export' | 'revenue' | 'browse'
 }
 
-/** The standard mix: every EU client on 2.14.0 hits the bug, Cobalt has its silent report issue. */
+/** The standard mix: every EU client on 26.10.0 hits the bug, Cobalt has its silent report issue. */
 function demoPlans(count: number): Plan[] {
     const by = (id: string, email?: string): Pick<Plan, 'client' | 'user'> => {
         const client = CLIENTS.find((c) => c.id === id)!
@@ -42,8 +42,8 @@ function demoPlans(count: number): Plan[] {
         { ...by('verdant'), scenario: 'export' },
         { ...by('alpenrose'), scenario: 'export' },
         { ...by('cobalt', 'maya.chen@cobalthealth.example'), scenario: 'revenue' },
-        { ...by('meridian'), scenario: 'export' }, // EU, multi-currency, 2.13.2: works
-        { ...by('kestrel'), scenario: 'export' }, // 2.14.0, single currency: works
+        { ...by('meridian'), scenario: 'export' }, // EU, multi-currency, 26.9.0: works
+        { ...by('kestrel'), scenario: 'export' }, // 26.10.0, single currency: works
     ]
     const others = CLIENTS.filter((c) => !['brightwater', 'cobalt'].includes(c.id))
     const plans = [...fixed]

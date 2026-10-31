@@ -1,5 +1,5 @@
 // Acme Portal: a small B2B invoicing app used to generate real PostHog traffic for the demo.
-// It has a planted regression: on release 2.14.0, exporting a PDF for a batch of invoices in
+// It has a planted regression: on release 26.10.0, exporting a PDF for a batch of invoices in
 // more than one currency throws in the browser and the UI hangs on "Preparing PDF…".
 //
 //   pnpm demo-app            (listens on DEMO_APP_PORT, default 3000)
@@ -191,7 +191,7 @@ const server = createServer(async (req, res) => {
     if (path === '/api/invoices/export') {
         const ids = new Set((url.searchParams.get('ids') || '').split(',').filter(Boolean))
         const lines = invoicesFor(ctx.client).filter((i) => ids.size === 0 || ids.has(i.id))
-        // Base-currency rates only. 2.14.0's client code assumes a rate for every currency.
+        // Base-currency rates only. 26.10.0's client code assumes a rate for every currency.
         const rates: Record<string, number> = { [ctx.client.currencies[0]]: 1 }
         return send(res, 200, JSON.stringify({ base: ctx.client.currencies[0], rates, lines }), 'application/json')
     }

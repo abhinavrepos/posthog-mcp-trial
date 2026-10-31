@@ -1,7 +1,8 @@
 # Five-minute demo
 
-Before the demo: `scripts/demo-prep.sh --reset-board` (a few minutes). Open three tabs:
-the mock Jira board (`:4000`), PostHog (`:80`), and Claude Code in this folder.
+Before the demo: `scripts/demo-prep.sh --reset-board` (a few minutes). Open four tabs:
+the mock Jira board (`:4000`), ION Lens release insights (`:8080/releases`), PostHog (`:80`),
+and Claude Code in this folder.
 
 ## 1. The problem (30 s)
 
@@ -17,7 +18,7 @@ On the board, click **Client bug: PDF export stuck**. Point out how vague the ti
 - It found **Ben's session** from an email and a London-time "this afternoon".
 - The **clip** is attached. Play it: the export hangs and Ben clicks again and again. Search
   input is masked in the replay: PostHog does not record what users type.
-- **Is it just them?** No. 4 clients, all on **2.14.0**. 2.13.2 has 0% failures on the same
+- **Is it just them?** No. 4 clients, all on **26.10.0**. 26.9.0 has 0% failures on the same
   screen, so this is a regression in the release, not a client problem.
 - **Usage**: how many clients depend on Invoices, and that Brightwater is the heaviest user.
 - **Suggested P1**, with the reasons written out. A human still decides.
@@ -42,7 +43,25 @@ hands back links. It never sees the replay itself: replays stay with people who 
 
 > Which other clients are affected, and is it getting worse?
 
-## 5. Close (30 s)
+## 5. Release insights (90 s)
+
+Open `http://<host>:8080/releases`.
+
+- **Findings**, in plain words:
+  - Bulk send (26.8.0) reached every client.
+  - The 26.5.0 chart engine broke the revenue report for 17 clients, and 26.6.0 fixed it.
+  - The 26.10.0 currency change is behind today's export bug.
+- **Impact map**: wins bottom right, problems up top. Click ACP-230 to see its numbers: errors
+  0 → 15 per 100 sessions, the support tickets, and why it is linked to Invoices.
+- **Show → Q3 2026**, then **Compare with → Q2 2026**: one quarter against another.
+- **Customise**: drag "Support tickets" to 10 and watch the ranking change. Admins can save it
+  as the default.
+- **Copy summary** gives Markdown for the stakeholder email.
+- In Claude: "Which ticket in Q3 2026 had the most impact, and which was the riskiest?"
+
+Access: a stakeholder can have "Release insights only". They see this page and no replays.
+
+## 6. Close (30 s)
 
 "Same logic, two front doors: Jira automation for every ticket, and Claude for follow-up
 questions. Moving to our real Jira is three settings. Nothing here changes how the product team

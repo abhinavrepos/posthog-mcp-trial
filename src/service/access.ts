@@ -11,13 +11,14 @@ import type { SQLInputValue } from 'node:sqlite'
 import { config } from '../core/config.ts'
 import { all, getSetting, one, run, setSetting, tx } from '../core/db.ts'
 
-export type Role = 'none' | 'watch' | 'download' | 'admin'
-export const ROLES: Role[] = ['none', 'watch', 'download', 'admin']
-const RANK: Record<Role, number> = { none: 0, watch: 1, download: 2, admin: 3 }
+export type Role = 'none' | 'insights' | 'watch' | 'download' | 'admin'
+export const ROLES: Role[] = ['none', 'insights', 'watch', 'download', 'admin']
+const RANK: Record<Role, number> = { none: 0, insights: 1, watch: 2, download: 3, admin: 4 }
 export const can = (role: Role, needed: Role) => RANK[role] >= RANK[needed]
 
 export const ROLE_TEXT: Record<Role, string> = {
     none: 'No access',
+    insights: 'Release insights only',
     watch: 'Watch clips',
     download: 'Watch, download and share',
     admin: 'Admin (manage access)',

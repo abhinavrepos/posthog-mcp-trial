@@ -12,6 +12,7 @@ import { Readable } from 'node:stream'
 import { config, ROOT } from '../core/config.ts'
 import { markdownToAdf, type AdfNode } from '../jira/adf.ts'
 import { signWebhook } from '../jira/client.ts'
+import { PAST_SUPPORT, RELEASES } from '../core/release-plan.ts'
 import { EXAMPLES } from './examples.ts'
 
 const PORT = Number(process.env.MOCK_JIRA_PORT || 4000)
@@ -45,6 +46,7 @@ interface Issue {
     comments: Comment[]
     attachments: Attachment[]
     fields: Record<string, string>
+    extra?: Record<string, unknown> // status, components, fixVersions: only the read-only archive uses them
 }
 interface State {
     next: number
@@ -56,7 +58,79 @@ function load(): State {
 }
 let state = load()
 const save = () => writeFileSync(STATE, JSON.stringify(state, null, 2))
-const find = (key: string) => state.issues.find((i) => i.key === key)
+const find = (key: string) => state.issues.find((i) => i.key === key) || ARCHIVE.find((i) => i.key === key)
+
+// ------------------------------------------------------------------- releases (read-only archive)
+// Product tickets (project ACP) with their fix versions, and last year's resolved support tickets,
+// from the demo release plan. They are not stored: they are the same every start.
+const ARCHIVE: Issue[] = [
+    ...RELEASES.flatMap((r) =>
+        r.tickets.map((tk) => ({
+            key: tk.key,
+            type: tk.type,
+            summary: tk.summary,
+            description: markdownToAdf(tk.description),
+            reporter: { displayName: 'Product team', emailAddress: 'product@acme.example', timeZone: 'Europe/London' },
+            created: new Date(Date.parse(r.date) - 30 * 86_400_000).toISOString(),
+            labels: tk.labels || [],
+            comments: [],
+            attachments: [],
+            fields: {},
+            extra: {
+                status: { name: r.released ? 'Done' : 'In Progress' },
+                components: tk.components.map((name) => ({ name })),
+                fixVersions: [{ name: r.name, releaseDate: r.date, released: r.released }],
+                resolutiondate: r.released ? `${r.date}T09:00:00.000Z` : null,
+            },
+        }))
+    ),
+    ...PAST_SUPPORT.map((tk) => ({
+        key: tk.key,
+        type: tk.type,
+        summary: tk.summary,
+        description: markdownToAdf(tk.description),
+        reporter: { displayName: 'Priya (Client Services)', emailAddress: 'priya.cs@acme.example', timeZone: 'Europe/London' },
+        created: `${tk.created}T10:30:00.000Z`,
+        labels: ['triaged'],
+        comments: [],
+        attachments: [],
+        fields: {},
+        extra: { status: { name: 'Done' }, components: [], fixVersions: [] },
+    })),
+]
+
+const VERSIONS = RELEASES.map((r, n) => ({ id: String(10_000 + n), name: r.name, description: r.description, releaseDate: r.date, released: r.released, archived: false }))
+
+/** The small part of JQL the triage service uses: clauses joined by AND, ORDER BY ignored. */
+export function jqlMatch(jql: string): (i: Issue) => boolean {
+    const where = jql.replace(/\border\s+by\b.*$/i, '').trim()
+    const tests: ((i: Issue) => boolean)[] = []
+    for (const clause of where ? where.split(/\s+and\s+/i) : []) {
+        const m = /^\s*(\w+)\s*(=|!=|>=|<=|>|<|\s+in\s+|\s+not\s+in\s+)\s*(.+?)\s*$/i.exec(clause)
+        if (!m) throw new Error(`Unsupported JQL clause: ${clause}`)
+        const field = m[1].toLowerCase()
+        const op = m[2].trim().toLowerCase()
+        const values = (/^\((.*)\)$/.exec(m[3])?.[1] ?? m[3]).split(',').map((v) => v.trim().replace(/^["']|["']$/g, ''))
+        const get = (i: Issue): string[] => {
+            if (field === 'project') return [i.key.split('-')[0]]
+            if (field === 'issuetype' || field === 'type') return [i.type]
+            if (field === 'fixversion') return ((i.extra?.fixVersions as { name: string }[]) || []).map((v) => v.name)
+            if (field === 'created') return [i.created]
+            if (field === 'status') return [String((i.extra?.status as { name?: string })?.name || 'Open')]
+            throw new Error(`Unsupported JQL field: ${m![1]}`)
+        }
+        const lower = (xs: string[]) => xs.map((x) => x.toLowerCase())
+        tests.push((i) => {
+            const have = get(i)
+            if (op === '=' || op === 'in') return lower(have).some((h) => lower(values).includes(h))
+            if (op === '!=' || op === 'not in') return !lower(have).some((h) => lower(values).includes(h))
+            const a = Date.parse(have[0])
+            const b = Date.parse(values[0])
+            return op === '>=' ? a >= b : op === '>' ? a > b : op === '<=' ? a <= b : a < b
+        })
+    }
+    return (i) => tests.every((test) => test(i))
+}
 
 function esc(s: string): string {
     return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
@@ -116,6 +190,7 @@ function toApi(i: Issue) {
             labels: i.labels,
             attachment: i.attachments.map((a) => ({ ...a, content: `http://localhost:${PORT}/attachments/${a.id}/${encodeURIComponent(a.filename)}` })),
             ...i.fields,
+            ...(i.extra || {}),
         },
     }
 }
@@ -206,7 +281,7 @@ table{border-collapse:collapse;width:100%;margin:8px 0}th,td{border:1px solid #d
 .examples form{display:inline}.pending{color:#a54800}h3,h4{margin:14px 0 6px}@media(max-width:800px){.grid{grid-template-columns:1fr}}`
 
 const page = (title: string, body: string, refresh = false) =>
-    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)}</title>${refresh ? '<meta http-equiv="refresh" content="4">' : ''}<style>${CSS}</style></head><body><header><b>◆ Jira</b><a href="/">Support board</a><span class="muted">demo instance</span></header><div class="wrap">${body}</div></body></html>`
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${esc(title)}</title>${refresh ? '<meta http-equiv="refresh" content="4">' : ''}<style>${CSS}</style></head><body><header><b>◆ Jira</b><a href="/">Support board</a><a href="/releases">Releases</a><span class="muted">demo instance</span></header><div class="wrap">${body}</div></body></html>`
 
 function board(): string {
     const rows = state.issues
@@ -238,13 +313,33 @@ function issuePage(i: Issue): string {
         `${i.key} ${i.summary}`,
         `<div class="muted"><a href="/">Support board</a> / ${i.key}</div><h2>${esc(i.summary)}</h2>
 <div class="grid"><div><div class="card">${adfToHtml(i.description)}</div>${videos ? `<div class="card"><h4 style="margin-top:0">Attachments</h4>${videos}</div>` : ''}
-<h3>Activity</h3>${comments || '<p class="pending">The triage service is working on it. This page refreshes on its own.</p>'}</div>
+<h3>Activity</h3>${comments || (i.extra ? '<p class="muted">No comments.</p>' : '<p class="pending">The triage service is working on it. This page refreshes on its own.</p>')}</div>
 <div><div class="card"><div class="muted">Type</div><span class="type ${i.type === config.jira.riskIssueType ? 'risk' : ''}">${esc(i.type)}</span>
 <div class="muted" style="margin-top:10px">Reporter</div>${esc(i.reporter.displayName)}<br><span class="muted">${esc(i.reporter.timeZone)}</span>
 <div class="muted" style="margin-top:10px">Labels</div>${i.labels.map((l) => `<span class="lbl">${esc(l)}</span>`).join('') || '-'}${fields}
+${
+            i.extra
+                ? `<div class="muted" style="margin-top:10px">Status</div>${esc(String((i.extra.status as { name: string }).name))}` +
+                  `<div class="muted" style="margin-top:10px">Fix version</div>${esc(((i.extra.fixVersions as { name: string }[]) || []).map((v) => v.name).join(', ') || '-')}` +
+                  `<div class="muted" style="margin-top:10px">Components</div>${esc(((i.extra.components as { name: string }[]) || []).map((c) => c.name).join(', ') || '-')}`
+                : ''
+        }
 <div class="muted" style="margin-top:10px">Created</div>${i.created.slice(0, 16).replace('T', ' ')} UTC</div></div></div>`,
-        !i.comments.length
+        !i.comments.length && !i.extra
     )
+}
+
+function releasesPage(): string {
+    const rows = [...RELEASES]
+        .reverse()
+        .map((r) => {
+            const tickets = r.tickets
+                .map((tk) => `<tr><td><a href="/browse/${tk.key}">${tk.key}</a></td><td><span class="type">${esc(tk.type)}</span></td><td>${esc(tk.summary)}</td><td class="muted">${esc(tk.components.join(', '))}</td></tr>`)
+                .join('')
+            return `<div class="card"><h3 style="margin-top:0">${esc(r.name)} <span class="muted" style="font-weight:400">· ${r.released ? 'Released' : 'Planned'} ${esc(r.date)}</span></h3><p class="muted">${esc(r.description)}</p><table class="issues">${tickets}</table></div>`
+        })
+        .join('')
+    return page('Releases', `<h2>Acme Portal releases (project ACP)</h2>${rows}`)
 }
 
 function newForm(): string {
@@ -267,7 +362,25 @@ const server = createServer(async (req, res) => {
         // REST API (what the triage service calls)
         if (p.startsWith('/rest/api/3/')) {
             if (!apiAuthOk(req)) return json(res, 401, { errorMessages: ['unauthorized'] })
-            let m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)$/.exec(p)
+            let m = /^\/rest\/api\/3\/project\/([A-Z]+)\/versions$/.exec(p)
+            if (m && req.method === 'GET') return json(res, 200, m[1] === 'ACP' ? VERSIONS : [])
+            if ((p === '/rest/api/3/search/jql' || p === '/rest/api/3/search') && (req.method === 'GET' || req.method === 'POST')) {
+                const body = req.method === 'POST' ? JSON.parse((await readBody(req)).toString() || '{}') : {}
+                const jql = String(body.jql ?? url.searchParams.get('jql') ?? '')
+                const max = Math.min(100, Number(body.maxResults ?? url.searchParams.get('maxResults') ?? 50))
+                const startAt = Number(body.nextPageToken ?? url.searchParams.get('nextPageToken') ?? body.startAt ?? url.searchParams.get('startAt') ?? 0)
+                let matches: Issue[]
+                try {
+                    matches = [...state.issues, ...ARCHIVE].filter(jqlMatch(jql))
+                } catch (e) {
+                    return json(res, 400, { errorMessages: [(e as Error).message] })
+                }
+                matches.sort((a, b) => b.created.localeCompare(a.created))
+                const page = matches.slice(startAt, startAt + max)
+                const isLast = startAt + max >= matches.length
+                return json(res, 200, { issues: page.map(toApi), isLast, ...(isLast ? {} : { nextPageToken: String(startAt + max) }), total: matches.length })
+            }
+            m = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)$/.exec(p)
             if (m && req.method === 'GET') {
                 const i = find(m[1])
                 return i ? json(res, 200, toApi(i)) : json(res, 404, { errorMessages: ['Issue does not exist'] })
@@ -324,6 +437,7 @@ const server = createServer(async (req, res) => {
         if (!uiAuthOk(req, res)) return
         if (p === '/' && req.method === 'GET') return html(res, board())
         if (p === '/new') return html(res, newForm())
+        if (p === '/releases') return html(res, releasesPage())
         let m = /^\/browse\/([A-Z]+-\d+)$/.exec(p)
         if (m) {
             const i = find(m[1])

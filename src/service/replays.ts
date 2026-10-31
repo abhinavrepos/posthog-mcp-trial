@@ -475,8 +475,13 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 const CSS = `:root{--bg:#f5f6f8;--card:#fff;--ink:#1c2230;--muted:#636b7c;--line:#e0e3ea;--accent:#1d4ed8;--accent-ink:#fff;--err:#b42318;--ok:#067647;--chip:#eef2ff}
 @media (prefers-color-scheme:dark){:root{--bg:#12151c;--card:#1b1f29;--ink:#e7e9ee;--muted:#9aa2b2;--line:#2c3240;--accent:#6b8afd;--accent-ink:#0b1020;--err:#f97066;--ok:#47cd89;--chip:#252c3d}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--card)}
-header b{font-size:16px}.hdr{display:flex;gap:10px;align-items:center;flex-wrap:wrap}header a{color:var(--accent);text-decoration:none;font-weight:600}header button{padding:5px 10px}.muted{color:var(--muted)}.small{font-size:13px}main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
+header{display:flex;align-items:center;gap:18px;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--card);flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px;color:var(--ink);text-decoration:none;letter-spacing:.01em}
+.brand .mark{width:18px;height:18px;border-radius:50%;background:conic-gradient(from 210deg,var(--accent),#1baf7a,var(--accent));box-shadow:inset 0 0 0 4px var(--card)}
+.brand .tag{font-weight:500;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 7px}
+nav{display:flex;gap:4px;flex:1}nav a{color:var(--muted);text-decoration:none;font-weight:600;padding:7px 11px;border-radius:7px}nav a:hover{color:var(--ink);background:var(--bg)}
+nav a[aria-current=page]{color:var(--accent);background:var(--chip)}.hdr{display:flex;gap:10px;align-items:center;flex-wrap:wrap}header button{padding:5px 10px}
+@media (max-width:700px){nav{order:3;flex-basis:100%}.who{display:none}}.muted{color:var(--muted)}.small{font-size:13px}main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:16px}
 h2{font-size:17px;margin:0 0 12px}label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
 input,select{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:9px 11px}
@@ -494,20 +499,30 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 
 export const PAGE_CSS = () => CSS
 
-/** Header with who is signed in, their role, the admin link and sign out. */
-export function headerHtml(v: Viewer | undefined, title: string, admin = false): string {
-    if (!v) return `<header><b>${esc(title)}</b></header>`
-    const links = [
-        admin ? `<a href="/replays">Clips</a>` : can(v.role, 'admin') ? `<a href="/replays/admin">Admin</a>` : '',
-        `<button class="ghost small" id="signout" type="button">Sign out</button>`,
-    ].join(' ')
-    return `<header><b>${esc(title)}</b><span class="hdr"><span class="muted small">${esc(v.email)} · ${esc(ROLE_TEXT[v.role])}</span> ${links}</span></header>
-<script>document.getElementById('signout').onclick=()=>fetch('/replays/logout',{method:'POST',headers:{'x-clip-page':'1'}}).then(()=>location.href='/replays')</script>`
+export const APP_NAME = process.env.APP_NAME || 'ION Lens'
+export type Section = 'Releases' | 'Replay clips' | 'Admin'
+
+/** The header on every page: the product name, the sections this person may open, and sign out. */
+export function headerHtml(v: Viewer | undefined, section: Section): string {
+    const brand = `<a class="brand" href="/"><span class="mark" aria-hidden="true"></span>${esc(APP_NAME)}<span class="tag">for PostHog</span></a>`
+    if (!v) return `<header>${brand}</header>`
+    const tabs = (
+        [
+            ['Releases', '/releases', 'insights'],
+            ['Replay clips', '/replays', 'watch'],
+            ['Admin', '/replays/admin', 'admin'],
+        ] as const
+    )
+        .filter(([, , need]) => can(v.role, need))
+        .map(([name, href]) => `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${name}</a>`)
+        .join('')
+    return `<header>${brand}<nav>${tabs}</nav><span class="hdr"><span class="muted small who">${esc(v.email)} · ${esc(ROLE_TEXT[v.role])}</span><button class="ghost small" id="signout" type="button">Sign out</button></span></header>
+<script>document.getElementById('signout').onclick=()=>fetch('/replays/logout',{method:'POST',headers:{'x-clip-page':'1'}}).then(()=>location.href='/')</script>`
 }
 
-function loginHtml(): string {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · Replay clips</title><style>${CSS}</style></head>
-<body>${headerHtml(undefined, 'Replay clips')}<main style="max-width:440px"><div class="card"><h2>Sign in</h2>
+export function loginHtml(section: Section = 'Replay clips'): string {
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
+<body>${headerHtml(undefined, section)}<main style="max-width:440px"><div class="card"><h2>Sign in</h2>
 <p class="small muted">Use your PostHog account. Signing in here also signs you in to PostHog in this browser.</p>
 <form id="f"><p><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></p>
 <p><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required></p>
@@ -515,20 +530,25 @@ function loginHtml(): string {
 <p class="small muted">Use two-factor login, or already signed in to PostHog? <a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on PostHog</a>, then <a href="/replays">reload this page</a>.</p></div></main>
 <script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('go');b.disabled=true;document.getElementById('msg').textContent='';
 try{const r=await fetch('/replays/login',{method:'POST',headers:{'content-type':'application/json','x-clip-page':'1'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('pw').value})});
-const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Sign in failed.');location.href='/replays'+location.search}catch(err){document.getElementById('msg').textContent=err.message}finally{b.disabled=false}}</script></body></html>`
+const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Sign in failed.');location.href=location.pathname+location.search}catch(err){document.getElementById('msg').textContent=err.message}finally{b.disabled=false}}</script></body></html>`
 }
 
 function noAccessHtml(v: Viewer): string {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No access · Replay clips</title><style>${CSS}</style></head>
+    if (can(v.role, 'insights')) {
+        return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
+<body>${headerHtml(v, 'Replay clips')}<main style="max-width:560px"><div class="card"><h2>Replay clips are not part of your access</h2>
+<p>You can see <a href="/releases">release insights</a>. Replays can show client data, so watching them needs the "Watch clips" role from an admin.</p></div></main></body></html>`
+    }
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No access · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
 <body>${headerHtml(v, 'Replay clips')}<main style="max-width:560px"><div class="card"><h2>You don't have access to replay clips</h2>
 <p>You're signed in as <b>${esc(v.email)}</b>, but no admin has given you access yet. Replays can show client data, so access is given person by person.</p>
-<p class="muted small">Ask a PostHog admin to give you the "Watch clips" role on the admin page.</p></div></main></body></html>`
+<p class="muted small">Ask a PostHog admin to give you a role on the admin page: "Release insights only", or "Watch clips" for replays too.</p></div></main></body></html>`
 }
 
 function pageHtml(v: Viewer): string {
     const bookmarklet = `javascript:(()=>{window.open(${JSON.stringify(config.service.publicUrl + '/replays?url=')}+encodeURIComponent(location.href))})()`
     const boot = JSON.stringify({ lengths: LENGTHS, ttl: config.service.clipLinkTtlHours, retention: RETENTION_DAYS, perHour: PER_HOUR, canDownload: can(v.role, 'download'), shareLinks: can(v.role, 'download') && loadAccess().allow_share_links }).replace(/</g, '\\u003c')
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips</title><style>${CSS}</style></head>
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
 <body>${headerHtml(v, 'Replay clips')}<main>
 
 <div class="card"><h2>1. Which replay?</h2>

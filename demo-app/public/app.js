@@ -48,18 +48,18 @@
     }
 
     // ---------------------------------------------------------------- Invoices: PDF export
-    // 2.14.0 converts every line to the base currency before building the PDF totals. The API
+    // 26.10.0 converts every line to the base currency before building the PDF totals. The API
     // only returns a rate for the base currency, so any second currency throws.
     function convertToBase(line, rates) {
         return line.amount * Number(rates[line.currency].toFixed(6))
     }
     function buildPdfTotals(data) {
-        if (A.client.version === '2.14.0') {
+        if (A.client.version === '26.10.0') {
             return data.lines.reduce(function (sum, line) {
                 return sum + convertToBase(line, data.rates)
             }, 0)
         }
-        // 2.13.2 printed one subtotal per currency and never converted.
+        // 26.9.0 printed one subtotal per currency and never converted.
         var per = {}
         data.lines.forEach(function (l) {
             per[l.currency] = (per[l.currency] || 0) + l.amount
@@ -83,7 +83,7 @@
         var res = await fetch('/api/invoices/export?ids=' + encodeURIComponent(ids))
         var data = await res.json()
         await sleep(600)
-        var totals = buildPdfTotals(data) // throws on 2.14.0 with mixed currencies
+        var totals = buildPdfTotals(data) // throws on 26.10.0 with mixed currencies
         status.textContent = 'PDF ready — invoices.pdf'
         status.className = 'status ok'
         posthog.capture('invoice_export_completed', {

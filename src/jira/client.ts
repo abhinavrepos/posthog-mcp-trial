@@ -123,3 +123,36 @@ export function verifyWebhookSignature(rawBody: Buffer | string, header: string 
 export function signWebhook(rawBody: Buffer | string, secret: string): string {
     return 'sha256=' + createHmac('sha256', secret).update(rawBody).digest('hex')
 }
+
+// ------------------------------------------------------------------ releases (read only)
+export interface JiraVersion {
+    id: string
+    name: string
+    description?: string
+    releaseDate?: string // YYYY-MM-DD
+    released: boolean
+    archived?: boolean
+}
+
+/** A project's versions (Jira "releases"). */
+export async function getVersions(projectKey: string): Promise<JiraVersion[]> {
+    return jira<JiraVersion[]>(`/rest/api/3/project/${encodeURIComponent(projectKey)}/versions`)
+}
+
+/** Every issue matching a JQL query, following pages (Jira Cloud's /search/jql). */
+export async function searchIssues(jql: string, fields: string[], limit = 1000): Promise<JiraIssue[]> {
+    const out: JiraIssue[] = []
+    let nextPageToken: string | undefined
+    do {
+        const page = await jira<{ issues: JiraIssue[]; nextPageToken?: string; isLast?: boolean }>('/rest/api/3/search/jql', {
+            method: 'POST',
+            body: JSON.stringify({ jql, fields, maxResults: 100, ...(nextPageToken ? { nextPageToken } : {}) }),
+        })
+        out.push(...page.issues)
+        nextPageToken = page.isLast === false || (page.nextPageToken && page.isLast !== true) ? page.nextPageToken : undefined
+    } while (nextPageToken && out.length < limit)
+    return out
+}
+
+/** Quotes a value for JQL. */
+export const jqlString = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`

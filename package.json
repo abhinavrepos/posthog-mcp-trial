@@ -16,7 +16,8 @@
     "demo-app": "tsx demo-app/server.ts",
     "mcp": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx src/mcp/stdio.ts",
     "sessions": "tsx scripts/generate-sessions.ts",
-    "seed": "tsx scripts/seed-history.ts"
+    "seed": "tsx scripts/seed-history.ts",
+    "releases:sync": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/sync-releases.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
