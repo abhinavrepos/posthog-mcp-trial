@@ -8,7 +8,7 @@ export interface ErrorImpact {
     error_message: string
     days: number
     occurrences: number
-    clients: { client_id: string; client_name: string; occurrences: number; users: number; last_seen: string }[]
+    clients: { client_id: string; client_name: string; plan: string; occurrences: number; users: number; last_seen: string }[]
     users: number
     sessions: number
     first_seen?: string
@@ -48,6 +48,7 @@ export async function errorImpact(
         ),
         hogql(
             `SELECT toString(properties.client_id) AS client_id, any(toString(properties.client_name)) AS client_name,
+                    any(toString(properties.client_plan)) AS plan,
                     count() AS n, count(DISTINCT person_id) AS users, max(timestamp) AS last_seen
              FROM events WHERE ${base} GROUP BY client_id ORDER BY n DESC LIMIT 50`,
             values
@@ -79,6 +80,7 @@ export async function errorImpact(
         clients: clients.map((r) => ({
             client_id: String(r.client_id),
             client_name: String(r.client_name),
+            plan: String(r.plan || ''),
             occurrences: Number(r.n),
             users: Number(r.users),
             last_seen: new Date(String(r.last_seen)).toISOString(),
@@ -114,6 +116,19 @@ export async function errorImpact(
         }
     }
     return impact
+}
+
+/** The most frequent errors on a screen, for risk reviews that name a screen but not an error. */
+export async function topErrorsOnScreen(pathname: string, days = 14, limit = 3): Promise<{ issue_id: string; error_type: string; error_message: string; occurrences: number; clients: number }[]> {
+    const rows = await hogql(
+        `SELECT toString(properties.$exception_issue_id) AS issue, any(toString(properties.$exception_types[1])) AS etype,
+                any(toString(properties.$exception_values[1])) AS evalue, count() AS n, count(DISTINCT toString(properties.client_id)) AS clients
+         FROM events
+         WHERE event = '$exception' AND timestamp > now() - toIntervalDay({days}) AND toString(properties.$pathname) = {path}
+         GROUP BY issue ORDER BY n DESC LIMIT {limit}`,
+        { path: pathname, days, limit }
+    )
+    return rows.map((r) => ({ issue_id: String(r.issue), error_type: String(r.etype), error_message: String(r.evalue), occurrences: Number(r.n), clients: Number(r.clients) }))
 }
 
 /** Fills missing days with zeros so a trend shows quiet days too. */
