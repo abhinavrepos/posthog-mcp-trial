@@ -36,7 +36,8 @@ x-node-health: &node-health
         start_period: 180s
 
 x-node: &node
-    image: ${POSTHOG_NODE_IMAGE:-ghcr.io/posthog/posthog-node:master}
+    # ghcr.io/posthog/posthog-node:master plus one setting, built by scale.sh (see node-image/).
+    image: ${POSTHOG_NODE_IMAGE:-posthog-node-lens:latest}
     restart: unless-stopped
     <<: *node-health
 
@@ -60,6 +61,10 @@ services:
             PERSONHOG_ENABLED: 'true'
             PERSONHOG_ADDR: personhog-router:50052
             CYCLOTRON_NODE_DATABASE_URL: postgres://posthog:posthog@db:5432/cyclotron_node
+            # Webhooks are sent only by plugins-cdp-worker. In this process they shared the event loop
+            # with every other plugin consumer, went out one at a time under load (about 0.25 s each),
+            # and the worker stalled until Kafka dropped it. Error tracking has its own container too.
+            PLUGINS_DISABLED_CAPABILITIES: cdpCyclotronWorker,errorTrackingIngestion
 
     # A separate worker that sends destination requests (webhooks and the like), sharing the queue with
     # plugins, so a slow destination cannot hold up everything else plugins does.
@@ -69,7 +74,7 @@ services:
             service: plugins
         <<: *node
         deploy:
-            replicas: ${CDP_WORKER_REPLICAS:-1}
+            replicas: ${CDP_WORKER_REPLICAS:-2}
         environment:
             PLUGIN_SERVER_MODE: cdp-cyclotron-worker
             NODE_OPTIONS: --max-old-space-size=${PLUGINS_HEAP_MB:-3072}

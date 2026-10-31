@@ -84,8 +84,9 @@ if grep -q '^COMPOSE_FILE=' .env; then sed -i "s|^COMPOSE_FILE=.*|COMPOSE_FILE=$
 else echo "COMPOSE_FILE=$FILES:docker-compose.scale.yml" >> .env; fi
 docker compose config -q
 
-echo "==> Pulling the current Node image"
-docker compose pull -q ingestion-general
+echo "==> Building the Node image (PostHog's current one plus PLUGINS_DISABLED_CAPABILITIES)"
+docker pull -q "${NODE_BASE_IMAGE:-ghcr.io/posthog/posthog-node:master}" >/dev/null
+docker build -q --build-arg BASE="${NODE_BASE_IMAGE:-ghcr.io/posthog/posthog-node:master}" -t posthog-node-lens:latest "$HERE/node-image" >/dev/null
 
 echo "==> Restarting with the new settings (data is kept)"
 docker compose up -d
