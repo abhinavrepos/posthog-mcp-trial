@@ -10,7 +10,17 @@
     "noUnusedParameters": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src", "demo-app/*.ts", "scripts/*.ts", "test"]
+  "include": [
+    "src",
+    "demo-app/*.ts",
+    "scripts/*.ts",
+    "test"
+  ],
+  "exclude": [
+    "scripts/rasterizer-logger.ts"
+  ]
 }

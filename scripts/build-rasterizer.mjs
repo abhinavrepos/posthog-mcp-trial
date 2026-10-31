@@ -56,6 +56,19 @@ await build({
     // Everything that is not PostHog source is an npm package from this project.
     plugins: [
         {
+            name: 'stderr-logger',
+            setup(b) {
+                b.onResolve({ filter: /(^|\/)logger$/ }, (args) => {
+                    const target = resolve(args.resolveDir, args.path)
+                    if (args.path.startsWith('~') || target === join(rasterizerDir, 'logger')) {
+                        if (args.path.startsWith('~') && !args.path.endsWith('recording-rasterizer/logger')) return undefined
+                        return { path: join(root, 'scripts/rasterizer-logger.ts') }
+                    }
+                    return undefined
+                })
+            },
+        },
+        {
             name: 'externalize-npm',
             setup(b) {
                 b.onResolve({ filter: /^[^./~]/ }, (args) => {
