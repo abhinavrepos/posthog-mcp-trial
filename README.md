@@ -302,6 +302,39 @@ kept unchanged.
   properties (or adapt `src/core/resolve.ts` to your group type). Replace the screen map in
   `src/core/catalog.ts` with your own screens.
 
+## Deploying somewhere else
+
+1. Copy `.env.example` to `.secrets.env` (or anywhere, with `TRIAGE_ENV_FILE=/path`) and fill it
+   in. Every key, URL, property name and limit is a setting. Your screens go in a JSON file
+   (`SCREENS_FILE`, see `config/screens.example.json`).
+2. `pnpm doctor` checks it against the real services: PostHog reachable, the key's scopes and
+   project, that your events carry the client and release properties, Jira login, secrets, HTTPS.
+3. `scripts/stack.sh start service`.
+
+### Using PostHog's MCP server next to this one
+
+Both can be connected at once. This server tells Claude, when it connects, which questions belong
+to which server: tickets, clients, releases and screens here; ad-hoc SQL, insights, flags,
+experiments and survey setup in PostHog's. It also tells Claude never to use PostHog's replay or
+Replay Vision tools. Give PostHog's server its own personal key without `session_recording`
+scopes (`POSTHOG_MCP_API_KEY`); `pnpm doctor` fails if that key can read replays. The key is
+what actually keeps replays private.
+
+### Scaling PostHog (self-hosted)
+
+`sudo deploy/posthog/scale.sh` makes the hobby install take 200 events a second (bursts of 500+)
+without losing any. It is safe to re-run, keeps all data, and `--undo` reverts it. What it changes
+and why is written at the top of `deploy/posthog/docker-compose.scale.yml`. In short:
+
+- the current Node image (Docker Hub's `posthog/posthog-node:latest` stopped updating in March), plus the settings and job-queue database that image needs;
+- Kafka partitions, so ingestion runs as several processes, and retention capped at 24 h and 2 GB per partition (it was 7 days with no cap);
+- a health check that restarts a stalled plugin or ingestion process, as Kubernetes would;
+- Postgres, Redis and Celery sized for the load; restart policies on every service.
+
+Check it with `pnpm loadtest --rate 200 --minutes 10`. It sends browser-like traffic to a separate
+"Load test" project, with a webhook destination, and fails if any event or webhook is lost, any
+plugin fails or any container restarts.
+
 ## Security notes
 
 - Ticket text is untrusted. HogQL queries bind every value as a placeholder, and nothing from a
