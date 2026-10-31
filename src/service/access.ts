@@ -3,13 +3,13 @@
 // PostHog answers "who is this?": people sign in with their PostHog account (password, 2FA and
 // deactivation all stay in PostHog), and PostHog owners and admins of the organization that owns
 // the project are always admins here. This service answers "what may they do?": each person
-// gets a role in run/access.json, set on the admin page.
+// gets a role in the database (run/triage.db, see core/db.ts), set on the admin page.
 import { createHash } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage } from 'node:http'
-import { join } from 'node:path'
+import type { SQLInputValue } from 'node:sqlite'
 
-import { config, ROOT } from '../core/config.ts'
+import { config } from '../core/config.ts'
+import { all, getSetting, one, run, setSetting, tx } from '../core/db.ts'
 
 export type Role = 'none' | 'watch' | 'download' | 'admin'
 export const ROLES: Role[] = ['none', 'watch', 'download', 'admin']
@@ -35,37 +35,86 @@ export interface AccessFile {
     people: Record<string, Person>
 }
 
-const FILE = join(ROOT, 'run/access.json')
-const AUDIT = join(ROOT, 'logs/audit.jsonl')
-mkdirSync(join(ROOT, 'run'), { recursive: true })
-mkdirSync(join(ROOT, 'logs'), { recursive: true })
-
 export function loadAccess(): AccessFile {
-    try {
-        const a = JSON.parse(readFileSync(FILE, 'utf8')) as AccessFile
-        return { default_role: a.default_role || 'none', allow_share_links: a.allow_share_links !== false, people: a.people || {} }
-    } catch {
-        return { default_role: 'none', allow_share_links: true, people: {} }
+    const people: Record<string, Person> = {}
+    for (const p of all<{ email: string; role: Role; note: string | null; updated_by: string; updated_at: string }>('SELECT * FROM people ORDER BY email')) {
+        people[p.email] = { role: p.role, note: p.note ?? undefined, updated_by: p.updated_by, updated_at: p.updated_at }
     }
+    return { default_role: getSetting<Role>('default_role', 'none'), allow_share_links: getSetting('allow_share_links', true), people }
 }
-export function saveAccess(a: AccessFile): void {
-    writeFileSync(FILE + '.tmp', JSON.stringify(a, null, 2))
-    writeFileSync(FILE, readFileSync(FILE + '.tmp'))
+
+export function personRole(email: string): Role | undefined {
+    return one<{ role: Role }>('SELECT role FROM people WHERE email = ?', email.toLowerCase())?.role
+}
+
+/** Gives a person a role and records who did it, in one transaction. */
+export function setPerson(email: string, role: Role, by: string, note?: string): void {
+    tx(() => {
+        const before = personRole(email)
+        run(
+            `INSERT INTO people (email, role, note, updated_by, updated_at) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT (email) DO UPDATE SET role = excluded.role, note = excluded.note, updated_by = excluded.updated_by, updated_at = excluded.updated_at`,
+            email.toLowerCase(), role, note ?? null, by, new Date().toISOString()
+        )
+        audit(by, 'access.role_set', { person: email.toLowerCase(), role, before: before ?? null })
+    })
+}
+
+export function removePerson(email: string, by: string): void {
+    tx(() => {
+        const before = personRole(email)
+        run('DELETE FROM people WHERE email = ?', email.toLowerCase())
+        audit(by, 'access.role_removed', { person: email.toLowerCase(), before: before ?? null })
+    })
+}
+
+export function setAccessSettings(change: { default_role?: Role; allow_share_links?: boolean }, by: string): void {
+    tx(() => {
+        if (change.default_role !== undefined) setSetting('default_role', change.default_role)
+        if (change.allow_share_links !== undefined) setSetting('allow_share_links', change.allow_share_links)
+        const a = loadAccess()
+        audit(by, 'access.settings', { default_role: a.default_role, allow_share_links: a.allow_share_links })
+    })
 }
 
 export function audit(who: string, action: string, details: Record<string, unknown> = {}): void {
     try {
-        appendFileSync(AUDIT, JSON.stringify({ t: new Date().toISOString(), who, action, ...details }) + '\n')
-    } catch {}
+        run('INSERT INTO audit (t, who, action, details) VALUES (?, ?, ?, ?)', new Date().toISOString(), who, action, JSON.stringify(details))
+    } catch (e) {
+        console.error(JSON.stringify({ t: new Date().toISOString(), msg: 'audit write failed', error: (e as Error).message }))
+    }
 }
 
-export function readAudit(limit = 300): Record<string, unknown>[] {
-    try {
-        const lines = readFileSync(AUDIT, 'utf8').trimEnd().split('\n')
-        return lines.slice(-limit).reverse().map((l) => JSON.parse(l) as Record<string, unknown>)
-    } catch {
-        return []
+export interface AuditQuery {
+    limit?: number
+    who?: string
+    action?: string // prefix, e.g. "clip." or "signin"
+    since?: string
+    q?: string // free text: matches the person, the action or any detail
+}
+export function readAudit(q: AuditQuery | number = {}): Record<string, unknown>[] {
+    const { limit = 300, who, action, since, q: text } = typeof q === 'number' ? { limit: q } : q
+    const where: string[] = []
+    const params: SQLInputValue[] = []
+    if (who) where.push('who = ?'), params.push(who.toLowerCase())
+    if (action) where.push("action LIKE ? ESCAPE '\\'"), params.push(action.replace(/[\\%_]/g, (c) => '\\' + c) + '%')
+    if (since) where.push('t >= ?'), params.push(since)
+    if (text?.trim()) {
+        const like = '%' + text.trim().toLowerCase().replace(/[\\%_]/g, (c) => '\\' + c) + '%'
+        where.push("(LOWER(who) LIKE ? ESCAPE '\\' OR LOWER(action) LIKE ? ESCAPE '\\' OR LOWER(details) LIKE ? ESCAPE '\\')")
+        params.push(like, like, like)
     }
+    const rows = all<{ t: string; who: string; action: string; details: string }>(
+        `SELECT t, who, action, details FROM audit ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ?`,
+        ...params,
+        Math.min(Math.max(1, limit), 100_000)
+    )
+    return rows.map((r) => ({ t: r.t, who: r.who, action: r.action, ...(JSON.parse(r.details) as Record<string, unknown>) }))
+}
+
+/** The last time each person did anything, from the audit table. */
+export function lastSeen(): Map<string, string> {
+    return new Map(all<{ who: string; t: string }>('SELECT who, MAX(t) AS t FROM audit GROUP BY who').map((r) => [r.who, r.t]))
 }
 
 // ------------------------------------------------------------------ PostHog identity
