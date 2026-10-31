@@ -1,0 +1,208 @@
+# Settings for a single-machine PostHog that ingests about 200 events a second without losing any, with
+# room for bursts of 500+. Fits 8+ cores and 16+ GB. Goes on top of the hobby install's own compose files.
+# To go higher, raise INGESTION_REPLICAS and CDP_WORKER_REPLICAS (up to EVENT_PARTITIONS in scale.sh).
+# deploy/posthog/scale.sh copies it into the install, adds it to COMPOSE_FILE, and also sets the Kafka
+# partitions and retention, which compose cannot. Every number below can be changed in the install's .env.
+#
+# What it fixes, and why:
+#   - The Docker Hub image posthog/posthog-node:latest stopped updating in March 2026, so plugins and
+#     ingestion ran seven months behind the web app. The current image is on ghcr.io.
+#   - Every Kafka topic had one partition, so ingestion could only ever run as one process. scale.sh adds
+#     partitions, and ingestion runs as two replicas (more is one setting away).
+#   - A stalled plugin consumer stayed stalled: its /_health turned red but nothing restarted it.
+#     Each Node service now restarts itself after four failed health checks in a row.
+#   - That image needs PersonHog settings for plugins and error tracking, which the hobby file only
+#     gives the main ingestion service.
+#   - The GeoIP file was not mounted in the ingestion container, so GeoIP found nothing for any event.
+#   - Celery started 16 processes (one per core) that held about 9 GB of memory doing almost nothing.
+#   - Postgres ran with 100 connections and 128 MB of cache; Redis had 200 MB.
+#   - Some services had no restart policy, so they stayed down after a reboot.
+
+x-node-health: &node-health
+    # Kubernetes would restart a pod whose /_health stays red. Compose does not, so the check does it:
+    # after four failures in a row (two minutes), once the process has been up for three minutes.
+    healthcheck:
+        test:
+            - CMD-SHELL
+            - >-
+                node -e "fetch('http://127.0.0.1:6738/_health',{signal:AbortSignal.timeout(8000)}).then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"
+                && rm -f /tmp/unhealthy-count
+                || { n=$$(( $$(cat /tmp/unhealthy-count 2>/dev/null || echo 0) + 1 )); echo $$n > /tmp/unhealthy-count;
+                up=$$(( $$(date +%s) - $$(stat -c %Y /proc/1) ));
+                if [ $$n -ge 4 ] && [ $$up -gt 180 ]; then echo "restarting after $$n failed checks" > /proc/1/fd/2; kill -TERM 1; fi; exit 1; }
+        interval: 30s
+        timeout: 15s
+        retries: 4
+        start_period: 180s
+
+x-node: &node
+    image: ${POSTHOG_NODE_IMAGE:-ghcr.io/posthog/posthog-node:master}
+    restart: unless-stopped
+    <<: *node-health
+
+services:
+    # ---------------------------------------------------------------- event pipeline
+    ingestion-general:
+        <<: *node
+        deploy:
+            replicas: ${INGESTION_REPLICAS:-2}
+        volumes:
+            - ./share:/share:ro
+        environment:
+            NODE_OPTIONS: --max-old-space-size=${INGESTION_HEAP_MB:-2048}
+
+    plugins:
+        <<: *node
+        volumes:
+            - ./share:/share:ro
+        environment:
+            NODE_OPTIONS: --max-old-space-size=${PLUGINS_HEAP_MB:-3072}
+            PERSONHOG_ENABLED: 'true'
+            PERSONHOG_ADDR: personhog-router:50052
+
+    # A separate worker that sends destination requests (webhooks and the like), sharing the queue with
+    # plugins, so a slow destination cannot hold up everything else plugins does.
+    plugins-cdp-worker:
+        extends:
+            file: docker-compose.yml
+            service: plugins
+        <<: *node
+        deploy:
+            replicas: ${CDP_WORKER_REPLICAS:-1}
+        environment:
+            PLUGIN_SERVER_MODE: cdp-cyclotron-worker
+            NODE_OPTIONS: --max-old-space-size=${PLUGINS_HEAP_MB:-3072}
+            PERSONHOG_ENABLED: 'true'
+            PERSONHOG_ADDR: personhog-router:50052
+
+    ingestion-error-tracking:
+        <<: *node
+        volumes:
+            - ./share:/share:ro
+        environment:
+            PERSONHOG_ENABLED: 'true'
+            PERSONHOG_ADDR: personhog-router:50052
+    ingestion-sessionreplay:
+        <<: *node
+    ingestion-logs:
+        <<: *node
+    ingestion-traces:
+        <<: *node
+    recording-api:
+        <<: *node
+
+    kafka:
+        restart: unless-stopped
+        command:
+            - redpanda
+            - start
+            - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+            - --advertise-kafka-addr internal://kafka:9092,external://localhost:19092
+            - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+            - --advertise-pandaproxy-addr internal://kafka:8082,external://localhost:18082
+            - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+            - --rpc-addr kafka:33145
+            - --advertise-rpc-addr kafka:33145
+            - --mode dev-container
+            - --smp ${KAFKA_CORES:-2}
+            - --memory ${KAFKA_MEMORY:-3G}
+            - --reserve-memory 500M
+            - --overprovisioned
+            - --set redpanda.empty_seed_starts_cluster=false
+            - --seeds kafka:33145
+            - --set redpanda.auto_create_topics_enabled=true
+
+    # ---------------------------------------------------------------- databases
+    db:
+        restart: unless-stopped
+        shm_size: 1g
+        command:
+            - postgres
+            - -c
+            - max_connections=${PG_MAX_CONNECTIONS:-200}
+            - -c
+            - shared_buffers=${PG_SHARED_BUFFERS:-1GB}
+            - -c
+            - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-4GB}
+            - -c
+            - work_mem=16MB
+            - -c
+            - maintenance_work_mem=512MB
+            - -c
+            - wal_buffers=16MB
+            - -c
+            - max_wal_size=4GB
+            - -c
+            - min_wal_size=1GB
+            - -c
+            - checkpoint_completion_target=0.9
+            - -c
+            - random_page_cost=1.1
+            - -c
+            - effective_io_concurrency=200
+            - -c
+            - wal_compression=on
+            - -c
+            - shared_preload_libraries=pg_stat_statements
+
+    redis7:
+        restart: unless-stopped
+        command: redis-server --maxmemory-policy allkeys-lru --maxmemory ${REDIS_MAXMEMORY:-1gb}
+
+    clickhouse:
+        restart: unless-stopped
+    valkey:
+        restart: unless-stopped
+    zookeeper:
+        restart: unless-stopped
+    objectstorage:
+        restart: unless-stopped
+    seaweedfs:
+        restart: unless-stopped
+
+    # ---------------------------------------------------------------- app
+    worker:
+        restart: unless-stopped
+        environment:
+            WEB_CONCURRENCY: ${CELERY_CONCURRENCY:-4}
+            CELERY_MAX_MEMORY_PER_CHILD: ${CELERY_MAX_MEMORY_PER_CHILD_KB:-1500000}
+    web:
+        restart: unless-stopped
+    temporal-django-worker:
+        restart: unless-stopped
+    temporal:
+        restart: unless-stopped
+    elasticsearch:
+        restart: unless-stopped
+    temporal-ui:
+        restart: unless-stopped
+    temporal-admin-tools:
+        restart: unless-stopped
+    capture:
+        restart: unless-stopped
+    capture-ai:
+        restart: unless-stopped
+    capture-logs:
+        restart: unless-stopped
+    replay-capture:
+        restart: unless-stopped
+    property-defs-rs:
+        restart: unless-stopped
+    property-defs-ai:
+        restart: unless-stopped
+    livestream:
+        restart: unless-stopped
+    personhog-replica:
+        restart: unless-stopped
+    personhog-router:
+        restart: unless-stopped
+    feature-flags:
+        restart: unless-stopped
+    hypercache-server:
+        restart: unless-stopped
+    cymbal:
+        restart: unless-stopped
+    cymbal-resolution:
+        restart: unless-stopped
+    browserless:
+        restart: unless-stopped
