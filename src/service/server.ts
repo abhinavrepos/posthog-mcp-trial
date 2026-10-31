@@ -19,6 +19,7 @@ import { verifyClipLink } from '../core/links.ts'
 import { renderReport } from '../core/report.ts'
 import { triage } from '../core/triage.ts'
 import { addAttachment, addComment, addLabels, getIssue, hasTriageComment, issueToTicket, verifyWebhookSignature } from '../jira/client.ts'
+import { serverInstructions } from '../mcp/instructions.ts'
 import { registerTools } from '../mcp/tools.ts'
 import { audit } from './access.ts'
 import { keptReleases, syncReleases, syncStatus } from '../core/releases.ts'
@@ -141,7 +142,7 @@ function bearerOk(req: IncomingMessage): boolean {
 async function handleMcp(req: IncomingMessage, res: ServerResponse) {
     if (!bearerOk(req)) return send(res, 401, { error: 'MCP needs Authorization: Bearer <MCP_TOKEN>' })
     // Stateless: a fresh server and transport per request.
-    const server = new McpServer({ name: 'ticket-triage', version: '0.1.0' })
+    const server = new McpServer({ name: 'ticket-triage', version: '0.1.0' }, { instructions: serverInstructions() })
     registerTools(server, ai)
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     res.on('close', () => {
