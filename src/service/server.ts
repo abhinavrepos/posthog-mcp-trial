@@ -3,7 +3,8 @@
 //   GET  /clips/<name>    signed, expiring clip links (with Range support so the video can seek)
 //   POST /mcp             the MCP tools over Streamable HTTP, behind a bearer token
 //   GET  /status          recent jobs
-import { createReadStream, existsSync, statSync } from 'node:fs'
+//   GET  /replays         the replay clip page (PostHog login), see replays.ts
+import { existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { basename, join } from 'node:path'
 import { timingSafeEqual } from 'node:crypto'
@@ -19,6 +20,7 @@ import { renderReport } from '../core/report.ts'
 import { triage } from '../core/triage.ts'
 import { addAttachment, addComment, addLabels, getIssue, hasTriageComment, issueToTicket, verifyWebhookSignature } from '../jira/client.ts'
 import { registerTools } from '../mcp/tools.ts'
+import { audit, handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
 
 const ai = makeAi()
 
@@ -121,21 +123,8 @@ function serveClip(req: IncomingMessage, res: ServerResponse, url: URL) {
     if (!verifyClipLink(name, url.searchParams.get('exp'), url.searchParams.get('sig'))) return send(res, 403, 'This clip link is invalid or has expired.')
     const file = join(config.clip.outDir, name)
     if (!existsSync(file)) return send(res, 404, 'not found')
-    const size = statSync(file).size
-    const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''))
-    const common = { 'content-type': 'video/mp4', 'accept-ranges': 'bytes', 'cache-control': 'private, max-age=3600' }
-    if (range && (range[1] || range[2])) {
-        const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]))
-        const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1
-        if (start > end || start >= size) {
-            res.writeHead(416, { 'content-range': `bytes */${size}` })
-            return res.end()
-        }
-        res.writeHead(206, { ...common, 'content-range': `bytes ${start}-${end}/${size}`, 'content-length': String(end - start + 1) })
-        return createReadStream(file, { start, end }).pipe(res)
-    }
-    res.writeHead(200, { ...common, 'content-length': String(size) })
-    createReadStream(file).pipe(res)
+    if (!req.headers.range || /^bytes=0-/.test(String(req.headers.range))) audit('signed-link', 'clip.viewed', { clip: name })
+    streamMp4(req, res, file)
 }
 
 function bearerOk(req: IncomingMessage): boolean {
@@ -168,6 +157,11 @@ const server = createServer(async (req, res) => {
         if (url.pathname === '/healthz') return send(res, 200, 'ok')
         if (url.pathname === '/webhooks/jira' && req.method === 'POST') return await handleWebhook(req, res)
         if (url.pathname.startsWith('/clips/') && req.method === 'GET') return serveClip(req, res, url)
+        if (url.pathname === '/') {
+            res.writeHead(302, { location: '/replays' })
+            return res.end()
+        }
+        if (await handleReplays(req, res, url)) return
         if (url.pathname === '/mcp') return await handleMcp(req, res)
         if (url.pathname === '/status') {
             if (!bearerOk(req)) return send(res, 401, { error: 'needs Authorization: Bearer <MCP_TOKEN>' })
@@ -183,6 +177,9 @@ const server = createServer(async (req, res) => {
 for (const [name, value] of Object.entries({ JIRA_WEBHOOK_SECRET: config.jira.webhookSecret, CLIP_LINK_SECRET: config.service.clipLinkSecret, MCP_TOKEN: config.service.mcpToken })) {
     if (!value) log(`warning: ${name} is not set; that feature refuses every request until it is`)
 }
+
+pruneOldClips()
+setInterval(() => pruneOldClips(), 6 * 3_600_000).unref()
 
 server.listen(config.service.port, '0.0.0.0', () => log('triage service listening', { port: config.service.port, ai: !!ai, ai_model: ai ? config.anthropic.model : undefined }))
 

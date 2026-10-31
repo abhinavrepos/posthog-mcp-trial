@@ -1,10 +1,13 @@
 // Renders a TriageReport as markdown. The same text becomes the Jira comment (via ADF) and the
 // MCP tool result, so people and Claude read the same thing.
+import { config } from './config.ts'
 import type { ErrorImpact } from './impact.ts'
 import type { Incident } from './incidents.ts'
 import type { TriageReport } from './triage.ts'
 import type { ScreenUsage } from './usage.ts'
 
+/** Opens the replay clip page with this replay filled in (needs a PostHog login). */
+const clipPageUrl = (replay: string) => `${config.service.publicUrl}/replays?url=${encodeURIComponent(replay)}`
 const pct = (x: number) => `${Math.round(x * 100)}%`
 const when = (iso: string) => iso.slice(0, 16).replace('T', ' ') + ' UTC'
 const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
@@ -103,7 +106,7 @@ function renderRci(r: TriageReport): string {
     }
 
     if (r.clip) {
-        lines.push('', `▶ **[Watch the ${Math.round(r.clip.video_duration_s)} s clip](${r.clip.url})** (attached) · [Full replay from ${mmss(r.clip.start_offset_s)}](${r.clip.replay_url})`)
+        lines.push('', `▶ **[Watch the ${Math.round(r.clip.video_duration_s)} s clip](${r.clip.url})** (attached) · [Full replay from ${mmss(r.clip.start_offset_s)}](${r.clip.replay_url}) · [Make another clip](${clipPageUrl(r.clip.replay_url)})`)
     } else if (r.incident?.recording || r.struggle?.recording) {
         lines.push('', `▶ [Open the replay](${(r.incident?.recording || r.struggle?.recording)!.url})`)
     }
