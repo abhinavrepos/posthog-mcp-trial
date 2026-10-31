@@ -60,11 +60,25 @@ The page also lists recent clips and has a "Get MP4" bookmark button: drag it to
 bar, and while you watch a replay in PostHog, click it to open that replay here. Each Jira
 triage comment links here too ("Make another clip").
 
-Access: the page uses the PostHog login. Browsers send cookies to every port of a host, so when
-you are logged in to PostHog on the same host name, you are logged in here. The service checks
-the session with PostHog, and only people who can open the project get in. If PostHog moves to
-another host name, put both behind one domain or set `SESSION_COOKIE_DOMAIN` in PostHog so the
-cookie is shared.
+Access: people sign in with their PostHog account, on the page itself or by being signed in to
+PostHog on the same host. What they may do is set per person on `/replays/admin`:
+
+| Role | Can |
+| --- | --- |
+| No access | Nothing (the default for PostHog users not listed) |
+| Watch clips | Make and watch clips on this site |
+| Watch, download and share | Also download MP4s and create share links |
+| Admin | Also manage access, settings and clips, and see the activity log |
+
+PostHog owners and admins of the organization that owns the project are always admins. Signing
+out on the page also ends the PostHog session. Removing someone from PostHog locks them out within
+a minute.
+
+On PostHog's free plan, PostHog itself cannot limit replays per person: every member of the
+project's organization can watch every replay in PostHog. To keep someone to clips only, give them
+a PostHog account in a separate organization ("Clip viewers") with no access to the project, then
+give them a role here. The admin page flags people who can see all replays in PostHog. Claude's
+`get_replay_link` returns links into this page, so they need a sign-in and a role too.
 
 Every inspection, clip, view, download and share link goes to `logs/audit.jsonl`. Clips are
 deleted after `CLIP_RETENTION_DAYS` (default 30), and each person can make `CLIPS_PER_HOUR`

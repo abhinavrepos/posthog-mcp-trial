@@ -1,11 +1,10 @@
 // The replay clip page: paste a PostHog replay link, pick a start and a length, get an MP4.
 //
-// Access uses the PostHog login. Browsers send cookies to every port of a host, so a person who
-// is logged in to PostHog on this host is logged in here too. The service checks the session with
-// PostHog itself, and only people who can open the project can make, watch or download clips.
-// Every action goes to logs/audit.jsonl. Old clips are deleted after CLIP_RETENTION_DAYS.
-import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+// People sign in with their PostHog account (see access.ts). What they may do depends on the role
+// an admin gives them on /replays/admin: watch clips, or also download and share them. Every
+// action goes to logs/audit.jsonl. Old clips are deleted after CLIP_RETENTION_DAYS.
+import { randomUUID } from 'node:crypto'
+import { createReadStream, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 
@@ -15,63 +14,14 @@ import { clipUrl } from '../core/links.ts'
 import { replayUrl } from '../core/posthog.ts'
 import { recordingInfo, type RecordingInfo } from '../core/recording-info.ts'
 import { downloadName, formatClock, HourlyLimit, parseReplayInput, parseStartTime } from '../core/replay-input.ts'
+import { audit, can, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
+import { handleAdmin } from './admin.ts'
 
 const RETENTION_DAYS = Number(process.env.CLIP_RETENTION_DAYS || 30)
 const PER_HOUR = Number(process.env.CLIPS_PER_HOUR || 20)
 const MAX_QUEUE = 20
 const LENGTHS = [10, 20, 30, 45, 60, 90, 120]
 const INDEX = join(ROOT, 'run/replay-clips.json')
-const AUDIT = join(ROOT, 'logs/audit.jsonl')
-mkdirSync(join(ROOT, 'run'), { recursive: true })
-mkdirSync(join(ROOT, 'logs'), { recursive: true })
-
-export interface Viewer {
-    email: string
-    name: string
-}
-
-// ------------------------------------------------------------------ access
-const authCache = new Map<string, { at: number; viewer?: Viewer }>()
-
-function cookie(req: IncomingMessage, name: string): string | undefined {
-    for (const part of String(req.headers.cookie || '').split(';')) {
-        const [k, ...v] = part.trim().split('=')
-        if (k === name) return decodeURIComponent(v.join('='))
-    }
-    return undefined
-}
-
-/** The PostHog user behind this request, if their session can open our project. */
-export async function posthogViewer(req: IncomingMessage): Promise<Viewer | undefined> {
-    const session = cookie(req, 'sessionid')
-    if (!session || !/^[A-Za-z0-9:._-]{8,200}$/.test(session)) return undefined
-    const key = createHash('sha256').update(session).digest('hex')
-    const hit = authCache.get(key)
-    if (hit && Date.now() - hit.at < 60_000) return hit.viewer
-    let viewer: Viewer | undefined
-    try {
-        const headers = { cookie: `sessionid=${session}`, accept: 'application/json' }
-        const [me, project] = await Promise.all([
-            fetch(`${config.posthog.host}/api/users/@me/`, { headers, signal: AbortSignal.timeout(10_000) }),
-            fetch(`${config.posthog.host}/api/projects/${config.posthog.projectId}/`, { headers, signal: AbortSignal.timeout(10_000) }),
-        ])
-        if (me.ok && project.ok) {
-            const u = (await me.json()) as { email: string; first_name?: string }
-            viewer = { email: u.email, name: u.first_name || u.email }
-        }
-    } catch {
-        viewer = undefined
-    }
-    authCache.set(key, { at: Date.now(), viewer })
-    if (authCache.size > 1000) authCache.clear()
-    return viewer
-}
-
-export function audit(who: string, action: string, details: Record<string, unknown> = {}): void {
-    try {
-        appendFileSync(AUDIT, JSON.stringify({ t: new Date().toISOString(), who, action, ...details }) + '\n')
-    } catch {}
-}
 
 // ------------------------------------------------------------------ clip index
 export interface ClipRecord {
@@ -96,6 +46,16 @@ function loadIndex(): ClipRecord[] {
 }
 let index = loadIndex()
 const saveIndex = () => writeFileSync(INDEX, JSON.stringify(index, null, 2))
+
+export const listClips = () => index
+export function deleteClip(name: string): boolean {
+    const record = index.find((c) => c.name === name)
+    if (!record) return false
+    rmSync(join(config.clip.outDir, name), { force: true })
+    index = index.filter((c) => c.name !== name)
+    saveIndex()
+    return true
+}
 
 /** Deletes clips older than CLIP_RETENTION_DAYS, both files and index entries. */
 export function pruneOldClips(now = Date.now()): number {
@@ -136,6 +96,28 @@ const jobs = new Map<string, Job>()
 const queue: Job[] = []
 let busy = false
 const limit = new HourlyLimit(PER_HOUR)
+
+/** Adds a clip made elsewhere (for example by the MCP tools) to the clip page's list. */
+export async function recordClip(clip: { name: string; session_id: string; start_offset_s: number; end_offset_s: number }, by: string): Promise<void> {
+    let info: RecordingInfo | undefined
+    try {
+        info = await recordingInfo(clip.session_id)
+    } catch {}
+    const record: ClipRecord = {
+        name: clip.name,
+        session_id: clip.session_id,
+        start_s: clip.start_offset_s,
+        end_s: clip.end_offset_s,
+        client: info?.client,
+        user: info?.user,
+        recording_start: info?.start,
+        download_name: downloadName({ client: info?.client, user: info?.user, recordingStart: info?.start, startS: clip.start_offset_s, endS: clip.end_offset_s }),
+        created_by: by,
+        created_at: new Date().toISOString(),
+    }
+    index = [record, ...index.filter((c) => c.name !== record.name)].slice(0, 500)
+    saveIndex()
+}
 
 async function work() {
     if (busy) return
@@ -249,22 +231,61 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
     const p = url.pathname
     if (!p.startsWith('/replays')) return false
 
-    const viewer = await posthogViewer(req)
-    if (p === '/replays' || p === '/replays/') {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
-        res.end(viewer ? pageHtml(viewer) : loginHtml())
-        return true
-    }
-    if (!viewer) {
-        json(res, 401, { error: 'Log in to PostHog first.' })
+    // Cross-site forms cannot set custom headers, so this blocks CSRF on every POST.
+    if ((req.method === 'POST' || req.method === 'DELETE') && req.headers['x-clip-page'] !== '1') {
+        json(res, 403, { error: 'Missing page header.' })
         return true
     }
 
-    // Cross-site forms cannot set custom headers, so this blocks CSRF on the JSON endpoints.
-    const fromPage = req.headers['x-clip-page'] === '1'
-    if (req.method === 'POST' && !fromPage) {
-        json(res, 403, { error: 'Missing page header.' })
+    if (p === '/replays/login' && req.method === 'POST') {
+        const body = await readJson(req)
+        // No proxy sits in front of this service, so the socket address is the client. A forwarded-for
+        // header would let anyone dodge the sign-in limit.
+        const ip = String(req.socket.remoteAddress || '')
+        const email = String(body.email || '').trim().toLowerCase()
+        const out = await signIn(ip, email, String(body.password || ''))
+        if (!out.session) {
+            audit(email || 'unknown', 'signin.failed', { ip })
+            json(res, 401, { error: out.error })
+            return true
+        }
+        // The cookie is PostHog's own session cookie, so this also signs the browser in to PostHog.
+        const cookies = [`sessionid=${out.session}; Path=/; HttpOnly; SameSite=Lax; Max-Age=1209600`]
+        if (out.csrf) cookies.push(`posthog_csrftoken=${out.csrf}; Path=/; SameSite=Lax; Max-Age=1209600`)
+        res.setHeader('set-cookie', cookies)
+        audit(email, 'signin', { ip })
+        json(res, 200, { ok: true })
         return true
+    }
+    if (p === '/replays/logout' && req.method === 'POST') {
+        const session = sessionCookie(req)
+        const who = (await currentViewer(req))?.email || 'unknown'
+        if (session) await signOut(session, csrfCookie(req))
+        res.setHeader('set-cookie', ['sessionid=; Path=/; Max-Age=0', 'posthog_csrftoken=; Path=/; Max-Age=0'])
+        audit(who, 'signout')
+        json(res, 200, { ok: true })
+        return true
+    }
+
+    const viewer = await currentViewer(req)
+    if (p === '/replays' || p === '/replays/') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
+        res.end(!viewer ? loginHtml() : can(viewer.role, 'watch') ? pageHtml(viewer) : noAccessHtml(viewer))
+        return true
+    }
+    if (!viewer) {
+        json(res, 401, { error: 'Sign in first.' })
+        return true
+    }
+    if (p.startsWith('/replays/admin')) return handleAdmin(req, res, url, viewer)
+    if (!can(viewer.role, 'watch')) {
+        json(res, 403, { error: 'You do not have access to replay clips. Ask an admin.' })
+        return true
+    }
+    const need = (role: Role): boolean => {
+        if (can(viewer.role, role)) return true
+        json(res, 403, { error: `This needs the "${ROLE_TEXT[role]}" role. Ask an admin.` })
+        return false
     }
 
     if (p === '/replays/api/inspect' && req.method === 'POST') {
@@ -321,6 +342,11 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         return true
     }
 
+    if (p === '/replays/api/me' && req.method === 'GET') {
+        json(res, 200, { email: viewer.email, role: viewer.role, role_text: ROLE_TEXT[viewer.role], share_links: loadAccess().allow_share_links })
+        return true
+    }
+
     let m = /^\/replays\/api\/jobs\/([0-9a-f-]{36})$/.exec(p)
     if (m && req.method === 'GET') {
         const job = jobs.get(m[1])
@@ -333,9 +359,21 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         json(res, 200, { clips: index.slice(0, 50).map(clipView), retention_days: RETENTION_DAYS })
         return true
     }
+    m = /^\/replays\/api\/clips\/([^/]+)$/.exec(p)
+    if (m && req.method === 'GET') {
+        const record = index.find((c) => c.name === decodeURIComponent(m![1]))
+        if (!record) json(res, 404, { error: 'This clip no longer exists.' })
+        else json(res, 200, clipView(record))
+        return true
+    }
 
     m = /^\/replays\/api\/share\/([^/]+)$/.exec(p)
     if (m && req.method === 'POST') {
+        if (!need('download')) return true
+        if (!loadAccess().allow_share_links) {
+            json(res, 403, { error: 'Share links are turned off by an admin.' })
+            return true
+        }
         const name = decodeURIComponent(m[1])
         if (!SAFE_NAME.test(name) || !index.some((c) => c.name === name)) {
             json(res, 404, { error: 'No such clip.' })
@@ -355,6 +393,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
             json(res, 404, { error: 'No such clip.' })
             return true
         }
+        if (m[1] === 'download' && !need('download')) return true
         if (m[1] === 'download') audit(viewer.email, 'clip.downloaded', { clip: name })
         else if (!req.headers.range || /^bytes=0-/.test(String(req.headers.range))) audit(viewer.email, 'clip.viewed', { clip: name })
         streamMp4(req, res, file, { download: m[1] === 'download' ? record.download_name : undefined, cache: 'private, no-store' })
@@ -372,7 +411,7 @@ const CSS = `:root{--bg:#f5f6f8;--card:#fff;--ink:#1c2230;--muted:#636b7c;--line
 @media (prefers-color-scheme:dark){:root{--bg:#12151c;--card:#1b1f29;--ink:#e7e9ee;--muted:#9aa2b2;--line:#2c3240;--accent:#6b8afd;--accent-ink:#0b1020;--err:#f97066;--ok:#47cd89;--chip:#252c3d}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--card)}
-header b{font-size:16px}.muted{color:var(--muted)}.small{font-size:13px}main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
+header b{font-size:16px}.hdr{display:flex;gap:10px;align-items:center;flex-wrap:wrap}header a{color:var(--accent);text-decoration:none;font-weight:600}header button{padding:5px 10px}.muted{color:var(--muted)}.small{font-size:13px}main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:16px}
 h2{font-size:17px;margin:0 0 12px}label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
 input,select{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:9px 11px}
@@ -388,19 +427,44 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 .table-wrap{overflow-x:auto}.hidden{display:none}code{background:var(--bg);padding:1px 5px;border-radius:4px}
 .spin{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s 1s linear infinite;display:inline-block}@keyframes s{to{transform:rotate(1turn)}}`
 
+export const PAGE_CSS = () => CSS
+
+/** Header with who is signed in, their role, the admin link and sign out. */
+export function headerHtml(v: Viewer | undefined, title: string, admin = false): string {
+    if (!v) return `<header><b>${esc(title)}</b></header>`
+    const links = [
+        admin ? `<a href="/replays">Clips</a>` : can(v.role, 'admin') ? `<a href="/replays/admin">Admin</a>` : '',
+        `<button class="ghost small" id="signout" type="button">Sign out</button>`,
+    ].join(' ')
+    return `<header><b>${esc(title)}</b><span class="hdr"><span class="muted small">${esc(v.email)} · ${esc(ROLE_TEXT[v.role])}</span> ${links}</span></header>
+<script>document.getElementById('signout').onclick=()=>fetch('/replays/logout',{method:'POST',headers:{'x-clip-page':'1'}}).then(()=>location.href='/replays')</script>`
+}
+
 function loginHtml(): string {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips</title><style>${CSS}</style></head>
-<body><header><b>Replay clips</b></header><main><div class="card"><h2>Log in to PostHog first</h2>
-<p>Replays can show client data, so this page uses your PostHog login. Log in to PostHog in this browser, then come back here.</p>
-<p><a class="btn" href="${esc(config.posthog.publicHost)}/login?next=/" target="_blank" rel="noopener">Open PostHog login</a> <button class="ghost" onclick="location.reload()">I've logged in</button></p>
-<p class="muted small">PostHog and this page must be opened on the same host name for the login to carry over.</p></div></main></body></html>`
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · Replay clips</title><style>${CSS}</style></head>
+<body>${headerHtml(undefined, 'Replay clips')}<main style="max-width:440px"><div class="card"><h2>Sign in</h2>
+<p class="small muted">Use your PostHog account. Signing in here also signs you in to PostHog in this browser.</p>
+<form id="f"><p><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></p>
+<p><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required></p>
+<p><button id="go">Sign in</button></p><p id="msg" class="small err"></p></form>
+<p class="small muted">Use two-factor login, or already signed in to PostHog? <a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on PostHog</a>, then <a href="/replays">reload this page</a>.</p></div></main>
+<script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('go');b.disabled=true;document.getElementById('msg').textContent='';
+try{const r=await fetch('/replays/login',{method:'POST',headers:{'content-type':'application/json','x-clip-page':'1'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('pw').value})});
+const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Sign in failed.');location.href='/replays'+location.search}catch(err){document.getElementById('msg').textContent=err.message}finally{b.disabled=false}}</script></body></html>`
+}
+
+function noAccessHtml(v: Viewer): string {
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No access · Replay clips</title><style>${CSS}</style></head>
+<body>${headerHtml(v, 'Replay clips')}<main style="max-width:560px"><div class="card"><h2>You don't have access to replay clips</h2>
+<p>You're signed in as <b>${esc(v.email)}</b>, but no admin has given you access yet. Replays can show client data, so access is given person by person.</p>
+<p class="muted small">Ask a PostHog admin to give you the "Watch clips" role on the admin page.</p></div></main></body></html>`
 }
 
 function pageHtml(v: Viewer): string {
     const bookmarklet = `javascript:(()=>{window.open(${JSON.stringify(config.service.publicUrl + '/replays?url=')}+encodeURIComponent(location.href))})()`
-    const boot = JSON.stringify({ lengths: LENGTHS, ttl: config.service.clipLinkTtlHours, retention: RETENTION_DAYS, perHour: PER_HOUR }).replace(/</g, '\\u003c')
+    const boot = JSON.stringify({ lengths: LENGTHS, ttl: config.service.clipLinkTtlHours, retention: RETENTION_DAYS, perHour: PER_HOUR, canDownload: can(v.role, 'download'), shareLinks: can(v.role, 'download') && loadAccess().allow_share_links }).replace(/</g, '\\u003c')
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips</title><style>${CSS}</style></head>
-<body><header><b>Replay clips</b><span class="muted small">${esc(v.email)}</span></header><main>
+<body>${headerHtml(v, 'Replay clips')}<main>
 
 <div class="card"><h2>1. Which replay?</h2>
 <label for="input">PostHog replay link or session id</label>
@@ -417,7 +481,7 @@ function pageHtml(v: Viewer): string {
 <div><label for="length">Length</label><select id="length"></select></div>
 <div style="flex:0"><button id="go" disabled>Make clip</button></div></div>
 <p id="job-msg" class="small"></p>
-<div id="result" class="hidden"><video id="video" controls preload="metadata"></video>
+<div id="result" class="hidden"><video id="video" controls preload="metadata" controlslist="nodownload" oncontextmenu="return CFG.canDownload"></video>
 <div class="row" style="align-items:center"><a class="btn" id="dl">Download MP4</a><button class="ghost" id="share">Copy share link</button><a class="btn ghost" id="open" target="_blank" rel="noopener">Open in PostHog</a></div>
 <p id="share-msg" class="small muted"></p></div></div>
 
@@ -453,13 +517,14 @@ $('go').onclick=async()=>{$('go').disabled=true;$('result').classList.add('hidde
   if(j.state==='failed')throw new Error(j.error||'The clip could not be made.');
   show(j.clip);txt($('job-msg'),'Ready.','ok');loadRecent()
  }catch(e){txt($('job-msg'),e.message,'err')}finally{$('go').disabled=false}};
-function show(c){$('video').src=c.video_url+'#t=1';$('dl').href=c.download_url;$('open').href=c.replay_url;$('share').dataset.name=c.name;$('share-msg').textContent='';$('result').classList.remove('hidden');$('result').scrollIntoView({behavior:'smooth',block:'nearest'})}
+function show(c){$('dl').classList.toggle('hidden',!CFG.canDownload);$('share').classList.toggle('hidden',!CFG.shareLinks);$('video').src=c.video_url+'#t=1';$('dl').href=c.download_url;$('open').href=c.replay_url;$('share').dataset.name=c.name;$('share-msg').textContent='';$('result').classList.remove('hidden');$('result').scrollIntoView({behavior:'smooth',block:'nearest'})}
 $('share').onclick=async()=>{try{const r=await api('/replays/api/share/'+encodeURIComponent($('share').dataset.name),{method:'POST'});await navigator.clipboard.writeText(r.url).catch(()=>{});$('share-msg').textContent='Link copied. Anyone with it can watch this clip for '+Math.round(r.expires_hours/24)+' days: '+r.url}catch(e){$('share-msg').textContent=e.message}};
 async function loadRecent(){try{const r=await api('/replays/api/clips');const tb=$('recent');tb.innerHTML='';
  if(!r.clips.length){tb.innerHTML='<tr><td colspan="6" class="muted">No clips yet.</td></tr>';return}
  r.clips.forEach(c=>{const tr=document.createElement('tr');[when(c.created_at),c.client||'',(c.user||'').replace(/@.*/,''),c.range,(c.created_by||'').replace(/@.*/,'')].forEach(t=>{const td=document.createElement('td');td.textContent=t;tr.appendChild(td)});
   const td=document.createElement('td');const w=document.createElement('button');w.className='ghost';w.textContent='Watch';w.onclick=()=>show(c);td.appendChild(w);tr.appendChild(td);tb.appendChild(tr)})}catch(e){$('recent').innerHTML='<tr><td colspan="6" class="err"></td></tr>';$('recent').querySelector('td').textContent=e.message}}
 loadRecent();
-const pre=new URLSearchParams(location.search).get('url');if(pre){$('input').value=pre;check()}
+const qs=new URLSearchParams(location.search);const pre=qs.get('url');if(pre){$('input').value=pre;check()}
+const one=qs.get('clip');if(one){api('/replays/api/clips/'+encodeURIComponent(one)).then(show).catch(e=>txt($('job-msg'),e.message,'err'))}
 </script></body></html>`
 }

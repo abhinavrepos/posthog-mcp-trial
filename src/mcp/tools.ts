@@ -7,7 +7,7 @@ import { SCREENS } from '../core/catalog.ts'
 import { renderClip } from '../core/clip.ts'
 import { errorImpact } from '../core/impact.ts'
 import { bestPerSession, findIncidents } from '../core/incidents.ts'
-import { clipUrl } from '../core/links.ts'
+import { config } from '../core/config.ts'
 import { replayUrl } from '../core/posthog.ts'
 import { renderReport } from '../core/report.ts'
 import { resolveClient, resolveScreen } from '../core/resolve.ts'
@@ -16,6 +16,7 @@ import { emailsIn } from '../core/text.ts'
 import { parseTimeWindow } from '../core/timewindow.ts'
 import { triage, type TriageAi } from '../core/triage.ts'
 import { screenUsage } from '../core/usage.ts'
+import { recordClip } from '../service/replays.ts'
 
 type Content = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }
 const text = (t: string): { content: Content[] } => ({ content: [{ type: 'text', text: t }] })
@@ -96,7 +97,8 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
             const lines = [`Replay in PostHog from ${Math.floor(start_s)}s (PostHog login needed): ${replayUrl(session_id, start_s)}`]
             try {
                 const clip = await renderClip({ sessionId: session_id, startOffsetS: start_s, durationS: duration_s })
-                lines.push(`MP4 clip, ${Math.round(clip.video_duration_s)} s (link expires): ${clipUrl(clip.name)}`)
+                await recordClip(clip, 'claude (MCP)')
+                lines.push(`MP4 clip, ${Math.round(clip.video_duration_s)} s, on the clip page (sign-in and the "Watch clips" role needed): ${config.service.publicUrl}/replays?clip=${encodeURIComponent(clip.name)}`)
             } catch (e) {
                 lines.push(`No MP4 clip: rendering is not available (${(e as Error).message.split('\n')[0].slice(0, 120)}).`)
             }
