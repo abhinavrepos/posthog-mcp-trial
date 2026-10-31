@@ -94,7 +94,7 @@ for i in $(seq 1 60); do
     sleep 5
 done
 
-echo "==> Database for the plugin job queue (the current Node image needs it)"
+echo "==> Databases: the plugin job queue and a person key (the current Node image needs both)"
 if ! docker compose exec -T db psql -U posthog -Atc "select 1 from pg_database where datname='cyclotron_node'" | grep -q 1; then
     docker compose exec -T db psql -U posthog -qc "create database cyclotron_node"
 fi
@@ -107,6 +107,10 @@ for f in $(ls posthog/rust/cyclotron-node-migrations/*.sql | sort); do
         echo "    applied $n"
     fi
 done
+# The current Node image upserts persons ON CONFLICT (team_id, uuid). Hobby installs skip the persons
+# migrations that add that key (they belong to the partitioned tables), so every person merge failed
+# and crashed ingestion. Add it without locking the table.
+docker compose exec -T db psql -U posthog -d posthog -qc "create unique index concurrently if not exists posthog_person_team_id_uuid_uniq on posthog_person (team_id, uuid)"
 docker compose up -d plugins plugins-cdp-worker >/dev/null
 
 echo "==> Kafka retention: ${RETENTION_HOURS} h, at most ${RETENTION_GB} GB per partition"

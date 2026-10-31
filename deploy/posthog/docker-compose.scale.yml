@@ -11,8 +11,8 @@
 #     partitions, and ingestion runs as two replicas (more is one setting away).
 #   - A stalled plugin consumer stayed stalled: its /_health turned red but nothing restarted it.
 #     Each Node service now restarts itself after four failed health checks in a row.
-#   - That image needs PersonHog settings for plugins and error tracking, which the hobby file only
-#     gives the main ingestion service.
+#   - That image needs PersonHog settings for plugins and error tracking (the hobby file only gives them
+#     to ingestion), a job-queue database, and a unique key on persons; scale.sh adds the last two.
 #   - The GeoIP file was not mounted in the ingestion container, so GeoIP found nothing for any event.
 #   - Celery started 16 processes (one per core) that held about 9 GB of memory doing almost nothing.
 #   - Postgres ran with 100 connections and 128 MB of cache; Redis had 200 MB.
