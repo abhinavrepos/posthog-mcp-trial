@@ -1,7 +1,7 @@
 # Five-minute demo
 
 Before the demo: `scripts/demo-prep.sh --reset-board` (a few minutes). Open four tabs:
-the mock Jira board (`:4000`), ION Lens release insights (`:8080/releases`), PostHog (`:80`),
+the mock Jira board (`:4000`), PostHog Lens (`:8080/releases`), PostHog (`:80`),
 and Claude Code in this folder.
 
 ## 1. The problem (30 s)
@@ -18,7 +18,7 @@ On the board, click **Client bug: PDF export stuck**. Point out how vague the ti
 - It found **Ben's session** from an email and a London-time "this afternoon".
 - The **clip** is attached. Play it: the export hangs and Ben clicks again and again. Search
   input is masked in the replay: PostHog does not record what users type.
-- **Is it just them?** No. 4 clients, all on **26.10.0**. 26.9.0 has 0% failures on the same
+- **Is it just them?** No. 10 clients, all on **26.10.0**. 26.9.0 has 0% failures on the same
   screen, so this is a regression in the release, not a client problem.
 - **Usage**: how many clients depend on Invoices, and that Brightwater is the heaviest user.
 - **Suggested P1**, with the reasons written out. A human still decides.
@@ -45,7 +45,8 @@ hands back links. It never sees the replay itself: replays stay with people who 
 
 ## 5. Release insights (90 s)
 
-Open `http://<host>:8080/releases`.
+Open `http://<host>:8080/releases`. The tabs at the top are Overview, Tickets, Releases & groups,
+Compare, How it works and Settings. The "Showing" picker carries across them.
 
 - **Findings**, in plain words:
   - Bulk send (26.8.0) reached every client.
@@ -53,11 +54,14 @@ Open `http://<host>:8080/releases`.
   - The 26.10.0 currency change is behind today's export bug.
 - **Impact map**: wins bottom right, problems up top. Click ACP-230 to see its numbers: errors
   0 → 15 per 100 sessions, the support tickets, and why it is linked to Invoices.
-- **Show → Q3 2026**, then **Compare with → Q2 2026**: one quarter against another.
+- **Compare**: Q3 2026 against Q2 2026, with the top tickets of each.
+- **How it works**: one page with every rule and the current weights, for "where do these
+  numbers come from?".
 - **Customise**: drag "Support tickets" to 10 and watch the ranking change. Admins can save it
   as the default.
 - **Copy summary** gives Markdown for the stakeholder email.
-- In Claude: "Which ticket in Q3 2026 had the most impact, and which was the riskiest?"
+- In Claude: "Which ticket in Q3 2026 had the most impact, and which was the riskiest?" Then
+  "Tell me everything about ACP-230" (`ticket_impact`).
 
 Access: a stakeholder can have "Release insights only". They see this page and no replays.
 

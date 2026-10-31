@@ -499,12 +499,13 @@ table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;p
 
 export const PAGE_CSS = () => CSS
 
-export const APP_NAME = process.env.APP_NAME || 'ION Lens'
+export const APP_NAME = process.env.APP_NAME || 'PostHog Lens'
+export const APP_TAG = process.env.APP_TAG ?? 'for ION'
 export type Section = 'Releases' | 'Replay clips' | 'Admin'
 
 /** The header on every page: the product name, the sections this person may open, and sign out. */
 export function headerHtml(v: Viewer | undefined, section: Section): string {
-    const brand = `<a class="brand" href="/"><span class="mark" aria-hidden="true"></span>${esc(APP_NAME)}<span class="tag">for PostHog</span></a>`
+    const brand = `<a class="brand" href="/"><span class="mark" aria-hidden="true"></span>${esc(APP_NAME)}${APP_TAG ? `<span class="tag">${esc(APP_TAG)}</span>` : ''}</a>`
     if (!v) return `<header>${brand}</header>`
     const tabs = (
         [

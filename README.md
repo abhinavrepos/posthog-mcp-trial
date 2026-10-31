@@ -1,12 +1,12 @@
-# ION Lens (ticket-triage)
+# PostHog Lens for ION (ticket-triage)
 
-ION Lens is a PostHog extension with three parts:
+PostHog Lens is a PostHog extension with three parts:
 
 - **Ticket triage**: Jira tickets arrive with the evidence attached.
 - **Release insights**: each Jira release's tickets, ranked by what they did for clients.
 - **Replay clips**: replay clips with per-person access.
 
-The site is at `http://<host>:8080`, and `APP_NAME` renames it.
+The site is at `http://<host>:8080`. `APP_NAME` and `APP_TAG` rename it.
 
 When a ticket lands in Jira, this finds the client's session in PostHog and attaches a clip of
 the moment it went wrong. The comment also covers how many other clients hit the same error, how
@@ -39,7 +39,8 @@ Two ticket types, set by the Jira issue type:
   client, the trend and a release comparison.
 
 MCP tools: `resolve_client`, `find_client_incidents`, `get_replay_link`, `screen_usage`, `error_blast_radius`,
-`find_silent_issues`, `triage_ticket` and `release_insights`.
+`find_silent_issues`, `triage_ticket`, and for releases `release_insights`, `list_releases`,
+`release_tickets`, `ticket_impact` and `compare_releases`.
 
 Claude never sees replay content. `get_replay_link` returns links for a person to open (the
 PostHog replay, which needs a PostHog login, and a signed MP4 clip). No tool returns frames,
@@ -162,7 +163,19 @@ Who carries a screen's problems:
 The scores show activity where a ticket changed the product, not proof that the ticket caused
 it, and the page says so.
 
-**On the page:**
+**Pages.** One scope picker (all kept releases, a quarter, a custom group or one release)
+carries across the pages, and every page has its own link:
+
+| Page | What |
+| --- | --- |
+| Overview | Headline numbers, findings, impact map, top value and top risk, errors before and after each release |
+| Tickets | Ranked tickets with search and filters, and each ticket's detail and link editor |
+| Releases & groups | The release table, the automatic quarters, and custom groups |
+| Compare | Any two scopes side by side |
+| How it works | Where every number comes from, with the current settings filled in |
+| Settings (admins) | Sources, rules and default weights |
+
+**Features:**
 
 - headline numbers, plain-language findings, an impact map (value against risk) and errors
   before and after each release;
@@ -187,8 +200,25 @@ it, and the page says so.
   - the component map;
   - reach for whole-screen links.
 
-Claude gets the same through the `release_insights` MCP tool (for example, "which ticket in
-Q3 2026 had the most impact?"). It uses event counts only, never replay content.
+**No AI makes these numbers.** They are Jira data and PostHog counts, put through the rules
+above. Findings are sentences filled in from the numbers.
+
+**Claude reads the same stored numbers** through five MCP tools:
+
+| Tool | What it gives |
+| --- | --- |
+| `release_insights` | A summary of a scope |
+| `list_releases` | Releases, quarters and groups |
+| `release_tickets` | Ranked and filtered tickets |
+| `ticket_impact` | One ticket in full |
+| `compare_releases` | Two scopes side by side |
+
+For example, ask "which Q3 ticket hurt the most clients, and what fixed it?" The tools see
+event counts and ticket text only, never replays. To connect Claude Code over HTTP:
+
+```bash
+claude mcp add --transport http posthog-lens http://<host>:8080/mcp --header "Authorization: Bearer <MCP_TOKEN>"
+```
 
 ## Layout
 
@@ -230,7 +260,12 @@ Commands: `pnpm test`, `pnpm typecheck`, `scripts/stack.sh start|stop|restart|st
 
 ## The demo data
 
-Acme Portal has 20 clients. It ships a release every month, named like `26.1.0`. The plan in
+Acme Portal has 120 clients and about 840 users. The 20 named clients in
+`src/core/catalog.ts` are the ones the demo app, the recorded sessions and the example tickets
+use. The other 100 are generated the same way every time, so the history has a realistic size
+(about 290,000 events over 14 months).
+
+Acme Portal ships a release every month, named like `26.1.0`. The plan in
 `src/core/release-plan.ts` is the single source for both the mock Jira's ACP releases (with 50
 tickets) and the year of PostHog history the seeder generates (`pnpm seed`, from 2025-09-01).
 Clients take each release 0 to 12 days after it ships, then use the features it added, and hit
@@ -239,19 +274,22 @@ its rage clicks and errors until the fix ships:
 | Release | Story |
 | --- | --- |
 | 26.1.0 | A new date picker draws rage clicks on the revenue report. 26.2.0 fixes it. |
-| 26.5.0 | A new chart engine crashes the revenue report for 17 clients. 26.6.0 fixes it. |
+| 26.5.0 | A new chart engine crashes the revenue report for 74 clients. 26.6.0 fixes it. |
 | 26.7.0 | New client list filters hide the search box. Rage clicks and four support tickets follow until 26.8.0. |
-| 26.8.0 | Bulk send reaches every client: the most valuable ticket of the year. |
+| 26.8.0 | Bulk send reaches 86 of 99 active clients in a month: the most valuable ticket of the year. |
 | 26.10.0 | The export bug described below. |
 
-The demo lives in PostHog project 2 ("Acme Portal"). Project 1 is the older 2.x demo, kept
-unchanged. Release 26.10.0 rolls out to half of them on a fixed date. On 26.10.0,
-exporting a PDF of invoices in more than one currency throws
+Release 26.10.0 went to half the clients on its release day. On 26.10.0, exporting a PDF of
+invoices in more than one currency throws
 `TypeError: Cannot read properties of undefined (reading 'toFixed')`, and the UI stays on
-"Preparing PDF…". So only the four EU multi-currency clients on 26.10.0 are affected. Two EU
-multi-currency clients on 26.9.0 are not, and that is what pins the bug on the release. Cobalt
+"Preparing PDF…". So only multi-currency clients on 26.10.0 are affected: ten of them, four of
+them named. Multi-currency clients still on 26.9.0 are not, and that is what pins the bug on
+the release. Cobalt
 Health's revenue report shows zero for the quarter with no error: that is the silent-issue case.
 All names, companies and email domains are invented.
+
+The demo lives in PostHog project 3 ("Acme Portal"). Projects 1 and 2 are older, smaller demos,
+kept unchanged.
 
 ## Moving to a real Jira and PostHog
 

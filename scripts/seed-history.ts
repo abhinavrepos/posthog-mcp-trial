@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 
-import { BUGGY_VERSION, CLIENTS, hitsExportBug, type DemoClient, type DemoUser } from '../src/core/catalog.ts'
+import { ALL_CLIENTS, BUGGY_VERSION, hitsExportBug, type DemoClient, type DemoUser } from '../src/core/catalog.ts'
 import { config, ROOT } from '../src/core/config.ts'
 import { hogql } from '../src/core/posthog.ts'
 import { activeSignals, appliesTo, releaseIndex, releaseTime, versionAt } from '../src/core/release-plan.ts'
@@ -50,6 +50,7 @@ const rnd = () => {
 const pick = <T>(xs: T[]) => xs[Math.floor(rnd() * xs.length)]
 
 const SITE = process.env.DEMO_APP_URL || 'http://localhost:3000'
+const CLIENTS_NAMED = new Set(ALL_CLIENTS.slice(0, 20).map((c) => c.id))
 const PLAN_ACTIVITY = { enterprise: 0.55, growth: 0.4, starter: 0.25 } as const
 // Tuesday to Thursday are busiest; weekends are quiet.
 const WEEKDAY_FACTOR = [0.15, 0.9, 1.15, 1.25, 1.2, 0.85, 0.12]
@@ -110,6 +111,7 @@ function sessionEvents(client: DemoClient, start: number, exception: Awaited<Ret
     }
 
     add('$pageview', '/dashboard', { $set: { email: user.email, name: user.name, role: user.role } })
+    for (const x of signals) if (x.screen === '/dashboard' && x.event && x.use && rnd() < x.use * ramp(x.since)) add(x.event, '/dashboard')
     const screens = ['/invoices', '/invoices', '/invoices', '/reports/revenue', '/reports/revenue', '/clients', '/clients', '/settings', '/dashboard']
     const visits = 1 + Math.floor(rnd() * 3)
     for (let v = 0; v < visits; v++) {
@@ -180,8 +182,11 @@ if (!exception) {
 const events: Ev[] = []
 for (let day = Math.floor(from / DAY) * DAY; day < until; day += DAY) {
     const dow = new Date(day).getUTCDay()
-    for (const client of CLIENTS) {
-        const sessions = Math.round(client.users.length * PLAN_ACTIVITY[client.plan] * WEEKDAY_FACTOR[dow] * 2 * (0.6 + rnd() * 0.8))
+    for (const client of ALL_CLIENTS) {
+        // About one session per active user every two working days; the named clients a bit more,
+        // so their stories show up.
+        const perUser = CLIENTS_NAMED.has(client.id) ? 1.2 : 0.42
+        const sessions = Math.round(client.users.length * PLAN_ACTIVITY[client.plan] * WEEKDAY_FACTOR[dow] * perUser * (0.6 + rnd() * 0.8))
         for (let s = 0; s < sessions; s++) {
             // Working hours, roughly in the client's region.
             const offset = { EU: -1, UK: 0, US: 5, APAC: -9 }[client.region]

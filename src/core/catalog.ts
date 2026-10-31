@@ -255,3 +255,58 @@ export function clientForEmail(email: string): { client: DemoClient; user: DemoU
     }
     return undefined
 }
+
+// ------------------------------------------------------------------ the wider client base
+// The 20 clients above are the named ones the demo app, the recorded sessions and the example
+// tickets use. These 100 more give the usage history a realistic size (about 120 clients and
+// 1,000 users). They are generated the same way every time, and every name is invented.
+const PREFIX = [
+    'Aster', 'Bramble', 'Calder', 'Dunmore', 'Elmstead', 'Fairhaven', 'Glenrock', 'Halcyon', 'Ironbridge', 'Juniper',
+    'Kingsmere', 'Larchmont', 'Marlowe', 'Northgate', 'Oakhurst', 'Pemberton', 'Quayside', 'Ravensworth', 'Silverbirch', 'Thornbury',
+    'Upland', 'Vantage', 'Westbrook', 'Yarrow', 'Zephyr', 'Ashgrove', 'Beckett', 'Coldwater', 'Driftwood', 'Everly',
+    'Foxglove', 'Greystone', 'Hollin', 'Ingleby', 'Lindqvist', 'Mistral', 'Nightingale', 'Orchard', 'Penrose', 'Rosemont',
+]
+const SUFFIX = ['Holdings', 'Engineering', 'Media', 'Pharma', 'Telecom', 'Mining', 'Shipping', 'Textiles', 'Labs', 'Group', 'Industries', 'Utilities', 'Agritech', 'Aviation', 'Insurance', 'Chemicals', 'Motors', 'Brewing', 'Systems', 'Clinics']
+const FIRST = ['Alex', 'Amara', 'Ben', 'Chen', 'Dana', 'Elena', 'Felix', 'Grace', 'Hugo', 'Isha', 'Jonas', 'Kira', 'Liam', 'Maya', 'Nils', 'Olga', 'Priya', 'Rafael', 'Sana', 'Tomas', 'Uma', 'Victor', 'Wen', 'Yara', 'Zoe', 'Arjun', 'Bea', 'Carlos', 'Ines', 'Kofi']
+const LAST = ['Ahmed', 'Berg', 'Costa', 'Dubois', 'Evans', 'Fischer', 'Garcia', 'Hansen', 'Ito', 'Jensen', 'Kumar', 'Larsen', 'Moreau', 'Novak', 'Okoro', 'Patel', 'Quinn', 'Rossi', 'Schmidt', 'Tanaka', 'Usman', 'Varga', 'Walsh', 'Yilmaz', 'Zhang']
+
+function seeded(seed: number): () => number {
+    let s = seed >>> 0 || 1
+    return () => {
+        s ^= s << 13
+        s ^= s >>> 17
+        s ^= s << 5
+        return ((s >>> 0) % 1_000_000) / 1_000_000
+    }
+}
+
+function wider(count: number): DemoClient[] {
+    const r = seeded(20261026)
+    const out: DemoClient[] = []
+    const used = new Set<string>()
+    for (let i = 0; out.length < count; i++) {
+        const name = `${PREFIX[(i * 7) % PREFIX.length]} ${SUFFIX[(i * 3 + Math.floor(i / PREFIX.length)) % SUFFIX.length]}`
+        if (used.has(name)) continue
+        used.add(name)
+        const id = name.toLowerCase().replace(/[^a-z]+/g, '-')
+        const region = (['EU', 'EU', 'EU', 'UK', 'UK', 'US', 'US', 'US', 'APAC', 'APAC'] as Region[])[Math.floor(r() * 10)]
+        const plan = (['enterprise', 'enterprise', 'growth', 'growth', 'growth', 'growth', 'starter', 'starter', 'starter', 'starter'] as Plan[])[Math.floor(r() * 10)]
+        const home = { EU: 'EUR', UK: 'GBP', US: 'USD', APAC: 'AUD' }[region]
+        const currencies = r() < (region === 'EU' ? 0.3 : 0.12) ? [home, region === 'EU' ? 'GBP' : 'EUR'] : [home]
+        const size = plan === 'enterprise' ? 12 + Math.floor(r() * 18) : plan === 'growth' ? 5 + Math.floor(r() * 9) : 2 + Math.floor(r() * 4)
+        const domain = `${id.replace(/-/g, '')}.example`
+        const users: DemoUser[] = []
+        for (let k = 0; k < size; k++) {
+            const first = FIRST[Math.floor(r() * FIRST.length)]
+            const last = LAST[Math.floor(r() * LAST.length)]
+            const email = `${first}.${last}${k}@${domain}`.toLowerCase()
+            users.push(u(email, `${first} ${last}`, k === 0 ? 'admin' : r() < 0.25 ? 'viewer' : 'finance'))
+        }
+        out.push({ id, name, region, plan, currencies, version: r() < 0.5 ? '26.10.0' : '26.9.0', users })
+    }
+    return out
+}
+
+export const WIDER_CLIENTS: DemoClient[] = wider(100)
+/** Every client in the usage history: the named 20 first, then the wider base. */
+export const ALL_CLIENTS: DemoClient[] = [...CLIENTS, ...WIDER_CLIENTS]
