@@ -6,6 +6,9 @@
 //                 recording get the same file, so it is stored once.
 //   clip_holders  who has which clip: made it, and whether they saved it
 //   audit         sign-ins, views, downloads, shares and access changes
+//   releases, release_tickets, release_snapshots, release_groups
+//                 the release dashboard: the last N Jira releases (default 12), their tickets and
+//                 how each ticket is linked to PostHog, computed numbers, and custom groups
 //
 // What gets deleted (see pruneOldClips in service/replays.ts):
 //   a clip nobody saved, CLIP_RETENTION_DAYS (14) after it was last asked for;
@@ -71,6 +74,52 @@ const MIGRATIONS: string[] = [
     );
     CREATE INDEX audit_t ON audit (t);
     CREATE INDEX audit_who ON audit (who, t);`,
+
+    // 2: the "Release insights only" role, and the release dashboard (core/releases.ts).
+    `CREATE TABLE people_v2 (
+        email TEXT PRIMARY KEY,
+        role TEXT NOT NULL CHECK (role IN ('none', 'insights', 'watch', 'download', 'admin')),
+        note TEXT,
+        updated_by TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    INSERT INTO people_v2 SELECT email, role, note, updated_by, updated_at FROM people;
+    DROP TABLE people;
+    ALTER TABLE people_v2 RENAME TO people;
+    CREATE TABLE releases (
+        name TEXT PRIMARY KEY,
+        released_at TEXT NOT NULL,
+        description TEXT,
+        synced_at TEXT NOT NULL
+    );
+    CREATE TABLE release_tickets (
+        key TEXT PRIMARY KEY,
+        release TEXT NOT NULL REFERENCES releases (name) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        description TEXT,
+        status TEXT,
+        components TEXT NOT NULL DEFAULT '[]',
+        labels TEXT NOT NULL DEFAULT '[]',
+        auto_link TEXT,
+        link TEXT,
+        link_by TEXT,
+        link_at TEXT,
+        hidden INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX release_tickets_release ON release_tickets (release);
+    CREATE TABLE release_snapshots (
+        release TEXT PRIMARY KEY REFERENCES releases (name) ON DELETE CASCADE,
+        computed_at TEXT NOT NULL,
+        data TEXT NOT NULL
+    );
+    CREATE TABLE release_groups (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        releases TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

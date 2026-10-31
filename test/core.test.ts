@@ -112,7 +112,7 @@ describe('incidents', () => {
         assert.equal(elementLabel(''), undefined)
     })
     test('one incident per session, exception first, recorded sessions first', () => {
-        const base = { client_id: 'c', client_name: 'C', user: 'u', pathname: '/invoices', app_version: '2.14.0' }
+        const base = { client_id: 'c', client_name: 'C', user: 'u', pathname: '/invoices', app_version: '26.10.0' }
         const rec = { start: '', end: '', offset_s: 1, url: '' }
         const list: Incident[] = [
             { ...base, kind: 'rageclick', timestamp: '2026-10-31T10:00:05Z', session_id: 'a', recording: rec },
@@ -127,9 +127,9 @@ describe('incidents', () => {
 describe('severity', () => {
     const quiet = { hasError: false, clientsAffected: 0, usersAffected: 0, occurrences: 0, clientsUsingScreen: 20, blocksTask: false, rising: false, enterpriseAffected: false, silent: false }
     test('a blocking regression across several enterprise clients is P1', () => {
-        const s = suggestSeverity({ ...quiet, hasError: true, blocksTask: true, clientsAffected: 4, usersAffected: 8, occurrences: 73, versionSpecific: '2.14.0', rising: true, enterpriseAffected: true })
+        const s = suggestSeverity({ ...quiet, hasError: true, blocksTask: true, clientsAffected: 4, usersAffected: 8, occurrences: 73, versionSpecific: '26.10.0', rising: true, enterpriseAffected: true })
         assert.equal(s.priority, 'P1')
-        assert.ok(s.reasons.some((r) => r.includes('2.14.0')))
+        assert.ok(s.reasons.some((r) => r.includes('26.10.0')))
     })
     test('one user, one error, nothing else is P4 or P3, never P1', () => {
         const s = suggestSeverity({ ...quiet, hasError: true, clientsAffected: 1, usersAffected: 1, occurrences: 1 })

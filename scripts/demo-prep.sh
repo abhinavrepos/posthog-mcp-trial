@@ -33,6 +33,9 @@ pnpm -s seed
 echo "==> Waiting for the recordings to be stored"
 sleep 30
 
+echo "==> Recomputing release insights"
+pnpm -s releases:sync || echo "    release sync failed; use \"Sync now\" on /releases"
+
 echo
 echo "Ready. Open the mock Jira board and file the example tickets."
 scripts/stack.sh status

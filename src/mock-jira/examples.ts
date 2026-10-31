@@ -26,8 +26,8 @@ export const EXAMPLES = [
     {
         button: 'MMT risk review',
         type: 'MMT Risk',
-        summary: 'Risk review: invoice PDF export after the 2.14.0 release',
-        description: 'Please assess exposure of the invoices export flow following the 2.14.0 release. Which clients are affected, how often, and is it getting worse?',
+        summary: 'Risk review: invoice PDF export after the 26.10.0 release',
+        description: 'Please assess exposure of the invoices export flow following the 26.10.0 release. Which clients are affected, how often, and is it getting worse?',
         reporter: { displayName: 'Jordan (Risk)', emailAddress: 'jordan.risk@acme.example', timeZone: 'Europe/London' },
     },
 ]

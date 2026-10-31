@@ -21,6 +21,8 @@ import { triage } from '../core/triage.ts'
 import { addAttachment, addComment, addLabels, getIssue, hasTriageComment, issueToTicket, verifyWebhookSignature } from '../jira/client.ts'
 import { registerTools } from '../mcp/tools.ts'
 import { audit } from './access.ts'
+import { keptReleases, syncReleases, syncStatus } from '../core/releases.ts'
+import { handleReleases } from './releases-page.ts'
 import { handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
 
 const ai = makeAi()
@@ -156,12 +158,17 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://localhost')
     try {
         if (url.pathname === '/healthz') return send(res, 200, 'ok')
+        if (url.pathname === '/favicon.ico') {
+            res.writeHead(204, { 'cache-control': 'max-age=86400' })
+            return res.end()
+        }
         if (url.pathname === '/webhooks/jira' && req.method === 'POST') return await handleWebhook(req, res)
         if (url.pathname.startsWith('/clips/') && req.method === 'GET') return serveClip(req, res, url)
         if (url.pathname === '/') {
-            res.writeHead(302, { location: '/replays' })
+            res.writeHead(302, { location: '/releases' })
             return res.end()
         }
+        if (await handleReleases(req, res, url)) return
         if (await handleReplays(req, res, url)) return
         if (url.pathname === '/mcp') return await handleMcp(req, res)
         if (url.pathname === '/status') {
@@ -181,6 +188,16 @@ for (const [name, value] of Object.entries({ JIRA_WEBHOOK_SECRET: config.jira.we
 
 pruneOldClips()
 setInterval(() => pruneOldClips(), 6 * 3_600_000).unref()
+
+// The release dashboard reads Jira and PostHog at start (when its data is older than an hour)
+// and every 6 hours. Numbers for the latest release keep moving while it is new.
+const syncNow = (why: string) =>
+    syncReleases()
+        .then((r) => log('releases synced', { why, releases: r.releases.length, tickets: r.tickets, seconds: r.seconds, dropped: r.dropped }))
+        .catch((e) => log('release sync failed', { why, error: (e as Error).message }))
+const last = syncStatus().at
+if (!keptReleases().length || !last || Date.now() - Date.parse(last) > 3_600_000) setTimeout(() => void syncNow('start'), 5_000).unref()
+setInterval(() => void syncNow('schedule'), 6 * 3_600_000).unref()
 
 server.listen(config.service.port, '0.0.0.0', () => log('triage service listening', { port: config.service.port, ai: !!ai, ai_model: ai ? config.anthropic.model : undefined }))
 

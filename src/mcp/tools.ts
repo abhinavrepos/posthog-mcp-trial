@@ -9,6 +9,7 @@ import { errorImpact } from '../core/impact.ts'
 import { bestPerSession, findIncidents } from '../core/incidents.ts'
 import { config } from '../core/config.ts'
 import { replayUrl } from '../core/posthog.ts'
+import { scopes, view, viewMarkdown } from '../core/releases.ts'
 import { renderReport } from '../core/report.ts'
 import { resolveClient, resolveScreen } from '../core/resolve.ts'
 import { struggleSessions } from '../core/silent.ts'
@@ -180,6 +181,29 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         async ({ summary, description, kind, reporter_timezone, clip }) => {
             const report = await triage({ key: 'MCP', kind, summary, description, reporter: { timeZone: reporter_timezone } }, { ai, clip })
             return text(renderReport(report))
+        }
+    )
+
+    server.registerTool(
+        'release_insights',
+        {
+            title: 'Release insights',
+            description:
+                'Ranks the Jira tickets shipped in a release, a quarter, a custom group or all kept releases by impact: how many clients used what they changed, and the errors, rage clicks and support tickets that followed. Returns findings and tables as markdown. Uses event counts only, never replay content. Call with no scope to list what can be asked for.',
+            inputSchema: {
+                scope: z.string().optional().describe('A release like "26.10.0", a quarter like "Q3 2026", a custom group name, or "all". Leave empty to list the options.'),
+                top: z.number().int().min(1).max(20).default(5),
+            },
+            annotations: { readOnlyHint: true },
+        },
+        async ({ scope, top }) => {
+            const all = scopes()
+            if (!all.length || all[0].releases.length === 0) return text('No releases yet. Sync the release dashboard first (/releases, "Sync now").')
+            if (!scope) return text(['Scopes you can ask for:', ...all.map((x) => `- ${x.label} (${x.kind}${x.kind === 'release' ? '' : `: ${x.releases.join(', ')}`})`)].join('\n'))
+            const want = scope.trim().toLowerCase()
+            const match = all.find((x) => x.label.toLowerCase() === want || x.id.toLowerCase() === want || x.id.toLowerCase() === `r:${want}`) || (want === 'all' ? all[0] : undefined)
+            if (!match) return text(`No scope called "${scope}". Options: ${all.map((x) => x.label).join(', ')}`)
+            return text(viewMarkdown(view(match.id), top) + `\n\nOpen it: ${config.service.publicUrl}/releases?scope=${encodeURIComponent(match.id)}`)
         }
     )
 }
