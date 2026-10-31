@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config } from '../core/config.ts'
 import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, type Role, type Viewer } from './access.ts'
-import { deleteClip, headerHtml, listClips, PAGE_CSS, setSaved, storage } from './replays.ts'
+import { APP_NAME, deleteClip, headerHtml, listClips, PAGE_CSS, setSaved, storage } from './replays.ts'
 
 interface Member {
     email: string
@@ -160,7 +160,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
 }
 
 function adminHtml(v: Viewer): string {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Admin · ION Lens</title><style>${PAGE_CSS()}
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Admin · ${APP_NAME}</title><style>${PAGE_CSS()}
 .badge{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--chip);white-space:nowrap}.warn{background:#fef0c7;color:#7a2e0e}
 @media (prefers-color-scheme:dark){.warn{background:#4e1d09;color:#fec84b}}td select{min-width:190px}.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px}
 .toolbar>div{flex:1;min-width:160px}details summary{cursor:pointer;font-weight:600}ul.tight{margin:6px 0;padding-left:20px}ul.tight li{margin:3px 0}</style></head>

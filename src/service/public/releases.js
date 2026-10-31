@@ -20,7 +20,11 @@
     var SCREENS = { '/invoices': 'Invoices', '/clients': 'Clients', '/dashboard': 'Dashboard', '/reports/revenue': 'Revenue report', '/settings': 'Settings' }
 
     var qs = new URLSearchParams(location.search)
-    var state = { scope: qs.get('scope') || 'all', compare: qs.get('compare') || '', weights: null, open: null, q: '', sort: 'impact', type: '', showAll: false }
+    var PAGE = B.page
+    var state = { scope: qs.get('scope') || 'all', compare: qs.get('compare') || '', weights: null, open: qs.get('open'), q: '', sort: 'impact', type: '', showAll: false }
+    var has = function (id) {
+        return !!document.getElementById(id)
+    }
     var data = null
     var areas = null
     var settingsDrawn = false
@@ -116,7 +120,11 @@
         var params = new URLSearchParams()
         if (state.scope !== 'all') params.set('scope', state.scope)
         if (state.compare) params.set('compare', state.compare)
-        history.replaceState(null, '', '/releases' + (params.toString() ? '?' + params : ''))
+        if (state.open && PAGE === 'tickets') params.set('open', state.open)
+        history.replaceState(null, '', location.pathname + (params.toString() ? '?' + params : ''))
+        ;[].slice.call(document.querySelectorAll('[data-keep-scope]')).forEach(function (a) {
+            a.href = a.getAttribute('href').split('?')[0] + (state.scope !== 'all' ? '?scope=' + encodeURIComponent(state.scope) : '')
+        })
         return api(url).then(function (d) {
             data = d
             render()
@@ -127,29 +135,35 @@
     function render() {
         var v = data.view
         renderScopes()
-        renderStatus(v.synced)
-        $('title').textContent = v.scope.kind === 'release' ? 'Release ' + v.scope.label : v.scope.label
-        $('subtitle').textContent =
-            v.scope.kind === 'all' ? 'Every kept release, matched to how clients use the product in PostHog.' : v.scope.kind === 'release' ? 'Its tickets, matched to how clients used the product before and after it shipped.' : v.releases.map(function (r) { return r.name }).join(', ')
-        renderKpis()
-        renderCompare()
-        renderReleaseHead()
-        renderFindings()
-        renderMap()
-        renderTrend()
-        renderTickets()
-        renderReleases()
-        renderGroups()
-        renderSliders()
-        if (B.isAdmin && !settingsDrawn) renderSettings()
+        if (has('status')) renderStatus(v.synced)
+        if (has('title')) {
+            var what = { overview: '', tickets: 'Tickets · ', releases: 'Releases · ' }[PAGE] || ''
+            $('title').textContent = what + (v.scope.kind === 'release' ? 'Release ' + v.scope.label : v.scope.label)
+            $('subtitle').textContent =
+                v.scope.kind === 'all' ? 'Every kept release, matched to how clients use the product in PostHog.' : v.scope.kind === 'release' ? 'Its tickets, matched to how clients used the product before and after it shipped.' : 'Releases ' + v.releases.map(function (r) { return r.name }).join(', ')
+        }
+        if (has('kpis')) renderKpis()
+        if (has('cmp-out')) renderCompare()
+        if (has('release-head')) renderReleaseHead()
+        if (has('findings')) renderFindings()
+        if (has('map')) renderMap()
+        if (has('top-value')) renderTop()
+        if (has('trend')) renderTrend()
+        if (has('tickets')) renderTickets()
+        if (has('releases')) renderReleases()
+        if (has('quarters')) renderQuarters()
+        if (has('groups')) renderGroups()
+        if (has('sliders')) renderSliders()
+        if (has('settings') && !settingsDrawn) renderSettings()
     }
 
     function renderScopes() {
         var groups = { all: 'Overview', quarter: 'Quarters', group: 'Custom groups', release: 'Releases' }
-        ;[$('scope'), $('compare')].forEach(function (sel, n) {
-            var current = n ? state.compare : state.scope
+        ;[['scope', state.scope, false], ['cmp-a', state.scope, false], ['cmp-b', state.compare, false]].forEach(function (cfg) {
+            var sel = $(cfg[0])
+            if (!sel) return
+            var current = cfg[1]
             clear(sel)
-            if (n) sel.appendChild(el('option', { value: '' }, 'Nothing'))
             Object.keys(groups).forEach(function (kind) {
                 var list = data.scopes.filter(function (s) { return s.kind === kind })
                 if (!list.length) return
@@ -165,6 +179,7 @@
     }
 
     function renderStatus(st) {
+        if (!has('status')) return
         var t = st.running ? 'Syncing with Jira and PostHog…' : st.at ? 'Synced ' + ago(st.at) + (st.result ? ' · ' + st.result.releases.length + ' releases, ' + st.result.tickets + ' tickets, ' + st.result.seconds + ' s' : '') : 'Not synced yet.'
         if (st.error && (!st.at || st.failed_at > st.at)) t += ' · Last sync failed: ' + st.error
         $('status').textContent = t
@@ -197,10 +212,10 @@
     }
 
     function renderCompare() {
-        var box = $('compare-box')
-        if (!data.compare) return box.classList.add('hidden')
-        box.classList.remove('hidden')
-        clear(box)
+        var out = clear($('cmp-out'))
+        if (!data.compare) return out.appendChild(el('div', { cls: 'card empty', text: 'Pick something to compare against.' }))
+        var box = el('div', { cls: 'card' })
+        out.appendChild(box)
         var a = data.view
         var b = data.compare
         var avg = function (v, f) {
@@ -224,6 +239,16 @@
         })
         box.appendChild(el('h2', null, a.scope.label + ' compared with ' + b.scope.label))
         box.appendChild(el('div', { cls: 'table-wrap' }, el('table', { cls: 'cmp' }, el('thead', null, el('tr', null, el('th', { text: '' }), el('th', { text: a.scope.label }), el('th', { text: b.scope.label }), el('th', { text: 'Difference' }))), tb)))
+        var cols = el('div', { cls: 'grid2' })
+        ;[a, b].forEach(function (v) {
+            var card = el('div', { cls: 'card' }, el('h2', { text: 'Top tickets: ' + v.scope.label }))
+            card.appendChild(topList(rankedOf(v).sort(function (x, y) { return y.scores.impact - x.scores.impact }).slice(0, 6)))
+            var f = el('ul', { cls: 'find', style: 'margin-top:10px' })
+            v.insights.slice(0, 4).forEach(function (i) { f.appendChild(el('li', null, el('span', { cls: 'ico ' + i.kind }, KIND[i.kind]), el('span', { text: i.text }))) })
+            card.appendChild(f)
+            cols.appendChild(card)
+        })
+        out.appendChild(cols)
     }
 
     // ------------------------------------------------------------------ one release
@@ -295,7 +320,14 @@
     function renderFindings() {
         var ul = clear($('findings'))
         if (!data.view.insights.length) ul.appendChild(el('li', { cls: 'muted' }, 'Nothing stands out yet.'))
-        data.view.insights.forEach(function (f) {
+        var all = data.view.insights
+        var shown = state.allFindings ? all : all.slice(0, 6)
+        if (all.length > shown.length || state.allFindings) {
+            setTimeout(function () {
+                ul.appendChild(el('li', { style: 'border:0' }, el('button', { type: 'button', cls: 'ghost small', onclick: function () { state.allFindings = !state.allFindings; renderFindings() } }, state.allFindings ? 'Show fewer' : 'Show all ' + all.length + ' findings')))
+            })
+        }
+        shown.forEach(function (f) {
             var li = el('li', null, el('span', { cls: 'ico ' + f.kind }, KIND[f.kind]), el('span', { text: f.text }))
             if (f.ticket) {
                 li.style.cursor = 'pointer'
@@ -306,9 +338,45 @@
         })
     }
 
+    function rankedOf(v) {
+        return v.tickets.filter(function (t) { return t.link && !t.hidden && v.settings.ticket_types.indexOf(t.type) >= 0 })
+    }
     function ranked() {
-        var s = data.view.settings
-        return data.view.tickets.filter(function (t) { return t.link && !t.hidden && s.ticket_types.indexOf(t.type) >= 0 })
+        return rankedOf(data.view)
+    }
+    function topList(list, field) {
+        var ul = el('ul', { cls: 'toplist' })
+        if (!list.length) ul.appendChild(el('li', { cls: 'muted', style: 'display:block' }, 'Nothing here.'))
+        list.forEach(function (t) {
+            var n = field === 'risk' ? Math.round(t.scores.risk * 100) : t.scores.impact
+            ul.appendChild(
+                el(
+                    'li',
+                    { onclick: function () { openTicket(t.key) }, title: 'Open ' + t.key },
+                    el('span', { cls: 'n', style: 'color:' + (t.scores.direction === 'risk' ? 'var(--s2)' : 'var(--s1)'), text: String(n) }),
+                    el('div', null, el('div', null, el('b', { text: t.key + ' ' }), el('span', { text: t.summary })), el('div', { cls: 'small muted', text: 'Release ' + t.release + ' · ' + (t.link.event || screenName(t.link.screen)) + (t.usage ? ' · ' + t.usage.clients_after + ' clients' : '') })),
+                    el('span', { cls: 'small muted', text: field === 'risk' ? 'risk' : 'impact' })
+                )
+            )
+        })
+        return ul
+    }
+    function renderTop() {
+        var r = ranked()
+        clear($('top-value')).appendChild(topList(r.filter(function (t) { return t.scores.direction === 'value' }).sort(function (a, b) { return b.scores.value - a.scores.value }).slice(0, 5)))
+        clear($('top-risk')).appendChild(topList(r.filter(function (t) { return t.scores.risk > 0 }).sort(function (a, b) { return b.scores.risk - a.scores.risk }).slice(0, 5), 'risk'))
+        var more = el('p', { cls: 'small' }, el('a', { href: '/releases/tickets' + (state.scope !== 'all' ? '?scope=' + encodeURIComponent(state.scope) : '') }, 'All ' + r.length + ' ranked tickets →'))
+        $('top-value').appendChild(more)
+    }
+    function renderQuarters() {
+        var box = clear($('quarters'))
+        var qs2 = data.scopes.filter(function (s) { return s.kind === 'quarter' })
+        var tb = el('tbody')
+        qs2.forEach(function (q) {
+            tb.appendChild(el('tr', { cls: 'rel', onclick: function () { setScope(q.id) } }, el('td', null, el('b', { text: q.label })), el('td', { cls: 'small muted', text: q.releases.join(', ') })))
+        })
+        box.appendChild(el('div', { cls: 'table-wrap' }, el('table', null, tb)))
+        box.appendChild(el('p', { cls: 'note', text: 'Quarters follow the year start in Settings. Click one to open it.' }))
     }
 
     function renderMap() {
@@ -554,6 +622,10 @@
     }
 
     function openTicket(key) {
+        if (PAGE !== 'tickets') {
+            location.href = '/releases/tickets?' + (state.scope !== 'all' ? 'scope=' + encodeURIComponent(state.scope) + '&' : '') + 'open=' + encodeURIComponent(key)
+            return
+        }
         var t = data.view.tickets.filter(function (x) { return x.key === key })[0]
         if (!t) return
         if (!ranked().some(function (x) { return x.key === key })) state.showAll = true
@@ -641,6 +713,10 @@
             var t
             input.addEventListener('input', function () {
                 out.textContent = input.value
+                if (PAGE === 'settings') {
+                    data.view.weights[row[0]] = Number(input.value)
+                    return
+                }
                 clearTimeout(t)
                 t = setTimeout(function () {
                     state.weights = Object.assign({}, data.view.weights, (function () { var o = {}; o[row[0]] = Number(input.value); return o })())
@@ -728,6 +804,10 @@
 
     // ------------------------------------------------------------------ wiring
     function setScope(id) {
+        if (PAGE === 'releases') {
+            location.href = '/releases?scope=' + encodeURIComponent(id)
+            return
+        }
         state.scope = id
         state.open = null
         if (state.compare === id) state.compare = ''
@@ -749,29 +829,32 @@
         clearTimeout(rt)
         rt = setTimeout(function () {
             if (!data) return
-            renderMap()
-            renderTrend()
-            renderReleaseHead()
-            renderTickets()
+            if (has('map')) renderMap()
+            if (has('trend')) renderTrend()
+            if (has('release-head')) renderReleaseHead()
+            if (has('tickets')) renderTickets()
         }, 200)
     })
-    $('scope').addEventListener('change', function () { setScope($('scope').value) })
-    $('compare').addEventListener('change', function () { state.compare = $('compare').value; load() })
-    $('tune').addEventListener('click', function () {
+    var on = function (id, ev, fn) {
+        if (has(id)) $(id).addEventListener(ev, fn)
+    }
+    on('scope', 'change', function () { setScope($('scope').value) })
+    on('cmp-a', 'change', function () { state.scope = $('cmp-a').value; load() })
+    on('cmp-b', 'change', function () { state.compare = $('cmp-b').value; load() })
+    on('tune', 'click', function () {
         var open = $('tune-panel').classList.toggle('open')
         $('tune').setAttribute('aria-expanded', String(open))
     })
-    $('reset-w').addEventListener('click', function () { state.weights = null; load() })
-    if ($('save-w')) {
-        $('save-w').addEventListener('click', function () {
-            api('/releases/api/settings', { method: 'POST', body: JSON.stringify({ weights: data.view.weights }) }).then(function () {
-                state.weights = null
-                $('status').textContent = 'Saved these weights as the default for everyone.'
-                load()
-            }).catch(function (e) { $('status').textContent = e.message })
-        })
-    }
-    $('copy').addEventListener('click', function () {
+    on('reset-w', 'click', function () { state.weights = null; load() })
+    on('save-w', 'click', function () {
+        var msgEl = $('w-msg') || $('status')
+        api('/releases/api/settings', { method: 'POST', body: JSON.stringify({ weights: data.view.weights }) }).then(function () {
+            state.weights = null
+            msgEl.textContent = 'Saved these weights as the default for everyone.'
+            if (PAGE !== 'settings') load()
+        }).catch(function (e) { msgEl.textContent = e.message })
+    })
+    on('copy', 'click', function () {
         var w = state.weights ? '&w=' + encodeURIComponent(JSON.stringify(state.weights)) : ''
         fetch('/releases/api/summary.md?scope=' + encodeURIComponent(state.scope) + w).then(function (r) { return r.text() }).then(function (t) {
             return navigator.clipboard.writeText(t).then(function () { $('copy').textContent = 'Copied' }, function () {
@@ -781,20 +864,33 @@
             })
         }).then(function () { setTimeout(function () { $('copy').textContent = 'Copy summary' }, 2000) })
     })
-    if ($('sync')) {
+    if (has('sync')) {
         $('sync').addEventListener('click', function () {
             $('sync').disabled = true
             api('/releases/api/sync', { method: 'POST' }).then(function (st) { renderStatus(st); waitForSync() }).finally(function () { setTimeout(function () { $('sync').disabled = false }, 3000) })
         })
     }
     var qt
-    $('q').addEventListener('input', function () { clearTimeout(qt); qt = setTimeout(function () { state.q = $('q').value.trim(); renderTickets() }, 150) })
-    $('sort').addEventListener('change', function () { state.sort = $('sort').value; renderTickets() })
-    $('type').addEventListener('change', function () { state.type = $('type').value; renderTickets() })
-    $('show-all').addEventListener('change', function () { state.showAll = $('show-all').checked; renderTickets() })
+    on('q', 'input', function () { clearTimeout(qt); qt = setTimeout(function () { state.q = $('q').value.trim(); renderTickets() }, 150) })
+    on('sort', 'change', function () { state.sort = $('sort').value; renderTickets() })
+    on('type', 'change', function () { state.type = $('type').value; renderTickets() })
+    on('show-all', 'change', function () { state.showAll = $('show-all').checked; renderTickets() })
 
+    if (PAGE === 'how') return
+    if (PAGE === 'compare' && !state.compare) {
+        // Default: the newest quarter against the one before it.
+        state.compare = '__auto'
+    }
     api('/releases/api/areas').then(function (a) { areas = a }).catch(function () {})
-    load().then(function () {
+    var first = state.compare === '__auto'
+        ? api('/releases/api/view?scope=all').then(function (d) {
+              var q = d.scopes.filter(function (s) { return s.kind === 'quarter' })
+              state.scope = q[0] ? q[0].id : 'all'
+              state.compare = q[1] ? q[1].id : ''
+          })
+        : Promise.resolve()
+    first.then(load).then(function () {
         if (data && data.view.synced.running) waitForSync()
+        if (state.open && PAGE === 'tickets') openTicket(state.open)
     })
 })()
