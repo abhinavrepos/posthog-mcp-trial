@@ -1,0 +1,55 @@
+{
+  "name": "ticket-triage",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Jira ticket triage on top of PostHog: finds the client's session, clips the replay, and adds usage and blast-radius data.",
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "build:rasterizer": "node scripts/build-rasterizer.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "service": "tsx src/service/server.ts",
+    "mock-jira": "tsx src/mock-jira/server.ts",
+    "demo-app": "tsx demo-app/server.ts",
+    "mcp": "tsx src/mcp/stdio.ts",
+    "sessions": "tsx scripts/generate-sessions.ts",
+    "seed": "tsx scripts/seed-history.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.70.0",
+    "@aws-sdk/client-s3": "^3.723.0",
+    "@aws-sdk/credential-provider-node": "^3.972.1",
+    "@aws-sdk/lib-storage": "^3.723.0",
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/resources": "^2.12.0",
+    "@opentelemetry/sdk-metrics": "^2.7.1",
+    "@opentelemetry/semantic-conventions": "^1.44.0",
+    "@smithy/node-http-handler": "4.4.9",
+    "ffmpeg-static": "^5.2.0",
+    "https-proxy-agent": "^7.0.6",
+    "ipaddr.js": "^2.5.0",
+    "lru-cache": "^11.5.3",
+    "pino": "^8.6.0",
+    "prom-client": "^14.2.0",
+    "puppeteer": "^24.3.0",
+    "puppeteer-capture": "^1.43.0",
+    "undici": "^8.12.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.11",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "ffmpeg-static",
+      "puppeteer"
+    ]
+  }
+}
