@@ -68,6 +68,15 @@ async function clipFor(sessionId: string, offsetS: number, recordingLengthS: num
     return { ...clip, url: clipUrl(clip.name), replay_url: replayUrl(sessionId, start) }
 }
 
+/** A short, readable reason for a failed clip. The full error goes to the service log. */
+function clipFailure(e: unknown): string {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error(JSON.stringify({ t: new Date().toISOString(), msg: 'clip render failed', error: msg.slice(0, 2000) }))
+    if (/No usable sandbox|Failed to launch the browser/.test(msg)) return 'The video clip could not be made: the clip renderer is not set up on this server yet. The replay link still works.'
+    if (/no stored snapshots/i.test(msg)) return 'The video clip could not be made: the recording is still being saved. Try again in a minute. The replay link works.'
+    return `The video clip could not be made (${msg.split('\n')[0].slice(0, 120)}). The replay link still works.`
+}
+
 const lengthOf = (r?: { start: string; end: string }) => (r ? (Date.parse(r.end) - Date.parse(r.start)) / 1000 : 0)
 
 export async function triage(ticket: Ticket, opts: TriageOptions = {}): Promise<TriageReport> {
@@ -189,8 +198,8 @@ async function clientIncident(report: TriageReport, parsed: ParsedTicket, client
         try {
             report.clip = await clipFor(sessionId, recording.offset_s, lengthOf(recording), opts.clipLengthS ?? 30)
         } catch (e) {
-            report.clip_error = (e as Error).message
-            report.notes.push(`The clip could not be rendered (${report.clip_error}). The replay link still works.`)
+            report.clip_error = clipFailure(e)
+            report.notes.push(report.clip_error)
         }
     } else if ((report.incident || report.struggle) && !recording) {
         report.notes.push('The matching session has no recording (recording may have been off, or it was sampled out).')
@@ -249,7 +258,7 @@ async function riskReview(report: TriageReport, parsed: ParsedTicket, opts: Tria
         try {
             clips.push(await clipFor(sessions[0].session_id, sessions[0].recording.offset_s, lengthOf(sessions[0].recording), opts.clipLengthS ?? 30))
         } catch (e) {
-            report.notes.push(`The clip could not be rendered (${(e as Error).message}).`)
+            report.notes.push(clipFailure(e))
         }
     }
     report.risk = { sessions, clips }
