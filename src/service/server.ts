@@ -20,7 +20,8 @@ import { renderReport } from '../core/report.ts'
 import { triage } from '../core/triage.ts'
 import { addAttachment, addComment, addLabels, getIssue, hasTriageComment, issueToTicket, verifyWebhookSignature } from '../jira/client.ts'
 import { registerTools } from '../mcp/tools.ts'
-import { audit, handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
+import { audit } from './access.ts'
+import { handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
 
 const ai = makeAi()
 
