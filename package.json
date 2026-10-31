@@ -10,11 +10,11 @@
   "scripts": {
     "build:rasterizer": "node scripts/build-rasterizer.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts",
-    "service": "tsx src/service/server.ts",
+    "test": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx --test test/*.test.ts",
+    "service": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx src/service/server.ts",
     "mock-jira": "tsx src/mock-jira/server.ts",
     "demo-app": "tsx demo-app/server.ts",
-    "mcp": "tsx src/mcp/stdio.ts",
+    "mcp": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx src/mcp/stdio.ts",
     "sessions": "tsx scripts/generate-sessions.ts",
     "seed": "tsx scripts/seed-history.ts"
   },

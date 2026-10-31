@@ -56,7 +56,7 @@ does the job with the same renderer.
 3. Watch it, download it (the file name says client, user, date and range), copy a share link
    that expires, or open the replay in PostHog at that second.
 
-The page also lists recent clips and has a "Get MP4" bookmark button: drag it to the bookmarks
+The page also lists your clips (made or saved by you) and has a "Get MP4" bookmark button: drag it to the bookmarks
 bar, and while you watch a replay in PostHog, click it to open that replay here. Each Jira
 triage comment links here too ("Make another clip").
 
@@ -80,9 +80,30 @@ a PostHog account in a separate organization ("Clip viewers") with no access to 
 give them a role here. The admin page flags people who can see all replays in PostHog. Claude's
 `get_replay_link` returns links into this page, so they need a sign-in and a role too.
 
-Every inspection, clip, view, download and share link goes to `logs/audit.jsonl`. Clips are
-deleted after `CLIP_RETENTION_DAYS` (default 30), and each person can make `CLIPS_PER_HOUR`
-clips (default 20).
+### Storage
+
+Roles, settings, clips and the activity log are kept in one SQLite file, `run/triage.db`
+(`src/core/db.ts`). SQLite is built into Node, so there is no database server to run. Back it up
+while the service runs with `sqlite3 run/triage.db ".backup backup.db"`. On first start, older
+JSON files (`run/access.json`, `run/replay-clips.json`, `logs/audit.jsonl`) are imported and
+renamed `*.imported`.
+
+- **No duplicates.** The same part of the same recording always gets the same file name, so it
+  is rendered and stored once. A second person who asks for it is added to the same clip.
+  Clips that only overlap are separate files.
+- **Two weeks unless saved.** A clip nobody saved is deleted `CLIP_RETENTION_DAYS` (default 14)
+  after it was last asked for. **Save this** keeps it until everyone who saved it unsaves it,
+  and unsaving gives it another 14 days.
+- **The admin page shows who has what**:
+  - each person's clips, how many they saved, and the space they use;
+  - each clip's holders, with stars for saved ones, its size and its delete date;
+  - the total space.
+
+  Admins can unsave a clip for someone or delete it for everyone.
+- **Activity log.** Every sign-in, inspection, clip, view, download, save and share is logged.
+  Entries older than `AUDIT_RETENTION_DAYS` (default 365) are deleted.
+
+Each person can make `CLIPS_PER_HOUR` clips (default 20).
 
 ## Layout
 

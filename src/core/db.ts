@@ -1,0 +1,161 @@
+// The replay clip page's database: one SQLite file (run/triage.db, or TRIAGE_DB).
+//
+//   settings      admin settings (default role, share links on or off)
+//   people        the role each person has on the clip page
+//   clips         one row per MP4 file in clips/. Two people asking for the same part of the same
+//                 recording get the same file, so it is stored once.
+//   clip_holders  who has which clip: made it, and whether they saved it
+//   audit         sign-ins, views, downloads, shares and access changes
+//
+// What gets deleted (see pruneOldClips in service/replays.ts):
+//   a clip nobody saved, CLIP_RETENTION_DAYS (14) after it was last asked for;
+//   activity older than AUDIT_RETENTION_DAYS (365).
+// A saved clip stays until everyone who saved it unsaves it, or an admin deletes it.
+//
+// SQLite is built into Node, so there is no database server to run.
+import { chownSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
+
+import { config, ROOT } from './config.ts'
+
+export const DB_FILE = process.env.TRIAGE_DB || join(ROOT, 'run/triage.db')
+mkdirSync(dirname(DB_FILE), { recursive: true })
+
+export const db = new DatabaseSync(DB_FILE)
+// auto_vacuum only takes effect on a new file; it lets deletes give the space back.
+db.exec('PRAGMA auto_vacuum = INCREMENTAL; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000; PRAGMA foreign_keys = ON;')
+
+// Each entry runs once, in order. PRAGMA user_version counts how many have run.
+const MIGRATIONS: string[] = [
+    `CREATE TABLE settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    CREATE TABLE people (
+        email TEXT PRIMARY KEY,
+        role TEXT NOT NULL CHECK (role IN ('none', 'watch', 'download', 'admin')),
+        note TEXT,
+        updated_by TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE TABLE clips (
+        name TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        start_s REAL NOT NULL,
+        end_s REAL NOT NULL,
+        client TEXT,
+        user TEXT,
+        recording_start TEXT,
+        download_name TEXT NOT NULL,
+        bytes INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        last_requested_at TEXT NOT NULL
+    );
+    CREATE INDEX clips_last_requested ON clips (last_requested_at);
+    CREATE TABLE clip_holders (
+        clip_name TEXT NOT NULL REFERENCES clips (name) ON DELETE CASCADE,
+        email TEXT NOT NULL,
+        made_at TEXT NOT NULL,
+        saved_at TEXT,
+        PRIMARY KEY (clip_name, email)
+    ) WITHOUT ROWID;
+    CREATE INDEX clip_holders_email ON clip_holders (email);
+    CREATE TABLE audit (
+        id INTEGER PRIMARY KEY,
+        t TEXT NOT NULL,
+        who TEXT NOT NULL,
+        action TEXT NOT NULL,
+        details TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX audit_t ON audit (t);
+    CREATE INDEX audit_who ON audit (who, t);`,
+]
+
+/** Runs fn in one transaction: all of its writes land, or none do. */
+export function tx<T>(fn: () => T): T {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+        const out = fn()
+        db.exec('COMMIT')
+        return out
+    } catch (e) {
+        db.exec('ROLLBACK')
+        throw e
+    }
+}
+
+export const all = <T>(sql: string, ...params: SQLInputValue[]) => db.prepare(sql).all(...params) as T[]
+export const one = <T>(sql: string, ...params: SQLInputValue[]) => db.prepare(sql).get(...params) as T | undefined
+export const run = (sql: string, ...params: SQLInputValue[]) => db.prepare(sql).run(...params)
+
+export function getSetting<T>(key: string, fallback: T): T {
+    const row = one<{ value: string }>('SELECT value FROM settings WHERE key = ?', key)
+    return row ? (JSON.parse(row.value) as T) : fallback
+}
+export function setSetting(key: string, value: unknown): void {
+    run('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value', key, JSON.stringify(value))
+}
+
+function migrate() {
+    const version = one<{ user_version: number }>('PRAGMA user_version')!.user_version
+    for (let v = version; v < MIGRATIONS.length; v++) {
+        tx(() => {
+            db.exec(MIGRATIONS[v])
+            db.exec(`PRAGMA user_version = ${v + 1}`)
+        })
+    }
+}
+
+/** Moves the JSON files older versions used into the database, once, and renames them. */
+function importLegacyFiles() {
+    const take = (rel: string, fn: (text: string) => void) => {
+        const file = join(ROOT, rel)
+        if (!existsSync(file)) return
+        tx(() => fn(readFileSync(file, 'utf8')))
+        renameSync(file, `${file}.imported`)
+    }
+    take('run/access.json', (text) => {
+        const a = JSON.parse(text) as { default_role?: string; allow_share_links?: boolean; people?: Record<string, { role: string; note?: string; updated_by: string; updated_at: string }> }
+        if (a.default_role) setSetting('default_role', a.default_role)
+        if (a.allow_share_links !== undefined) setSetting('allow_share_links', a.allow_share_links)
+        for (const [email, p] of Object.entries(a.people || {})) {
+            run('INSERT OR REPLACE INTO people VALUES (?, ?, ?, ?, ?)', email.toLowerCase(), p.role, p.note ?? null, p.updated_by, p.updated_at)
+        }
+    })
+    take('run/replay-clips.json', (text) => {
+        for (const c of JSON.parse(text) as Record<string, string | number | undefined>[]) {
+            const file = join(config.clip.outDir, String(c.name))
+            if (!existsSync(file)) continue
+            run(
+                `INSERT OR IGNORE INTO clips (name, session_id, start_s, end_s, client, user, recording_start, download_name, bytes, created_by, created_at, last_requested_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                String(c.name), String(c.session_id), Number(c.start_s), Number(c.end_s), (c.client as string) ?? null, (c.user as string) ?? null, (c.recording_start as string) ?? null,
+                String(c.download_name), statSync(file).size, String(c.created_by), String(c.created_at), String(c.created_at)
+            )
+            run('INSERT OR IGNORE INTO clip_holders (clip_name, email, made_at) VALUES (?, ?, ?)', String(c.name), String(c.created_by), String(c.created_at))
+        }
+    })
+    take('logs/audit.jsonl', (text) => {
+        for (const line of text.split('\n')) {
+            if (!line.trim()) continue
+            const { t, who, action, ...details } = JSON.parse(line) as Record<string, unknown>
+            run('INSERT INTO audit (t, who, action, details) VALUES (?, ?, ?, ?)', String(t), String(who), String(action), JSON.stringify(details))
+        }
+    })
+}
+
+/** If something runs as root (say, the MCP server started by Claude Code), keeps the database files
+ * owned by whoever owns run/, so the service, which runs unprivileged, can still write them. */
+function keepOwner() {
+    if (process.getuid?.() !== 0) return
+    const { uid, gid } = statSync(dirname(DB_FILE))
+    if (uid === 0) return
+    for (const f of [DB_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`]) if (existsSync(f)) chownSync(f, uid, gid)
+}
+
+migrate()
+// Only the default database takes over the old files; a test database must not.
+if (DB_FILE === join(ROOT, 'run/triage.db')) importLegacyFiles()
+keepOwner()

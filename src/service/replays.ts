@@ -2,14 +2,17 @@
 //
 // People sign in with their PostHog account (see access.ts). What they may do depends on the role
 // an admin gives them on /replays/admin: watch clips, or also download and share them. Every
-// action goes to logs/audit.jsonl. Old clips are deleted after CLIP_RETENTION_DAYS.
+// action goes to the audit table. Clips live in the database (core/db.ts): the same part of the same
+// recording is one file however many people ask for it, a clip nobody saved is deleted
+// CLIP_RETENTION_DAYS (14) after it was last asked for, and a saved one stays until it is unsaved.
 import { randomUUID } from 'node:crypto'
-import { createReadStream, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, readdirSync, rmSync, statSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 
 import { renderClip } from '../core/clip.ts'
-import { config, ROOT } from '../core/config.ts'
+import { config } from '../core/config.ts'
+import { all, db, one, run, tx } from '../core/db.ts'
 import { clipUrl } from '../core/links.ts'
 import { replayUrl } from '../core/posthog.ts'
 import { recordingInfo, type RecordingInfo } from '../core/recording-info.ts'
@@ -17,15 +20,15 @@ import { downloadName, formatClock, HourlyLimit, parseReplayInput, parseStartTim
 import { audit, can, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
 import { handleAdmin } from './admin.ts'
 
-const RETENTION_DAYS = Number(process.env.CLIP_RETENTION_DAYS || 30)
+const RETENTION_DAYS = Number(process.env.CLIP_RETENTION_DAYS || 14)
+const AUDIT_RETENTION_DAYS = Number(process.env.AUDIT_RETENTION_DAYS || 365)
 const PER_HOUR = Number(process.env.CLIPS_PER_HOUR || 20)
 const MAX_QUEUE = 20
 const LENGTHS = [10, 20, 30, 45, 60, 90, 120]
-const INDEX = join(ROOT, 'run/replay-clips.json')
 
-// ------------------------------------------------------------------ clip index
+// ------------------------------------------------------------------ clips in the database
 export interface ClipRecord {
-    name: string // file in clips/
+    name: string // file in clips/; the same session and range always give the same name
     session_id: string
     start_s: number
     end_s: number
@@ -33,48 +36,133 @@ export interface ClipRecord {
     user?: string
     recording_start?: string
     download_name: string
-    created_by: string
+    bytes: number
+    created_by: string // who asked first
     created_at: string
+    last_requested_at: string
+    holders: string[] // everyone who made or saved it
+    saved_by: string[]
+    expires_at?: string // undefined while someone has it saved
 }
 
-function loadIndex(): ClipRecord[] {
+const SELECT_CLIP = `SELECT c.*,
+    (SELECT json_group_array(email) FROM clip_holders h WHERE h.clip_name = c.name) AS holders,
+    (SELECT json_group_array(email) FROM clip_holders h WHERE h.clip_name = c.name AND h.saved_at IS NOT NULL) AS saved_by
+    FROM clips c`
+const DAY = 86_400_000
+
+function fromRow(r: Record<string, unknown>): ClipRecord {
+    const c: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(r)) if (v !== null) c[k] = v
+    c.holders = JSON.parse(String(r.holders))
+    c.saved_by = JSON.parse(String(r.saved_by))
+    if (!(c.saved_by as string[]).length) c.expires_at = new Date(Date.parse(String(r.last_requested_at)) + RETENTION_DAYS * DAY).toISOString()
+    return c as unknown as ClipRecord
+}
+
+export function getClip(name: string): ClipRecord | undefined {
+    const r = one<Record<string, unknown>>(`${SELECT_CLIP} WHERE c.name = ?`, name)
+    return r ? fromRow(r) : undefined
+}
+
+/** Recent clips, or only the ones this person made or saved. */
+export function listClips(opts: { holder?: string; limit?: number } = {}): ClipRecord[] {
+    const where = opts.holder ? 'WHERE c.name IN (SELECT clip_name FROM clip_holders WHERE email = ?)' : ''
+    const params = opts.holder ? [opts.holder] : []
+    return all<Record<string, unknown>>(`${SELECT_CLIP} ${where} ORDER BY c.last_requested_at DESC LIMIT ?`, ...params, opts.limit ?? 200).map(fromRow)
+}
+
+/** Records that `by` has this clip. A clip that already exists is not stored again: the person is
+ * added to it and its two weeks start again. */
+export function storeClip(clip: { name: string; session_id: string; start_offset_s: number; end_offset_s: number }, info: Partial<RecordingInfo> | undefined, by: string): ClipRecord {
+    const now = new Date().toISOString()
+    const file = join(config.clip.outDir, clip.name)
+    const bytes = existsSync(file) ? statSync(file).size : 0
+    tx(() => {
+        run(
+            `INSERT INTO clips (name, session_id, start_s, end_s, client, user, recording_start, download_name, bytes, created_by, created_at, last_requested_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (name) DO UPDATE SET last_requested_at = excluded.last_requested_at, bytes = excluded.bytes`,
+            clip.name, clip.session_id, clip.start_offset_s, clip.end_offset_s, info?.client ?? null, info?.user ?? null, info?.start ?? null,
+            downloadName({ client: info?.client, user: info?.user, recordingStart: info?.start, startS: clip.start_offset_s, endS: clip.end_offset_s }),
+            bytes, by, now, now
+        )
+        run('INSERT INTO clip_holders (clip_name, email, made_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING', clip.name, by, now)
+    })
+    return getClip(clip.name)!
+}
+
+/** Adds a clip made elsewhere (for example by the MCP tools) to the clip page. */
+export async function recordClip(clip: { name: string; session_id: string; start_offset_s: number; end_offset_s: number }, by: string): Promise<void> {
+    let info: RecordingInfo | undefined
     try {
-        return JSON.parse(readFileSync(INDEX, 'utf8')) as ClipRecord[]
-    } catch {
-        return []
-    }
+        info = await recordingInfo(clip.session_id)
+    } catch {}
+    storeClip(clip, info, by)
 }
-let index = loadIndex()
-const saveIndex = () => writeFileSync(INDEX, JSON.stringify(index, null, 2))
 
-export const listClips = () => index
+/** Saves a clip for this person (kept until unsaved), or unsaves it (deleted two weeks later unless
+ * someone else saved it). */
+export function setSaved(name: string, email: string, saved: boolean): ClipRecord | undefined {
+    if (!getClip(name)) return undefined
+    const now = new Date().toISOString()
+    tx(() => {
+        run(
+            'INSERT INTO clip_holders (clip_name, email, made_at, saved_at) VALUES (?, ?, ?, ?) ON CONFLICT (clip_name, email) DO UPDATE SET saved_at = excluded.saved_at',
+            name, email, now, saved ? now : null
+        )
+        if (!saved) run('UPDATE clips SET last_requested_at = ? WHERE name = ?', now, name)
+    })
+    return getClip(name)
+}
+
 export function deleteClip(name: string): boolean {
-    const record = index.find((c) => c.name === name)
-    if (!record) return false
+    if (!getClip(name)) return false
     rmSync(join(config.clip.outDir, name), { force: true })
-    index = index.filter((c) => c.name !== name)
-    saveIndex()
+    run('DELETE FROM clips WHERE name = ?', name) // clip_holders rows go with it
     return true
 }
 
-/** Deletes clips older than CLIP_RETENTION_DAYS, both files and index entries. */
+/** Deletes clips nobody saved that nobody asked for in CLIP_RETENTION_DAYS, MP4 files no clip
+ * row knows about (older than the same), and activity older than AUDIT_RETENTION_DAYS. */
 export function pruneOldClips(now = Date.now()): number {
-    const cutoff = now - RETENTION_DAYS * 86_400_000
-    let removed = 0
+    const cutoff = new Date(now - RETENTION_DAYS * DAY).toISOString()
+    const expired = all<{ name: string }>(
+        `SELECT name FROM clips WHERE last_requested_at < ? AND NOT EXISTS (SELECT 1 FROM clip_holders h WHERE h.clip_name = clips.name AND h.saved_at IS NOT NULL)`,
+        cutoff
+    )
+    for (const { name } of expired) deleteClip(name)
+    // A row whose file went missing is dropped; renderClip makes the file again if someone asks.
+    for (const { name } of all<{ name: string }>('SELECT name FROM clips')) if (!existsSync(join(config.clip.outDir, name))) run('DELETE FROM clips WHERE name = ?', name)
+    let stray = 0
     if (existsSync(config.clip.outDir)) {
         for (const f of readdirSync(config.clip.outDir)) {
             const p = join(config.clip.outDir, f)
-            if (f.endsWith('.mp4') && statSync(p).mtimeMs < cutoff) {
+            if (f.endsWith('.mp4') && !getClip(f) && statSync(p).mtimeMs < now - RETENTION_DAYS * DAY) {
                 rmSync(p, { force: true })
-                removed++
+                stray++
             }
         }
     }
-    const before = index.length
-    index = index.filter((c) => existsSync(join(config.clip.outDir, c.name)))
-    if (index.length !== before) saveIndex()
-    if (removed) audit('system', 'clips.pruned', { removed, retention_days: RETENTION_DAYS })
-    return removed
+    const oldAudit = Number(run('DELETE FROM audit WHERE t < ?', new Date(now - AUDIT_RETENTION_DAYS * DAY).toISOString()).changes)
+    db.exec('PRAGMA incremental_vacuum')
+    if (expired.length || stray) audit('system', 'clips.pruned', { removed: expired.length + stray, retention_days: RETENTION_DAYS })
+    if (oldAudit) console.log(JSON.stringify({ t: new Date().toISOString(), msg: 'old activity deleted', rows: oldAudit }))
+    return expired.length + stray
+}
+
+/** Space the clips take, in total and per person. A clip several people hold is counted once in the
+ * total and in full for each of them. */
+export function storage(): { clips: number; bytes: number; saved: number; saved_bytes: number; per_person: { email: string; clips: number; saved: number; bytes: number }[] } {
+    const total = one<{ clips: number; bytes: number | null }>('SELECT COUNT(*) AS clips, SUM(bytes) AS bytes FROM clips')!
+    const saved = one<{ n: number; bytes: number | null }>(
+        'SELECT COUNT(*) AS n, SUM(bytes) AS bytes FROM clips WHERE EXISTS (SELECT 1 FROM clip_holders h WHERE h.clip_name = clips.name AND h.saved_at IS NOT NULL)'
+    )!
+    const per_person = all<{ email: string; clips: number; saved: number; bytes: number }>(
+        `SELECT h.email, COUNT(*) AS clips, COUNT(h.saved_at) AS saved, COALESCE(SUM(c.bytes), 0) AS bytes
+         FROM clip_holders h JOIN clips c ON c.name = h.clip_name GROUP BY h.email ORDER BY bytes DESC`
+    )
+    return { clips: total.clips, bytes: total.bytes ?? 0, saved: saved.n, saved_bytes: saved.bytes ?? 0, per_person }
 }
 
 // ------------------------------------------------------------------ jobs
@@ -97,28 +185,6 @@ const queue: Job[] = []
 let busy = false
 const limit = new HourlyLimit(PER_HOUR)
 
-/** Adds a clip made elsewhere (for example by the MCP tools) to the clip page's list. */
-export async function recordClip(clip: { name: string; session_id: string; start_offset_s: number; end_offset_s: number }, by: string): Promise<void> {
-    let info: RecordingInfo | undefined
-    try {
-        info = await recordingInfo(clip.session_id)
-    } catch {}
-    const record: ClipRecord = {
-        name: clip.name,
-        session_id: clip.session_id,
-        start_s: clip.start_offset_s,
-        end_s: clip.end_offset_s,
-        client: info?.client,
-        user: info?.user,
-        recording_start: info?.start,
-        download_name: downloadName({ client: info?.client, user: info?.user, recordingStart: info?.start, startS: clip.start_offset_s, endS: clip.end_offset_s }),
-        created_by: by,
-        created_at: new Date().toISOString(),
-    }
-    index = [record, ...index.filter((c) => c.name !== record.name)].slice(0, 500)
-    saveIndex()
-}
-
 async function work() {
     if (busy) return
     busy = true
@@ -128,23 +194,10 @@ async function work() {
             job.started_at = Date.now()
             try {
                 const clip = await renderClip({ sessionId: job.session_id, startOffsetS: job.start_s, durationS: job.length_s })
-                const record: ClipRecord = {
-                    name: clip.name,
-                    session_id: job.session_id,
-                    start_s: clip.start_offset_s,
-                    end_s: clip.end_offset_s,
-                    client: job.info.client,
-                    user: job.info.user,
-                    recording_start: job.info.start,
-                    download_name: downloadName({ client: job.info.client, user: job.info.user, recordingStart: job.info.start, startS: clip.start_offset_s, endS: clip.end_offset_s }),
-                    created_by: job.owner,
-                    created_at: new Date().toISOString(),
-                }
-                index = [record, ...index.filter((c) => c.name !== record.name)].slice(0, 500)
-                saveIndex()
+                const record = storeClip(clip, job.info, job.owner)
                 job.clip = record
                 job.state = 'done'
-                audit(job.owner, 'clip.created', { session_id: job.session_id, clip: clip.name, cached: clip.cached, render_s: clip.render_s })
+                audit(job.owner, 'clip.created', { session_id: job.session_id, clip: clip.name, cached: clip.cached, render_s: clip.render_s, shared_with: record.holders.length - 1 })
             } catch (e) {
                 const msg = (e as Error).message
                 job.state = 'failed'
@@ -169,13 +222,14 @@ function jobView(job: Job) {
         position: job.state === 'queued' ? queue.indexOf(job) + 1 : 0,
         error: job.error,
         elapsed_s: Math.round(((job.finished_at || Date.now()) - (job.started_at || job.created_at)) / 1000),
-        clip: job.clip ? clipView(job.clip) : undefined,
+        clip: job.clip ? clipView(getClip(job.clip.name) || job.clip, job.owner) : undefined,
     }
 }
 
-function clipView(c: ClipRecord) {
+function clipView(c: ClipRecord, viewer?: string) {
     return {
         ...c,
+        saved: !!viewer && c.saved_by.includes(viewer),
         range: `${formatClock(c.start_s)}–${formatClock(c.end_s)}`,
         video_url: `/replays/video/${encodeURIComponent(c.name)}`,
         download_url: `/replays/download/${encodeURIComponent(c.name)}`,
@@ -356,14 +410,25 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
     }
 
     if (p === '/replays/api/clips' && req.method === 'GET') {
-        json(res, 200, { clips: index.slice(0, 50).map(clipView), retention_days: RETENTION_DAYS })
+        json(res, 200, { clips: listClips({ holder: viewer.email, limit: 100 }).map((c) => clipView(c, viewer.email)), retention_days: RETENTION_DAYS })
         return true
     }
     m = /^\/replays\/api\/clips\/([^/]+)$/.exec(p)
     if (m && req.method === 'GET') {
-        const record = index.find((c) => c.name === decodeURIComponent(m![1]))
+        const record = getClip(decodeURIComponent(m![1]))
         if (!record) json(res, 404, { error: 'This clip no longer exists.' })
-        else json(res, 200, clipView(record))
+        else json(res, 200, clipView(record, viewer.email))
+        return true
+    }
+    m = /^\/replays\/api\/clips\/([^/]+)\/save$/.exec(p)
+    if (m && req.method === 'POST') {
+        const saved = (await readJson(req)).saved !== false
+        const record = setSaved(decodeURIComponent(m[1]), viewer.email, saved)
+        if (!record) json(res, 404, { error: 'This clip no longer exists.' })
+        else {
+            audit(viewer.email, saved ? 'clip.saved' : 'clip.unsaved', { clip: record.name })
+            json(res, 200, clipView(record, viewer.email))
+        }
         return true
     }
 
@@ -375,7 +440,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
             return true
         }
         const name = decodeURIComponent(m[1])
-        if (!SAFE_NAME.test(name) || !index.some((c) => c.name === name)) {
+        if (!SAFE_NAME.test(name) || !getClip(name)) {
             json(res, 404, { error: 'No such clip.' })
             return true
         }
@@ -387,7 +452,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
     m = /^\/replays\/(video|download)\/([^/]+)$/.exec(p)
     if (m && req.method === 'GET') {
         const name = decodeURIComponent(m[2])
-        const record = index.find((c) => c.name === name)
+        const record = getClip(name)
         const file = join(config.clip.outDir, name)
         if (!SAFE_NAME.test(name) || !record || !existsSync(file)) {
             json(res, 404, { error: 'No such clip.' })
@@ -482,10 +547,10 @@ function pageHtml(v: Viewer): string {
 <div style="flex:0"><button id="go" disabled>Make clip</button></div></div>
 <p id="job-msg" class="small"></p>
 <div id="result" class="hidden"><video id="video" controls preload="metadata" controlslist="nodownload" oncontextmenu="return CFG.canDownload"></video>
-<div class="row" style="align-items:center"><a class="btn" id="dl">Download MP4</a><button class="ghost" id="share">Copy share link</button><a class="btn ghost" id="open" target="_blank" rel="noopener">Open in PostHog</a></div>
-<p id="share-msg" class="small muted"></p></div></div>
+<div class="row" style="align-items:center"><button class="ghost" id="save" type="button">Save this</button><a class="btn" id="dl">Download MP4</a><button class="ghost" id="share">Copy share link</button><a class="btn ghost" id="open" target="_blank" rel="noopener">Open in PostHog</a></div>
+<p id="keep-msg" class="small muted"></p><p id="share-msg" class="small muted"></p></div></div>
 
-<div class="card"><h2>Recent clips</h2><div class="table-wrap"><table><thead><tr><th>Made</th><th>Client</th><th>User</th><th>Part</th><th>By</th><th></th></tr></thead><tbody id="recent"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table></div>
+<div class="card"><h2>Your clips</h2><div class="table-wrap"><table><thead><tr><th>Made</th><th>Client</th><th>User</th><th>Part</th><th>Kept until</th><th></th></tr></thead><tbody id="recent"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table></div>
 <p class="small muted" id="retention"></p></div>
 
 <div class="card"><h2>Get MP4 from PostHog in one click</h2>
@@ -498,8 +563,11 @@ const clock=s=>{s=Math.max(0,Math.floor(s));const h=Math.floor(s/3600),m=Math.fl
 const when=iso=>new Date(iso).toLocaleString([], {dateStyle:'medium',timeStyle:'short'});
 const api=(path,opts={})=>fetch(path,{...opts,headers:{'content-type':'application/json','x-clip-page':'1',...(opts.headers||{})}}).then(async r=>{const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||('Error '+r.status));return b});
 CFG.lengths.forEach(l=>{const o=document.createElement('option');o.value=l;o.textContent=l+' seconds';if(l===30)o.selected=true;$('length').appendChild(o)});
-$('retention').textContent='Clips are deleted after '+CFG.retention+' days. Share links expire after '+Math.round(CFG.ttl/24)+' days. Every view and download is logged.';
-let info=null;
+$('retention').textContent='Clips are deleted '+CFG.retention+' days after they were last made, unless you click Save. Share links expire after '+Math.round(CFG.ttl/24)+' days. Every view and download is logged.';
+const day=iso=>new Date(iso).toLocaleDateString([], {dateStyle:'medium'});
+const keepText=c=>c.saved?'You saved this clip. It stays until you unsave it.':c.saved_by.length?'Saved by someone else, so it is kept.':'Deleted on '+day(c.expires_at)+' unless someone saves it.';
+async function toggleSave(c){const r=await api('/replays/api/clips/'+encodeURIComponent(c.name)+'/save',{method:'POST',body:JSON.stringify({saved:!c.saved})});return r}
+let info=null,cur=null;
 function txt(el,t,cls){el.textContent=t;el.className='small '+(cls||'')}
 async function check(){const input=$('input').value.trim();if(!input)return;txt($('inspect-msg'),'Checking…','muted');$('info').classList.add('hidden');$('go').disabled=true;
  try{const r=await api('/replays/api/inspect',{method:'POST',body:JSON.stringify({input})});info=r.info;
@@ -517,12 +585,15 @@ $('go').onclick=async()=>{$('go').disabled=true;$('result').classList.add('hidde
   if(j.state==='failed')throw new Error(j.error||'The clip could not be made.');
   show(j.clip);txt($('job-msg'),'Ready.','ok');loadRecent()
  }catch(e){txt($('job-msg'),e.message,'err')}finally{$('go').disabled=false}};
-function show(c){$('dl').classList.toggle('hidden',!CFG.canDownload);$('share').classList.toggle('hidden',!CFG.shareLinks);$('video').src=c.video_url+'#t=1';$('dl').href=c.download_url;$('open').href=c.replay_url;$('share').dataset.name=c.name;$('share-msg').textContent='';$('result').classList.remove('hidden');$('result').scrollIntoView({behavior:'smooth',block:'nearest'})}
+function show(c){$('dl').classList.toggle('hidden',!CFG.canDownload);$('share').classList.toggle('hidden',!CFG.shareLinks);$('video').src=c.video_url+'#t=1';$('dl').href=c.download_url;$('open').href=c.replay_url;$('share').dataset.name=c.name;cur=c;$('save').textContent=c.saved?'Saved ✓ (unsave)':'Save this';txt($('keep-msg'),keepText(c),'muted');$('share-msg').textContent='';$('result').classList.remove('hidden');$('result').scrollIntoView({behavior:'smooth',block:'nearest'})}
 $('share').onclick=async()=>{try{const r=await api('/replays/api/share/'+encodeURIComponent($('share').dataset.name),{method:'POST'});await navigator.clipboard.writeText(r.url).catch(()=>{});$('share-msg').textContent='Link copied. Anyone with it can watch this clip for '+Math.round(r.expires_hours/24)+' days: '+r.url}catch(e){$('share-msg').textContent=e.message}};
+$('save').onclick=async()=>{if(!cur)return;$('save').disabled=true;try{const c=await toggleSave(cur);cur=c;$('save').textContent=c.saved?'Saved ✓ (unsave)':'Save this';txt($('keep-msg'),keepText(c),c.saved?'ok':'muted');loadRecent()}catch(e){txt($('keep-msg'),e.message,'err')}finally{$('save').disabled=false}};
 async function loadRecent(){try{const r=await api('/replays/api/clips');const tb=$('recent');tb.innerHTML='';
  if(!r.clips.length){tb.innerHTML='<tr><td colspan="6" class="muted">No clips yet.</td></tr>';return}
- r.clips.forEach(c=>{const tr=document.createElement('tr');[when(c.created_at),c.client||'',(c.user||'').replace(/@.*/,''),c.range,(c.created_by||'').replace(/@.*/,'')].forEach(t=>{const td=document.createElement('td');td.textContent=t;tr.appendChild(td)});
-  const td=document.createElement('td');const w=document.createElement('button');w.className='ghost';w.textContent='Watch';w.onclick=()=>show(c);td.appendChild(w);tr.appendChild(td);tb.appendChild(tr)})}catch(e){$('recent').innerHTML='<tr><td colspan="6" class="err"></td></tr>';$('recent').querySelector('td').textContent=e.message}}
+ r.clips.forEach(c=>{const tr=document.createElement('tr');[when(c.created_at),c.client||'',(c.user||'').replace(/@.*/,''),c.range,c.saved?'Saved':c.expires_at?day(c.expires_at):'Saved by someone else'].forEach(t=>{const td=document.createElement('td');td.textContent=t;tr.appendChild(td)});
+  const td=document.createElement('td');td.style.whiteSpace='nowrap';const w=document.createElement('button');w.className='ghost';w.textContent='Watch';w.onclick=()=>show(c);
+  const k=document.createElement('button');k.className='ghost';k.textContent=c.saved?'Unsave':'Save';k.onclick=async()=>{k.disabled=true;try{const n=await toggleSave(c);if(cur&&cur.name===n.name)show(n);loadRecent()}catch(e){alert(e.message)}};
+  td.append(w,' ',k);tr.appendChild(td);tb.appendChild(tr)})}catch(e){$('recent').innerHTML='<tr><td colspan="6" class="err"></td></tr>';$('recent').querySelector('td').textContent=e.message}}
 loadRecent();
 const qs=new URLSearchParams(location.search);const pre=qs.get('url');if(pre){$('input').value=pre;check()}
 const one=qs.get('clip');if(one){api('/replays/api/clips/'+encodeURIComponent(one)).then(show).catch(e=>txt($('job-msg'),e.message,'err'))}
