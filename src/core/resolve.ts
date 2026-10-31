@@ -4,6 +4,7 @@
 import { SCREENS, type Screen } from './catalog.ts'
 import { hogql } from './posthog.ts'
 import { containsPhrase, tokens } from './text.ts'
+import { P } from './props.ts'
 
 export interface ClientMatch {
     id: string
@@ -24,9 +25,9 @@ let clientCache: { at: number; clients: KnownClient[] } | undefined
 export async function knownClients(): Promise<KnownClient[]> {
     if (clientCache && Date.now() - clientCache.at < 5 * 60_000) return clientCache.clients
     const rows = await hogql(
-        `SELECT toString(properties.client_id) AS id, any(toString(properties.client_name)) AS name, count() AS events
+        `SELECT toString(${P.client}) AS id, any(toString(${P.clientName})) AS name, count() AS events
          FROM events
-         WHERE timestamp > now() - INTERVAL 90 DAY AND notEmpty(toString(properties.client_id))
+         WHERE timestamp > now() - INTERVAL 90 DAY AND notEmpty(toString(${P.client}))
          GROUP BY id ORDER BY events DESC LIMIT 1000`
     )
     const clients = rows.map((r) => ({ id: String(r.id), name: String(r.name || r.id), events: Number(r.events) }))
@@ -37,11 +38,11 @@ export async function knownClients(): Promise<KnownClient[]> {
 /** Which client(s) a person with this email has used the product as. */
 export async function clientsForEmail(email: string): Promise<{ id: string; name: string; events: number }[]> {
     const rows = await hogql(
-        `SELECT toString(properties.client_id) AS id, any(toString(properties.client_name)) AS name, count() AS events
+        `SELECT toString(${P.client}) AS id, any(toString(${P.clientName})) AS name, count() AS events
          FROM events
          WHERE timestamp > now() - INTERVAL 90 DAY
-           AND (lower(toString(person.properties.email)) = {email} OR lower(distinct_id) = {email})
-           AND notEmpty(toString(properties.client_id))
+           AND (lower(toString(${P.email})) = {email} OR lower(distinct_id) = {email})
+           AND notEmpty(toString(${P.client}))
          GROUP BY id ORDER BY events DESC LIMIT 5`,
         { email: email.toLowerCase() }
     )
@@ -50,11 +51,11 @@ export async function clientsForEmail(email: string): Promise<{ id: string; name
 
 async function clientsForDomain(domain: string): Promise<{ id: string; name: string; events: number }[]> {
     const rows = await hogql(
-        `SELECT toString(properties.client_id) AS id, any(toString(properties.client_name)) AS name, count() AS events
+        `SELECT toString(${P.client}) AS id, any(toString(${P.clientName})) AS name, count() AS events
          FROM events
          WHERE timestamp > now() - INTERVAL 90 DAY
-           AND endsWith(lower(toString(person.properties.email)), {domain})
-           AND notEmpty(toString(properties.client_id))
+           AND endsWith(lower(toString(${P.email})), {domain})
+           AND notEmpty(toString(${P.client}))
          GROUP BY id ORDER BY events DESC LIMIT 5`,
         { domain: '@' + domain.toLowerCase() }
     )

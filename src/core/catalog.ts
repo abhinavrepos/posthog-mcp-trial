@@ -1,6 +1,9 @@
 // The demo world: Acme Portal's B2B clients, their users, and the screens of the app.
 // The demo app, the session generator and the history seeder all read from here, so a ticket
 // that says "Brightwater can't export" refers to the same client everywhere.
+// For your own app, set SCREENS_FILE (see config/screens.example.json); the clients are only demo data.
+import { config, type Screen } from './config.ts'
+export type { Screen }
 
 export type Region = 'EU' | 'UK' | 'US' | 'APAC'
 export type Plan = 'starter' | 'growth' | 'enterprise'
@@ -21,13 +24,7 @@ export interface DemoClient {
     users: DemoUser[]
 }
 
-export interface Screen {
-    path: string
-    name: string
-    aliases: string[] // words people use for it in tickets
-}
-
-export const SCREENS: Screen[] = [
+export const DEMO_SCREENS: Screen[] = [
     { path: '/dashboard', name: 'Dashboard', aliases: ['dashboard', 'home', 'overview', 'landing'] },
     {
         path: '/invoices',
@@ -42,6 +39,9 @@ export const SCREENS: Screen[] = [
     },
     { path: '/settings', name: 'Settings', aliases: ['settings', 'preferences', 'profile', 'team', 'users'] },
 ]
+
+/** The screens tickets are matched against: SCREENS_FILE if set, otherwise the demo app's. */
+export const SCREENS: Screen[] = config.screens ?? DEMO_SCREENS
 
 const u = (email: string, name: string, role: DemoUser['role'] = 'finance'): DemoUser => ({ email, name, role })
 

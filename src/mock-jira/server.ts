@@ -362,6 +362,7 @@ const server = createServer(async (req, res) => {
         // REST API (what the triage service calls)
         if (p.startsWith('/rest/api/3/')) {
             if (!apiAuthOk(req)) return json(res, 401, { errorMessages: ['unauthorized'] })
+            if (p === '/rest/api/3/myself' && req.method === 'GET') return json(res, 200, { accountId: 'triage-bot', displayName: 'Triage bot (mock)', active: true })
             let m = /^\/rest\/api\/3\/project\/([A-Z]+)\/versions$/.exec(p)
             if (m && req.method === 'GET') return json(res, 200, m[1] === 'ACP' ? VERSIONS : [])
             if ((p === '/rest/api/3/search/jql' || p === '/rest/api/3/search') && (req.method === 'GET' || req.method === 'POST')) {

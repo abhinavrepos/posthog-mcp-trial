@@ -18,7 +18,10 @@
     "sessions": "tsx scripts/generate-sessions.ts",
     "seed": "tsx scripts/seed-history.ts",
     "releases:sync": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/sync-releases.ts",
-    "seed:feedback": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/seed-feedback.ts"
+    "seed:feedback": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/seed-feedback.ts",
+    "doctor": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/doctor.ts",
+    "mcp:config": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/mcp-config.ts",
+    "loadtest": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx deploy/posthog/loadtest.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",
