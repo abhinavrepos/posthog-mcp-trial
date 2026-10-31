@@ -1,0 +1,8 @@
+node_modules/
+vendor/
+.cache/
+clips/
+logs/
+run/
+.secrets.env
+*.log
