@@ -1,27 +1,30 @@
-// The release dashboard's engine: Jira releases and their tickets, matched to PostHog usage.
+// Release outcomes: Jira releases and their tickets, matched to what happened in PostHog.
+// It only gathers facts. Judging whether a ticket is risky is left to a model (Claude, through the
+// MCP tools in src/mcp/tools.ts) and to people, whose verdicts are saved here.
 //
-//   sync     reads the last N released versions from Jira (default 12) and their tickets, links
-//            each ticket to the part of the product it changed (a screen, and a PostHog event when
-//            one fits), then computes each release's numbers from PostHog into release_snapshots.
-//   view     turns stored numbers into scores, rankings and insights for a release, a quarter, a
-//            custom group or all kept releases. Weights come from the caller, so changing them
-//            needs no PostHog queries.
+//   sync       reads the last N released versions from Jira (default 12), their tickets and the
+//              support tickets; links each ticket to the screen it changed (and the PostHog event
+//              it added, when one fits); then counts use, errors, rage clicks and survey answers
+//              before and after each release into release_snapshots. Every 6 hours, or on request.
+//   outcomes   sorts a release's tickets into groups by what happened (adopted, more errors,
+//              clients complained, ...). The rules are plain thresholds, listed in OUTCOMES.
+//   verdicts   "risky", "watch" or "fine" with a reason, from Claude or a person.
 //
 // How a ticket is linked (first match wins, and a person can always change it):
-//   1. a link someone set on the dashboard
-//   2. its Jira component, through the component map in the settings (or a screen of that name)
+//   1. a link someone set
+//   2. its Jira component, through RELEASES_COMPONENT_SCREENS (or a screen of that name)
 //   3. words in the ticket that name a screen
-//   plus a PostHog event: one whose name shares words with the ticket title and that first
-//   appeared within three weeks of the release. That is what a new feature looks like.
+//   plus a PostHog event: one whose name shares a feature word with the ticket title and that
+//   first appeared within three weeks of the release. That is what a new feature looks like.
 //
-// What "after" means: from the release date to the next release, at most window_days. "Before"
-// is the same number of days before the release. Errors, rage clicks and support tickets are
-// counted per screen and given to the tickets that changed how that screen already worked
-// (tickets linked to the screen without an event of their own); if every ticket on the screen
-// added an event, they share it. A person can switch this per ticket.
+// "After" runs from the release date to the next release, at most RELEASES_WINDOW_DAYS. "Before"
+// is the same number of days before the release. Errors, rage clicks and complaints are counted per
+// screen and given to the tickets that changed how that screen already worked (linked to it without
+// an event of their own); if every ticket on the screen added an event, they share them.
 import { adfToText } from '../jira/adf.ts'
 import { getVersions, jqlString, searchIssues, type JiraIssue } from '../jira/client.ts'
 import { SCREENS } from './catalog.ts'
+import { config } from './config.ts'
 import { all, getSetting, one, run, setSetting, tx } from './db.ts'
 import { hogql, issueUrl } from './posthog.ts'
 import { resolveScreen } from './resolve.ts'
@@ -29,69 +32,43 @@ import { stem, tokens } from './text.ts'
 
 const DAY = 86_400_000
 
-// ------------------------------------------------------------------ settings
-export interface Weights {
-    reach: number
-    adoption: number
-    fixes: number
-    errors: number
-    friction: number
-    support: number
-}
-
+// ------------------------------------------------------------------ settings (environment)
 export interface ReleaseSettings {
     jira_project: string
     support_jql: string // the support tickets to count, e.g. RCI and MMT Risk
     keep: number // releases kept
     window_days: number // longest "after" window
     fiscal_start_month: number // 1 = calendar quarters
-    ticket_types: string[] // types that are ranked
     client_property: string // the event property that names the client
     version_property: string // the event property with the release name, or '' to use dates only
     component_screens: Record<string, string> // Jira component → screen path
-    screen_reach_factor: number // how much a whole-screen link counts for reach (0..1)
-    weights: Weights
-}
-
-export const DEFAULT_SETTINGS: ReleaseSettings = {
-    jira_project: process.env.RELEASES_JIRA_PROJECT || 'ACP',
-    support_jql: process.env.RELEASES_SUPPORT_JQL || 'project = SUP AND issuetype in ("RCI", "MMT Risk")',
-    keep: 12,
-    window_days: 30,
-    fiscal_start_month: 1,
-    ticket_types: ['Story', 'Bug', 'Improvement'],
-    client_property: 'client_id',
-    version_property: 'app_version',
-    component_screens: {},
-    screen_reach_factor: 0.5,
-    weights: { reach: 3, adoption: 2, fixes: 2, errors: 3, friction: 1, support: 2 },
 }
 
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/
-
-export function releaseSettings(): ReleaseSettings {
-    const s = { ...DEFAULT_SETTINGS, ...getSetting<Partial<ReleaseSettings>>('releases', {}) }
-    s.weights = { ...DEFAULT_SETTINGS.weights, ...s.weights }
-    return s
+const intEnv = (k: string, d: number, lo: number, hi: number) => {
+    const v = Number(process.env[k])
+    return process.env[k] && Number.isInteger(v) && v >= lo && v <= hi ? v : d
 }
 
-/** Checks and stores settings. Throws a message fit for the person on a bad value. */
-export function saveReleaseSettings(change: Partial<ReleaseSettings>): ReleaseSettings {
-    const s = { ...releaseSettings(), ...change }
-    s.weights = { ...releaseSettings().weights, ...(change.weights || {}) }
-    if (!/^[A-Z][A-Z0-9_]{0,19}$/.test(s.jira_project)) throw new Error('The Jira project key looks wrong (for example ACP).')
-    if (!Number.isInteger(s.keep) || s.keep < 1 || s.keep > 52) throw new Error('Keep between 1 and 52 releases.')
-    if (!Number.isInteger(s.window_days) || s.window_days < 7 || s.window_days > 120) throw new Error('The window must be 7 to 120 days.')
-    if (!Number.isInteger(s.fiscal_start_month) || s.fiscal_start_month < 1 || s.fiscal_start_month > 12) throw new Error('Pick a month for the year start.')
-    if (!IDENT.test(s.client_property)) throw new Error('The client property must be a plain property name.')
-    if (s.version_property && !IDENT.test(s.version_property)) throw new Error('The version property must be a plain property name, or empty.')
-    if (!Array.isArray(s.ticket_types) || !s.ticket_types.length) throw new Error('Rank at least one ticket type.')
-    if (!(s.screen_reach_factor >= 0 && s.screen_reach_factor <= 1)) throw new Error('Screen reach must be between 0 and 1.')
-    for (const [k, v] of Object.entries(s.weights)) if (!(Number(v) >= 0 && Number(v) <= 10)) throw new Error(`The ${k} weight must be 0 to 10.`)
-    for (const [k, v] of Object.entries(s.component_screens)) if (!k.trim() || !String(v).startsWith('/')) throw new Error('Map each component to a screen path that starts with /.')
-    if (/;|\b(delete|update|insert)\b/i.test(s.support_jql)) throw new Error('The support JQL should only filter issues.')
-    setSetting('releases', s)
-    return s
+export function releaseSettings(): ReleaseSettings {
+    const prop = (k: string, d: string) => {
+        const v = process.env[k] ?? d
+        return v === '' || IDENT.test(v) ? v : d // property names go into HogQL, so only plain names
+    }
+    let component_screens: Record<string, string> = {}
+    try {
+        component_screens = JSON.parse(process.env.RELEASES_COMPONENT_SCREENS || '{}')
+    } catch {}
+    return {
+        jira_project: /^[A-Z][A-Z0-9_]{0,19}$/.test(process.env.RELEASES_JIRA_PROJECT || '') ? process.env.RELEASES_JIRA_PROJECT! : 'ACP',
+        support_jql: process.env.RELEASES_SUPPORT_JQL || 'project = SUP AND issuetype in ("RCI", "MMT Risk")',
+        keep: intEnv('RELEASES_KEEP', 12, 1, 52),
+        window_days: intEnv('RELEASES_WINDOW_DAYS', 30, 7, 120),
+        fiscal_start_month: intEnv('RELEASES_FISCAL_START_MONTH', 1, 1, 12),
+        client_property: prop('RELEASES_CLIENT_PROPERTY', 'client_id') || 'client_id',
+        version_property: prop('RELEASES_VERSION_PROPERTY', 'app_version'),
+        component_screens,
+    }
 }
 
 // ------------------------------------------------------------------ linking tickets to PostHog
@@ -251,6 +228,7 @@ interface SupportTicket {
     key: string
     type: string
     summary: string
+    text: string // the start of the description: what the client said
     created: string
     screen?: string
 }
@@ -262,7 +240,37 @@ async function loadSupport(jql: string, since: string): Promise<SupportTicket[]>
         // "Client: …" line that would otherwise look like the Clients screen.
         const body = adfToText(i.fields.description as never).replace(/^\s*client\s*:.*$/gim, '')
         const m = [resolveScreen(i.fields.summary)[0], resolveScreen(body)[0]].find((x) => x && x.confidence >= 0.6)
-        return { key: i.key, type: i.fields.issuetype?.name || '', summary: i.fields.summary, created: String(i.fields.created), screen: m && m.confidence >= 0.6 ? m.path : undefined }
+        return {
+            key: i.key,
+            type: i.fields.issuetype?.name || '',
+            summary: i.fields.summary,
+            text: body.replace(/\s+/g, ' ').trim().slice(0, 300),
+            created: String(i.fields.created),
+            screen: m && m.confidence >= 0.6 ? m.path : undefined,
+        }
+    })
+}
+
+export interface SurveyAnswer {
+    at: string
+    path: string
+    rating: number | null // 1 to 5 when the first question is a rating
+    comment: string
+    client: string
+}
+
+/** PostHog survey answers ("survey sent" events): what users told you in the product. */
+async function loadSurveys(since: string, cp: string): Promise<SurveyAnswer[]> {
+    const rows = await hogql(
+        `SELECT timestamp AS at, toString(properties.$pathname) AS path, toString(properties.$survey_response) AS r0,
+                toString(properties.$survey_response_1) AS r1, toString(properties.${cp}) AS client
+         FROM events WHERE event = 'survey sent' AND timestamp > toDateTime({since}) ORDER BY timestamp LIMIT 20000`,
+        { since }
+    )
+    return rows.map((r) => {
+        const rating = Number(r.r0)
+        const isRating = String(r.r0 ?? '').trim() !== '' && Number.isFinite(rating) && rating >= 1 && rating <= 10
+        return { at: iso(r.at), path: String(r.path || ''), rating: isRating ? rating : null, comment: String((isRating ? r.r1 : r.r0) || '').trim().slice(0, 400), client: String(r.client || '') }
     })
 }
 
@@ -308,7 +316,14 @@ export interface ScreenStats {
     errors_before: number
     rage_after: number
     rage_before: number
-    support: { key: string; summary: string; created: string; type: string }[]
+    support: { key: string; summary: string; text: string; created: string; type: string }[]
+    survey: {
+        answers_before: number
+        answers_after: number
+        rating_before: number | null // average, 1 to 5
+        rating_after: number | null
+        comments_after: { rating: number | null; comment: string; client: string; at: string }[]
+    }
 }
 export interface TicketStats {
     key: string
@@ -354,7 +369,7 @@ export interface Snapshot {
 const n = (v: unknown) => Number(v) || 0
 const ts = (d: number) => new Date(d).toISOString().replace('T', ' ').slice(0, 19)
 
-async function computeSnapshot(rel: ReleaseRow, next: ReleaseRow | undefined, ctx: { s: ReleaseSettings; errors: ErrorIssue[]; support: SupportTicket[] }): Promise<Snapshot> {
+async function computeSnapshot(rel: ReleaseRow, next: ReleaseRow | undefined, ctx: { s: ReleaseSettings; errors: ErrorIssue[]; support: SupportTicket[]; surveys: SurveyAnswer[] }): Promise<Snapshot> {
     const { s } = ctx
     const cp = `properties.${s.client_property}`
     const start = Date.parse(rel.released_at + 'T00:00:00Z')
@@ -373,7 +388,7 @@ async function computeSnapshot(rel: ReleaseRow, next: ReleaseRow | undefined, ct
         const link: Link | null = own || (auto && (auto.screen || auto.event) ? { screen: auto.screen, event: auto.event } : null)
         return { t, auto, own, link }
     })
-    const ranked = (x: (typeof linked)[number]) => !x.t.hidden && s.ticket_types.includes(x.t.type)
+    const ranked = (x: (typeof linked)[number]) => !x.t.hidden && x.t.type !== 'Task'
     const owners = new Map<string, string[]>()
     for (const screen of new Set(linked.map((x) => x.link?.screen).filter(Boolean) as string[])) {
         const onScreen = linked.filter((x) => ranked(x) && x.link?.screen === screen)
@@ -457,6 +472,27 @@ async function computeSnapshot(rel: ReleaseRow, next: ReleaseRow | undefined, ct
     }
 
     const inWindow = (d: string) => Date.parse(d) >= start && Date.parse(d) < end
+    const inBefore = (d: string) => Date.parse(d) >= before && Date.parse(d) < start
+    const avg = (xs: (number | null)[]) => {
+        const ys = xs.filter((x): x is number => x !== null)
+        return ys.length ? Math.round((ys.reduce((a, b) => a + b, 0) / ys.length) * 10) / 10 : null
+    }
+    const surveyStats = (answers: SurveyAnswer[]): ScreenStats['survey'] => {
+        const b = answers.filter((a) => inBefore(a.at))
+        const a = answers.filter((x) => inWindow(x.at))
+        return {
+            answers_before: b.length,
+            answers_after: a.length,
+            rating_before: avg(b.map((x) => x.rating)),
+            rating_after: avg(a.map((x) => x.rating)),
+            // The lowest-rated comments first: they say what went wrong.
+            comments_after: a
+                .filter((x) => x.comment)
+                .sort((x, y) => (x.rating ?? 9) - (y.rating ?? 9))
+                .slice(0, 12)
+                .map((x) => ({ rating: x.rating, comment: x.comment, client: x.client, at: x.at })),
+        }
+    }
     const screenStats: Record<string, ScreenStats> = {}
     screens.forEach((path, j) => {
         screenStats[path] = {
@@ -466,7 +502,8 @@ async function computeSnapshot(rel: ReleaseRow, next: ReleaseRow | undefined, ct
             errors_before: n(agg[`s${j}_e_b`]),
             rage_after: n(agg[`s${j}_r_a`]),
             rage_before: n(agg[`s${j}_r_b`]),
-            support: ctx.support.filter((x) => x.screen === path && inWindow(x.created)).map((x) => ({ key: x.key, summary: x.summary, created: x.created, type: x.type })),
+            support: ctx.support.filter((x) => x.screen === path && inWindow(x.created)).map((x) => ({ key: x.key, summary: x.summary, text: x.text, created: x.created, type: x.type })),
+            survey: surveyStats(ctx.surveys.filter((a) => a.path === path)),
         }
     })
 
@@ -567,7 +604,12 @@ async function doSync(): Promise<SyncResult> {
     const issues = await searchIssues(`project = ${s.jira_project} AND fixVersion in (${kept.map((v) => jqlString(v.name)).join(', ')})`, fields, 5000)
     const since = new Date(Date.parse(kept[0].releaseDate!) - (s.window_days + 7) * DAY).toISOString()
     const cp = s.client_property
-    const [areas, errors, support] = await Promise.all([loadAreas(since), loadErrors(since, cp), loadSupport(s.support_jql, since).catch(() => [] as SupportTicket[])])
+    const [areas, errors, support, surveys] = await Promise.all([
+        loadAreas(since),
+        loadErrors(since, cp),
+        loadSupport(s.support_jql, since).catch(() => [] as SupportTicket[]),
+        loadSurveys(since, cp).catch(() => [] as SurveyAnswer[]),
+    ])
 
     const now = new Date().toISOString()
     const releaseOf = (i: JiraIssue) => {
@@ -585,7 +627,10 @@ async function doSync(): Promise<SyncResult> {
                 v.name, v.releaseDate!, v.description || null, now
             )
         }
-        for (const name of dropped) run('DELETE FROM releases WHERE name = ?', name) // tickets and snapshots go with it
+        for (const name of dropped) {
+            run('DELETE FROM releases WHERE name = ?', name) // tickets and snapshots go with it
+            run('DELETE FROM release_verdicts WHERE release = ?', name)
+        }
         const seen: string[] = []
         for (const i of issues) {
             const v = releaseOf(i)
@@ -604,17 +649,12 @@ async function doSync(): Promise<SyncResult> {
             )
         }
         for (const r of all<{ key: string }>('SELECT key FROM release_tickets')) if (!seen.includes(r.key)) run('DELETE FROM release_tickets WHERE key = ?', r.key)
-        // Custom groups forget releases that are no longer kept.
-        for (const g of all<{ id: number; releases: string }>('SELECT id, releases FROM release_groups')) {
-            const left = (JSON.parse(g.releases) as string[]).filter((x) => keptNames.includes(x))
-            run('UPDATE release_groups SET releases = ? WHERE id = ?', JSON.stringify(left), g.id)
-        }
     })
     setSetting('releases.areas', areas)
 
     const rels = keptReleases()
     for (let i = 0; i < rels.length; i++) {
-        const snap = await computeSnapshot(rels[i], rels[i + 1], { s, errors, support })
+        const snap = await computeSnapshot(rels[i], rels[i + 1], { s, errors, support, surveys })
         run('INSERT INTO release_snapshots (release, computed_at, data) VALUES (?, ?, ?) ON CONFLICT (release) DO UPDATE SET computed_at = excluded.computed_at, data = excluded.data', rels[i].name, snap.computed_at, JSON.stringify(snap))
     }
     return { releases: keptNames, tickets: issues.length, dropped, seconds: Math.round((Date.now() - t0) / 100) / 10 }
@@ -627,12 +667,16 @@ export async function recompute(release: string): Promise<void> {
     const i = rels.findIndex((r) => r.name === release)
     if (i < 0) return
     const since = new Date(Date.parse(rels[0].released_at) - (s.window_days + 7) * DAY).toISOString()
-    const [errors, support] = await Promise.all([loadErrors(since, s.client_property), loadSupport(s.support_jql, since).catch(() => [] as SupportTicket[])])
-    const snap = await computeSnapshot(rels[i], rels[i + 1], { s, errors, support })
+    const [errors, support, surveys] = await Promise.all([
+        loadErrors(since, s.client_property),
+        loadSupport(s.support_jql, since).catch(() => [] as SupportTicket[]),
+        loadSurveys(since, s.client_property).catch(() => [] as SurveyAnswer[]),
+    ])
+    const snap = await computeSnapshot(rels[i], rels[i + 1], { s, errors, support, surveys })
     run('INSERT INTO release_snapshots (release, computed_at, data) VALUES (?, ?, ?) ON CONFLICT (release) DO UPDATE SET computed_at = excluded.computed_at, data = excluded.data', release, snap.computed_at, JSON.stringify(snap))
 }
 
-// ------------------------------------------------------------------ editing
+// ------------------------------------------------------------------ links and verdicts
 export const areas = () => getSetting<Areas>('releases.areas', { screens: [], events: [] })
 
 export function ticketRelease(key: string): string | undefined {
@@ -642,306 +686,309 @@ export function ticketRelease(key: string): string | undefined {
 export function setLink(key: string, link: Link | null, by: string): void {
     run('UPDATE release_tickets SET link = ?, link_by = ?, link_at = ? WHERE key = ?', link ? JSON.stringify(link) : null, link ? by : null, link ? new Date().toISOString() : null, key)
 }
-export function setHidden(key: string, hidden: boolean): void {
-    run('UPDATE release_tickets SET hidden = ? WHERE key = ?', hidden ? 1 : 0, key)
+
+export type Verdict = 'risky' | 'watch' | 'fine'
+export interface VerdictRow {
+    ticket: string
+    release: string
+    verdict: Verdict
+    reason: string
+    source: string // a person's name or email, or "claude"
+    at: string
 }
 
-export interface Group {
-    id: number
-    name: string
-    releases: string[]
-    created_by: string
-    created_at: string
+/** Saves a verdict on a ticket. Earlier ones are kept as history; the newest counts. */
+export function recordVerdict(ticket: string, verdict: Verdict, reason: string, source: string): VerdictRow {
+    const release = ticketRelease(ticket)
+    if (!release) throw new Error(`${ticket} is not in the kept releases.`)
+    const row: VerdictRow = { ticket, release, verdict, reason: reason.trim().slice(0, 2000), source: source.trim().slice(0, 120) || 'unknown', at: new Date().toISOString() }
+    run('INSERT INTO release_verdicts (ticket, release, verdict, reason, source, at) VALUES (?, ?, ?, ?, ?, ?)', row.ticket, row.release, row.verdict, row.reason, row.source, row.at)
+    return row
 }
-export const groups = (): Group[] => all<Group & { releases: string }>('SELECT * FROM release_groups ORDER BY name').map((g) => ({ ...g, releases: JSON.parse(g.releases as unknown as string) }))
-export function saveGroup(g: { id?: number; name: string; releases: string[] }, by: string): number {
-    const names = keptReleases().map((r) => r.name)
-    const releases = [...new Set(g.releases)].filter((r) => names.includes(r))
-    if (!g.name.trim() || g.name.length > 60) throw new Error('Give the group a name (up to 60 characters).')
-    if (!releases.length) throw new Error('Pick at least one release.')
-    if (g.id) {
-        run('UPDATE release_groups SET name = ?, releases = ? WHERE id = ?', g.name.trim(), JSON.stringify(releases), g.id)
-        return g.id
-    }
-    return Number(run('INSERT INTO release_groups (name, releases, created_by, created_at) VALUES (?, ?, ?, ?)', g.name.trim(), JSON.stringify(releases), by, new Date().toISOString()).lastInsertRowid)
+export const verdictHistory = (ticket: string) => all<VerdictRow>('SELECT ticket, release, verdict, reason, source, at FROM release_verdicts WHERE ticket = ? ORDER BY id DESC', ticket)
+function latestVerdicts(): Map<string, VerdictRow> {
+    const out = new Map<string, VerdictRow>()
+    for (const v of all<VerdictRow>('SELECT ticket, release, verdict, reason, source, at FROM release_verdicts ORDER BY id')) out.set(v.ticket, v)
+    return out
 }
-export const deleteGroup = (id: number) => run('DELETE FROM release_groups WHERE id = ?', id)
 
-// ------------------------------------------------------------------ scopes and views
-export function quarterOf(date: string, startMonth: number): { id: string; label: string } {
+// ------------------------------------------------------------------ scopes
+export function quarterOf(date: string, startMonth: number): string {
     const d = new Date(date + 'T00:00:00Z')
     const m = d.getUTCMonth() + 1
-    const offset = (m - startMonth + 12) % 12
-    const q = Math.floor(offset / 3) + 1
-    if (startMonth === 1) return { id: `q:${d.getUTCFullYear()}-${q}`, label: `Q${q} ${d.getUTCFullYear()}` }
+    const q = Math.floor(((m - startMonth + 12) % 12) / 3) + 1
+    if (startMonth === 1) return `Q${q} ${d.getUTCFullYear()}`
     const fy = m >= startMonth ? d.getUTCFullYear() + 1 : d.getUTCFullYear()
-    return { id: `q:FY${fy}-${q}`, label: `FY${String(fy).slice(2)} Q${q}` }
+    return `FY${String(fy).slice(2)} Q${q}`
 }
 
 export interface Scope {
-    id: string // all | r:<release> | q:<quarter> | g:<group id>
     label: string
-    kind: 'all' | 'release' | 'quarter' | 'group'
     releases: string[]
 }
 
-export function scopes(): Scope[] {
-    const s = releaseSettings()
+export const keptNames = () => keptReleases().map((r) => r.name)
+
+/** Quarters that have kept releases, newest first. */
+export function quarters(): Scope[] {
+    const start = releaseSettings().fiscal_start_month
+    const out = new Map<string, string[]>()
+    for (const r of keptReleases()) {
+        const q = quarterOf(r.released_at, start)
+        out.set(q, [...(out.get(q) || []), r.name])
+    }
+    return [...out].reverse().map(([label, releases]) => ({ label, releases }))
+}
+
+/** Reads what someone asked for: "all", "26.10.0", "Q3 2026", "FY27 Q1", "last 3",
+ * "26.5.0..26.8.0" or "2026-01-01..2026-06-30". */
+export function resolveScope(text?: string): Scope | undefined {
     const rels = keptReleases()
-    const out: Scope[] = [{ id: 'all', label: `Last ${rels.length} releases`, kind: 'all', releases: rels.map((r) => r.name) }]
-    const quarters = new Map<string, Scope>()
-    for (const r of rels) {
-        const q = quarterOf(r.released_at, s.fiscal_start_month)
-        if (!quarters.has(q.id)) quarters.set(q.id, { id: q.id, label: q.label, kind: 'quarter', releases: [] })
-        quarters.get(q.id)!.releases.push(r.name)
+    const q = (text || 'all').trim()
+    if (!q || /^all$/i.test(q)) return { label: `Last ${rels.length} releases`, releases: rels.map((r) => r.name) }
+    const exact = rels.find((r) => r.name === q.replace(/^v/i, ''))
+    if (exact) return { label: exact.name, releases: [exact.name] }
+    const quarter = quarters().find((x) => x.label.toLowerCase() === q.toLowerCase())
+    if (quarter) return quarter
+    const last = /^last\s+(\d+)$/i.exec(q)
+    if (last) {
+        const picked = rels.slice(-Number(last[1]))
+        return { label: `Last ${picked.length} releases`, releases: picked.map((r) => r.name) }
     }
-    out.push(...[...quarters.values()].reverse())
-    for (const g of groups()) out.push({ id: `g:${g.id}`, label: g.name, kind: 'group', releases: g.releases })
-    out.push(...[...rels].reverse().map((r) => ({ id: `r:${r.name}`, label: r.name, kind: 'release' as const, releases: [r.name] })))
-    return out
-}
-
-export interface Scores {
-    reach: number
-    adoption: number | null
-    fixes: number | null
-    errors: number | null
-    friction: number | null
-    support: number | null
-    value: number
-    risk: number
-    impact: number
-    direction: 'value' | 'risk'
-}
-
-const clamp = (x: number) => Math.max(0, Math.min(1, x))
-const per100 = (count: number, sessions: number) => (sessions ? (count / sessions) * 100 : 0)
-
-/** Scores a ticket from 0 to 1 on each signal, then value, risk and impact (0 to 100). */
-export function scoreTicket(t: TicketStats, snap: Snapshot, w: Weights, screenReach: number): Scores {
-    const active = Math.max(1, snap.totals.clients_after)
-    const sc = t.link?.screen ? snap.screens[t.link.screen] : undefined
-    const reachRaw = t.usage ? t.usage.clients_after / active : 0
-    const reach = clamp(t.link?.event ? reachRaw : reachRaw * screenReach)
-    // Adoption: how much use the ticket's event got, against the screen's sessions.
-    const adoption = t.link?.event && t.usage && sc ? clamp(t.usage.after / Math.max(1, sc.sessions_after) / 0.4) : null
-    let fixes: number | null = null
-    let errors: number | null = null
-    let friction: number | null = null
-    let support: number | null = null
-    if (t.risk_owner && sc) {
-        const errDelta = per100(sc.errors_after, sc.sessions_after) - per100(sc.errors_before, sc.sessions_before)
-        const rageDelta = per100(sc.rage_after, sc.sessions_after) - per100(sc.rage_before, sc.sessions_before)
-        const newHere = snap.new_errors.some((e) => e.path === t.link!.screen && e.clients >= 2)
-        errors = clamp(Math.max(errDelta / 5, newHere ? 0.5 : 0))
-        friction = clamp(rageDelta / 8)
-        support = clamp(sc.support.length / 4)
-        // Only a ticket that changed how the screen already worked can be credited with a fix.
-        const couldFix = !t.link?.event || t.type === 'Bug'
-        const hadProblems = sc.errors_before + sc.rage_before > 0
-        fixes = hadProblems && couldFix ? clamp(Math.max(-errDelta / 5, -rageDelta / 8)) : null
-    }
-    const avg = (parts: [number | null, number][]) => {
-        const use = parts.filter(([v, wt]) => v !== null && wt > 0) as [number, number][]
-        const total = use.reduce((a, [, wt]) => a + wt, 0)
-        return total ? use.reduce((a, [v, wt]) => a + v * wt, 0) / total : 0
-    }
-    const value = avg([
-        [reach, w.reach],
-        [adoption, w.adoption],
-        [fixes, w.fixes],
-    ])
-    const risk = avg([
-        [errors, w.errors],
-        [friction, w.friction],
-        [support, w.support],
-    ])
-    return { reach, adoption, fixes, errors, friction, support, value, risk, impact: Math.round(100 * Math.max(value, risk)), direction: risk > value ? 'risk' : 'value' }
-}
-
-export interface ReleaseSummary {
-    name: string
-    date: string
-    description: string
-    days: number
-    open: boolean
-    tickets: number
-    by_type: Record<string, number>
-    clients_active: number
-    clients_on_version: number | null
-    adoption: { week: string; on: number; all: number }[]
-    errors_per_1k: number
-    errors_per_1k_before: number
-    rage_per_1k: number
-    rage_per_1k_before: number
-    new_errors: ErrorIssue[]
-    support: number
-    health: 'Healthy' | 'Watch' | 'At risk'
-    health_reasons: string[]
-    top: string | null
-}
-
-function summarize(snap: Snapshot, ranked: (TicketStats & { scores: Scores })[]): ReleaseSummary {
-    const t = snap.totals
-    const e1 = per100(t.errors_after, t.sessions_after) * 10
-    const e0 = per100(t.errors_before, t.sessions_before) * 10
-    const r1 = per100(t.rage_after, t.sessions_after) * 10
-    const r0 = per100(t.rage_before, t.sessions_before) * 10
-    const support = new Set(Object.values(snap.screens).flatMap((x) => x.support.map((y) => y.key))).size
-    const spread = snap.new_errors.filter((e) => e.clients >= 2)
-    const reasons: string[] = []
-    if (spread.length) reasons.push(`${spread.length} new error${spread.length > 1 ? 's' : ''} hitting 2+ clients`)
-    if (e1 >= 2 && e1 >= 3 * Math.max(e0, 0.5)) reasons.push(`errors ${e0 ? `${Math.round(e1 / e0)}×` : 'up from none'}`)
-    if (support >= 3) reasons.push(`${support} support tickets`)
-    let health: ReleaseSummary['health'] = reasons.length ? 'At risk' : 'Healthy'
-    if (health === 'Healthy') {
-        if (e1 >= 1 && e1 >= 1.5 * Math.max(e0, 0.5)) reasons.push('errors up')
-        if (r1 >= 2 && r1 >= 2 * Math.max(r0, 0.5)) reasons.push('rage clicks up')
-        if (support >= 1) reasons.push(`${support} support ticket${support > 1 ? 's' : ''}`)
-        if (reasons.length) health = 'Watch'
-    }
-    const by_type: Record<string, number> = {}
-    for (const x of snap.tickets) by_type[x.type] = (by_type[x.type] || 0) + 1
-    return {
-        name: snap.release,
-        date: snap.date,
-        description: snap.description,
-        days: snap.window.days,
-        open: snap.window.open,
-        tickets: snap.tickets.length,
-        by_type,
-        clients_active: t.clients_after,
-        clients_on_version: t.clients_on_version,
-        adoption: snap.adoption,
-        errors_per_1k: Math.round(e1 * 10) / 10,
-        errors_per_1k_before: Math.round(e0 * 10) / 10,
-        rage_per_1k: Math.round(r1 * 10) / 10,
-        rage_per_1k_before: Math.round(r0 * 10) / 10,
-        new_errors: snap.new_errors,
-        support,
-        health,
-        health_reasons: reasons,
-        top: ranked.find((x) => x.scores.direction === 'value')?.key || null,
-    }
-}
-
-const pct = (x: number) => `${Math.round(x * 100)}%`
-const nameOf = (path?: string) => (path ? screenName(path) : 'its screen')
-
-/** Plain-language findings, strongest first. Only event numbers, never replay content. */
-function insights(snaps: Snapshot[], ranked: (TicketStats & { scores: Scores; release: string })[], summaries: ReleaseSummary[]): { kind: 'win' | 'risk' | 'fix' | 'info'; text: string; ticket?: string }[] {
-    const out: { kind: 'win' | 'risk' | 'fix' | 'info'; text: string; ticket?: string; weight: number }[] = []
-    const snapOf = (r: string) => snaps.find((s) => s.release === r)!
-    for (const x of ranked) {
-        const snap = snapOf(x.release)
-        const active = Math.max(1, snap.totals.clients_after)
-        if (x.link?.event && x.usage && x.scores.reach >= 0.5) {
-            out.push({ kind: 'win', ticket: x.key, weight: x.scores.value, text: `${x.key} "${x.summary}" (${x.release}) reached ${x.usage.clients_after} of ${active} clients (${pct(x.usage.clients_after / active)}) in ${snap.window.days} days.` })
-        }
-        if (x.link?.event && x.usage && x.usage.clients_after <= Math.max(2, active * 0.15) && !snap.window.open) {
-            out.push({ kind: 'info', ticket: x.key, weight: 0.3, text: `Low uptake: ${x.key} "${x.summary}" (${x.release}) was used by ${x.usage.clients_after} client${x.usage.clients_after === 1 ? '' : 's'} in ${snap.window.days} days.` })
-        }
-        if (x.scores.fixes !== null && x.scores.fixes >= 0.3 && x.link?.screen) {
-            const sc = snap.screens[x.link.screen]
-            const what = sc.errors_before > sc.rage_before ? 'errors' : 'rage clicks'
-            const [b, a] = what === 'errors' ? [sc.errors_before, sc.errors_after] : [sc.rage_before, sc.rage_after]
-            out.push({ kind: 'fix', ticket: x.key, weight: 0.6 + x.scores.fixes / 4, text: `${x.key} "${x.summary}" (${x.release}) looks fixed: ${what} on ${nameOf(x.link.screen)} went from ${b} to ${a} in the same number of days.` })
-        }
-        if (x.scores.friction !== null && x.scores.friction >= 0.3 && x.link?.screen) {
-            const sc = snap.screens[x.link.screen]
-            out.push({ kind: 'risk', ticket: x.key, weight: 0.7 + x.scores.friction / 4, text: `Rage clicks on ${nameOf(x.link.screen)} went from ${sc.rage_before} to ${sc.rage_after} after ${x.release}. Likely cause: ${x.key} "${x.summary}".` })
+    const range = /^(.+?)\s*\.\.\s*(.+)$/.exec(q)
+    if (range) {
+        const at = (x: string) => rels.find((r) => r.name === x)?.released_at || (/^\d{4}-\d{2}-\d{2}$/.test(x) ? x : undefined)
+        const [from, to] = [at(range[1]), at(range[2])]
+        if (from && to) {
+            const picked = rels.filter((r) => r.released_at >= from && r.released_at <= to)
+            if (picked.length) return { label: `${range[1]} to ${range[2]}`, releases: picked.map((r) => r.name) }
         }
     }
-    for (const sum of summaries) {
-        const snap = snapOf(sum.name)
-        for (const e of sum.new_errors.filter((e) => e.clients >= 2)) {
-            const suspects = ranked.filter((x) => x.release === sum.name && x.risk_owner && x.link?.screen === e.path).map((x) => x.key)
-            out.push({
-                kind: 'risk',
-                ticket: suspects[0],
-                weight: 0.9 + Math.min(0.1, e.clients / 100),
-                text: `New error after ${sum.name}: ${e.type}${e.message ? `: ${e.message}` : ''}. ${e.occurrences} times for ${e.clients} clients, mostly on ${nameOf(e.path)}.${suspects.length ? ` Likely cause: ${suspects.join(', ')}.` : ''}`,
-            })
-        }
-        const supportByScreen = Object.entries(snap.screens).filter(([, v]) => v.support.length >= 2)
-        for (const [path, v] of supportByScreen) {
-            out.push({ kind: 'risk', weight: 0.75, text: `${v.support.length} support tickets about ${nameOf(path)} in the ${snap.window.days} days after ${sum.name} (${v.support.map((x) => x.key).join(', ')}).` })
-        }
-        if (sum.clients_on_version !== null && sum.clients_active && snaps.length === 1) {
-            out.push({ kind: 'info', weight: 0.2, text: `${sum.clients_on_version} of ${sum.clients_active} active clients ran ${sum.name} in its first ${sum.days} days.` })
-        }
-    }
-    return out
-        .sort((a, b) => b.weight - a.weight)
-        .slice(0, 12)
-        .map(({ weight: _w, ...rest }) => rest)
-}
-
-export interface View {
-    scope: Scope
-    weights: Weights
-    settings: ReleaseSettings
-    releases: ReleaseSummary[]
-    tickets: (TicketStats & { release: string; scores: Scores })[]
-    insights: ReturnType<typeof insights>
-    screens: Record<string, Record<string, ScreenStats>> // release → screen → numbers
-    kpis: { releases: number; tickets: number; ranked: number; clients_reached: number; new_errors: number; support: number; at_risk: number; avg_value: number; avg_risk: number }
-    synced: ReturnType<typeof syncStatus>
+    return undefined
 }
 
 export function snapshotsFor(names: string[]): Snapshot[] {
     return names.map((r) => one<{ data: string }>('SELECT data FROM release_snapshots WHERE release = ?', r)).filter(Boolean).map((x) => JSON.parse(x!.data) as Snapshot)
 }
 
-export function view(scopeId = 'all', weights?: Partial<Weights>): View {
-    const s = releaseSettings()
-    const w = { ...s.weights, ...(weights || {}) }
-    const scope = scopes().find((x) => x.id === scopeId) || scopes()[0]
-    const snaps = snapshotsFor(scope.releases)
-    const tickets = snaps.flatMap((snap) => snap.tickets.map((t) => ({ ...t, release: snap.release, scores: scoreTicket(t, snap, w, s.screen_reach_factor) })))
-    const rankedTickets = tickets.filter((t) => !t.hidden && s.ticket_types.includes(t.type) && t.link).sort((a, b) => b.scores.impact - a.scores.impact)
-    const summaries = snaps.map((snap) => summarize(snap, rankedTickets.filter((t) => t.release === snap.release)))
-    const avg = (xs: number[]) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) : 0)
+// ------------------------------------------------------------------ outcomes
+/** Thresholds for the outcome groups. Plain numbers on purpose: anyone can read and argue them. */
+export const THRESHOLDS = {
+    adopted: 0.3, // share of active clients that used a new feature's event
+    low_uptake: 0.1, // below this share, once the window has closed
+    error_rise: 1, // more errors per 100 sessions on the screen
+    rage_rise: 2, // more rage clicks per 100 sessions on the screen (and at least 5)
+    fixed_drop: 0.5, // errors or rage clicks per 100 sessions fell by half (from at least 1)
+    rating_drop: 0.8, // survey rating fell by this much (10 answers or more on each side)
+    too_new_days: 14,
+}
+
+export const OUTCOMES = [
+    { id: 'errors', title: 'More errors after the release', rule: `errors on its screen rose by ${THRESHOLDS.error_rise}+ per 100 sessions, or a new error type hit 2+ clients` },
+    { id: 'rage', title: 'More rage clicks', rule: `rage clicks on its screen rose by ${THRESHOLDS.rage_rise}+ per 100 sessions` },
+    { id: 'complaints', title: 'Clients complained', rule: `support tickets about its screen after the release, or the survey rating fell by ${THRESHOLDS.rating_drop}+` },
+    { id: 'fixed', title: 'Fixed something', rule: 'errors or rage clicks on its screen fell by half or more (bug fixes and changes to existing screens only)' },
+    { id: 'adopted', title: 'Adopted', rule: `the new event was used by ${THRESHOLDS.adopted * 100}%+ of active clients` },
+    { id: 'low_uptake', title: 'Low uptake', rule: `the new event was used by under ${THRESHOLDS.low_uptake * 100}% of active clients` },
+    { id: 'too_new', title: 'Too new to tell', rule: `released under ${THRESHOLDS.too_new_days} days ago, nothing stands out yet` },
+    { id: 'no_change', title: 'No clear change', rule: 'linked, but none of the above' },
+    { id: 'unmeasured', title: "Can't measure", rule: 'no screen or event to measure (often tasks)' },
+] as const
+export type OutcomeId = (typeof OUTCOMES)[number]['id']
+
+const per100 = (count: number, sessions: number) => (sessions ? Math.round((count / sessions) * 1000) / 10 : 0)
+const nameOf = (path?: string) => (path ? screenName(path) : 'its screen')
+const pct = (x: number) => `${Math.round(x * 100)}%`
+const day = (iso: string) => iso.slice(0, 10)
+
+export interface TicketOutcome extends TicketStats {
+    release: string
+    groups: OutcomeId[]
+    facts: string[] // short sentences with the numbers
+    verdict?: VerdictRow
+}
+
+export function classify(t: TicketStats, snap: Snapshot, verdict?: VerdictRow): TicketOutcome {
+    const groups: OutcomeId[] = []
+    const facts: string[] = []
+    const active = Math.max(1, snap.totals.clients_after)
+    const screen = t.link?.screen
+    const sc = screen ? snap.screens[screen] : undefined
+    if (!t.link) {
+        groups.push('unmeasured')
+        facts.push(`not linked: ${t.link_reason}`)
+    } else {
+        if (t.usage) {
+            const share = t.usage.clients_after / active
+            facts.push(
+                t.link.event
+                    ? `${t.link.event} happened ${t.usage.after} times (${t.usage.before} before), by ${t.usage.users_after} people at ${t.usage.clients_after} of ${active} active clients (${pct(share)})`
+                    : `${nameOf(screen)} page views ${t.usage.before} → ${t.usage.after}, ${t.usage.clients_after} of ${active} clients`
+            )
+            if (t.link.event) {
+                if (share >= THRESHOLDS.adopted) groups.push('adopted')
+                else if (share < THRESHOLDS.low_uptake && !snap.window.open) groups.push('low_uptake')
+            }
+        }
+        if (sc && t.risk_owner) {
+            const [e0, e1] = [per100(sc.errors_before, sc.sessions_before), per100(sc.errors_after, sc.sessions_after)]
+            const [r0, r1] = [per100(sc.rage_before, sc.sessions_before), per100(sc.rage_after, sc.sessions_after)]
+            const newErrors = snap.new_errors.filter((e) => e.path === screen && e.clients >= 2)
+            if (sc.errors_before + sc.errors_after) facts.push(`errors on ${nameOf(screen)} ${e0} → ${e1} per 100 sessions`)
+            for (const e of newErrors) facts.push(`new ${e.type}: ${e.message} (${e.occurrences} times, ${e.clients} clients)`)
+            if (sc.rage_before + sc.rage_after) facts.push(`rage clicks ${r0} → ${r1} per 100 sessions`)
+            if (sc.support.length) facts.push(`${sc.support.length} support ticket${sc.support.length > 1 ? 's' : ''} (${sc.support.map((x) => x.key).join(', ')})`)
+            const sv = sc.survey
+            if (sv.rating_after !== null) facts.push(`survey rating ${sv.rating_before ?? '–'} → ${sv.rating_after} (${sv.answers_after} answers)`)
+            if (e1 - e0 >= THRESHOLDS.error_rise || newErrors.length) groups.push('errors')
+            if (r1 - r0 >= THRESHOLDS.rage_rise && sc.rage_after >= 5) groups.push('rage')
+            const ratingFell = sv.rating_before !== null && sv.rating_after !== null && sv.answers_before >= 10 && sv.answers_after >= 10 && sv.rating_before - sv.rating_after >= THRESHOLDS.rating_drop
+            if (sc.support.length || ratingFell) groups.push('complaints')
+            const couldFix = !t.link.event || t.type === 'Bug'
+            const fell = (b: number, a: number) => b >= 1 && a <= b * (1 - THRESHOLDS.fixed_drop)
+            if (couldFix && (fell(e0, e1) || fell(r0, r1))) groups.push('fixed')
+            if (t.shares_screen_with.length) facts.push(`shares ${nameOf(screen)}'s numbers with ${t.shares_screen_with.join(', ')}`)
+        } else if (sc) {
+            const owners = snap.tickets.filter((x) => x.risk_owner && x.link?.screen === screen).map((x) => x.key)
+            if (owners.length) facts.push(`problems on ${nameOf(screen)} are counted for ${owners.join(', ')}`)
+        }
+        if (!groups.length) groups.push(snap.window.open && snap.window.days < THRESHOLDS.too_new_days ? 'too_new' : 'no_change')
+    }
+    return { ...t, release: snap.release, groups, facts, verdict }
+}
+
+export interface ReleaseFacts {
+    name: string
+    date: string
+    days: number
+    open: boolean
+    tickets: number
+    clients_active: number
+    clients_on_version: number | null
+    errors_per_1k: [number, number]
+    rage_per_1k: [number, number]
+    support: number
+    survey: { rating_before: number | null; rating_after: number | null; answers_after: number }
+    new_errors: ErrorIssue[]
+}
+
+function releaseFacts(snap: Snapshot): ReleaseFacts {
+    const t = snap.totals
+    const svs = Object.values(snap.screens).map((x) => x.survey)
+    const weighted = (key: 'rating_before' | 'rating_after', n: 'answers_before' | 'answers_after') => {
+        const total = svs.reduce((a, x) => a + (x[key] !== null ? x[n] : 0), 0)
+        return total ? Math.round((svs.reduce((a, x) => a + (x[key] ?? 0) * (x[key] !== null ? x[n] : 0), 0) / total) * 10) / 10 : null
+    }
     return {
-        scope,
-        weights: w,
-        settings: s,
-        releases: summaries,
-        tickets: [...rankedTickets, ...tickets.filter((t) => !rankedTickets.includes(t))],
-        insights: insights(snaps, rankedTickets, summaries),
-        screens: Object.fromEntries(snaps.map((x) => [x.release, x.screens])),
-        kpis: {
-            releases: snaps.length,
-            tickets: tickets.length,
-            ranked: rankedTickets.length,
-            clients_reached: Math.max(0, ...rankedTickets.filter((t) => t.link?.event).map((t) => t.usage?.clients_after || 0)),
-            new_errors: summaries.reduce((a, x) => a + x.new_errors.length, 0),
-            support: summaries.reduce((a, x) => a + x.support, 0),
-            at_risk: summaries.filter((x) => x.health === 'At risk').length,
-            avg_value: avg(rankedTickets.map((t) => t.scores.value)),
-            avg_risk: avg(rankedTickets.map((t) => t.scores.risk)),
-        },
-        synced: syncStatus(),
+        name: snap.release,
+        date: snap.date,
+        days: snap.window.days,
+        open: snap.window.open,
+        tickets: snap.tickets.length,
+        clients_active: t.clients_after,
+        clients_on_version: t.clients_on_version,
+        errors_per_1k: [per100(t.errors_before, t.sessions_before) * 10, per100(t.errors_after, t.sessions_after) * 10],
+        rage_per_1k: [per100(t.rage_before, t.sessions_before) * 10, per100(t.rage_after, t.sessions_after) * 10],
+        support: new Set(Object.values(snap.screens).flatMap((x) => x.support.map((y) => y.key))).size,
+        survey: { rating_before: weighted('rating_before', 'answers_before'), rating_after: weighted('rating_after', 'answers_after'), answers_after: svs.reduce((a, x) => a + x.answers_after, 0) },
+        new_errors: snap.new_errors,
     }
 }
 
-/** The view as markdown, for Claude (MCP) and anywhere text is easier than a page. */
-export function viewMarkdown(v: View, top = 5): string {
-    const lines = [`## ${v.scope.label}: release insights`]
-    lines.push(`${v.kpis.releases} release${v.kpis.releases === 1 ? '' : 's'}, ${v.kpis.tickets} tickets (${v.kpis.ranked} ranked), ${v.kpis.new_errors} new errors, ${v.kpis.support} support tickets, ${v.kpis.at_risk} at risk.`)
-    if (v.insights.length) lines.push('', '### Findings', ...v.insights.map((i) => `- ${i.text}`))
-    const table = (title: string, xs: View['tickets']) => {
-        if (!xs.length) return
-        lines.push('', `### ${title}`, '| Ticket | Release | Linked to | Clients | Value | Risk | Impact |', '|---|---|---|---|---|---|---|')
-        for (const t of xs) lines.push(`| ${t.key} ${t.summary} | ${t.release} | ${t.link?.event || nameOf(t.link?.screen)} | ${t.usage?.clients_after ?? '-'} | ${Math.round(t.scores.value * 100)} | ${Math.round(t.scores.risk * 100)} | ${t.scores.impact} |`)
+export function outcomes(scope: Scope): { scope: Scope; releases: ReleaseFacts[]; tickets: TicketOutcome[] } {
+    const snaps = snapshotsFor(scope.releases)
+    const verdicts = latestVerdicts()
+    return {
+        scope,
+        releases: snaps.map(releaseFacts),
+        tickets: snaps.flatMap((snap) => snap.tickets.filter((t) => !t.hidden).map((t) => classify(t, snap, verdicts.get(t.key)))),
     }
-    const ranked = v.tickets.filter((t) => t.link && !t.hidden && v.settings.ticket_types.includes(t.type))
-    table('Most impact', ranked.slice(0, top))
-    table('Most risk', [...ranked].sort((a, b) => b.scores.risk - a.scores.risk).filter((t) => t.scores.risk > 0).slice(0, top))
-    if (v.releases.length > 1) {
-        lines.push('', '### Releases', '| Release | Date | Tickets | Errors per 1k sessions (before → after) | Support | Health |', '|---|---|---|---|---|---|')
-        for (const r of v.releases) lines.push(`| ${r.name} | ${r.date} | ${r.tickets} | ${r.errors_per_1k_before} → ${r.errors_per_1k} | ${r.support} | ${r.health} |`)
+}
+
+// ------------------------------------------------------------------ text for the MCP tools
+const jiraBase = () => (process.env.JIRA_PUBLIC_URL || config.jira.baseUrl.replace(/\/\/(localhost|127\.0\.0\.1)(?=[:/]|$)/, `//${new URL(config.service.publicUrl).hostname}`)).replace(/\/+$/, '')
+export const jiraUrl = (key: string) => `${jiraBase()}/browse/${encodeURIComponent(key)}`
+const verdictText = (v?: VerdictRow) => (v ? `verdict **${v.verdict}** (${v.source}, ${day(v.at)}): ${v.reason}` : '')
+
+function releaseTable(rels: ReleaseFacts[]): string[] {
+    const lines = ['| Release | Date | Measured | Clients on it | Errors / 1k sessions | Rage / 1k | Support tickets | Survey rating |', '|---|---|---|---|---|---|---|---|']
+    for (const r of rels) {
+        lines.push(
+            `| ${r.name} | ${r.date} | ${r.days} days${r.open ? ', still counting' : ''} | ${r.clients_on_version ?? '–'} of ${r.clients_active} | ${r.errors_per_1k[0]} → ${r.errors_per_1k[1]} | ${r.rage_per_1k[0]} → ${r.rage_per_1k[1]} | ${r.support} | ${r.survey.rating_before ?? '–'} → ${r.survey.rating_after ?? '–'} |`
+        )
     }
-    lines.push('', '_Impact is the larger of value (reach, adoption, fixes) and risk (errors, rage clicks, support tickets). It shows activity where a ticket changed the product, not proof that the ticket caused it._')
+    return lines
+}
+
+export function releasesMarkdown(): string {
+    const rels = snapshotsFor(keptNames()).map(releaseFacts)
+    if (!rels.length) return 'No releases yet. Run refresh_releases first.'
+    const st = getSetting<{ at?: string }>('releases.sync', {})
+    return [
+        `## Kept releases (${rels.length}, Jira project ${releaseSettings().jira_project})`,
+        ...releaseTable([...rels].reverse()),
+        '',
+        `Quarters: ${quarters().map((q) => `${q.label} (${q.releases.join(', ')})`).join('; ')}.`,
+        `You can also ask for "all", "last 3", or a range like "26.5.0..26.8.0". Last refreshed ${st.at ? day(st.at) + ' ' + st.at.slice(11, 16) + ' UTC' : 'never'}.`,
+    ].join('\n')
+}
+
+export function outcomesMarkdown(scope: Scope): string {
+    const o = outcomes(scope)
+    const lines = [`## Outcomes: ${scope.label} (${scope.releases.join(', ')})`]
+    lines.push('Facts from Jira and PostHog, sorted by what happened after each release. A ticket can be in more than one group. Use client_feedback for what clients said and ticket_evidence for one ticket in full.')
+    lines.push('', '### Releases', ...releaseTable(o.releases))
+    lines.push('', '### Groups')
+    for (const g of OUTCOMES) {
+        const ts = o.tickets.filter((t) => t.groups.includes(g.id))
+        if (ts.length) lines.push(`- **${g.title}** (${ts.length}): ${ts.map((t) => t.key).join(', ')}. _Rule: ${g.rule}._`)
+    }
+    // Each ticket once, problems first, in the order of the groups above.
+    const rank = (t: TicketOutcome) => Math.min(...t.groups.map((g) => OUTCOMES.findIndex((x) => x.id === g)))
+    lines.push('', '### Tickets')
+    for (const t of [...o.tickets].sort((a, b) => rank(a) - rank(b) || a.key.localeCompare(b.key))) {
+        const tags = t.groups.map((g) => OUTCOMES.find((x) => x.id === g)!.title.toLowerCase()).join(', ')
+        lines.push(`- **${t.key}** ${t.summary} (${t.type}, ${t.release}) [${tags}]: ${t.facts.map((f) => f.replace(/\.+$/, '')).join('; ')}.${t.verdict ? ` ${verdictText(t.verdict)}` : ''}`)
+    }
+    return lines.join('\n')
+}
+
+export function evidenceMarkdown(key: string): string | undefined {
+    const release = ticketRelease(key)
+    if (!release) return undefined
+    const snap = snapshotsFor([release])[0]
+    const raw = snap?.tickets.find((t) => t.key === key)
+    if (!snap || !raw) return undefined
+    const t = classify(raw, snap, latestVerdicts().get(key))
+    const sc = t.link?.screen ? snap.screens[t.link.screen] : undefined
+    const lines = [`## ${t.key}: ${t.summary}`, `${t.type} in release ${t.release} (${snap.date}). Measured ${snap.window.days} days before and after${snap.window.open ? ', still counting' : ''}. Jira: ${jiraUrl(t.key)}`]
+    lines.push(`- **Groups:** ${t.groups.map((g) => OUTCOMES.find((x) => x.id === g)!.title).join(', ')}`)
+    lines.push(`- **Linked to:** ${t.link ? `${nameOf(t.link.screen)}${t.link.event ? `, event ${t.link.event}` : ''}` : 'nothing'} (${t.link_source === 'person' ? `set by ${t.link_by}` : t.link_reason}).`)
+    for (const f of t.facts) lines.push(`- ${f}`)
+    if (t.weekly.length) lines.push(`- **Week by week:** ${t.weekly.map((w) => `${w.week}: ${w.n}`).join(', ')}`)
+    if (sc && t.risk_owner) {
+        for (const x of sc.support) lines.push(`- **${x.type} ${x.key}** (${day(x.created)}) "${x.summary}": ${x.text}`)
+        for (const c of sc.survey.comments_after.slice(0, 8)) lines.push(`- **Survey** (${c.rating ?? 'no rating'}/5, ${c.client}, ${day(c.at)}): "${c.comment}"`)
+    }
+    for (const e of snap.new_errors.filter((e) => e.path === t.link?.screen)) lines.push(`- **New error** ${e.type}: ${e.message}. ${e.occurrences} times, ${e.clients} clients, first seen ${day(e.first_seen)}.${e.url ? ` ${e.url}` : ''}`)
+    const history = verdictHistory(key)
+    if (history.length) lines.push('', '### Verdicts', ...history.map((v) => `- ${day(v.at)} ${v.source}: **${v.verdict}**: ${v.reason}`))
+    return lines.join('\n')
+}
+
+export function feedbackMarkdown(scope: Scope, screen?: string): string {
+    const lines = [`## Client feedback: ${scope.label}${screen ? `, ${nameOf(screen)}` : ''}`, 'Support tickets and in-product survey answers in the days after each release, by screen.']
+    for (const snap of snapshotsFor(scope.releases)) {
+        const screens = Object.entries(snap.screens).filter(([p, v]) => (!screen || p === screen) && (v.support.length || v.survey.answers_after))
+        if (!screens.length) continue
+        lines.push('', `### ${snap.release} (${snap.date}, ${snap.window.days} days)`)
+        for (const [p, v] of screens) {
+            const sv = v.survey
+            lines.push(`**${nameOf(p)}**: ${v.support.length} support tickets; survey rating ${sv.rating_before ?? '–'} → ${sv.rating_after ?? '–'} from ${sv.answers_after} answers (${sv.answers_before} before).`)
+            for (const x of v.support) lines.push(`- ${x.type} ${x.key} (${day(x.created)}) "${x.summary}": ${x.text}`)
+            for (const c of sv.comments_after) lines.push(`- Survey ${c.rating ?? '–'}/5 (${c.client}, ${day(c.at)}): "${c.comment}"`)
+        }
+    }
+    if (lines.length === 2) lines.push('', 'No support tickets or survey answers in this scope.')
     return lines.join('\n')
 }
