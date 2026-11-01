@@ -271,6 +271,9 @@ Claude Code asks once to approve a project MCP server. Remote MCP clients use `h
 
 Commands: `pnpm test`, `pnpm typecheck`, `scripts/stack.sh start|stop|restart|status`.
 
+Status page: `deploy/status/up.sh` starts one small container with a page that says whether PostHog,
+these processes, data flow, every container and the machine are up (see `deploy/status/README.md`).
+
 ## The demo data
 
 Acme Portal has 120 clients and about 840 users. The 20 named clients in
