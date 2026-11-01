@@ -20,9 +20,10 @@
 #     (phase 9); otherwise migration 0140 stops on columns that only 2026 migrations add;
 #   - it runs migrate-storage-hobby one service at a time, skipping buckets 2025 never had (run whole, it
 #     stops at the missing ai-blobs bucket and copies nothing after it);
-#   - it also copies replays stored under session_recording_batches/ (what a 2025 project with "legacy"
-#     replay retention used) into the replay store; PostHog's migrate-storage-hobby copies only
-#     session_recordings/ there, so those replays would no longer play.
+#   - replays of 2025 projects with "legacy" retention (stored under session_recording_batches/) are copied
+#     into the replay store and renamed to session_recordings/<period>/..., the only names the new replay
+#     reader accepts, with a retention period that keeps every one of them; otherwise they are listed but
+#     none of them play, and those older than 30 days disappear.
 #
 # Phases (each records when it finished; running again continues where it stopped):
 #   1 check      versions, volumes, free disk, MinIO image, and that events have stopped
@@ -370,6 +371,9 @@ if phase storage; then
         # it never copies session_recording_batches/ there. This adds both.
         say "copying session_recording_batches/ and symbolsets/ into the replay store"
         web_python copy_legacy_replays.py
+        # The new replay reader refuses session_recording_batches/ names, so those replays would not play.
+        say "renaming legacy replays so the new replay reader accepts them"
+        web_python fix_legacy_replays.py
     else
         say "no MinIO volume; nothing to copy"
     fi
@@ -380,7 +384,13 @@ fi
 if phase verify; then
     web_python counts.py -e STORES=both > "$STATE/after.json"
     python3 "$HERE/compare.py" "$STATE/before.json" "$STATE/after.json" | tee "$STATE/verify.txt"
-    grep -q '^RESULT: PASS' "$STATE/verify.txt" || { echo "Differences found: see $STATE/verify.txt. To go back: $0 rollback"; exit 1; }
+    # Counts are not enough: fetch every block of every replay through the new replay reader, as the app does.
+    say "fetching every replay through the new replay reader"
+    dc exec -T web python manage.py shell < "$HERE/replays_playable.py" 2>/dev/null | grep -E "^(PLAYABLE|  failed)" | tee -a "$STATE/verify.txt"
+    if ! grep -qE '^PLAYABLE: ([0-9]+) of \1 recordings, ([0-9]+) of \2 blocks' "$STATE/verify.txt"; then
+        echo "RESULT: FAIL (not every replay plays)" >> "$STATE/verify.txt"
+    fi
+    grep -q '^RESULT: PASS' "$STATE/verify.txt" && ! grep -q '^RESULT: FAIL' "$STATE/verify.txt" || { echo "Differences found: see $STATE/verify.txt. To go back: $0 rollback"; exit 1; }
     finish verify
     say "Upgrade complete and verified. The backup in $BACKUP_DIR can be deleted once you are happy."
 fi

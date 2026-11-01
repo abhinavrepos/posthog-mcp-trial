@@ -4,6 +4,7 @@
 #
 #   python3 compare.py before.json after.json
 import json
+import re
 import sys
 
 before, after = (json.load(open(p)) for p in sys.argv[1:3])
@@ -35,6 +36,11 @@ for team, r in before.get("replays", {}).items():
 replay_store = after.get("storage", {}).get("replays", {})
 missing = [u for u in before.get("replay_block_files", []) if u.split("/", 3)[3] not in replay_store]
 check(not missing, f"every replay block file is in the replay store ({len(before.get('replay_block_files', []))} files)" + (f"; {len(missing)} missing, e.g. {missing[:3]}" if missing else ""))
+# What the new replay reader (recording-api) accepts; it answers 400 to any other name.
+READER = re.compile(r"^session_recordings/(30d|90d|1y|5y)/\d+-[0-9a-f]{16}$")
+pointed = [u.split("/", 3)[3] for u in after.get("replay_block_files", [])]
+unplayable = [k for k in pointed if not READER.match(k) or k not in replay_store]
+check(not unplayable, f"every block a replay points at has a name the new replay reader accepts and is in the replay store ({len(pointed)} files)" + (f"; {len(unplayable)} not, e.g. {unplayable[:3]}" if unplayable else ""))
 
 print("stored files")
 REPLAY_PREFIXES = ("session_recordings/", "session_recordings_lts/", "session_recording_batches/")
