@@ -56,7 +56,7 @@ if ! is_done check; then
     psql_q "SELECT id, name, api_token FROM posthog_team ORDER BY id" | sed 's/^/    /'
     ch -q "SELECT team_id, count() FROM events GROUP BY team_id ORDER BY team_id FORMAT TSV" | sed 's/^/    events in project /'
     need_mb=$(ch -q "SELECT intDiv(sum(bytes_on_disk), 1048576) FROM system.parts WHERE active AND database = 'posthog'")
-    free_mb=$(df -Pm "$OUT" | awk 'NR==2 {print $4}')
+    free_mb=$(( $(df -Pk "$OUT" | awk 'NR==2 {print $4}') / 1024 ))
     say "ClickHouse data: ${need_mb} MB. Free space for the bundle: ${free_mb} MB."
     if [ "$free_mb" -lt $(( need_mb * 2 + 2048 )) ]; then
         echo "Not enough free space in $OUT: need about $(( need_mb * 2 + 2048 )) MB (plus the replay files)."; exit 1
