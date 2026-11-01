@@ -23,6 +23,15 @@ TARGET_COMMIT=$commit
 TARGET_APP_IMAGE=$app_digest
 NODE_BASE_IMAGE=$node_digest
 EOF
+# Stepping stone for databases from before PostHog's migration squash of 8 Sep 2026 (see posthog-upgrade.sh
+# phase 8): the last commit before the squash, and its last posthog migration.
+stone=3ae7a3ca6121e6836d82a6aaf00192f7749ee5d2
+docker pull -q "posthog/posthog:$stone" >/dev/null
+cat >> "$OUT/versions.env" <<EOF
+STEPPING_STONE_COMMIT=$stone
+STEPPING_STONE_IMAGE=$(docker image inspect -f '{{index .RepoDigests 0}}' "posthog/posthog:$stone")
+STEPPING_STONE_LAST_MIGRATION=1343_teammarketinganalyticsconfig_filter_test_accounts
+EOF
 
 {
     echo "# Exact images as running on $(hostname) at $(date -u +%Y-%m-%dT%H:%M:%SZ). Written by pin-versions.sh."
