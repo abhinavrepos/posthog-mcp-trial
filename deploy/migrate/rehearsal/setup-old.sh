@@ -14,12 +14,18 @@ code=$(curl -s -o /tmp/old-signup.json -w '%{http_code}' -X POST http://127.0.0.
 echo "signup: $code"
 rm -f /tmp/old-signup.json
 
-out=$(docker compose exec -T -e EMAIL="$OLD_ADMIN_EMAIL" web python manage.py shell 2>/dev/null <<'PY'
+out=$(docker compose exec -T -e EMAIL="$OLD_ADMIN_EMAIL" -e PW="$OLD_ADMIN_PASSWORD" web python manage.py shell 2>/dev/null <<'PY'
 import json, os
 from posthog.models import User
 from posthog.models.personal_api_key import PersonalAPIKey
-from posthog.models.utils import generate_random_token_personal, hash_key_value, mask_key_value
+from posthog.models.utils import generate_random_token_personal, mask_key_value
+try:
+    from posthog.models.utils import hash_key_value
+except ImportError:  # where the 2025 version keeps it
+    from posthog.models.personal_api_key import hash_key_value
 user = User.objects.get(email=os.environ["EMAIL"])
+user.set_password(os.environ["PW"])  # keeps rehearsal.env right if an earlier run stopped half way
+user.save()
 team = user.team
 team.session_recording_opt_in = True
 team.autocapture_exceptions_opt_in = True
