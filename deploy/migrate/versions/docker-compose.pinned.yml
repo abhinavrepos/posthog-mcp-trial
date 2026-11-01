@@ -1,0 +1,67 @@
+# Exact images as running on vultr at 2026-11-01T06:26:15Z. Written by pin-versions.sh.
+# The Node services are not here: scale.sh builds them from NODE_BASE_IMAGE in versions.env.
+services:
+    asyncmigrationscheck:
+        image: posthog/posthog@sha256:b02ce15262323fe6e72e2620e333394697d210da04bc3acfeda0c949d5ad6ad1
+    browserless:
+        image: ghcr.io/browserless/chromium@sha256:79a37927bdd235c8f5a299a8846c37e946c3505dff2562ece3922d4562d016a3
+    capture:
+        image: ghcr.io/posthog/posthog/capture@sha256:19998d990129045bdb965ae4a04aafd3b9f2664bd45ed8df2e3c2a753818475a
+    capture-ai:
+        image: ghcr.io/posthog/posthog/capture@sha256:19998d990129045bdb965ae4a04aafd3b9f2664bd45ed8df2e3c2a753818475a
+    capture-logs:
+        image: ghcr.io/posthog/posthog/capture-logs@sha256:37c62ad0e78abace0b14bcbfa788884a070fb0f9ae686b81cdbeb49756fca63a
+    clickhouse:
+        image: ghcr.io/posthog/clickhouse-posthog@sha256:34f131fcbaa38d5e2ff86f40408aeed99b07716f6a0f3a01f81fdbfe486791e0
+    cymbal:
+        image: ghcr.io/posthog/posthog/cymbal@sha256:b1aef1cfede071b733aa8ac86c6553e7f17130e639b557dc8148d6d14b221cf1
+    cymbal-resolution:
+        image: ghcr.io/posthog/posthog/cymbal@sha256:b1aef1cfede071b733aa8ac86c6553e7f17130e639b557dc8148d6d14b221cf1
+    db:
+        image: postgres@sha256:ef9d1517df69c4d27dbb9ddcec14f431a2442628603f4e9daa429b92ae6c3cd1
+    elasticsearch:
+        image: elasticsearch@sha256:a06b03a2db8db2be43d3c3851e7bcebdd4fff79f4db08c7da6bad7a8776d3e15
+    feature-flags:
+        image: ghcr.io/posthog/posthog/feature-flags@sha256:7e99cce853ae9395595a67f790cb257514e5e7f6cba402bfd7d3191db0f8f90a
+    hypercache-server:
+        image: ghcr.io/posthog/posthog/hypercache-server@sha256:9d4c57800f1b2006f9aed5780d01c4152115f2ce846cc05bf3bcfb8fb3db99f9
+    kafka:
+        image: redpandadata/redpanda@sha256:8f7e9e4c1422baaa1a5e2a6c6c668cfe05442cb3cb476542c7dff61725e6fe31
+    kafka-init:
+        image: redpandadata/redpanda@sha256:8f7e9e4c1422baaa1a5e2a6c6c668cfe05442cb3cb476542c7dff61725e6fe31
+    livestream:
+        image: ghcr.io/posthog/posthog/livestream@sha256:630912a568ab4f8717e56c0b596babe5240728f3fa40e013d6841a7816834940
+    objectstorage:
+        image: chrislusf/seaweedfs@sha256:d47c7ee99fcb951351d7194915f4e3a5ea604a8e8871183d713907dec4fb9bf5
+    personhog-replica:
+        image: ghcr.io/posthog/posthog/personhog-replica@sha256:e2b474675c58aa5d185456d78400090c5cbe9ae91ed014431d57a26a1cf9b009
+    personhog-router:
+        image: ghcr.io/posthog/posthog/personhog-router@sha256:819074e6757a3af316161a73ab9468651cd5da3c7f4e420dd628eaca4daea53b
+    property-defs-ai:
+        image: ghcr.io/posthog/posthog/property-defs-rs@sha256:5644f791563693c0f5cbf96530a13abdb187b9acab7e3411afbc978ee283bdab
+    property-defs-rs:
+        image: ghcr.io/posthog/posthog/property-defs-rs@sha256:5644f791563693c0f5cbf96530a13abdb187b9acab7e3411afbc978ee283bdab
+    proxy:
+        image: caddy@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e
+    redis7:
+        image: redis@sha256:2c933526722b4126a61d5c170f766dc159adf97682f0b1cbbc27b1666ba96d84
+    replay-capture:
+        image: ghcr.io/posthog/posthog/capture@sha256:19998d990129045bdb965ae4a04aafd3b9f2664bd45ed8df2e3c2a753818475a
+    seaweedfs:
+        image: chrislusf/seaweedfs@sha256:d47c7ee99fcb951351d7194915f4e3a5ea604a8e8871183d713907dec4fb9bf5
+    temporal:
+        image: temporalio/auto-setup@sha256:e9245820522233ec6a59ad69c6512ae4450705ee02bf6894fc61ba13b238c1c0
+    temporal-admin-tools:
+        image: temporalio/admin-tools@sha256:37e2e33dbd7b86a12fa1daecf48f5b42544956ae503a83bd45460587f25591f2
+    temporal-django-worker:
+        image: posthog/posthog@sha256:b02ce15262323fe6e72e2620e333394697d210da04bc3acfeda0c949d5ad6ad1
+    temporal-ui:
+        image: temporalio/ui@sha256:2081da2b305d9c311a5d13dc6b98173c5aff2072a74000a7b79ef47a97210c0e
+    valkey:
+        image: valkey/valkey@sha256:2602ace2be6569bc2bbb06f873776516ab9089821525be34f4305c67eb9db02a
+    web:
+        image: posthog/posthog@sha256:b02ce15262323fe6e72e2620e333394697d210da04bc3acfeda0c949d5ad6ad1
+    worker:
+        image: posthog/posthog@sha256:b02ce15262323fe6e72e2620e333394697d210da04bc3acfeda0c949d5ad6ad1
+    zookeeper:
+        image: zookeeper@sha256:341cf7411329fd5a3ea37640073e7b8f063175168c0f0d99179e9606e035a80c
