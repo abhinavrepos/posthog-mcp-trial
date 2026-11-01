@@ -295,6 +295,10 @@ if phase order; then
         say "applying ee up to 0038 before the rest"
         dc run --rm --no-deps web python manage.py migrate ee 0038_alter_enterpriseeventdefinition_eventdefinition_ptr_and_more 2>&1 | grep -E "Applying|Error" | tail -12
         [ "$(q "SELECT count(*) FROM django_migrations WHERE app='ee' AND name='0038_alter_enterpriseeventdefinition_eventdefinition_ptr_and_more'")" = 1 ] || { echo "Could not apply ee.0038 first; see the output above."; exit 1; }
+        # Finishing that migrate made Django create content types for the event_definitions models, which
+        # duplicate the posthog ones posthog.1018 renames (it then stops with a unique-key error). Remove the
+        # new duplicates and their permissions; the originals, which other rows point at, are kept.
+        q "DELETE FROM auth_permission WHERE content_type_id IN (SELECT e.id FROM django_content_type e JOIN django_content_type p ON p.model = e.model AND p.app_label = 'posthog' WHERE e.app_label = 'event_definitions'); DELETE FROM django_content_type e USING django_content_type p WHERE e.app_label = 'event_definitions' AND p.app_label = 'posthog' AND p.model = e.model;" >/dev/null
     fi
     finish order
 fi
