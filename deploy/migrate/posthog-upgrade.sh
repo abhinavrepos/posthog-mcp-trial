@@ -81,15 +81,20 @@ if [ "$ONLY" = rollback ]; then
     PROJECT=$(recall project)
     [ -f "$BACKUP_DIR/install-files.tgz" ] || { echo "No backup in $BACKUP_DIR."; exit 1; }
     say "stopping PostHog and putting back the backup from $BACKUP_DIR"
-    dc down || true
+    dc down --remove-orphans || true
     tar -xzf "$BACKUP_DIR/install-files.tgz"
-    if ls "$BACKUP_DIR"/volumes/*.tar >/dev/null 2>&1; then
-        for t in "$BACKUP_DIR"/volumes/*.tar; do
-            v=$(basename "$t" .tar)
+    if [ -f "$BACKUP_DIR/volumes/list.txt" ]; then
+        # Every volume of the install comes back as it was, ZooKeeper included: ClickHouse keeps part of
+        # its bookkeeping there, and restoring ClickHouse without it sets its data parts aside as broken.
+        while read -r v; do
             docker volume rm -f "$v" >/dev/null 2>&1 || true
-            docker volume create "$v" >/dev/null
+            docker volume create --label com.docker.compose.project="$PROJECT" --label com.docker.compose.volume="${v#"${PROJECT}"_}" "$v" >/dev/null
             docker run --rm -v "$v:/v" -v "$BACKUP_DIR/volumes:/b:ro" alpine sh -c "cd /v && tar -xf /b/$v.tar"
             say "    restored volume $v"
+        done < "$BACKUP_DIR/volumes/list.txt"
+        # Volumes the new version created (SeaweedFS, for example) go, so a new attempt starts clean.
+        for v in $(docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT"); do
+            grep -qx "$v" "$BACKUP_DIR/volumes/list.txt" || { docker volume rm "$v" >/dev/null && say "    removed $v (created by the upgrade)"; }
         done
     else
         say "no volume backups (SKIP_VOLUME_BACKUP was set): restore your VM snapshot instead"
@@ -163,11 +168,14 @@ if phase backup; then
         say "stopping PostHog to copy its data volumes unchanged"
         dc stop
         mkdir -p "$BACKUP_DIR/volumes"
-        for v in "${PROJECT}_postgres-data" "${PROJECT}_clickhouse-data" $(recall minio_volume); do
+        # All of the install's volumes: ClickHouse's replicated tables also keep state in ZooKeeper, so a
+        # backup of ClickHouse alone cannot be restored cleanly.
+        docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT" | sort > "$BACKUP_DIR/volumes/list.txt"
+        while read -r v; do
             [ -f "$BACKUP_DIR/volumes/$v.tar" ] && continue
             docker run --rm -v "$v:/v:ro" -v "$BACKUP_DIR/volumes:/b" alpine sh -c "cd /v && tar -cf /b/$v.tar.partial . && mv /b/$v.tar.partial /b/$v.tar"
             say "    $v: $(du -h "$BACKUP_DIR/volumes/$v.tar" | cut -f1)"
-        done
+        done < "$BACKUP_DIR/volumes/list.txt"
     fi
     finish backup
 fi
