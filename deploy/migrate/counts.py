@@ -17,15 +17,16 @@ from botocore.config import Config
 
 def ch(sql):
     host = os.environ.get("CLICKHOUSE_HOST", "clickhouse")
-    q = urllib.parse.urlencode({"query": sql + " FORMAT JSONCompact", "database": os.environ.get("CLICKHOUSE_DATABASE", "posthog")})
+    # 64-bit numbers come back as numbers, not strings.
+    q = urllib.parse.urlencode({"query": sql + " FORMAT JSONCompact", "database": os.environ.get("CLICKHOUSE_DATABASE", "posthog"), "output_format_json_quote_64bit_integers": 0})
     with urllib.request.urlopen(f"http://{host}:8123/?{q}", timeout=600) as r:
         return json.loads(r.read())["data"]
 
 
 out = {}
-out["events"] = {f"{t}|{d}|{e}": n for t, d, e, n in ch("SELECT team_id, toString(toDate(timestamp)), event, uniqExact(uuid) FROM events GROUP BY 1, 2, 3")}
-out["persons"] = {str(t): n for t, n in ch("SELECT team_id, uniqExact(id) FROM person WHERE NOT is_deleted GROUP BY team_id")}
-out["groups"] = {str(t): n for t, n in ch("SELECT team_id, uniqExact(group_type_index, group_key) FROM groups GROUP BY team_id")}
+out["events"] = {f"{t}|{d}|{e}": int(n) for t, d, e, n in ch("SELECT team_id, toString(toDate(timestamp)), event, uniqExact(uuid) FROM events GROUP BY 1, 2, 3")}
+out["persons"] = {str(t): int(n) for t, n in ch("SELECT team_id, uniqExact(id) FROM person WHERE NOT is_deleted GROUP BY team_id")}
+out["groups"] = {str(t): int(n) for t, n in ch("SELECT team_id, uniqExact(group_type_index, group_key) FROM groups GROUP BY team_id")}
 rows = ch("SELECT team_id, session_id, sum(event_count), groupArrayArray(block_urls) FROM session_replay_events GROUP BY team_id, session_id")
 out["replays"] = {}
 blocks = []
