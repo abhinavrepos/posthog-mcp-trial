@@ -7,7 +7,7 @@
 #   sudo ./posthog-upgrade.sh rollback       # put back the backup taken in phase 3
 #
 # It follows PostHog's own bin/upgrade-hobby step for step, but pinned, without questions, with a backup
-# and a before/after check, and with four fixes for problems the rehearsal found in upgrade-hobby:
+# and a before/after check, and with fixes for problems the rehearsal found in PostHog's upgrade path:
 #   - it removes the old Postgres volume by its real name (compose names it <project>_postgres-data;
 #     upgrade-hobby runs `docker volume rm postgres-data`, which finds nothing, and Postgres 15 then
 #     refuses to start on the Postgres 12 files);
@@ -16,6 +16,10 @@
 #   - it migrates a database from before September 2026 through the last version before PostHog's
 #     migration squash first (phase 8); without that, the new version's migrations stop part way
 #     (InvalidBasesError at posthog.1019, then a missing table at posthog.1032) and PostHog never starts;
+#   - it runs PostHog's ClickHouse migrations with columns added early where an old migration needs them
+#     (phase 9); otherwise migration 0140 stops on columns that only 2026 migrations add;
+#   - it runs migrate-storage-hobby one service at a time, skipping buckets 2025 never had (run whole, it
+#     stops at the missing ai-blobs bucket and copies nothing after it);
 #   - it also copies replays stored under session_recording_batches/ (what a 2025 project with "legacy"
 #     replay retention used) into the replay store; PostHog's migrate-storage-hobby copies only
 #     session_recordings/ there, so those replays would no longer play.
@@ -30,10 +34,12 @@
 #   7 postgres   Postgres 12 -> 15: new volume, restore the dump (skipped when already on 15)
 #   8 stone      databases from before Sep 2026: migrate with the last version before PostHog's migration
 #                squash first (see phase 8); without it the new version's migrations stop part way
-#   9 start      start PostHog through ../posthog/scale.sh (current Node image, partitions, health checks,
-#                sizing); its migrations run first, which can take a while on a large ClickHouse
-#  10 storage    MinIO -> SeaweedFS with PostHog's migrate-storage-hobby, plus the legacy replay folder
-#  11 verify     counts again, compared with phase 2. Prints RESULT: PASS or FAIL
+#   9 clickhouse PostHog's database and ClickHouse migrations; adds columns some old ClickHouse migrations
+#                need early (see phase 9)
+#  10 start      start PostHog through ../posthog/scale.sh (current Node image, partitions, health checks,
+#                sizing)
+#  11 storage    MinIO -> SeaweedFS with PostHog's migrate-storage-hobby, plus the legacy replay folder
+#  12 verify     counts again, compared with phase 2. Prints RESULT: PASS or FAIL
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -318,7 +324,23 @@ if phase stone; then
     finish stone
 fi
 
-# ---------------------------------------------------------------- 9 start
+# ---------------------------------------------------------------- 9 clickhouse
+# PostHog's own migrations for this version, then its ClickHouse migrations through clickhouse_catchup.py:
+# from ClickHouse migration 0139 (September 2025) several of them recreate views with columns that only
+# later migrations add, and stop; the catch-up adds each such column early, with PostHog's own definition.
+if phase clickhouse; then
+    dc up -d db redis7 clickhouse kafka zookeeper >/dev/null 2>&1
+    for _ in $(seq 1 60); do dc exec -T db pg_isready -U posthog >/dev/null 2>&1 && break; sleep 2; done
+    say "PostHog's database migrations"
+    dc run --rm --no-deps -e SKIP_ASYNC_MIGRATIONS_SETUP=1 web python manage.py migrate --noinput > "$STATE/django-migrate.log" 2>&1 \
+        || { tail -25 "$STATE/django-migrate.log"; echo "PostHog's database migrations failed; see $STATE/django-migrate.log"; exit 1; }
+    say "    applied $(grep -c '  Applying ' "$STATE/django-migrate.log" || true)"
+    say "PostHog's ClickHouse migrations"
+    STATE_DIR="$STATE" POSTHOG_SRC=posthog python3 "$HERE/clickhouse_catchup.py"
+    finish clickhouse
+fi
+
+# ---------------------------------------------------------------- 10 start
 # Started through ../posthog/scale.sh, so every service comes up once, on the right images and settings:
 # PostHog's Docker Hub Node image is months old and would crash-loop until replaced.
 if phase start; then
@@ -329,12 +351,24 @@ if phase start; then
     finish start
 fi
 
-# ---------------------------------------------------------------- 10 storage
+# ---------------------------------------------------------------- 11 storage
 if phase storage; then
     if [ -n "$(recall minio_volume)" ]; then
-        say "copying MinIO files into SeaweedFS with PostHog's migrate-storage-hobby"
-        echo y | bash posthog/bin/migrate-storage-hobby --volume "$(recall minio_volume)"
-        say "copying replays under session_recording_batches/ into the replay store (migrate-storage-hobby leaves them in general storage)"
+        # PostHog's migrate-storage-hobby, one service at a time: run whole, it stops at the first bucket the
+        # old MinIO does not have (ai-blobs, which 2025 versions never created) and copies nothing after it.
+        vol=$(recall minio_volume)
+        for svc in general-storage ai-blobs session-recordings session-recordings-lts; do
+            bucket=posthog; [ "$svc" = ai-blobs ] && bucket=ai-blobs
+            if ! docker run --rm -v "$vol:/data:ro" alpine test -d "/data/$bucket"; then say "    $svc: the old MinIO has no $bucket bucket; nothing to copy"; continue; fi
+            say "copying $svc with PostHog's migrate-storage-hobby"
+            if ! echo y | bash posthog/bin/migrate-storage-hobby --volume "$vol" "$svc" > "$STATE/storage-$svc.log" 2>&1; then
+                tail -20 "$STATE/storage-$svc.log"; echo "migrate-storage-hobby $svc failed; see $STATE/storage-$svc.log"; exit 1
+            fi
+            grep -E "Found [0-9]+ objects|Completed:|Skipped:|Failed:|transferred" "$STATE/storage-$svc.log" | sed 's/^/        /' || true
+        done
+        # Run whole, it would also copy symbol sets to the replay store, where error tracking reads them, and
+        # it never copies session_recording_batches/ there. This adds both.
+        say "copying session_recording_batches/ and symbolsets/ into the replay store"
         web_python copy_legacy_replays.py
     else
         say "no MinIO volume; nothing to copy"
@@ -342,7 +376,7 @@ if phase storage; then
     finish storage
 fi
 
-# ---------------------------------------------------------------- 11 verify
+# ---------------------------------------------------------------- 12 verify
 if phase verify; then
     web_python counts.py -e STORES=both > "$STATE/after.json"
     python3 "$HERE/compare.py" "$STATE/before.json" "$STATE/after.json" | tee "$STATE/verify.txt"
