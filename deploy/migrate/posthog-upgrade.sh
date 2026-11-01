@@ -13,8 +13,9 @@
 #     refuses to start on the Postgres 12 files);
 #   - it restores Postgres before starting PostHog (upgrade-hobby starts the whole stack first, so the
 #     web container builds an empty database that the restore then has to drop while it is in use);
-#   - it runs two migrations in the order a database from 2025 needs (phase 8); without that, the new
-#     version's migrations stop at posthog.1019 with InvalidBasesError and PostHog never starts;
+#   - it migrates a database from before September 2026 through the last version before PostHog's
+#     migration squash first (phase 8); without that, the new version's migrations stop part way
+#     (InvalidBasesError at posthog.1019, then a missing table at posthog.1032) and PostHog never starts;
 #   - it also copies replays stored under session_recording_batches/ (what a 2025 project with "legacy"
 #     replay retention used) into the replay store; PostHog's migrate-storage-hobby copies only
 #     session_recordings/ there, so those replays would no longer play.
@@ -27,7 +28,8 @@
 #   5 configure  .env and compose files, exactly as upgrade-hobby writes them, plus the pinned images
 #   6 pull       the pinned images
 #   7 postgres   Postgres 12 -> 15: new volume, restore the dump (skipped when already on 15)
-#   8 order      put two migrations in the order PostHog needs on a database this old (see phase 8)
+#   8 stone      databases from before Sep 2026: migrate with the last version before PostHog's migration
+#                squash first (see phase 8); without it the new version's migrations stop part way
 #   9 start      start PostHog; its migrations run (can take a while on a large ClickHouse)
 #  10 storage    MinIO -> SeaweedFS with PostHog's migrate-storage-hobby, plus the legacy replay folder
 #  11 scale      ../posthog/scale.sh: current Node image, partitions, health checks, sizing
@@ -262,45 +264,50 @@ if phase postgres; then
     finish postgres
 fi
 
-# ---------------------------------------------------------------- 8 order (before PostHog's own migrations)
-# Upgrading a database from before February 2026 fails in PostHog's migrations with
-#   InvalidBasesError: Cannot resolve bases for ee.EnterpriseEventDefinition, ee.EnterprisePropertyDefinition
-# posthog.1018 moves the event and property definition models to the event_definitions app, and ee.0038
-# must follow it before any later posthog migration. On an old database Django uses the squashed
-# event_definitions migration instead, which needs every posthog migration up to September 2026 first,
-# so posthog.1019 runs while ee still points at the old models, and nothing can migrate after that.
-# event_definitions.0001_initial changes no tables (it only declares where the models now live), so it
-# is recorded as applied; Django then uses the separate migrations, and ee is brought to 0038 first.
-if phase order; then
+# ---------------------------------------------------------------- 8 stone (database from before Sep 2026)
+# PostHog squashed its Django migrations on 8 Sep 2026 (68 products included). A database from before that
+# has none of the newer products' migrations, so Django installs those products from their squashed
+# migration, which needs every posthog migration up to September 2026 first; but posthog migrations from
+# that span need those products' tables. The new version's migrations then stop part way, for example
+# InvalidBasesError for ee.EnterpriseEventDefinition at posthog.1019, or a missing posthog_conversations_ticket
+# table at posthog.1032. So the database is first migrated by the last version before the squash, whose
+# migrations still interleave every product's original migrations, the way continuously upgraded installs
+# went. Only its Django migrations run (in a one-off container); nothing else of that version is started.
+if phase stone; then
     q() { dc exec -T db psql -U posthog -d posthog -Atc "$1"; }
-    dc up -d db redis7 clickhouse >/dev/null 2>&1
+    dc up -d db redis7 clickhouse kafka >/dev/null 2>&1
     for _ in $(seq 1 60); do dc exec -T db pg_isready -U posthog >/dev/null 2>&1 && break; sleep 2; done
-    ee38=$(q "SELECT count(*) FROM django_migrations WHERE app='ee' AND name='0038_alter_enterpriseeventdefinition_eventdefinition_ptr_and_more'")
-    evdef=$(q "SELECT count(*) FROM django_migrations WHERE app='event_definitions'")
-    p1018=$(q "SELECT count(*) FROM django_migrations WHERE app='posthog' AND name='1018_migrate_event_definition_models'")
-    p1015=$(q "SELECT count(*) FROM django_migrations WHERE app='posthog' AND name='1015_normalize_feature_flag_payloads_to_strings'")
-    if [ "$ee38" = 1 ] || [ "$evdef" != 0 ]; then
-        say "the database is past this step already; nothing to do"
+    if [ "$(q "SELECT count(*) FROM django_migrations WHERE app='posthog' AND name='$STEPPING_STONE_LAST_MIGRATION'")" = 1 ]; then
+        say "the database is past the stepping stone already"
     else
-        if [ "$p1018" = 1 ]; then
-            # A failed upgrade-hobby run applied 1018 out of order: undo it (it only relabels content types).
-            say "undoing posthog.1018, applied out of order by an earlier upgrade attempt"
-            q "UPDATE django_content_type SET app_label='posthog' WHERE app_label='event_definitions' AND model IN ('eventdefinition','propertydefinition','eventproperty','eventschema','schemapropertygroup','schemapropertygroupproperty'); DELETE FROM django_migrations WHERE app='posthog' AND name='1018_migrate_event_definition_models';" >/dev/null
+        say "migrating the database with PostHog $STEPPING_STONE_COMMIT (the last version before the squash) first"
+        docker pull -q "$STEPPING_STONE_IMAGE" >/dev/null
+        printf 'services:\n    web:\n        image: %s\n' "$STEPPING_STONE_IMAGE" > "$STATE/stone.yml"
+        stone_files=(); IFS=: read -ra cf <<< "$(grep -E '^COMPOSE_FILE=' .env | cut -d= -f2-)"
+        for f in "${cf[@]}"; do stone_files+=(-f "$f"); done
+        stone() { dc "${stone_files[@]}" -f "$STATE/stone.yml" run --rm --no-deps -e SKIP_ASYNC_MIGRATIONS_SETUP=1 web "$@"; }
+        if ! stone python manage.py migrate --noinput > "$STATE/stone-migrate.log" 2>&1; then
+            if grep -q "InvalidBasesError" "$STATE/stone-migrate.log"; then
+                # ee.0038 has to follow posthog.1018 before later posthog migrations. event_definitions.0001
+                # changes no tables (it declares where the moved models live), so it is recorded as applied,
+                # ee is taken to 0038, and the content types Django adds for event_definitions on the way are
+                # removed again so posthog.1018 can rename the originals.
+                say "putting ee.0038 before the remaining posthog migrations"
+                if [ "$(q "SELECT count(*) FROM django_migrations WHERE app='posthog' AND name='1018_migrate_event_definition_models'")" = 1 ] && [ "$(q "SELECT count(*) FROM django_migrations WHERE app='event_definitions'")" = 0 ]; then
+                    q "UPDATE django_content_type SET app_label='posthog' WHERE app_label='event_definitions' AND model IN ('eventdefinition','propertydefinition','eventproperty','eventschema','schemapropertygroup','schemapropertygroupproperty'); DELETE FROM django_migrations WHERE app='posthog' AND name='1018_migrate_event_definition_models';" >/dev/null
+                fi
+                [ "$(q "SELECT count(*) FROM django_migrations WHERE app='event_definitions'")" = 0 ] && q "INSERT INTO django_migrations (app, name, applied) VALUES ('event_definitions', '0001_initial', now())" >/dev/null
+                stone python manage.py migrate ee 0038_alter_enterpriseeventdefinition_eventdefinition_ptr_and_more >> "$STATE/stone-migrate.log" 2>&1
+                q "DELETE FROM auth_permission WHERE content_type_id IN (SELECT e.id FROM django_content_type e JOIN django_content_type p ON p.model = e.model AND p.app_label = 'posthog' WHERE e.app_label = 'event_definitions'); DELETE FROM django_content_type e USING django_content_type p WHERE e.app_label = 'event_definitions' AND p.app_label = 'posthog' AND p.model = e.model;" >/dev/null
+                stone python manage.py migrate --noinput >> "$STATE/stone-migrate.log" 2>&1 || { tail -25 "$STATE/stone-migrate.log"; echo "The stepping-stone migrations failed; see $STATE/stone-migrate.log"; exit 1; }
+            else
+                tail -25 "$STATE/stone-migrate.log"; echo "The stepping-stone migrations failed; see $STATE/stone-migrate.log"; exit 1
+            fi
         fi
-        if [ "$p1015" = 0 ]; then
-            say "bringing posthog up to 1015 first"
-            dc run --rm --no-deps web python manage.py migrate posthog 1015_normalize_feature_flag_payloads_to_strings 2>&1 | grep -E "Applying|Error" | tail -3
-        fi
-        q "INSERT INTO django_migrations (app, name, applied) VALUES ('event_definitions', '0001_initial', now())" >/dev/null
-        say "applying ee up to 0038 before the rest"
-        dc run --rm --no-deps web python manage.py migrate ee 0038_alter_enterpriseeventdefinition_eventdefinition_ptr_and_more 2>&1 | grep -E "Applying|Error" | tail -12
-        [ "$(q "SELECT count(*) FROM django_migrations WHERE app='ee' AND name='0038_alter_enterpriseeventdefinition_eventdefinition_ptr_and_more'")" = 1 ] || { echo "Could not apply ee.0038 first; see the output above."; exit 1; }
-        # Finishing that migrate made Django create content types for the event_definitions models, which
-        # duplicate the posthog ones posthog.1018 renames (it then stops with a unique-key error). Remove the
-        # new duplicates and their permissions; the originals, which other rows point at, are kept.
-        q "DELETE FROM auth_permission WHERE content_type_id IN (SELECT e.id FROM django_content_type e JOIN django_content_type p ON p.model = e.model AND p.app_label = 'posthog' WHERE e.app_label = 'event_definitions'); DELETE FROM django_content_type e USING django_content_type p WHERE e.app_label = 'event_definitions' AND p.app_label = 'posthog' AND p.model = e.model;" >/dev/null
+        say "applied $(grep -c '  Applying ' "$STATE/stone-migrate.log" || true) migrations with the stepping stone"
+        [ "$(q "SELECT count(*) FROM django_migrations WHERE app='posthog' AND name='$STEPPING_STONE_LAST_MIGRATION'")" = 1 ] || { echo "The stepping stone did not finish; see $STATE/stone-migrate.log"; exit 1; }
     fi
-    finish order
+    finish stone
 fi
 
 # ---------------------------------------------------------------- 9 start
