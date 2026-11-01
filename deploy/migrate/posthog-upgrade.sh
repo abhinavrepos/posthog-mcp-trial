@@ -221,9 +221,12 @@ if phase configure; then
     chmod +x compose/start compose/temporal-django-worker
     cp "$HERE/versions/docker-compose.pinned.yml" docker-compose.pinned.yml
     files="docker-compose.yml"; [ -f docker-compose.override.yml ] && files="$files:docker-compose.override.yml"
-    envset COMPOSE_FILE "$files:docker-compose.pinned.yml"
+    # EXTRA_COMPOSE_FILES: site-specific compose files to keep (colon-separated), applied last.
+    files="$files:docker-compose.pinned.yml${EXTRA_COMPOSE_FILES:+:$EXTRA_COMPOSE_FILES}"
+    envset COMPOSE_FILE "$files"
+    [ -n "${EXTRA_COMPOSE_FILES:-}" ] && envset EXTRA_COMPOSE_FILES "$EXTRA_COMPOSE_FILES"
     dc config -q
-    say "compose files: $files:docker-compose.pinned.yml"
+    say "compose files: $files"
     finish configure
 fi
 

@@ -13,7 +13,8 @@
 #   KAFKA_RETENTION_GB_PER_PARTITION  hard cap per partition, default 2
 #   EVENT_PARTITIONS               partitions for the busy topics, default 8 (the most ingestion replicas)
 #   INGESTION_REPLICAS, CDP_WORKER_REPLICAS, KAFKA_CORES, KAFKA_MEMORY,
-#   PG_MAX_CONNECTIONS, PG_SHARED_BUFFERS, REDIS_MAXMEMORY, CELERY_CONCURRENCY, POSTHOG_NODE_IMAGE
+#   PG_MAX_CONNECTIONS, PG_SHARED_BUFFERS, REDIS_MAXMEMORY, CELERY_CONCURRENCY, POSTHOG_NODE_IMAGE,
+#   NODE_BASE_IMAGE, EXTRA_COMPOSE_FILES   see docker-compose.scale.yml
 #                                  see docker-compose.scale.yml
 set -euo pipefail
 
@@ -33,6 +34,9 @@ FILES="docker-compose.yml"
 [ -f docker-compose.override.yml ] && FILES="$FILES:docker-compose.override.yml"
 # Exact image versions, when the install was upgraded with deploy/migrate/posthog-upgrade.sh.
 [ -f docker-compose.pinned.yml ] && FILES="$FILES:docker-compose.pinned.yml"
+# Site-specific compose files to keep (colon-separated), as posthog-upgrade.sh records them.
+EXTRA="$(setting EXTRA_COMPOSE_FILES '')"
+[ -n "$EXTRA" ] && FILES="$FILES:$EXTRA"
 NODE_BASE_IMAGE="$(setting NODE_BASE_IMAGE ghcr.io/posthog/posthog-node:master)"
 rpk() { docker compose exec -T kafka rpk "$@"; }
 
