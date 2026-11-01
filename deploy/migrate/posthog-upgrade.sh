@@ -7,12 +7,14 @@
 #   sudo ./posthog-upgrade.sh rollback       # put back the backup taken in phase 3
 #
 # It follows PostHog's own bin/upgrade-hobby step for step, but pinned, without questions, with a backup
-# and a before/after check, and with three fixes for problems the rehearsal found in upgrade-hobby:
+# and a before/after check, and with four fixes for problems the rehearsal found in upgrade-hobby:
 #   - it removes the old Postgres volume by its real name (compose names it <project>_postgres-data;
 #     upgrade-hobby runs `docker volume rm postgres-data`, which finds nothing, and Postgres 15 then
 #     refuses to start on the Postgres 12 files);
 #   - it restores Postgres before starting PostHog (upgrade-hobby starts the whole stack first, so the
 #     web container builds an empty database that the restore then has to drop while it is in use);
+#   - it runs two migrations in the order a database from 2025 needs (phase 8); without that, the new
+#     version's migrations stop at posthog.1019 with InvalidBasesError and PostHog never starts;
 #   - it also copies replays stored under session_recording_batches/ (what a 2025 project with "legacy"
 #     replay retention used) into the replay store; PostHog's migrate-storage-hobby copies only
 #     session_recordings/ there, so those replays would no longer play.
@@ -25,10 +27,11 @@
 #   5 configure  .env and compose files, exactly as upgrade-hobby writes them, plus the pinned images
 #   6 pull       the pinned images
 #   7 postgres   Postgres 12 -> 15: new volume, restore the dump (skipped when already on 15)
-#   8 start      start PostHog; its migrations run (can take a while on a large ClickHouse)
-#   9 storage    MinIO -> SeaweedFS with PostHog's migrate-storage-hobby, plus the legacy replay folder
-#  10 scale      ../posthog/scale.sh: current Node image, partitions, health checks, sizing
-#  11 verify     counts again, compared with phase 2. Prints RESULT: PASS or FAIL
+#   8 order      put two migrations in the order PostHog needs on a database this old (see phase 8)
+#   9 start      start PostHog; its migrations run (can take a while on a large ClickHouse)
+#  10 storage    MinIO -> SeaweedFS with PostHog's migrate-storage-hobby, plus the legacy replay folder
+#  11 scale      ../posthog/scale.sh: current Node image, partitions, health checks, sizing
+#  12 verify     counts again, compared with phase 2. Prints RESULT: PASS or FAIL
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -247,7 +250,7 @@ if phase postgres; then
         dc up -d db
         for _ in $(seq 1 60); do dc exec -T db pg_isready -U posthog >/dev/null 2>&1 && break; sleep 2; done
         gunzip -c "$BACKUP_DIR/pg_dumpall.sql.gz" | dc exec -T db psql -U posthog -d postgres -q > "$STATE/pg_restore.log" 2>&1 || true
-        grep -E "ERROR" "$STATE/pg_restore.log" | grep -vE 'role "posthog" already exists|current user cannot be dropped|database "postgres" .*|cannot drop the currently open database' | head -10 || true
+        grep -E "ERROR" "$STATE/pg_restore.log" | grep -vE 'role "posthog" already exists|current user cannot be dropped|database "postgres" .*|cannot drop the currently open database|database "[a-z_]+" does not exist' | head -10 || true
         dc exec -T db psql -U posthog -d postgres -qc "ALTER USER posthog WITH PASSWORD 'posthog';" >/dev/null
         teams=$(dc exec -T db psql -U posthog -d posthog -Atc "SELECT count(*) FROM posthog_team")
         want=$(python3 -c "import json; print(json.load(open('$STATE/before.json'))['postgres']['posthog_team'])")
@@ -259,15 +262,52 @@ if phase postgres; then
     finish postgres
 fi
 
-# ---------------------------------------------------------------- 8 start
+# ---------------------------------------------------------------- 8 order (before PostHog's own migrations)
+# Upgrading a database from before February 2026 fails in PostHog's migrations with
+#   InvalidBasesError: Cannot resolve bases for ee.EnterpriseEventDefinition, ee.EnterprisePropertyDefinition
+# posthog.1018 moves the event and property definition models to the event_definitions app, and ee.0038
+# must follow it before any later posthog migration. On an old database Django uses the squashed
+# event_definitions migration instead, which needs every posthog migration up to September 2026 first,
+# so posthog.1019 runs while ee still points at the old models, and nothing can migrate after that.
+# event_definitions.0001_initial changes no tables (it only declares where the models now live), so it
+# is recorded as applied; Django then uses the separate migrations, and ee is brought to 0038 first.
+if phase order; then
+    q() { dc exec -T db psql -U posthog -d posthog -Atc "$1"; }
+    dc up -d db redis7 clickhouse >/dev/null 2>&1
+    for _ in $(seq 1 60); do dc exec -T db pg_isready -U posthog >/dev/null 2>&1 && break; sleep 2; done
+    ee38=$(q "SELECT count(*) FROM django_migrations WHERE app='ee' AND name='0038_alter_enterpriseeventdefinition_eventdefinition_ptr_and_more'")
+    evdef=$(q "SELECT count(*) FROM django_migrations WHERE app='event_definitions'")
+    p1018=$(q "SELECT count(*) FROM django_migrations WHERE app='posthog' AND name='1018_migrate_event_definition_models'")
+    p1015=$(q "SELECT count(*) FROM django_migrations WHERE app='posthog' AND name='1015_normalize_feature_flag_payloads_to_strings'")
+    if [ "$ee38" = 1 ] || [ "$evdef" != 0 ]; then
+        say "the database is past this step already; nothing to do"
+    else
+        if [ "$p1018" = 1 ]; then
+            # A failed upgrade-hobby run applied 1018 out of order: undo it (it only relabels content types).
+            say "undoing posthog.1018, applied out of order by an earlier upgrade attempt"
+            q "UPDATE django_content_type SET app_label='posthog' WHERE app_label='event_definitions' AND model IN ('eventdefinition','propertydefinition','eventproperty','eventschema','schemapropertygroup','schemapropertygroupproperty'); DELETE FROM django_migrations WHERE app='posthog' AND name='1018_migrate_event_definition_models';" >/dev/null
+        fi
+        if [ "$p1015" = 0 ]; then
+            say "bringing posthog up to 1015 first"
+            dc run --rm --no-deps web python manage.py migrate posthog 1015_normalize_feature_flag_payloads_to_strings 2>&1 | grep -E "Applying|Error" | tail -3
+        fi
+        q "INSERT INTO django_migrations (app, name, applied) VALUES ('event_definitions', '0001_initial', now())" >/dev/null
+        say "applying ee up to 0038 before the rest"
+        dc run --rm --no-deps web python manage.py migrate ee 0038_alter_enterpriseeventdefinition_eventdefinition_ptr_and_more 2>&1 | grep -E "Applying|Error" | tail -12
+        [ "$(q "SELECT count(*) FROM django_migrations WHERE app='ee' AND name='0038_alter_enterpriseeventdefinition_eventdefinition_ptr_and_more'")" = 1 ] || { echo "Could not apply ee.0038 first; see the output above."; exit 1; }
+    fi
+    finish order
+fi
+
+# ---------------------------------------------------------------- 9 start
 if phase start; then
     if [ "$(recall async_check)" = TRUE ]; then dc up -d db redis7 clickhouse && dc run --rm asyncmigrationscheck; fi
-    dc up -d
+    dc up -d --remove-orphans   # the old redis 6.2 and cyclotron-janitor are gone in the new version
     wait_web
     finish start
 fi
 
-# ---------------------------------------------------------------- 9 storage
+# ---------------------------------------------------------------- 10 storage
 if phase storage; then
     if [ -n "$(recall minio_volume)" ]; then
         say "copying MinIO files into SeaweedFS with PostHog's migrate-storage-hobby"
@@ -280,14 +320,14 @@ if phase storage; then
     finish storage
 fi
 
-# ---------------------------------------------------------------- 10 scale
+# ---------------------------------------------------------------- 11 scale
 if phase scale; then
     NODE_BASE_IMAGE="$NODE_BASE_IMAGE" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/../posthog/scale.sh"
     wait_web
     finish scale
 fi
 
-# ---------------------------------------------------------------- 11 verify
+# ---------------------------------------------------------------- 12 verify
 if phase verify; then
     web_python counts.py -e STORES=both > "$STATE/after.json"
     python3 "$HERE/compare.py" "$STATE/before.json" "$STATE/after.json" | tee "$STATE/verify.txt"
