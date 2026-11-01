@@ -39,13 +39,25 @@ The output is also written to `upgrade-state/upgrade.log`.
 | 6 pull | the pinned images | 5–10 min |
 | 7 postgres | Postgres 12 → 15: new volume, restore the dump, before anything else starts | 1 min |
 | 8 stone | Django migrations of the last PostHog before its migration squash (problem 3) | 45 min |
-| 9 clickhouse | the new version's database and ClickHouse migrations (problems 4 and 5) | FILL_CH |
-| 10 start | PostHog starts through `../posthog/scale.sh` | FILL_START |
+| 9 clickhouse | the new version's database and ClickHouse migrations (problems 4 and 5) | 37 min |
+| 10 start | PostHog starts through `../posthog/scale.sh` | 7 min |
 | 11 storage | MinIO → SeaweedFS with PostHog's `migrate-storage-hobby`, and the legacy replays (problems 6–8) | 1 min |
-| 12 verify | counts compared with phase 2, then every replay fetched through the new replay reader | FILL_VERIFY |
+| 12 verify | counts compared with phase 2, then every replay fetched through the new replay reader | 1 min |
 
-The rehearsal had 1,027,745 events, 1,000 replays, 31,000 persons and 300 groups. Most of the time is the
-migrations, which mostly depend on the number of migrations, not on the amount of data.
+The rehearsal had 1,027,745 events, 1,000 replays, 31,000 persons and 300 groups, and took 1 hour 30 minutes
+in total, start to `RESULT: PASS`. Most of it is migrations, whose time depends mostly on how many there
+are, not on the amount of data, so production should take a similar time plus the backup and the copying
+of its larger files.
+
+The final rehearsal ran from the pre-upgrade backup with no manual steps and ended with:
+
+```
+RESULT: PASS (0 problem(s))       events 1,027,745 = 1,027,745 · persons 31,497 · groups 300 · every table equal
+PLAYABLE: 1000 of 1000 recordings, 17698 of 17698 blocks, 398.5 MB
+```
+
+and afterwards the old admin password, the old personal API key and the same project token all worked,
+and every dashboard loaded with fresh results.
 
 When it prints `RESULT: PASS`, start the apps again and check a few dashboards and replays.
 
