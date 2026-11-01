@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Upgrade a self-hosted (hobby) PostHog in place, on top of its own data, to the exact version pinned
-# in versions/ (the one tested), then tune it with ../posthog/scale.sh.
+# in versions/ (the one tested), tuned with ../posthog/scale.sh.
 #
 #   sudo ./posthog-upgrade.sh                # in the PostHog folder (or set POSTHOG_DIR); all phases
 #   sudo ./posthog-upgrade.sh verify         # run one phase again
@@ -30,10 +30,10 @@
 #   7 postgres   Postgres 12 -> 15: new volume, restore the dump (skipped when already on 15)
 #   8 stone      databases from before Sep 2026: migrate with the last version before PostHog's migration
 #                squash first (see phase 8); without it the new version's migrations stop part way
-#   9 start      start PostHog; its migrations run (can take a while on a large ClickHouse)
+#   9 start      start PostHog through ../posthog/scale.sh (current Node image, partitions, health checks,
+#                sizing); its migrations run first, which can take a while on a large ClickHouse
 #  10 storage    MinIO -> SeaweedFS with PostHog's migrate-storage-hobby, plus the legacy replay folder
-#  11 scale      ../posthog/scale.sh: current Node image, partitions, health checks, sizing
-#  12 verify     counts again, compared with phase 2. Prints RESULT: PASS or FAIL
+#  11 verify     counts again, compared with phase 2. Prints RESULT: PASS or FAIL
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -319,9 +319,12 @@ if phase stone; then
 fi
 
 # ---------------------------------------------------------------- 9 start
+# Started through ../posthog/scale.sh, so every service comes up once, on the right images and settings:
+# PostHog's Docker Hub Node image is months old and would crash-loop until replaced.
 if phase start; then
     if [ "$(recall async_check)" = TRUE ]; then dc up -d db redis7 clickhouse && dc run --rm asyncmigrationscheck; fi
-    dc up -d --remove-orphans   # the old redis 6.2 and cyclotron-janitor are gone in the new version
+    dc up -d --remove-orphans db redis7 clickhouse kafka >/dev/null 2>&1   # the old redis 6.2 and cyclotron-janitor are gone
+    NODE_BASE_IMAGE="$NODE_BASE_IMAGE" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/../posthog/scale.sh"
     wait_web
     finish start
 fi
@@ -339,14 +342,7 @@ if phase storage; then
     finish storage
 fi
 
-# ---------------------------------------------------------------- 11 scale
-if phase scale; then
-    NODE_BASE_IMAGE="$NODE_BASE_IMAGE" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/../posthog/scale.sh"
-    wait_web
-    finish scale
-fi
-
-# ---------------------------------------------------------------- 12 verify
+# ---------------------------------------------------------------- 11 verify
 if phase verify; then
     web_python counts.py -e STORES=both > "$STATE/after.json"
     python3 "$HERE/compare.py" "$STATE/before.json" "$STATE/after.json" | tee "$STATE/verify.txt"
