@@ -13,9 +13,13 @@
 #   2. copies each block file to session_recordings/<period>/<same name> in the replay store (the original
 #      stays);
 #   3. points the replay metadata in ClickHouse at the new names and sets retention_period_days.
+# Before changing any metadata it copies the rows it will change to posthog._upgrade_backup_session_replay_events
+# (deleted only by `posthog-upgrade.sh cleanup`, after asking).
 import json
 import os
 import re
+import sys
+import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -25,8 +29,11 @@ import psycopg2
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
+sys.stdout.reconfigure(line_buffering=True)
 PERIODS = [("30d", 30), ("90d", 90), ("1y", 365), ("5y", 1825)]
 LEGACY = "session_recording_batches/"
+BACKUP = "_upgrade_backup_session_replay_events"
+LEGACY_ROWS = f"arrayExists(u -> position(u, '/{LEGACY}') > 0, block_urls)"
 env = os.environ.get
 
 
@@ -56,6 +63,19 @@ rows = ch(
 )
 if not rows:
     print("    no legacy replays")
+elif not ch(f"EXISTS TABLE {BACKUP}")[0][0]:
+    # The rows this changes, exactly as stored, before anything is changed. Built under another name and
+    # renamed when complete, so a half-made copy is never taken for the backup.
+    ch(f"DROP TABLE IF EXISTS {BACKUP}_partial", fmt=None)
+    ch(f"CREATE TABLE {BACKUP}_partial ENGINE = MergeTree ORDER BY tuple() AS SELECT * FROM sharded_session_replay_events WHERE {LEGACY_ROWS}", fmt=None)
+    want = ch(f"SELECT count() FROM sharded_session_replay_events WHERE {LEGACY_ROWS}")[0][0]
+    got = ch(f"SELECT count() FROM {BACKUP}_partial")[0][0]
+    if got != want:
+        raise SystemExit(f"backup of the replay metadata is incomplete ({got} of {want} rows); nothing was changed")
+    ch(f"RENAME TABLE {BACKUP}_partial TO {BACKUP}", fmt=None)
+    print(f"    backed up the metadata of the legacy replays first: {got} rows in posthog.{BACKUP}")
+else:
+    print(f"    the metadata backup posthog.{BACKUP} exists already (from an earlier run); kept as it is")
 for team, oldest, sessions, urls in rows:
     cur.execute("SELECT session_recording_retention_period FROM posthog_team WHERE id = %s", [team])
     setting = (cur.fetchone() or ["30d"])[0]
@@ -78,17 +98,22 @@ for team, oldest, sessions, urls in rows:
         return "copied"
 
     results = {}
+    done, last = 0, time.time()
     with ThreadPoolExecutor(16) as pool:
         for r in pool.map(copy, files):
             results[r] = results.get(r, 0) + 1
+            done += 1
+            if time.time() - last >= 30:
+                print(f"      ... project {team}: {done} of {len(files)} block files renamed")
+                last = time.time()
     ch(
         f"ALTER TABLE sharded_session_replay_events UPDATE "
         f"block_urls = arrayMap(u -> replaceOne(u, '/{LEGACY}', '/session_recordings/{period}/'), block_urls), "
         f"retention_period_days = {days[period]} "
-        f"WHERE team_id = {int(team)} AND arrayExists(u -> position(u, '/{LEGACY}') > 0, block_urls)",
+        f"WHERE team_id = {int(team)} AND {LEGACY_ROWS}",
         fmt=None,
     )
-    left = ch(f"SELECT count() FROM session_replay_events WHERE team_id = {int(team)} AND arrayExists(u -> position(u, '/{LEGACY}') > 0, block_urls)")[0][0]
+    left = ch(f"SELECT count() FROM session_replay_events WHERE team_id = {int(team)} AND {LEGACY_ROWS}")[0][0]
     if left:
         raise SystemExit(f"project {team}: {left} replay rows still point at {LEGACY}")
     print(f"    project {team}: {sessions} legacy replays (oldest {oldest[:10]}) kept for {period} (project setting {setting}); {len(files)} block files {results}; metadata updated")

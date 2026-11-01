@@ -2,12 +2,15 @@
 # Compares the counts taken before and after an upgrade (counts.py). Prints every difference and
 # RESULT: PASS or RESULT: FAIL. Exit code 0 only on PASS.
 #
-#   python3 compare.py before.json after.json
+#   python3 compare.py before.json after.json [--no-replays]
+# --no-replays: the replay files were not copied (posthog-upgrade.sh --no-replays); the replay metadata
+# must still be complete, but the replay store is not checked.
 import json
 import re
 import sys
 
-before, after = (json.load(open(p)) for p in sys.argv[1:3])
+NO_REPLAYS = "--no-replays" in sys.argv
+before, after = (json.load(open(p)) for p in [a for a in sys.argv[1:] if not a.startswith("--")][:2])
 problems = []
 
 
@@ -34,13 +37,15 @@ for team, r in before.get("replays", {}).items():
     a = after.get("replays", {}).get(team, {})
     check(r == a, f"project {team}: {r['recordings']} recordings, {r['replay_events']} replay events, {r['blocks']} blocks before; after {a or 'none'}")
 replay_store = after.get("storage", {}).get("replays", {})
+if NO_REPLAYS:
+    print(f"  skip  replay files not copied, as chosen: {len(before.get('replay_block_files', []))} files stay in the old MinIO volume")
 missing = [u for u in before.get("replay_block_files", []) if u.split("/", 3)[3] not in replay_store]
-check(not missing, f"every replay block file is in the replay store ({len(before.get('replay_block_files', []))} files)" + (f"; {len(missing)} missing, e.g. {missing[:3]}" if missing else ""))
+NO_REPLAYS or check(not missing, f"every replay block file is in the replay store ({len(before.get('replay_block_files', []))} files)" + (f"; {len(missing)} missing, e.g. {missing[:3]}" if missing else ""))
 # What the new replay reader (recording-api) accepts; it answers 400 to any other name.
 READER = re.compile(r"^session_recordings/(30d|90d|1y|5y)/\d+-[0-9a-f]{16}$")
 pointed = [u.split("/", 3)[3] for u in after.get("replay_block_files", [])]
 unplayable = [k for k in pointed if not READER.match(k) or k not in replay_store]
-check(not unplayable, f"every block a replay points at has a name the new replay reader accepts and is in the replay store ({len(pointed)} files)" + (f"; {len(unplayable)} not, e.g. {unplayable[:3]}" if unplayable else ""))
+NO_REPLAYS or check(not unplayable, f"every block a replay points at has a name the new replay reader accepts and is in the replay store ({len(pointed)} files)" + (f"; {len(unplayable)} not, e.g. {unplayable[:3]}" if unplayable else ""))
 
 print("stored files")
 REPLAY_PREFIXES = ("session_recordings/", "session_recordings_lts/", "session_recording_batches/")
