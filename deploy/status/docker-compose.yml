@@ -1,0 +1,30 @@
+# The status page, as its own compose project next to PostHog. Start it with ./up.sh, which fills in
+# DOCKER_GID. Settings: status.env next to this file (see status.env.example), all optional.
+name: lens-status
+services:
+    status:
+        build: .
+        image: posthog-lens-status:latest
+        restart: unless-stopped
+        read_only: true
+        cap_drop: [ALL]
+        security_opt: ['no-new-privileges:true']
+        # The Docker socket is how it sees the containers. It only sends GET requests, but whoever
+        # controls this container could do more with it, so it runs as an unprivileged user with no
+        # capabilities on a read-only file system, and the page is password-protected when public.
+        group_add: ['${DOCKER_GID:?start it with ./up.sh}']
+        env_file:
+            - path: status.env
+              required: false
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock:ro
+            # Any folder on the disk to watch: only its free space is read.
+            - ${STATUS_DISK_FOLDER:-/var/lib/lens-status}:/host-disk:ro
+        ports:
+            - '${STATUS_BIND:-127.0.0.1}:${STATUS_PORT:-8090}:8090'
+        networks: [posthog]
+        extra_hosts: ['host.docker.internal:host-gateway']
+networks:
+    posthog:
+        external: true
+        name: ${POSTHOG_NETWORK:-posthog_default}
