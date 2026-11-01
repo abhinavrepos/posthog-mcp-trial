@@ -387,7 +387,7 @@ if phase verify; then
     # Counts are not enough: fetch every block of every replay through the new replay reader, as the app does.
     say "fetching every replay through the new replay reader"
     dc exec -T web python manage.py shell < "$HERE/replays_playable.py" 2>/dev/null | grep -E "^(PLAYABLE|  failed)" | tee -a "$STATE/verify.txt"
-    if ! grep -qE '^PLAYABLE: ([0-9]+) of \1 recordings, ([0-9]+) of \2 blocks' "$STATE/verify.txt"; then
+    if ! python3 -c 'import re,sys; m = re.search(r"^PLAYABLE: (\d+) of (\d+) recordings, (\d+) of (\d+) blocks", open(sys.argv[1]).read(), re.M); sys.exit(0 if m and m[1] == m[2] and m[3] == m[4] else 1)' "$STATE/verify.txt"; then
         echo "RESULT: FAIL (not every replay plays)" >> "$STATE/verify.txt"
     fi
     grep -q '^RESULT: PASS' "$STATE/verify.txt" && ! grep -q '^RESULT: FAIL' "$STATE/verify.txt" || { echo "Differences found: see $STATE/verify.txt. To go back: $0 rollback"; exit 1; }
