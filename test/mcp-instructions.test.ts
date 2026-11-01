@@ -19,7 +19,8 @@ after(() => {
     rmSync(dir, { recursive: true, force: true })
 })
 
-const server = new McpServer({ name: 'ticket-triage', version: '0' }, { instructions: serverInstructions() })
+// As Claude sees them with PostHog's MCP server on (FEATURE_POSTHOG_MCP and POSTHOG_MCP_URL set).
+const server = new McpServer({ name: 'ticket-triage', version: '0' }, { instructions: serverInstructions(true) })
 registerTools(server)
 const client = new Client({ name: 'test', version: '0' })
 const [a, b] = InMemoryTransport.createLinkedPair()

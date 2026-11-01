@@ -7,3 +7,4 @@ run/
 .secrets.env
 *.log
 __pycache__/
+.mcp.json

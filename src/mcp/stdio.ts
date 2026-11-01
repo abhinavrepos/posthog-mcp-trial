@@ -4,11 +4,17 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { makeAi } from '../core/ai.ts'
 import { shutdownClips } from '../core/clip.ts'
+import { config } from '../core/config.ts'
 import { serverInstructions } from './instructions.ts'
 import { registerTools } from './tools.ts'
 
 // stdout belongs to the protocol. Anything else that logs goes to stderr.
 console.log = console.error
+
+if (!config.features.lensMcp) {
+    console.error(`${config.app.name}'s MCP tools are switched off (FEATURE_LENS_MCP=off). Run pnpm mcp:config to update .mcp.json.`)
+    process.exit(1)
+}
 
 const server = new McpServer({ name: 'ticket-triage', version: '0.1.0' }, { instructions: serverInstructions() })
 registerTools(server, makeAi())
