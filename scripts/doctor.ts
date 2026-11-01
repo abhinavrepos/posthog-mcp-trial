@@ -4,9 +4,11 @@
 //   TRIAGE_ENV_FILE=/etc/lens.env pnpm doctor
 //
 // Exits 1 if anything is wrong. Warnings don't fail it. Prints no secrets.
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
-import { config, ENV_FILE } from '../src/core/config.ts'
+import { config, ENV_FILE, ROOT } from '../src/core/config.ts'
+import { mcpClientConfig } from '../src/mcp/client-config.ts'
 
 type Level = 'ok' | 'warn' | 'fail'
 const results: { level: Level; what: string; detail: string }[] = []
@@ -81,8 +83,26 @@ else {
 }
 if (ph.publicHost && isLocal(ph.publicHost) && !isLocal(config.service.publicUrl)) say('warn', 'POSTHOG_PUBLIC_HOST is localhost', 'replay links will not open for other people')
 
+// ------------------------------------------------------------------ MCP switches
+const f = config.features
+say('ok', `FEATURE_LENS_MCP: ${f.lensMcp ? 'on' : 'off'}`, f.lensMcp ? `${config.app.name}'s tools for Claude (/mcp and stdio)` : '/mcp answers 503, stdio exits')
+if (!f.posthogMcp) say('ok', 'FEATURE_POSTHOG_MCP: off', "PostHog's MCP server is left out of .mcp.json and of the instructions")
+else if (!ph.mcpUrl) say('ok', 'FEATURE_POSTHOG_MCP: on, but POSTHOG_MCP_URL is not set', "so PostHog's MCP server is not used")
+else say('ok', 'FEATURE_POSTHOG_MCP: on', ph.mcpUrl)
+{
+    const want = JSON.stringify(mcpClientConfig().file)
+    const path = join(ROOT, '.mcp.json')
+    let have = ''
+    try {
+        have = JSON.stringify(JSON.parse(readFileSync(path, 'utf8')))
+    } catch {}
+    if (!have) say('warn', '.mcp.json missing', 'run pnpm mcp:config so Claude Code in this folder gets the servers that are on')
+    else if (have !== want) say('warn', '.mcp.json does not match the switches', 'run pnpm mcp:config')
+    else say('ok', '.mcp.json matches the switches')
+}
+
 // ------------------------------------------------------------------ PostHog's MCP server
-if (ph.mcpUrl) {
+if (ph.mcpUrl && f.posthogMcp) {
     if (!ph.mcpApiKey) say('fail', 'POSTHOG_MCP_URL is set without POSTHOG_MCP_API_KEY')
     else {
         const key = await get(`${ph.host}/api/personal_api_keys/@current/`, { authorization: `Bearer ${ph.mcpApiKey}` }).catch(() => null)
@@ -111,7 +131,7 @@ else if (j.webhookSecret.length < 24) say('warn', 'JIRA_WEBHOOK_SECRET is short'
 
 // ------------------------------------------------------------------ This service
 const s = config.service
-for (const [name, v] of [['MCP_TOKEN', s.mcpToken], ['CLIP_LINK_SECRET', s.clipLinkSecret]] as const) {
+for (const [name, v] of [...(config.features.lensMcp ? [['MCP_TOKEN', s.mcpToken] as const] : []), ['CLIP_LINK_SECRET', s.clipLinkSecret] as const]) {
     if (!v) say('fail', name, 'not set (openssl rand -hex 32)')
     else if (v.length < 32) say('warn', `${name} is short`, `${v.length} characters; use 32+`)
     else say('ok', name, `${v.length} characters`)

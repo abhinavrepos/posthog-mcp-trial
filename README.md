@@ -204,6 +204,27 @@ anything is saved. In Claude Code it is `/mcp__ticket-triage__review_release 26.
 | `RELEASES_VERSION_PROPERTY` | Event property with the release name (`app_version`; empty to match by date only) |
 | `RELEASES_COMPONENT_SCREENS` | JSON map from Jira component to screen, e.g. `{"Billing":"/invoices"}` |
 
+### Switching the MCP servers on and off
+
+Two switches in `.secrets.env`, each `on` or `off` (both `on` by default):
+
+| Switch | What it controls | When off |
+| --- | --- | --- |
+| `FEATURE_LENS_MCP` | this service's tools for Claude: replay links, tickets, clients, screens, releases | `/mcp` answers 503, the stdio server exits, `.mcp.json` leaves it out |
+| `FEATURE_POSTHOG_MCP` | PostHog's own MCP server (needs `POSTHOG_MCP_URL` and `POSTHOG_MCP_API_KEY`) | `.mcp.json` leaves it out; the instructions stop sending Claude there |
+
+After changing either:
+
+```bash
+pnpm mcp:config                      # rewrites .mcp.json (git-ignored: it can hold PostHog's key)
+scripts/stack.sh restart service     # for /mcp over HTTP
+pnpm doctor                          # shows both switches and whether .mcp.json matches them
+```
+
+The rule that Claude never opens replays is in the instructions with either switch. The replay clip
+page (`/replays`) is not an MCP server and is not affected. If someone connects PostHog's MCP server
+to their own Claude by hand, these switches cannot stop that; use a PostHog key without replay scopes.
+
 To connect Claude Code over HTTP:
 
 ```bash
@@ -244,8 +265,8 @@ scripts/demo-prep.sh --reset-board          # starts everything, records session
 Then open the mock Jira at `http://<host>:4000` (no login) and file an example ticket. Its
 **Releases** page lists the ACP releases the release tools read.
 
-For Claude Code, `.mcp.json` registers the stdio server. Claude Code asks once to approve a
-project MCP server. Remote MCP clients use `http://<host>:8080/mcp` with
+For Claude Code, run `pnpm mcp:config`: it writes `.mcp.json` with the servers that are switched on.
+Claude Code asks once to approve a project MCP server. Remote MCP clients use `http://<host>:8080/mcp` with
 `Authorization: Bearer <MCP_TOKEN>`.
 
 Commands: `pnpm test`, `pnpm typecheck`, `scripts/stack.sh start|stop|restart|status`.

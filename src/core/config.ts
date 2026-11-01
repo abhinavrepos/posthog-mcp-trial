@@ -36,6 +36,15 @@ function propName(key: string, fallback: string, optional = false): string {
     return v
 }
 
+/** An on/off switch: on, off, true, false, yes, no, 1 or 0. Anything else stops the service at start. */
+export function flag(key: string, fallback: boolean): boolean {
+    const v = env(key).trim().toLowerCase()
+    if (v === '') return fallback
+    if (['on', 'true', 'yes', '1'].includes(v)) return true
+    if (['off', 'false', 'no', '0'].includes(v)) return false
+    throw new Error(`${key} must be on or off, got "${env(key)}"`)
+}
+
 export interface Screen {
     path: string
     name: string
@@ -68,6 +77,15 @@ export const config = {
         // https://mcp.posthog.com/mcp for PostHog Cloud, or your own copy for a self-hosted PostHog.
         mcpUrl: env('POSTHOG_MCP_URL'),
         mcpApiKey: env('POSTHOG_MCP_API_KEY'), // a separate personal key, without session_recording:read
+    },
+    // Which MCP servers Claude gets. Each can be switched off on its own; both are on by default.
+    features: {
+        // This service's MCP tools (replay links, tickets, clients, releases): /mcp over HTTP, the
+        // stdio server, and its entry in .mcp.json.
+        lensMcp: flag('FEATURE_LENS_MCP', true),
+        // PostHog's own MCP server in .mcp.json, and the instructions that send Claude to it. Takes
+        // effect only with POSTHOG_MCP_URL and POSTHOG_MCP_API_KEY set.
+        posthogMcp: flag('FEATURE_POSTHOG_MCP', true),
     },
     // How your events name things. The defaults match the demo app.
     properties: {
@@ -113,6 +131,9 @@ export const config = {
         model: env('ANTHROPIC_MODEL', 'claude-opus-5-5'),
     },
 }
+
+/** PostHog's MCP server is in use: switched on and configured. */
+export const posthogMcpActive = (): boolean => config.features.posthogMcp && !!config.posthog.mcpUrl && !!config.posthog.mcpApiKey
 
 export function requirePosthog(): void {
     const missing = (['projectId', 'personalApiKey'] as const).filter((k) => !config.posthog[k])

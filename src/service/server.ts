@@ -14,7 +14,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 
 import { makeAi } from '../core/ai.ts'
 import { shutdownClips } from '../core/clip.ts'
-import { config } from '../core/config.ts'
+import { config, posthogMcpActive } from '../core/config.ts'
 import { verifyClipLink } from '../core/links.ts'
 import { renderReport } from '../core/report.ts'
 import { triage } from '../core/triage.ts'
@@ -130,6 +130,10 @@ function serveClip(req: IncomingMessage, res: ServerResponse, url: URL) {
     streamMp4(req, res, file)
 }
 
+function featureState() {
+    return { lens_mcp: config.features.lensMcp, posthog_mcp: posthogMcpActive(), posthog_mcp_switch: config.features.posthogMcp, ai: !!ai }
+}
+
 function bearerOk(req: IncomingMessage): boolean {
     const token = config.service.mcpToken
     if (!token) return false
@@ -140,6 +144,7 @@ function bearerOk(req: IncomingMessage): boolean {
 }
 
 async function handleMcp(req: IncomingMessage, res: ServerResponse) {
+    if (!config.features.lensMcp) return send(res, 503, { error: `${config.app.name}'s MCP tools are switched off (FEATURE_LENS_MCP=off).` })
     if (!bearerOk(req)) return send(res, 401, { error: 'MCP needs Authorization: Bearer <MCP_TOKEN>' })
     // Stateless: a fresh server and transport per request.
     const server = new McpServer({ name: 'ticket-triage', version: '0.1.0' }, { instructions: serverInstructions() })
@@ -158,6 +163,8 @@ const server = createServer(async (req, res) => {
     const url = new URL(req.url || '/', 'http://localhost')
     try {
         if (url.pathname === '/healthz') return send(res, 200, 'ok')
+        // For the status page: up, and which switches are on. No secrets, no data.
+        if (url.pathname === '/health') return send(res, 200, { ok: true, features: featureState() })
         if (url.pathname === '/favicon.ico') {
             res.writeHead(204, { 'cache-control': 'max-age=86400' })
             return res.end()
@@ -172,7 +179,7 @@ const server = createServer(async (req, res) => {
         if (url.pathname === '/mcp') return await handleMcp(req, res)
         if (url.pathname === '/status') {
             if (!bearerOk(req)) return send(res, 401, { error: 'needs Authorization: Bearer <MCP_TOKEN>' })
-            return send(res, 200, { ai: !!ai, jobs })
+            return send(res, 200, { ai: !!ai, features: featureState(), jobs })
         }
         send(res, 404, 'not found')
     } catch (e) {
@@ -181,7 +188,7 @@ const server = createServer(async (req, res) => {
     }
 })
 
-for (const [name, value] of Object.entries({ JIRA_WEBHOOK_SECRET: config.jira.webhookSecret, CLIP_LINK_SECRET: config.service.clipLinkSecret, MCP_TOKEN: config.service.mcpToken })) {
+for (const [name, value] of Object.entries({ JIRA_WEBHOOK_SECRET: config.jira.webhookSecret, CLIP_LINK_SECRET: config.service.clipLinkSecret, ...(config.features.lensMcp ? { MCP_TOKEN: config.service.mcpToken } : {}) })) {
     if (!value) log(`warning: ${name} is not set; that feature refuses every request until it is`)
 }
 
@@ -198,7 +205,7 @@ const last = syncStatus().at
 if (!keptReleases().length || !last || Date.now() - Date.parse(last) > 3_600_000) setTimeout(() => void syncNow('start'), 5_000).unref()
 setInterval(() => void syncNow('schedule'), 6 * 3_600_000).unref()
 
-server.listen(config.service.port, '0.0.0.0', () => log('triage service listening', { port: config.service.port, ai: !!ai, ai_model: ai ? config.anthropic.model : undefined }))
+server.listen(config.service.port, '0.0.0.0', () => log('triage service listening', { port: config.service.port, ai: !!ai, ai_model: ai ? config.anthropic.model : undefined, features: featureState() }))
 
 const stop = async () => {
     server.close()

@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "ticket-triage": {
-      "command": "node",
-      "args": ["--disable-warning=ExperimentalWarning", "--import", "tsx", "src/mcp/stdio.ts"]
-    }
-  }
-}
