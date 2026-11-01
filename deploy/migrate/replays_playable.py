@@ -3,10 +3,11 @@
 # bytes themselves are discarded unread.
 #
 #   python manage.py shell < replays_playable.py      (in the web container; posthog-upgrade.sh phase verify)
-# Prints "PLAYABLE: <n> of <m> recordings, <a> of <b> blocks".
+# Prints "PLAYABLE: <n> of <m> recordings, <a> of <b> blocks", and a progress line every 30 seconds.
 import asyncio
 import json
 import re
+import time
 import urllib.parse
 import urllib.request
 
@@ -33,11 +34,14 @@ async def main():
     total_bytes = 0
     failures = []
     sem = asyncio.Semaphore(32)
+    total_blocks = sum(len(u) for _, _, u in rows)
+    last = time.time()
+    print(f"  progress: fetching {total_blocks} blocks of {len(rows)} recordings", flush=True)
     async with aiohttp.ClientSession() as http:
         client = RecordingApiClient(http, settings.RECORDING_API_URL)
 
         async def one(team, sid, urls):
-            nonlocal ok_blocks, bad_blocks, ok_recordings, total_bytes
+            nonlocal ok_blocks, bad_blocks, ok_recordings, total_bytes, last
             good = True
             for u in urls:
                 m = URL.match(u)
@@ -55,11 +59,13 @@ async def main():
                         good = False
                         if len(failures) < 5:
                             failures.append(f"{sid}: {str(e)[:160]}")
+                if time.time() - last >= 30:
+                    last = time.time()
+                    print(f"  progress: {ok_blocks + bad_blocks} of {total_blocks} blocks fetched, {bad_blocks} failed", flush=True)
             if good and urls:
                 ok_recordings += 1
 
         await asyncio.gather(*(one(t, s, u) for t, s, u in rows))
-    total_blocks = sum(len(u) for _, _, u in rows)
     print(f"PLAYABLE: {ok_recordings} of {len(rows)} recordings, {ok_blocks} of {total_blocks} blocks, {total_bytes / 1e6:.1f} MB")
     for f in failures:
         print(f"  failed: {f}")

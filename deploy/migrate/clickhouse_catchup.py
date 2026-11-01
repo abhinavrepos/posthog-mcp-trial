@@ -26,8 +26,11 @@ NO_SYSTEM_TABLE = re.compile(r"Unknown table expression identifier 'system\.([a-
 TARGET = re.compile(r"TO\s+(?:`?posthog`?\.)?`?([A-Za-z0-9_]+)`?")
 
 
+sys.stdout.reconfigure(line_buffering=True)
+
+
 def sh(*args, input=None):
-    return subprocess.run(args, capture_output=True, text=True, input=input)
+    return subprocess.run(args, capture_output=True, text=True, input=input, stdin=None if input is not None else subprocess.DEVNULL)
 
 
 def ch(sql):
@@ -79,10 +82,15 @@ def family(target):
 added = []
 ch("SYSTEM FLUSH LOGS")
 for round_ in range(1, MAX_ROUNDS + 1):
-    r = sh("docker", "compose", "run", "--rm", "--no-deps", "-e", "SKIP_ASYNC_MIGRATIONS_SETUP=1", "web", "python", "manage.py", "migrate_clickhouse")
-    out = r.stdout + r.stderr
-    open(os.path.join(STATE, f"clickhouse-migrate-{round_}.log"), "w").write(out)
-    if r.returncode == 0:
+    # Written as it runs, so posthog-upgrade.sh can show which migration is running.
+    log = os.path.join(STATE, f"clickhouse-migrate-{round_}.log")
+    with open(log, "w") as f:
+        rc = subprocess.run(
+            ["docker", "compose", "run", "--rm", "-T", "--no-deps", "-e", "SKIP_ASYNC_MIGRATIONS_SETUP=1", "-e", "PYTHONUNBUFFERED=1", "web", "python", "manage.py", "migrate_clickhouse"],
+            stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+        ).returncode
+    out = open(log, encoding="utf-8", errors="replace").read()
+    if rc == 0:
         print(f"ClickHouse migrations finished (round {round_}).")
         break
     if NO_SYSTEM_TABLE.search(out):
