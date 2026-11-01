@@ -26,23 +26,27 @@ cd /root            # or wherever PostHog was installed
 sudo /root/deploy/migrate/posthog-upgrade.sh
 ```
 
-It runs phase after phase and stops at the first problem. Running it again continues where it stopped.
-The output is also written to `upgrade-state/upgrade.log`.
+Run it in a terminal (`tmux` or `screen` is best, so a dropped connection does not stop it). It first shows
+what it found and a plan, asks whether to copy the session replays, and asks before it starts. Then it runs
+phase after phase without questions, and stops at the first problem. Running it again continues where it
+stopped. The output is also written to `upgrade-state/upgrade.log`; `posthog-upgrade.sh status` shows which
+phases are done.
 
 | Phase | What happens | Rehearsal time |
 | --- | --- | --- |
-| 1 check | versions, volumes, free disk, MinIO image; refuses to start while events still arrive | 1 min |
+| 1 check | versions, volumes, free disk, MinIO image; refuses to start while events still arrive; the questions | 1 min |
 | 2 before | counts of everything that must survive: events per day and name, persons, groups, replays, files, rows | 1 min |
-| 3 backup | `pg_dumpall`, the install's files, and every Docker volume of the install (ZooKeeper included) | 1 min |
+| 3 backup | `pg_dumpall`, the install's files, and every Docker volume of the install (ZooKeeper included), each checked, then checksummed | 1 min |
 | 4 source | PostHog's source at the pinned commit, in `./posthog` | 1 min |
 | 5 configure | `.env` and compose files as `upgrade-hobby` writes them, plus the pinned images | seconds |
 | 6 pull | the pinned images | 5–10 min |
-| 7 postgres | Postgres 12 → 15: new volume, restore the dump, before anything else starts | 1 min |
+| 7 postgres | Postgres 12 → 15: old data copied aside, new volume, restore the dump, every table's rows checked | 1 min |
 | 8 stone | Django migrations of the last PostHog before its migration squash (problem 3) | 45 min |
 | 9 clickhouse | the new version's database and ClickHouse migrations (problems 4 and 5) | 37 min |
 | 10 start | PostHog starts through `../posthog/scale.sh` | 7 min |
-| 11 storage | MinIO → SeaweedFS with PostHog's `migrate-storage-hobby`, and the legacy replays (problems 6–8) | 1 min |
-| 12 verify | counts compared with phase 2, then every replay fetched through the new replay reader | 1 min |
+| 11 storage | MinIO → SeaweedFS with PostHog's `migrate-storage-hobby`: every stored file but the replays (problem 6) | 1 min |
+| 12 replays | the session replays, legacy ones renamed so they play (problems 7 and 8); skipped with `--no-replays` | 1 min |
+| 13 verify | counts compared with phase 2, then every replay fetched through the new replay reader | 1 min |
 
 The rehearsal had 1,027,745 events, 1,000 replays, 31,000 persons and 300 groups, and took 1 hour 30 minutes
 in total, start to `RESULT: PASS`. Most of it is migrations, whose time depends mostly on how many there
@@ -59,7 +63,63 @@ PLAYABLE: 1000 of 1000 recordings, 17698 of 17698 blocks, 398.5 MB
 and afterwards the old admin password, the old personal API key and the same project token all worked,
 and every dashboard loaded with fresh results.
 
+A second rehearsal (1 November 2026, same data) tested the options and the safety features:
+
+- `--no-replays`: the upgrade passed (`RESULT: PASS`) with no replay file copied anywhere, and the old MinIO
+  untouched; `replays` then copied them later (76 files, the metadata of 1,127 replay rows backed up
+  first) and `verify` played all 1,000 recordings, 17,698 of 17,698 blocks;
+- the backup: 12 volumes, each checked file for file, 1.8 GB, checksummed in 49 seconds; the Postgres 12
+  files kept in their own volume; the restore checked table by table (27 of 27);
+- a failure on purpose (web stopped during phase storage): the run stopped with where, why and what to do,
+  and the same command, run again, continued from that phase and passed;
+- `rollback` checked the checksums before anything else; `cleanup` asked about each item and deleted only
+  the one answered with `delete`.
+
 When it prints `RESULT: PASS`, start the apps again and check a few dashboards and replays.
+
+### Options
+
+| | |
+| --- | --- |
+| `--no-replays` | do not copy the session replays now. They stay, untouched, in the old MinIO volume; the new version lists them but cannot play them. Copy them later with `posthog-upgrade.sh replays`, then `posthog-upgrade.sh verify`. Everything else (events, persons, dashboards, other files) is upgraded and checked as usual. |
+| `--yes` | no questions: replays are copied, the upgrade starts. For unattended runs. |
+| `status` | which phases are done, the replay choice, the state of the backup |
+| `<phase>` | run one phase again, for example `verify` |
+| `SKIP_VOLUME_BACKUP=1` | only with a VM snapshot: backs up Postgres only (asks you to confirm the snapshot) |
+
+### Progress
+
+Every phase starts with a line like `== phase 8 of 13: stone - ... (45 min in the rehearsal)` and ends with
+its time. During the long steps a line comes every 30 seconds (`PROGRESS_SECONDS`), for example:
+
+```
+    ... 12m30s: 612 of 1862 database migrations applied (now: posthog.0840_externaldatasource...)
+    ... 2m00s: ClickHouse migration 0213 done of 0364 (now: 0214_...)
+    ... 1m30s: posthog_clickhouse-data: 2310 MB of about 5120 MB
+    ... 0m30s: 41% | 3200/7800 objects | 512.0 MB (17.1 MB/s) | ✓ 3200 | ✗ 0 | ⊘ 0
+```
+
+## Safety: what happens when something fails, and what is deleted when
+
+- **Every step is checked, and the first failure stops the run.** The script then says which phase stopped,
+  that nothing has been deleted, where the backup is, and how to continue (fix the cause, run it again: it
+  continues with that phase) or go back (`rollback`).
+- **Nothing changes before the backup is complete.** Each phase that changes data refuses to run without it.
+  The backup is checked as it is made: the Postgres dump must read back whole, with PostgreSQL's end marker;
+  each volume's archive must read back with as many entries as the volume has. Then every file is
+  checksummed; `rollback` checks those checksums before it touches anything.
+- **The upgrade deletes nothing it has not kept a copy of:**
+  - Postgres 12's files are copied to the volume `<project>_postgres12-before-upgrade` before the old volume
+    is replaced, and the restore is checked table by table against the counts from phase 2;
+  - ClickHouse and ZooKeeper are changed in place by PostHog's migrations, with their volumes in the backup;
+  - the old MinIO volume is only read: files are copied out of it, never moved or deleted;
+  - the replay metadata the legacy-replay fix changes is copied first to the ClickHouse table
+    `posthog._upgrade_backup_session_replay_events`.
+- **Deleting is a separate step you run yourself:** `posthog-upgrade.sh cleanup`, only after `verify` has
+  passed. It shows each item (the replay metadata copy, volumes the new version no longer uses, the old
+  MinIO volume, the Postgres 12 copy, the backup folder) with its size and what deleting it means, and
+  deletes it only if you type `delete`. It never offers the old MinIO volume while the replays have not
+  been copied, since it then holds their only copy.
 
 ## If something goes wrong
 
@@ -68,8 +128,9 @@ sudo /root/deploy/migrate/posthog-upgrade.sh rollback
 docker compose up -d
 ```
 
-This puts back the install's files and **every** volume exactly as they were before phase 3 (rehearsed),
-and removes volumes the new version created. Without volume backups, restore the VM snapshot instead.
+This checks the backup, asks, then puts back the install's files and **every** volume exactly as they were
+before phase 3 (rehearsed), and removes volumes the new version created. Without volume backups, restore the
+VM snapshot instead.
 
 ## PostHog problems this script works around
 
@@ -118,7 +179,7 @@ path leaves the instance either not starting or with replays that do not play.
 
 | File | What |
 | --- | --- |
-| `posthog-upgrade.sh` | the upgrade, in phases |
+| `posthog-upgrade.sh` | the upgrade, in phases; also `status`, `rollback`, `cleanup` |
 | `versions/` | the exact versions: commit and image digests (`pin-versions.sh` writes them on the tested machine) |
 | `counts.py`, `compare.py` | the before/after counts and their comparison (names, sizes and counts only; no replay is opened) |
 | `clickhouse_catchup.py` | runs the ClickHouse migrations, adding columns early where they need them (problems 4, 5) |
