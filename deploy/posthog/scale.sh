@@ -31,6 +31,9 @@ SMALL=$(( PARTITIONS / 2 ))
 [ "$SMALL" -ge 1 ] || SMALL=1
 FILES="docker-compose.yml"
 [ -f docker-compose.override.yml ] && FILES="$FILES:docker-compose.override.yml"
+# Exact image versions, when the install was upgraded with deploy/migrate/posthog-upgrade.sh.
+[ -f docker-compose.pinned.yml ] && FILES="$FILES:docker-compose.pinned.yml"
+NODE_BASE_IMAGE="$(setting NODE_BASE_IMAGE ghcr.io/posthog/posthog-node:master)"
 rpk() { docker compose exec -T kafka rpk "$@"; }
 
 # Busy topics get more partitions so several consumers can share them. Ordering is per key (person,
@@ -85,8 +88,8 @@ else echo "COMPOSE_FILE=$FILES:docker-compose.scale.yml" >> .env; fi
 docker compose config -q
 
 echo "==> Building the Node image (PostHog's current one plus PLUGINS_DISABLED_CAPABILITIES)"
-docker pull -q "${NODE_BASE_IMAGE:-ghcr.io/posthog/posthog-node:master}" >/dev/null
-docker build -q --build-arg BASE="${NODE_BASE_IMAGE:-ghcr.io/posthog/posthog-node:master}" -t posthog-node-lens:latest "$HERE/node-image" >/dev/null
+docker pull -q "$NODE_BASE_IMAGE" >/dev/null
+docker build -q --build-arg BASE="$NODE_BASE_IMAGE" -t posthog-node-lens:latest "$HERE/node-image" >/dev/null
 
 echo "==> Restarting with the new settings (data is kept)"
 docker compose up -d

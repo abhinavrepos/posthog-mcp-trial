@@ -6,7 +6,7 @@
 //   tsx deploy/posthog/replaytest.ts --screens 200 --minutes 5
 //
 // Uses the separate "Load test" project (see loadtest.ts). Everything it records is made up.
-// Settings: POSTHOG_DIR, POSTHOG_HOST, POSTHOG_ADMIN_EMAIL / POSTHOG_ADMIN_PASSWORD (to read the
+// Settings: POSTHOG_DIR, POSTHOG_HOST, REPLAYTEST_PROJECT (project name, default "Load test"), POSTHOG_ADMIN_EMAIL / POSTHOG_ADMIN_PASSWORD (to read the
 // stored recordings back through the API).
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -50,10 +50,10 @@ async function project(): Promise<{ id: number; token: string }> {
     const py = `
 import json
 from posthog.models import Team, User
-team = Team.objects.filter(name="Load test").first()
+team = Team.objects.filter(name=${JSON.stringify(process.env.REPLAYTEST_PROJECT || "Load test")}).first()
 if not team:
     user = User.objects.filter(email=${JSON.stringify(config.posthog.adminEmail || '')}).first() or User.objects.order_by("id").first()
-    team = Team.objects.create_with_data(organization=user.organization, name="Load test", initiating_user=user)
+    team = Team.objects.create_with_data(organization=user.organization, name=${JSON.stringify(process.env.REPLAYTEST_PROJECT || "Load test")}, initiating_user=user)
 team.session_recording_opt_in = True
 team.save()
 print("LT" + json.dumps({"id": team.id, "token": team.api_token}))
