@@ -124,7 +124,7 @@ if phase check; then
         fi
     fi
     used_mb=$(docker run --rm -v "${PROJECT}_postgres-data:/a:ro" -v "${PROJECT}_clickhouse-data:/b:ro" ${minio_vol:+-v "$minio_vol:/c:ro"} alpine du -sm /a /b ${minio_vol:+/c} | awk '{s+=$1} END {print s}')
-    free_mb=$(df -Pm "$BACKUP_DIR" | awk 'NR==2 {print $4}')
+    free_mb=$(( $(df -Pk "$BACKUP_DIR" | awk 'NR==2 {print $4}') / 1024 ))
     need_mb=$(( ${SKIP_VOLUME_BACKUP:-0} == 1 ? used_mb / 4 + 30000 : used_mb * 2 + 30000 ))
     say "data volumes: ${used_mb} MB; free: ${free_mb} MB; needed (backup, new images, copied files): about ${need_mb} MB"
     [ "$free_mb" -ge "$need_mb" ] || { echo "Not enough disk. Free space, or set SKIP_VOLUME_BACKUP=1 if you have a VM snapshot."; exit 1; }
