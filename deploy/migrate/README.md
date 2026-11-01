@@ -38,10 +38,14 @@ The output is also written to `upgrade-state/upgrade.log`.
 | 5 configure | `.env` and compose files as `upgrade-hobby` writes them, plus the pinned images | seconds |
 | 6 pull | the pinned images | 5–10 min |
 | 7 postgres | Postgres 12 → 15: new volume, restore the dump, before anything else starts | 1 min |
-| 8 stone | Django migrations of the last PostHog before its migration squash (see below) | (filled in) |
-| 9 start | PostHog starts through `../posthog/scale.sh`; its own migrations finish | (filled in) |
-| 10 storage | MinIO → SeaweedFS with PostHog's `migrate-storage-hobby`, plus the legacy replay folder | (filled in) |
-| 11 verify | counts again, compared with phase 2: `RESULT: PASS` or `FAIL` | 1 min |
+| 8 stone | Django migrations of the last PostHog before its migration squash (problem 3) | 45 min |
+| 9 clickhouse | the new version's database and ClickHouse migrations (problems 4 and 5) | FILL_CH |
+| 10 start | PostHog starts through `../posthog/scale.sh` | FILL_START |
+| 11 storage | MinIO → SeaweedFS with PostHog's `migrate-storage-hobby`, and the legacy replays (problems 6–8) | 1 min |
+| 12 verify | counts compared with phase 2, then every replay fetched through the new replay reader | FILL_VERIFY |
+
+The rehearsal had 1,027,745 events, 1,000 replays, 31,000 persons and 300 groups. Most of the time is the
+migrations, which mostly depend on the number of migrations, not on the amount of data.
 
 When it prints `RESULT: PASS`, start the apps again and check a few dashboards and replays.
 
@@ -58,30 +62,45 @@ and removes volumes the new version created. Without volume backups, restore the
 ## PostHog problems this script works around
 
 Each was found by rehearsing on a copy of production (the 2025 version with a million events, 1,000 replays
-in MinIO, persons, groups, cohorts, flags, insights and dashboards):
+in MinIO, persons, groups, cohorts, flags, insights and dashboards). Without these, PostHog's own upgrade
+path leaves the instance either not starting or with replays that do not play.
 
 1. **The Postgres 12 → 15 step removes the wrong volume.** `upgrade-hobby` runs `docker volume rm
    postgres-data`, but compose names the volume `<project>_postgres-data`, so nothing is removed and
    Postgres 15 refuses to start on Postgres 12 files. The script removes the real volume.
 2. **The Postgres restore runs after PostHog has started.** The web container first builds an empty
    database, which the restore then has to drop while it is in use. The script restores first.
-3. **The new version's migrations cannot run on a 2025 database.** PostHog squashed its migrations on
-   8 September 2026, 68 products included. Products a 2025 database never had are installed from their
+3. **The new version's database migrations cannot run on a 2025 database.** PostHog squashed its migrations
+   on 8 September 2026, 68 products included. Products a 2025 database never had are installed from their
    squashed migration, which needs migrations from September 2026 that in turn need those products' tables.
-   The migrations stop part way (`InvalidBasesError` for `ee.EnterpriseEventDefinition` at `posthog.1019`,
-   then a missing `posthog_conversations_ticket` table at `posthog.1032`) and PostHog never starts. The
-   script first runs the Django migrations of the last version before the squash (commit `3ae7a3ca`), the
-   path continuously upgraded installs took; the target then finishes normally.
-4. **Replays of "legacy retention" projects stop playing.** In 2025 those replays were stored under
-   `session_recording_batches/`. `migrate-storage-hobby` copies only `session_recordings/` to the new
-   replay store, so the recordings stay listed but the blocks are not where the new reader looks. The
-   script copies them too and checks that every block of every replay is there.
-5. **The Node image on Docker Hub is seven months old**, and the new version also needs settings and a
+   The migrations stop (`InvalidBasesError` for `ee.EnterpriseEventDefinition` at `posthog.1019`, then a
+   missing `posthog_conversations_ticket` table at `posthog.1032`) and PostHog never starts. The script
+   first runs the Django migrations of the last version before the squash (commit `3ae7a3ca`), the path
+   continuously upgraded installs took; the target then finishes normally.
+4. **ClickHouse migration 0140 stops on columns from the future.** Many ClickHouse migrations drop a view
+   and recreate it with today's definition, not the one of their time. From migration 0139 (where 2025 left
+   it), 0140 recreates the replay view with six columns that only 2026 migrations add (`is_deleted`,
+   `ai_tags_fixed`, `ai_tags_freeform`, `ai_highlighted`, `surfacing_score`, `snapshot_mode_v2`).
+   `clickhouse_catchup.py` adds each such column first, with the definition PostHog's own later migration
+   uses; that migration then finds it there (`IF NOT EXISTS`).
+5. **A metrics view needs `system.crash_log`,** which ClickHouse creates only when it first writes to it.
+   The catch-up runs `SYSTEM FLUSH LOGS`.
+6. **`migrate-storage-hobby` stops at the first bucket 2025 never had** (`ai-blobs`) and copies nothing after
+   it, replays included. The script runs it one service at a time and skips missing buckets.
+7. **Replays of "legacy retention" projects do not play.** 2025 stored their blocks as
+   `session_recording_batches/<timestamp>-<hex>`. `migrate-storage-hobby` does not copy them to the replay
+   store, and the new replay reader refuses that name anyway (it accepts only
+   `session_recordings/<30d|90d|1y|5y>/...`): all replays were listed, none played. The script copies them,
+   gives them an accepted name with a retention period that keeps every one of them, and updates their
+   metadata in ClickHouse. Then it fetches every block of every replay through the new reader.
+8. **Replays older than 30 days would disappear.** The new version treats a replay without a retention period
+   as expiring 30 days after it started. The period set in problem 7 covers the oldest legacy replay.
+9. **The Node image on Docker Hub is seven months old**, and the new version also needs settings and a
    database the hobby files do not provide. `../posthog/scale.sh` uses the current image (pinned) and adds
-   them; the upgraded PostHog is started through it.
-6. **A backup without ZooKeeper cannot be restored.** ClickHouse's replicated tables keep part of their state
-   in ZooKeeper; restoring ClickHouse alone left its data parts set aside as broken. The backup includes
-   every volume.
+   them; the upgraded PostHog is started through it, so no service runs the stale image.
+10. **A backup without ZooKeeper cannot be restored.** ClickHouse's replicated tables keep part of their
+    state in ZooKeeper; restoring ClickHouse alone left 999 data parts set aside as broken. The backup takes
+    every volume, and the rollback was rehearsed: all data back, nothing detached.
 
 ## Files
 
@@ -90,7 +109,9 @@ in MinIO, persons, groups, cohorts, flags, insights and dashboards):
 | `posthog-upgrade.sh` | the upgrade, in phases |
 | `versions/` | the exact versions: commit and image digests (`pin-versions.sh` writes them on the tested machine) |
 | `counts.py`, `compare.py` | the before/after counts and their comparison (names, sizes and counts only; no replay is opened) |
-| `copy_legacy_replays.py` | the `session_recording_batches/` copy (problem 4) |
+| `clickhouse_catchup.py` | runs the ClickHouse migrations, adding columns early where they need them (problems 4, 5) |
+| `copy_legacy_replays.py`, `fix_legacy_replays.py` | the legacy replays: copy, rename, metadata (problems 7, 8) |
+| `replays_playable.py` | fetches every block of every replay through the new replay reader (in verify) |
 | `minio-image/` | MinIO `RELEASE.2025-04-22T22-12-26Z`, which MinIO no longer publishes |
 | `posthog-export.sh`, `posthog-import.sh` | the other route: copying production into a PostHog that already has other data (not needed for an in-place upgrade) |
 | `rehearsal/` | how the copy of production was built |
