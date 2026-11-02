@@ -69,7 +69,8 @@ export async function struggleSessions(q: { clientId: string; pathname?: string;
              FROM events
              WHERE toString(properties.$session_id) IN {ids} AND NOT startsWith(event, '$')
                AND timestamp >= {from} AND timestamp < {to}
-             GROUP BY sid, event`,
+             GROUP BY sid, event
+             LIMIT 50000`,
             { ids: rows.map((r) => String(r.sid)), from: q.from.toISOString(), to: q.to.toISOString() }
         )
         for (const c of counts) {
