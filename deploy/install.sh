@@ -49,6 +49,10 @@ APP_USER=triage
 APP_HOME=/var/lib/triage
 NODE_MAJOR=24
 PNPM_VERSION=10.29.3
+# docker compose build (the status page) needs buildx 0.17 or later; Amazon Linux's docker package has an
+# older one or none. This one is installed when it is missing, checked against its release checksum.
+BUILDX_VERSION=v0.37.2
+BUILDX_SHA256=982ca20490b45ed1ec8d99795974d3d874a358f75938c9c237305010e6b7e548
 MIN_RAM_GB=15     # a "16 GB" machine reports a little less
 MIN_DISK_GB=60
 
@@ -636,8 +640,20 @@ EOF
     finish service
 }
 
+ensure_buildx() {
+    local v; v="$(docker buildx version 2>/dev/null | awk '{print $2; exit}' | sed 's/^v//' || true)"
+    if [ -n "$v" ] && [ "$(printf '%s\n' 0.17 "$v" | sort -V | head -1)" = 0.17 ]; then return 0; fi
+    local dir=/usr/local/lib/docker/cli-plugins tmp; tmp="$(mktemp)"
+    mkdir -p "$dir"
+    curl -fsSL -o "$tmp" "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64"
+    echo "$BUILDX_SHA256  $tmp" | sha256sum -c --quiet - || { rm -f "$tmp"; die "The buildx download does not match its checksum."; }
+    install -m 755 "$tmp" "$dir/docker-buildx"; rm -f "$tmp"
+    ok "docker buildx $BUILDX_VERSION installed (the status page is built with it; it had ${v:-none})"
+}
+
 step_status() {
     CURRENT=status; step "Status page"
+    ensure_buildx
     local f="$HERE/status/status.env" port project
     port="$(read_env_file "$SECRETS" SERVICE_PORT)"; port="${port:-8080}"
     project="$(basename "$POSTHOG_DIR")"
