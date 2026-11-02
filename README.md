@@ -259,11 +259,23 @@ The local `.mcp.json` server has the same tools.
 
 ## Install on a fresh machine
 
-Needs: Ubuntu 22.04+ or Debian 12 on x86_64, 16 GB+ RAM, 60 GB+ free disk, ports 80 (and 443 for
-HTTPS), 8080 open to your users. Nothing else: the script installs Docker, PostHog, Node and pnpm.
+This branch is for **Amazon Linux 2023** (the `ticket-triage` branch is the same project for Ubuntu
+and Debian). The EC2 instance needs:
+
+- **Amazon Linux 2023 AMI, x86_64.** Not Graviton (arm64): the Chrome that renders clips has no Linux
+  arm64 build.
+- **16 GB+ memory:** m7i.xlarge, m6i.xlarge or m6a.xlarge (4 CPUs, 16 GB) or larger.
+- **A 60 GB+ root volume** (gp3). The default 8 GB is far too small.
+- **Security group, inbound:** 22 from your address; 80 (and 443 with a domain) from your users and
+  your app; 8080 from where people open clip links. 8090 only if the status page is public.
+- With a domain: an A record pointing at the instance's Elastic IP, so the address does not change
+  when the instance stops.
+
+Nothing else: the script installs Docker, PostHog, Node and pnpm. Log in as `ec2-user`, then:
 
 ```bash
-sudo git clone --branch ticket-triage --single-branch https://github.com/abhinavrepos/posthog-mcp-trial /srv/ticket-triage
+sudo dnf install -y git
+sudo git clone --branch ticket-triage-amazon-linux --single-branch https://github.com/abhinavrepos/posthog-mcp-trial /srv/ticket-triage
 cd /srv/ticket-triage
 sudo deploy/install.sh                      # asks every setting, shows the plan, then installs (about 1 hour)
 ```
