@@ -11,6 +11,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 
 import { renderClip } from '../core/clip.ts'
+import { addComment, captionedFile, checkComment, commentCounts, cues, DEFAULT_DURATION, deleteComment, DURATIONS, getComment, listComments, MAX_TEXT, removeVariants, toVtt, updateComment, variantOf } from '../core/comments.ts'
 import { config } from '../core/config.ts'
 import { all, db, one, run, tx } from '../core/db.ts'
 import { clipUrl } from '../core/links.ts'
@@ -120,7 +121,8 @@ export function setSaved(name: string, email: string, saved: boolean): ClipRecor
 export function deleteClip(name: string): boolean {
     if (!getClip(name)) return false
     rmSync(join(config.clip.outDir, name), { force: true })
-    run('DELETE FROM clips WHERE name = ?', name) // clip_holders rows go with it
+    removeVariants(name)
+    run('DELETE FROM clips WHERE name = ?', name) // clip_holders and clip_comments rows go with it
     return true
 }
 
@@ -139,6 +141,8 @@ export function pruneOldClips(now = Date.now()): number {
     if (existsSync(config.clip.outDir)) {
         for (const f of readdirSync(config.clip.outDir)) {
             const p = join(config.clip.outDir, f)
+            const owner = variantOf(f)
+            if (owner && getClip(owner)) continue // a burned-in copy of a clip that still exists
             if (f.endsWith('.mp4') && !getClip(f) && statSync(p).mtimeMs < now - RETENTION_DAYS * DAY) {
                 rmSync(p, { force: true })
                 stray++
@@ -227,9 +231,10 @@ function jobView(job: Job) {
     }
 }
 
-function clipView(c: ClipRecord, viewer?: string) {
+function clipView(c: ClipRecord, viewer?: string, counts?: Map<string, number>) {
     return {
         ...c,
+        comments: (counts ?? commentCounts()).get(c.name) ?? 0,
         saved: !!viewer && c.saved_by.includes(viewer),
         range: `${formatClock(c.start_s)}–${formatClock(c.end_s)}`,
         video_url: `/replays/video/${encodeURIComponent(c.name)}`,
@@ -417,7 +422,8 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
     }
 
     if (p === '/replays/api/clips' && req.method === 'GET') {
-        json(res, 200, { clips: listClips({ holder: viewer.email, limit: 100 }).map((c) => clipView(c, viewer.email)), retention_days: RETENTION_DAYS })
+        const counts = commentCounts()
+        json(res, 200, { clips: listClips({ holder: viewer.email, limit: 100 }).map((c) => clipView(c, viewer.email, counts)), retention_days: RETENTION_DAYS })
         return true
     }
     m = /^\/replays\/api\/clips\/([^/]+)$/.exec(p)
@@ -427,6 +433,65 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         else json(res, 200, clipView(record, viewer.email))
         return true
     }
+    m = /^\/replays\/api\/clips\/([^/]+)\/comments(?:\/(\d+)|(\.vtt))?$/.exec(p)
+    if (m) {
+        const record = getClip(decodeURIComponent(m[1]))
+        if (!record) {
+            json(res, 404, { error: 'This clip no longer exists.' })
+            return true
+        }
+        const length = record.end_s - record.start_s
+        const view = () => {
+            const list = listComments(record.name)
+            const admin = can(viewer.role, 'admin')
+            return {
+                comments: list.map((c) => ({ ...c, mine: c.author === viewer.email, can_edit: c.author === viewer.email || admin })),
+                cues: cues(list, length),
+                length_s: length,
+                durations: DURATIONS,
+                default_duration: DEFAULT_DURATION,
+                max_text: MAX_TEXT,
+            }
+        }
+        if (m[3] && req.method === 'GET') {
+            res.writeHead(200, { 'content-type': 'text/vtt; charset=utf-8', 'cache-control': 'no-store' })
+            res.end(toVtt(cues(listComments(record.name), length)))
+            return true
+        }
+        if (!m[2] && req.method === 'GET') {
+            json(res, 200, view())
+            return true
+        }
+        if (!m[2] && req.method === 'POST') {
+            const ok = checkComment(await readJson(req), length)
+            if ('error' in ok) return (json(res, 400, ok), true)
+            const added = addComment(record.name, ok, viewer.email)
+            if ('error' in added) return (json(res, 400, added), true)
+            audit(viewer.email, 'clip.comment_added', { clip: record.name, at_s: added.at_s })
+            json(res, 200, view())
+            return true
+        }
+        if (m[2] && (req.method === 'POST' || req.method === 'DELETE')) {
+            const c = getComment(record.name, Number(m[2]))
+            if (!c) return (json(res, 404, { error: 'That comment no longer exists.' }), true)
+            if (c.author !== viewer.email && !can(viewer.role, 'admin')) return (json(res, 403, { error: 'Only whoever wrote a comment, or an admin, can change it.' }), true)
+            if (req.method === 'DELETE') {
+                deleteComment(c.id)
+                if (!listComments(record.name).length) removeVariants(record.name)
+                audit(viewer.email, 'clip.comment_deleted', { clip: record.name, at_s: c.at_s, author: c.author })
+            } else {
+                const ok = checkComment(await readJson(req), length)
+                if ('error' in ok) return (json(res, 400, ok), true)
+                updateComment(c.id, ok)
+                audit(viewer.email, 'clip.comment_edited', { clip: record.name, at_s: ok.at_s, author: c.author })
+            }
+            json(res, 200, view())
+            return true
+        }
+        json(res, 405, { error: 'Not allowed.' })
+        return true
+    }
+
     m = /^\/replays\/api\/clips\/([^/]+)\/save$/.exec(p)
     if (m && req.method === 'POST') {
         const saved = (await readJson(req)).saved !== false
@@ -451,8 +516,9 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
             json(res, 404, { error: 'No such clip.' })
             return true
         }
-        audit(viewer.email, 'clip.link_shared', { clip: name })
-        json(res, 200, { url: clipUrl(name), expires_hours: config.service.clipLinkTtlHours })
+        const withComments = (await readJson(req).catch(() => ({}) as Record<string, unknown>)).comments !== false && listComments(name).length > 0
+        audit(viewer.email, 'clip.link_shared', { clip: name, comments: withComments })
+        json(res, 200, { url: clipUrl(name) + (withComments ? '&c=1' : ''), expires_hours: config.service.clipLinkTtlHours, comments: withComments })
         return true
     }
 
@@ -466,9 +532,19 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
             return true
         }
         if (m[1] === 'download' && !need('download')) return true
-        if (m[1] === 'download') audit(viewer.email, 'clip.downloaded', { clip: name })
+        let out = file
+        if (m[1] === 'download' && url.searchParams.get('comments') !== '0') {
+            try {
+                out = await captionedFile(name, record.end_s - record.start_s)
+            } catch (e) {
+                console.error(JSON.stringify({ t: new Date().toISOString(), msg: 'burning comments failed', clip: name, error: (e as Error).message.slice(0, 500) }))
+                json(res, 500, { error: 'The comments could not be added to the video. Download it without comments, or try again.' })
+                return true
+            }
+        }
+        if (m[1] === 'download') audit(viewer.email, 'clip.downloaded', { clip: name, comments: out !== file })
         else if (!req.headers.range || /^bytes=0-/.test(String(req.headers.range))) audit(viewer.email, 'clip.viewed', { clip: name })
-        streamMp4(req, res, file, { download: m[1] === 'download' ? record.download_name : undefined, cache: 'private, no-store' })
+        streamMp4(req, res, out, { download: m[1] === 'download' ? record.download_name : undefined, cache: 'private, no-store' })
         return true
     }
 
@@ -501,6 +577,15 @@ button.ghost,.btn.ghost{background:transparent;color:var(--accent)}button:disabl
 .err{color:var(--err)}.ok{color:var(--ok)}video{width:100%;border-radius:8px;background:#000;margin:8px 0}
 table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:500;font-size:12px}
 .table-wrap{overflow-x:auto}.hidden{display:none}code{background:var(--bg);padding:1px 5px;border-radius:4px}
+.player{position:relative;background:#000;border-radius:8px;overflow:hidden;margin:8px 0}.player video{display:block;width:100%;margin:0;border-radius:0}
+.cap{position:absolute;left:4%;right:4%;bottom:15%;text-align:center;pointer-events:none}
+.cap span{display:inline-block;max-width:100%;background:rgba(0,0,0,.82);color:#fff;font-weight:700;font-size:clamp(17px,3.3vw,34px);line-height:1.3;padding:.35em .65em;border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere;box-shadow:0 2px 12px rgba(0,0,0,.35)}
+.player:fullscreen{display:flex;align-items:center;border-radius:0}.player:fullscreen video{height:100%;object-fit:contain}.player:fullscreen .cap span{font-size:clamp(24px,3.4vw,60px)}
+.fs{position:absolute;top:8px;right:8px;padding:5px 10px;background:rgba(0,0,0,.55);border:0;color:#fff;font-size:13px}
+textarea{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:9px 11px;resize:vertical}
+.comments{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}.comments h3{font-size:15px;margin:0 0 4px}
+.cm{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line)}.cm .at{flex:none;font-variant-numeric:tabular-nums;padding:2px 8px;font-size:13px}
+.cm .tx{flex:1;white-space:pre-wrap;overflow-wrap:anywhere}.cm .by{font-size:12px;color:var(--muted)}.cm.on{background:var(--chip)}.cm button{padding:2px 8px;font-size:13px}
 .spin{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s 1s linear infinite;display:inline-block}@keyframes s{to{transform:rotate(1turn)}}`
 
 export const PAGE_CSS = () => CSS
@@ -568,9 +653,18 @@ function pageHtml(v: Viewer): string {
 <div><label for="length">Length</label><select id="length"></select></div>
 <div style="flex:0"><button id="go" disabled>Make clip</button></div></div>
 <p id="job-msg" class="small"></p>
-<div id="result" class="hidden"><video id="video" controls preload="metadata" controlslist="nodownload" oncontextmenu="return CFG.canDownload"></video>
+<div id="result" class="hidden"><div class="player" id="player"><video id="video" controls preload="metadata" controlslist="nodownload nofullscreen" oncontextmenu="return CFG.canDownload"><track kind="captions" srclang="en" label="Comments" id="track"></video><div class="cap" id="cap" aria-live="polite"></div><button class="fs" id="fs" type="button" title="Full screen, with the comments">Full screen</button></div>
 <div class="row" style="align-items:center"><button class="ghost" id="save" type="button">Save this</button><a class="btn" id="dl">Download MP4</a><button class="ghost" id="share">Copy share link</button><a class="btn ghost" id="open" target="_blank" rel="noopener">Open in PostHog</a></div>
-<p id="keep-msg" class="small muted"></p><p id="share-msg" class="small muted"></p></div></div>
+<p id="keep-msg" class="small muted"></p><p id="share-msg" class="small muted"></p>
+<div class="comments"><h3>Comments on the video</h3>
+<p class="small muted" style="margin:0 0 6px">Each comment shows big over the video at its moment, like a subtitle. Downloads and share links include them, burned into the video.</p>
+<div id="c-list"></div>
+<div class="row" style="margin-top:10px"><div style="flex:0 0 120px"><label for="c-at">At (m:ss)</label><input id="c-at" value="0:00" autocomplete="off"></div>
+<div style="flex:0 0 140px"><label for="c-dur">Show for</label><select id="c-dur"></select></div>
+<div style="flex:0"><button class="ghost" id="c-now" type="button" title="Take the moment the video is at" style="white-space:nowrap">Use video time</button></div></div>
+<p style="margin:8px 0"><label for="c-text">Comment</label><textarea id="c-text" rows="2" placeholder="What should people notice at this moment?"></textarea></p>
+<div class="row" style="align-items:center"><button id="c-add" type="button">Add comment</button><button class="ghost hidden" id="c-cancel" type="button">Cancel</button><span class="small" id="c-msg"></span></div>
+<p class="small muted" id="c-plain"></p></div></div></div>
 
 <div class="card"><h2>Your clips</h2><div class="table-wrap"><table><thead><tr><th>Made</th><th>Client</th><th>User</th><th>Part</th><th>Kept until</th><th></th></tr></thead><tbody id="recent"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table></div>
 <p class="small muted" id="retention"></p></div>
@@ -607,15 +701,59 @@ $('go').onclick=async()=>{$('go').disabled=true;$('result').classList.add('hidde
   if(j.state==='failed')throw new Error(j.error||'The clip could not be made.');
   show(j.clip);txt($('job-msg'),'Ready.','ok');loadRecent()
  }catch(e){txt($('job-msg'),e.message,'err')}finally{$('go').disabled=false}};
-function show(c){$('dl').classList.toggle('hidden',!CFG.canDownload);$('share').classList.toggle('hidden',!CFG.shareLinks);$('video').src=c.video_url+'#t=1';$('dl').href=c.download_url;$('open').href=c.replay_url;$('share').dataset.name=c.name;cur=c;$('save').textContent=c.saved?'Saved ✓ (unsave)':'Save this';txt($('keep-msg'),keepText(c),'muted');$('share-msg').textContent='';$('result').classList.remove('hidden');$('result').scrollIntoView({behavior:'smooth',block:'nearest'})}
-$('share').onclick=async()=>{try{const r=await api('/replays/api/share/'+encodeURIComponent($('share').dataset.name),{method:'POST'});await navigator.clipboard.writeText(r.url).catch(()=>{});$('share-msg').textContent='Link copied. Anyone with it can watch this clip for '+Math.round(r.expires_hours/24)+' days: '+r.url}catch(e){$('share-msg').textContent=e.message}};
+function show(c){$('dl').classList.toggle('hidden',!CFG.canDownload);$('share').classList.toggle('hidden',!CFG.shareLinks);$('video').src=c.video_url+'#t=1';$('dl').href=c.download_url;$('track').src='/replays/api/clips/'+encodeURIComponent(c.name)+'/comments.vtt';loadComments(c);$('open').href=c.replay_url;$('share').dataset.name=c.name;cur=c;$('save').textContent=c.saved?'Saved ✓ (unsave)':'Save this';txt($('keep-msg'),keepText(c),'muted');$('share-msg').textContent='';$('result').classList.remove('hidden');$('result').scrollIntoView({behavior:'smooth',block:'nearest'})}
+$('share').onclick=async()=>{try{const r=await api('/replays/api/share/'+encodeURIComponent($('share').dataset.name),{method:'POST',body:JSON.stringify({comments:true})});await navigator.clipboard.writeText(r.url).catch(()=>{});$('share-msg').textContent='Link copied'+(r.comments?', with the comments in the video':'')+'. Anyone with it can watch this clip for '+Math.round(r.expires_hours/24)+' days: '+r.url}catch(e){$('share-msg').textContent=e.message}};
 $('save').onclick=async()=>{if(!cur)return;$('save').disabled=true;try{const c=await toggleSave(cur);cur=c;$('save').textContent=c.saved?'Saved ✓ (unsave)':'Save this';txt($('keep-msg'),keepText(c),c.saved?'ok':'muted');loadRecent()}catch(e){txt($('keep-msg'),e.message,'err')}finally{$('save').disabled=false}};
 async function loadRecent(){try{const r=await api('/replays/api/clips');const tb=$('recent');tb.innerHTML='';
  if(!r.clips.length){tb.innerHTML='<tr><td colspan="6" class="muted">No clips yet.</td></tr>';return}
- r.clips.forEach(c=>{const tr=document.createElement('tr');[when(c.created_at),c.client||'',(c.user||'').replace(/@.*/,''),c.range,c.saved?'Saved':c.expires_at?day(c.expires_at):'Saved by someone else'].forEach(t=>{const td=document.createElement('td');td.textContent=t;tr.appendChild(td)});
+ r.clips.forEach(c=>{const tr=document.createElement('tr');[when(c.created_at),c.client||'',(c.user||'').replace(/@.*/,''),c.range+(c.comments?' · '+c.comments+' comment'+(c.comments===1?'':'s'):''),c.saved?'Saved':c.expires_at?day(c.expires_at):'Saved by someone else'].forEach(t=>{const td=document.createElement('td');td.textContent=t;tr.appendChild(td)});
   const td=document.createElement('td');td.style.whiteSpace='nowrap';const w=document.createElement('button');w.className='ghost';w.textContent='Watch';w.onclick=()=>show(c);
   const k=document.createElement('button');k.className='ghost';k.textContent=c.saved?'Unsave':'Save';k.onclick=async()=>{k.disabled=true;try{const n=await toggleSave(c);if(cur&&cur.name===n.name)show(n);loadRecent()}catch(e){alert(e.message)}};
   td.append(w,' ',k);tr.appendChild(td);tb.appendChild(tr)})}catch(e){$('recent').innerHTML='<tr><td colspan="6" class="err"></td></tr>';$('recent').querySelector('td').textContent=e.message}}
+// ---------------------------------------------------------------- comments on the video
+let CM={clip:null,list:[],cues:[],editing:null,length:0,durations:[],touched:false};
+const atText=x=>{x=Math.max(0,Math.round(x*10)/10);const m=Math.floor(x/60),r=x-m*60;const whole=Math.floor(r);const tenth=Math.round((r-whole)*10);return m+':'+String(whole).padStart(2,'0')+(tenth?'.'+tenth:'')};
+const parseAt=t=>{const m=/^\\s*(?:(\\d+):)?(\\d{1,2})(?:\\.(\\d))?\\s*$/.exec(t||'');if(!m)return NaN;return Number(m[1]||0)*60+Number(m[2])+Number(m[3]||0)/10};
+function cmMsg(t,cls){$('c-msg').textContent=t;$('c-msg').className='small '+(cls||'')}
+async function loadComments(c){CM.clip=c;CM.editing=null;CM.touched=false;resetComposer();try{applyComments(await api('/replays/api/clips/'+encodeURIComponent(c.name)+'/comments'))}catch(e){cmMsg(e.message,'err')}}
+function applyComments(r){CM.list=r.comments;CM.cues=r.cues;CM.length=r.length_s;
+ if(!CM.durations.length){CM.durations=r.durations;r.durations.forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=d+' seconds';if(d===r.default_duration)o.selected=true;$('c-dur').appendChild(o)})}
+ $('c-text').maxLength=r.max_text;renderComments();paint();
+ if(CM.clip){CM.clip.comments=r.comments.length;$('dl').textContent=r.comments.length&&CFG.canDownload?'Download MP4 with comments':'Download MP4'}
+ $('c-plain').innerHTML='';if(r.comments.length&&CFG.canDownload){const a=document.createElement('a');a.href=CM.clip.download_url+'?comments=0';a.textContent='Download without the comments';$('c-plain').appendChild(a)}
+ const tr=$('video').textTracks[0];if(tr)tr.mode=document.fullscreenElement===$('video')?'showing':'hidden'}
+function renderComments(){const box=$('c-list');box.innerHTML='';
+ if(!CM.list.length){const p=document.createElement('p');p.className='small muted';p.textContent='No comments yet. Pause the video where something matters and write what to notice.';box.appendChild(p);return}
+ CM.list.forEach(c=>{const row=document.createElement('div');row.className='cm';row.dataset.at=c.at_s;
+  const at=document.createElement('button');at.className='ghost at';at.type='button';at.textContent=atText(c.at_s);at.title='Jump to this moment';at.onclick=()=>{const v=$('video');v.pause();v.currentTime=c.at_s;paint()};row.appendChild(at);
+  const body=document.createElement('div');body.style.flex='1';const tx=document.createElement('div');tx.className='tx';tx.textContent=c.text;body.appendChild(tx);
+  const by=document.createElement('div');by.className='by';by.textContent=c.author.replace(/@.*/,'')+' · shows for '+c.duration_s+' s'+(c.updated_at!==c.created_at?' · edited':'');body.appendChild(by);row.appendChild(body);
+  if(c.can_edit){const e=document.createElement('button');e.className='ghost';e.type='button';e.textContent='Edit';e.onclick=()=>editComment(c);const d=document.createElement('button');d.className='ghost';d.type='button';d.textContent='Delete';
+   d.onclick=async()=>{if(!confirm('Delete this comment?'))return;try{applyComments(await api('/replays/api/clips/'+encodeURIComponent(CM.clip.name)+'/comments/'+c.id,{method:'DELETE'}));cmMsg('Deleted.','ok')}catch(err){cmMsg(err.message,'err')}};
+   const w=document.createElement('div');w.style.display='flex';w.style.gap='6px';w.append(e,d);row.appendChild(w)}
+  box.appendChild(row)})}
+function resetComposer(){CM.editing=null;$('c-text').value='';$('c-add').textContent='Add comment';$('c-cancel').classList.add('hidden');CM.touched=false;cmMsg('')}
+function editComment(c){CM.editing=c;$('c-at').value=atText(c.at_s);$('c-dur').value=String(c.duration_s);if($('c-dur').value!==String(c.duration_s)){const o=document.createElement('option');o.value=c.duration_s;o.textContent=c.duration_s+' seconds';$('c-dur').appendChild(o);$('c-dur').value=String(c.duration_s)}
+ $('c-text').value=c.text;$('c-add').textContent='Save changes';$('c-cancel').classList.remove('hidden');CM.touched=true;$('c-text').focus();const v=$('video');v.pause();v.currentTime=c.at_s;paint()}
+$('c-cancel').onclick=resetComposer;
+$('c-now').onclick=()=>{$('c-at').value=atText($('video').currentTime);CM.touched=true};
+$('c-at').oninput=()=>{CM.touched=true};
+// Writing a comment pauses the video and takes its moment, unless a moment was typed already.
+$('c-text').addEventListener('focus',()=>{const v=$('video');if(!v.paused)v.pause();if(!CM.touched&&!CM.editing)$('c-at').value=atText(v.currentTime)});
+$('c-add').onclick=async()=>{if(!CM.clip)return;const at=parseAt($('c-at').value);if(Number.isNaN(at)){cmMsg('Write the moment like 0:12 or 1:05.5.','err');return}
+ const body=JSON.stringify({at_s:at,duration_s:Number($('c-dur').value),text:$('c-text').value});$('c-add').disabled=true;
+ try{const path='/replays/api/clips/'+encodeURIComponent(CM.clip.name)+'/comments'+(CM.editing?'/'+CM.editing.id:'');const was=!!CM.editing;
+  applyComments(await api(path,{method:'POST',body}));resetComposer();cmMsg(was?'Saved.':'Added. Play the video to see it.','ok');const v=$('video');v.currentTime=Math.max(0,at-1);paint()}
+ catch(e){cmMsg(e.message,'err')}finally{$('c-add').disabled=false}};
+$('c-text').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();$('c-add').click()}});
+// Shows the comment for the video's current moment, big, over the picture.
+let shownCue=null;
+function paint(){const t=$('video').currentTime;const c=CM.cues.find(x=>t>=x.start&&t<x.end)||null;if(c!==shownCue){shownCue=c;const cap=$('cap');cap.innerHTML='';if(c){const sp=document.createElement('span');sp.textContent=c.text;cap.appendChild(sp)}}
+ document.querySelectorAll('#c-list .cm').forEach(r=>r.classList.toggle('on',!!c&&Number(r.dataset.at)===c.start))}
+(()=>{const v=$('video');let raf=0;const loop=()=>{paint();raf=v.paused?0:requestAnimationFrame(loop)};v.addEventListener('play',()=>{if(!raf)raf=requestAnimationFrame(loop)});['seeked','timeupdate','loadedmetadata','pause'].forEach(ev=>v.addEventListener(ev,paint))})();
+$('fs').onclick=()=>{const p=$('player');if(document.fullscreenElement)document.exitFullscreen();else if(p.requestFullscreen)p.requestFullscreen().catch(()=>{})};
+// Browsers that still put the bare video in full screen get the comments as captions there.
+document.addEventListener('fullscreenchange',()=>{const tr=$('video').textTracks[0];if(tr)tr.mode=document.fullscreenElement===$('video')?'showing':'hidden';$('fs').textContent=document.fullscreenElement?'Exit full screen':'Full screen'});
 loadRecent();
 const qs=new URLSearchParams(location.search);const pre=qs.get('url');if(pre){$('input').value=pre;check()}
 const one=qs.get('clip');if(one){api('/replays/api/clips/'+encodeURIComponent(one)).then(show).catch(e=>txt($('job-msg'),e.message,'err'))}

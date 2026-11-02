@@ -73,6 +73,16 @@ does the job with the same renderer.
 3. Watch it, download it (the file name says client, user, date and range), copy a share link
    that expires, or open the replay in PostHog at that second.
 
+**Comments on the video.** Under a clip, anyone who can watch it can pin comments to moments:
+click into the comment box (the video pauses and its moment is taken, or type one like `1:05.5`),
+write what to notice and pick how long it shows (3 to 20 seconds, 5 by default). While the clip
+plays, each comment shows big over the picture at its moment, like a subtitle, also in full screen.
+**Download** and **share links** carry them burned into the video, so they work in any player
+(**Download without the comments** gives the plain clip). A comment shows until its time runs out
+or the next comment starts. Whoever wrote a comment, or an admin, can edit or delete it; each
+change is in the activity log. The burned copy is made once per version of the comments (about a
+second for a 30-second clip) and is deleted with the clip.
+
 The page also lists your clips (made or saved by you) and has a "Get MP4" bookmark button: drag it to the bookmarks
 bar, and while you watch a replay in PostHog, click it to open that replay here. Each Jira
 triage comment links here too ("Make another clip").
@@ -287,7 +297,7 @@ The local `.mcp.json` server has the same tools.
 
 | Path | What |
 | --- | --- |
-| `src/core/` | Shared logic: resolution, incidents, usage, impact, silent issues, clips, severity, report; `releases.ts` (release outcomes), `presence.ts` (time in the app), `db.ts` (SQLite) |
+| `src/core/` | Shared logic: resolution, incidents, usage, impact, silent issues, clips, clip comments, severity, report; `releases.ts` (release outcomes), `presence.ts` (time in the app), `db.ts` (SQLite) |
 | `src/jira/` | Jira Cloud REST v3 client, webhook signatures, Markdown ↔ ADF |
 | `src/service/` | The web service: webhooks, signed clip links, MCP over HTTP, `/replays`, the Live page, admin |
 | `src/mcp/` | MCP tools and the stdio entry point |
