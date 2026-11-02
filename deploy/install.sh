@@ -197,6 +197,7 @@ is_urls() { local u; for u in ${1//,/ }; do is_url "$u" || return 1; done; }
 is_onoff() { [[ "$1" =~ ^(on|off)$ ]] || { warn "on or off"; return 1; }; }
 is_yesno() { [[ "$1" =~ ^(yes|no)$ ]] || { warn "yes or no"; return 1; }; }
 is_address() { [[ "$1" =~ ^(https?://)?[A-Za-z0-9.-]+$ ]] || { warn "a domain (posthog.example.com), an IP address, or http://name"; return 1; }; }
+is_private_ip() { [[ "$1" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)[0-9.]+$ ]]; }
 addr_kind() { local h="${1#*://}"; [[ "$1" == http://* ]] || [[ "$h" =~ ^[0-9.]+$ ]] && echo http || echo https; }
 # One or more addresses, comma-separated, all of one kind: domains with HTTPS, or IPs and http:// names.
 is_addresses() {
@@ -278,6 +279,9 @@ collect_answers() {
         if [ -z "$POSTHOG_MCP_URL" ] || [ "$POSTHOG_MCP_URL" = "$LOCAL_MCP_URL" ]; then LOCAL_MCP=1
         else need POSTHOG_MCP_API_KEY POSTHOG_MCP_URL; fi
     fi
+    # PostHog's MCP on the network as well (port 8787): by default when PostHog's address is a private IP.
+    # On a public address the key would cross the internet in plain HTTP, so it stays on this machine.
+    setting POSTHOG_MCP_NETWORK "$(is_private_ip "$host" && echo yes || echo no)" is_yesno
     setting SERVICE_PUBLIC_URL "http://$host:8080" is_url
     setting CLIP_ALLOWED_HOSTS "$([ -n "$APP_URLS" ] && hosts_of "$APP_URLS" || echo localhost)"
     setting STATUS_PUBLIC no is_yesno
@@ -309,7 +313,10 @@ show_plan() {
     say "PostHog Lens    $SERVICE_PUBLIC_URL, from $APP_DIR, as user $APP_USER, starts at boot"
     say "Jira            $([ -n "$JIRA_BASE_URL" ] && echo "$JIRA_BASE_URL (releases from $RELEASES_JIRA_PROJECT)" || echo "not connected yet (connect it later in .secrets.env)")"
     say "Claude reading  $([ -n "$ANTHROPIC_API_KEY" ] && echo on || echo "off (keyword rules)")"
-    say "MCP             Lens tools $FEATURE_LENS_MCP, PostHog's MCP $FEATURE_POSTHOG_MCP$([ "$LOCAL_MCP" = 1 ] && echo " (on this machine, read-only key without replay access)")"
+    say "MCP             Lens tools $FEATURE_LENS_MCP, PostHog's MCP $FEATURE_POSTHOG_MCP$([ "$LOCAL_MCP" = 1 ] && echo " (read-only key without replay access)")"
+    if [ "$LOCAL_MCP" = 1 ]; then
+        say "                PostHog's MCP at $([ "$POSTHOG_MCP_NETWORK" = yes ] && echo "http://$host:8787/mcp" || echo "http://127.0.0.1:8787/mcp, this machine only")"
+    fi
     say "Status page     $([ "$STATUS_PUBLIC" = yes ] && echo "http://$host:8090 with a password" || echo "http://127.0.0.1:8090 on this machine only")"
     say "${D}Other settings (event names, Jira, Claude, MCP, status page): defaults above. Change them with${N}"
     say "${D}--config FILE (deploy/install.env.example), or later in $SECRETS.${N}"
@@ -551,12 +558,17 @@ step_account() {
 step_posthog_mcp() {
     CURRENT=posthog_mcp; step "PostHog's MCP server"
     if [ "$LOCAL_MCP" = 1 ]; then
-        SECRETS="$SECRETS" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/posthog-mcp/up.sh"
+        local host; host="$(hosts_of "${POSTHOG_ADDRESS%%,*}")"
+        if [ "$POSTHOG_MCP_NETWORK" = yes ]; then
+            MCP_BIND=0.0.0.0 MCP_NETWORK_URL="http://$host:8787/mcp" SECRETS="$SECRETS" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/posthog-mcp/up.sh"
+        else
+            SECRETS="$SECRETS" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/posthog-mcp/up.sh"
+        fi
         POSTHOG_MCP_URL="$(read_env_file "$SECRETS" POSTHOG_MCP_URL)"
         POSTHOG_MCP_API_KEY="$(read_env_file "$SECRETS" POSTHOG_MCP_API_KEY)"
         [ -n "$POSTHOG_MCP_API_KEY" ] || die "No key for PostHog's MCP server was written to .secrets.env."
         save_answer POSTHOG_MCP_URL "$POSTHOG_MCP_URL"
-        ok "on $POSTHOG_MCP_URL, for this machine only"
+        ok "on $([ "$POSTHOG_MCP_NETWORK" = yes ] && echo "http://$host:8787/mcp" || echo "$POSTHOG_MCP_URL, for this machine only")"
     else
         # A server this installer started earlier is not needed any more.
         bash "$HERE/posthog-mcp/up.sh" down >/dev/null 2>&1 || true
@@ -745,7 +757,8 @@ EOF
     if [ "$LOCAL_MCP" = 1 ]; then cat >>"$f" <<EOF
 
 PostHog's MCP server (SQL, insights, flags, dashboards...)
-  Address         $POSTHOG_MCP_URL, this machine only (Claude Code here gets it through .mcp.json)
+  Address         $([ "$POSTHOG_MCP_NETWORK" = yes ] && echo "http://$(hosts_of "${POSTHOG_ADDRESS%%,*}"):8787/mcp from the network (port 8787 open in the firewall);" || echo "$POSTHOG_MCP_URL, this machine only;") on this machine $POSTHOG_MCP_URL
+                  (Claude Code here gets it through .mcp.json). Every request needs the key below.
   Key             read-only, project $(read_env_file "$SECRETS" POSTHOG_PROJECT_ID) only, no session replay scopes
                   (label posthog-mcp in PostHog). New key: sudo $HERE/posthog-mcp/up.sh --new-key
   Logs            cd $HERE/posthog-mcp && sudo docker compose logs -f

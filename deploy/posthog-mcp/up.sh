@@ -4,6 +4,8 @@
 #   deploy/posthog-mcp/up.sh             # start it (or restart it with new settings)
 #   deploy/posthog-mcp/up.sh --new-key   # also replace its API key
 #   deploy/posthog-mcp/up.sh down        # stop and remove it
+#   MCP_BIND=0.0.0.0 MCP_NETWORK_URL=http://10.0.1.25:8787/mcp deploy/posthog-mcp/up.sh
+#                                        # reachable from the network too, not only this machine
 #
 # The key is read-only and can never reach session replays: it has every read scope except the ones
 # for recordings, things made from recordings (replay AI analysis, signals), exports (they can hold
@@ -18,7 +20,8 @@ cd "$(dirname "$0")"
 if [ "${1:-}" = down ]; then MCP_POSTHOG_API_URL=- MCP_POSTHOG_PUBLIC_URL=- docker compose down; exit 0; fi
 SECRETS="${SECRETS:-$(cd ../.. && pwd)/.secrets.env}"
 POSTHOG_DIR="${POSTHOG_DIR:-/opt/posthog}"
-export MCP_PORT="${MCP_PORT:-8787}"
+export MCP_PORT="${MCP_PORT:-8787}" MCP_BIND="${MCP_BIND:-127.0.0.1}"
+export MCP_APPS_URL="${MCP_NETWORK_URL:-http://127.0.0.1:$MCP_PORT/mcp}"; MCP_APPS_URL="${MCP_APPS_URL%/mcp}"
 export POSTHOG_NETWORK="${POSTHOG_NETWORK:-$(basename "$POSTHOG_DIR")_default}"
 get() { grep -E "^$1=" "$SECRETS" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
 put() {
@@ -79,9 +82,12 @@ PY
     put POSTHOG_MCP_API_KEY "$key"
     echo "Made a read-only API key for the MCP server (no session replay scopes), label posthog-mcp."
 fi
-put POSTHOG_MCP_URL "http://127.0.0.1:$MCP_PORT/mcp"
+# The address this machine reaches it on: 127.0.0.1 unless it listens on one other address only.
+local_host="$MCP_BIND"; [ "$local_host" = 0.0.0.0 ] && local_host=127.0.0.1
+put POSTHOG_MCP_URL "http://$local_host:$MCP_PORT/mcp"
 
 docker compose up -d --quiet-pull --remove-orphans 2>&1 | grep -v -E "^ *(Container|Network) " || true
-for _ in $(seq 1 60); do curl -fs -o /dev/null -m 2 "http://127.0.0.1:$MCP_PORT/healthz" && break; sleep 1; done
-curl -fs -o /dev/null -m 2 "http://127.0.0.1:$MCP_PORT/healthz" || { docker compose logs --tail 20; echo "The MCP server did not start."; exit 1; }
-echo "PostHog's MCP server: http://127.0.0.1:$MCP_PORT/mcp (this machine only), calling PostHog at $MCP_POSTHOG_API_URL"
+for _ in $(seq 1 60); do curl -fs -o /dev/null -m 2 "http://$local_host:$MCP_PORT/healthz" && break; sleep 1; done
+curl -fs -o /dev/null -m 2 "http://$local_host:$MCP_PORT/healthz" || { docker compose logs --tail 20; echo "The MCP server did not start."; exit 1; }
+if [ "$MCP_BIND" = 127.0.0.1 ]; then where="this machine only"; else where="also ${MCP_NETWORK_URL:-port $MCP_PORT on the network}"; fi
+echo "PostHog's MCP server: http://$local_host:$MCP_PORT/mcp ($where), calling PostHog at $MCP_POSTHOG_API_URL"
