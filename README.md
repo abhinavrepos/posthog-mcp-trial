@@ -289,7 +289,8 @@ It asks two things:
 - **The email of the first PostHog login.**
 
 Everything else has a default: organization `ION`, event names `client_id`, `client_name`,
-`app_version` and `email`, Jira not connected, Claude reading off, Lens MCP on, and the status page on
+`app_version` and `email`, Jira not connected, Claude reading off, both MCP servers on (PostHog's
+runs on this machine, with a key that cannot reach replays), and the status page on
 this machine only. Session recording works on every site that sends events. To set APP_URLS (which
 limits recording to your app's addresses) or change any other default, fill in a copy of
 `deploy/install.env.example` and run `sudo deploy/install.sh --config my-install.env`. Add `--yes`
@@ -403,6 +404,14 @@ experiments and survey setup in PostHog's. It also tells Claude never to use Pos
 Replay Vision tools. Give PostHog's server its own personal key without `session_recording`
 scopes (`POSTHOG_MCP_API_KEY`); `pnpm doctor` fails if that key can read replays. The key is
 what actually keeps replays private.
+
+`deploy/install.sh` sets this up on its own: `deploy/posthog-mcp/up.sh` runs PostHog's MCP server
+(PostHog's image, pinned by digest) on `127.0.0.1:8787` and makes its key. The key is read-only and
+limited to the Lens project. It has no scope for recordings, playlists, Replay Vision, signals,
+exports (they can hold recording videos) or sharing links (they can open recordings). PostHog's
+server then offers no replay tools at all. Its SQL tool can still read replay metadata (the
+`session_replay_events` table: counts, durations, first URL), as the Lens key can. Replay content is
+never reachable.
 
 ### Scaling PostHog (self-hosted)
 
