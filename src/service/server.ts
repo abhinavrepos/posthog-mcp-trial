@@ -23,7 +23,8 @@ import { serverInstructions } from '../mcp/instructions.ts'
 import { registerTools } from '../mcp/tools.ts'
 import { audit } from './access.ts'
 import { keptReleases, syncReleases, syncStatus } from '../core/releases.ts'
-import { handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
+import { captionedFile } from '../core/comments.ts'
+import { getClip, handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
 
 const ai = makeAi()
 
@@ -121,14 +122,17 @@ async function handleWebhook(req: IncomingMessage, res: ServerResponse) {
     void runJob(job)
 }
 
-function serveClip(req: IncomingMessage, res: ServerResponse, url: URL) {
+async function serveClip(req: IncomingMessage, res: ServerResponse, url: URL) {
     const name = decodeURIComponent(url.pathname.slice('/clips/'.length))
     if (name !== basename(name) || !/^[A-Za-z0-9-]+_\d+-\d+\.mp4$/.test(name)) return send(res, 404, 'not found')
     if (!verifyClipLink(name, url.searchParams.get('exp'), url.searchParams.get('sig'))) return send(res, 403, 'This clip link is invalid or has expired.')
     const file = join(config.clip.outDir, name)
     if (!existsSync(file)) return send(res, 404, 'not found')
-    if (!req.headers.range || /^bytes=0-/.test(String(req.headers.range))) audit('signed-link', 'clip.viewed', { clip: name })
-    streamMp4(req, res, file)
+    // c=1: with the comments burned in, as they are now (a link shared before an edit shows the edit).
+    const clip = url.searchParams.get('c') === '1' ? getClip(name) : undefined
+    const out = clip ? await captionedFile(name, clip.end_s - clip.start_s) : file
+    if (!req.headers.range || /^bytes=0-/.test(String(req.headers.range))) audit('signed-link', 'clip.viewed', { clip: name, comments: out !== file })
+    streamMp4(req, res, out)
 }
 
 function featureState() {
@@ -171,7 +175,7 @@ const server = createServer(async (req, res) => {
             return res.end()
         }
         if (url.pathname === '/webhooks/jira' && req.method === 'POST') return await handleWebhook(req, res)
-        if (url.pathname.startsWith('/clips/') && req.method === 'GET') return serveClip(req, res, url)
+        if (url.pathname.startsWith('/clips/') && req.method === 'GET') return await serveClip(req, res, url)
         if (url.pathname === '/') {
             res.writeHead(302, { location: '/replays' })
             return res.end()
