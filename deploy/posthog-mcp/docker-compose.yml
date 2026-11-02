@@ -13,10 +13,11 @@ services:
             # Where the server calls PostHog's API, and the address its links point at.
             POSTHOG_API_BASE_URL: ${MCP_POSTHOG_API_URL:?}
             POSTHOG_PUBLIC_URL: ${MCP_POSTHOG_PUBLIC_URL:?}
-            MCP_APPS_BASE_URL: http://127.0.0.1:${MCP_PORT:-8787}
+            MCP_APPS_BASE_URL: ${MCP_APPS_URL:-http://127.0.0.1:8787}
         ports:
-            # Only this machine. Every request still needs a PostHog personal API key.
-            - '127.0.0.1:${MCP_PORT:-8787}:3001'
+            # 127.0.0.1: this machine only. 0.0.0.0 (MCP_BIND): the network too. Either way every request
+            # needs a PostHog personal API key.
+            - '${MCP_BIND:-127.0.0.1}:${MCP_PORT:-8787}:3001'
         networks: [posthog]
 networks:
     posthog:
