@@ -3,8 +3,8 @@
 # (the triage service) and its status page. For a machine that already runs PostHog, use
 # deploy/migrate/posthog-upgrade.sh to bring PostHog to this version first.
 #
-#   sudo deploy/install.sh                                  # asks every setting, shows the plan, installs
-#   sudo deploy/install.sh --config my-install.env          # answers from a file (deploy/install.env.example)
+#   sudo deploy/install.sh                                  # asks two things, shows the plan, installs
+#   sudo deploy/install.sh --config my-install.env          # every other setting from a file (deploy/install.env.example)
 #   sudo deploy/install.sh --config my-install.env --yes    # no questions at all
 #   sudo deploy/install.sh --use-existing-posthog           # PostHog is already on this version: keep it
 #   sudo deploy/install.sh status                           # which steps are done, and the summary
@@ -16,6 +16,7 @@
 #   posthog   PostHog through deploy/posthog/install-posthog-hobby.sh, every image pinned by digest
 #             (deploy/migrate/versions), started at boot by posthog.service. 30-60 minutes.
 #   scale     deploy/posthog/scale.sh: about 200 events a second without losing any (SCALE=no skips it)
+#   addresses PostHog answers on every address in POSTHOG_ADDRESS, each one trusted for logins (CSRF)
 #   node      Node 24 (checked against nodejs.org's checksums) and pnpm 10
 #   user      the unprivileged "triage" user the service runs as; it owns the project folder
 #   app       pnpm install (with Chrome for rendering), the user-namespace setting Chrome's sandbox needs
@@ -26,7 +27,7 @@
 #   status    the status page (deploy/status), only on this machine or behind a password
 #   mcp       .mcp.json for Claude Code, from the two MCP switches
 #   doctor    pnpm doctor: checks every setting against the running services
-# check, settings, service, status, mcp and doctor run every time, so changed answers take effect.
+# check, addresses, settings, service, status, mcp and doctor run every time, so changed answers take effect.
 # At the end it prints (and saves) everything you need: addresses, logins, where each secret is, the
 # snippet for your app, how to connect Jira and Claude.
 set -Eeuo pipefail
@@ -78,9 +79,9 @@ chmod 700 "$STATE_DIR"
 
 done_step() { [ -f "$STATE_DIR/done/$1" ]; }
 finish() { date -u +%Y-%m-%dT%H:%M:%SZ >"$STATE_DIR/done/$1"; ok "step $1 done"; }
-STEPS=(check packages posthog scale node user app account settings service status mcp doctor)
+STEPS=(check packages posthog scale addresses node user app account settings service status mcp doctor)
 # Cheap and safe to repeat, so they run every time and changed answers take effect.
-ALWAYS=" check settings service status mcp doctor "
+ALWAYS=" check addresses settings service status mcp doctor "
 
 if [ "$CMD" = status ]; then
     for s in "${STEPS[@]}"; do
@@ -141,6 +142,17 @@ INTERACTIVE=0
 [ $YES = 0 ] && [ -t 0 ] && INTERACTIVE=1
 [ $YES = 1 ] || [ $INTERACTIVE = 1 ] || die "No terminal to ask questions on: pass --config FILE --yes."
 
+# setting KEY default [validator]: a setting that is never asked. It comes from the environment, the
+# --config file, an earlier answer or .secrets.env, else the default.
+setting() {
+    local key="$1" v; v="$(known "$key")"; [ -n "$v" ] || v="$2"
+    [ "$v" = "-" ] && v=""
+    if [ -n "$v" ] && [ -n "${3:-}" ] && ! "$3" "$v"; then die "$key: \"$v\" is not valid. Fix it in the --config file (or $ANSWERS)."; fi
+    printf -v "$key" '%s' "$v"
+    save_answer "$key" "$v"
+}
+need() { [ -n "${!1}" ] || die "$1 is required when $2 is set: add it to the --config file."; }
+
 # ask KEY "question" default required(1/0) secret(1/0) validator
 ask() {
     local key="$1" q="$2" def="$3" req="$4" secret="${5:-0}" check="${6:-}" cur v shown typed
@@ -175,6 +187,17 @@ is_urls() { local u; for u in ${1//,/ }; do is_url "$u" || return 1; done; }
 is_onoff() { [[ "$1" =~ ^(on|off)$ ]] || { warn "on or off"; return 1; }; }
 is_yesno() { [[ "$1" =~ ^(yes|no)$ ]] || { warn "yes or no"; return 1; }; }
 is_address() { [[ "$1" =~ ^(https?://)?[A-Za-z0-9.-]+$ ]] || { warn "a domain (posthog.example.com), an IP address, or http://name"; return 1; }; }
+addr_kind() { local h="${1#*://}"; [[ "$1" == http://* ]] || [[ "$h" =~ ^[0-9.]+$ ]] && echo http || echo https; }
+# One or more addresses, comma-separated, all of one kind: domains with HTTPS, or IPs and http:// names.
+is_addresses() {
+    local a first=""
+    for a in ${1//,/ }; do
+        is_address "$a" || return 1
+        [ -n "$first" ] || first="$(addr_kind "$a")"
+        [ "$(addr_kind "$a")" = "$first" ] || { warn "mix of kinds: use only domains (HTTPS), or only IPs and http:// names (plain HTTP)"; return 1; }
+    done
+    [ -n "$first" ]
+}
 is_file() { local f="$1"; [[ "$f" = /* ]] || f="$APP_DIR/$f"; [ -f "$f" ] && python3 -c 'import json,sys; l=json.load(open(sys.argv[1])); assert isinstance(l,list) and all(x["path"].startswith("/") and x["name"] for x in l)' "$f" 2>/dev/null || { warn "not found, or not a JSON list like config/screens.example.json"; return 1; }; }
 is_jql() { [ -n "$1" ]; }
 hosts_of() { local u h out=""; for u in ${1//,/ }; do h="${u#*://}"; h="${h%%/*}"; h="${h%%:*}"; out="${out:+$out,}$h"; done; echo "$out"; }
@@ -194,67 +217,70 @@ SCALE="$(known SCALE)"; SCALE="${SCALE:-yes}"
 
 collect_answers() {
     step "Settings"
-    [ $INTERACTIVE = 1 ] && say "Press Enter to keep the value in [brackets]. Type - to clear one."
-    echo; echo "  ${B}PostHog${N}"
-    ask POSTHOG_ADDRESS "Address people use to reach PostHog: a domain gets HTTPS (DNS must point here, ports 80 and 443 open in the security group); an IP or http://name is plain HTTP" "$(public_ip)" 1 0 is_address
+    [ $INTERACTIVE = 1 ] && say "Press Enter to keep the value in [brackets]."
+    ask POSTHOG_ADDRESS "Address(es) people use to reach PostHog, comma-separated (the first is the main one). Domains get HTTPS (DNS must point here, ports 80 and 443 open in the security group); IPs and http://names are plain HTTP. Do not mix the two." "$(public_ip)" 1 0 is_addresses
+    POSTHOG_ADDRESS="${POSTHOG_ADDRESS// /}"; save_answer POSTHOG_ADDRESS "$POSTHOG_ADDRESS"
     ask ADMIN_EMAIL "Email for the first PostHog login" "" 1 0 is_email
-    ask ORG_NAME "Organization name in PostHog" "" 1
-    ask APP_URLS "Your product's addresses, comma-separated (PostHog records sessions only there), e.g. https://app.example.com" "" 1 0 is_urls
-    echo; echo "  ${B}Your events${N} (the names your app sends to PostHog)"
-    ask PROP_CLIENT_ID "Event property with the client (customer account) id" client_id 1
-    ask PROP_CLIENT_NAME "Event property with the client's display name" client_name 1
-    ask PROP_APP_VERSION "Event property with your release, e.g. 26.10.0 (none: match releases by date only)" app_version 1
-    ask PROP_PERSON_EMAIL "Person property with the user's email" email 1
-    ask SCREENS_FILE "JSON file with your app's screens (like config/screens.example.json); empty: match pages by path only" "" 0 0 is_file
-    echo; echo "  ${B}Jira${N} (optional: leave the address empty to connect it later)"
-    ask JIRA_BASE_URL "Jira site, e.g. https://your-site.atlassian.net" "" 0 0 is_url
+
+    # Everything below has a default and is never asked. Change one in a --config file
+    # (deploy/install.env.example), or in .secrets.env afterwards.
+    local host; host="$(hosts_of "${POSTHOG_ADDRESS%%,*}")"
+    setting ORG_NAME ION
+    # Only from the environment or --config: empty means PostHog records on every site that sends events.
+    APP_URLS="${APP_URLS:-$(read_env_file "$CONFIG" APP_URLS)}"
+    [ -z "$APP_URLS" ] || is_urls "$APP_URLS" || die "APP_URLS: \"$APP_URLS\" is not a list of http(s):// addresses."
+    setting PROP_CLIENT_ID client_id
+    setting PROP_CLIENT_NAME client_name
+    setting PROP_APP_VERSION app_version
+    setting PROP_PERSON_EMAIL email
+    setting SCREENS_FILE "" is_file
+    setting JIRA_BASE_URL "" is_url
+    setting JIRA_EMAIL "" is_email
+    setting JIRA_API_TOKEN ""
+    setting JIRA_RCI_ISSUE_TYPE RCI
+    setting JIRA_RISK_ISSUE_TYPE "MMT Risk"
+    setting RELEASES_JIRA_PROJECT ""
+    setting RELEASES_SUPPORT_JQL 'project = SUP AND issuetype in ("RCI", "MMT Risk")'
     if [ -n "$JIRA_BASE_URL" ]; then
-        ask JIRA_EMAIL "Jira bot user's email" "" 1 0 is_email
-        ask JIRA_API_TOKEN "Jira API token for that user (https://id.atlassian.com/manage-profile/security/api-tokens)" "" 1 1
-        ask JIRA_RCI_ISSUE_TYPE "Issue type that gets triaged as an incident" RCI 1
-        ask JIRA_RISK_ISSUE_TYPE "Issue type that gets triaged as a risk" "MMT Risk" 1
-        ask RELEASES_JIRA_PROJECT "Jira project key whose fix versions are your releases, e.g. ACP" "" 1
-        ask RELEASES_SUPPORT_JQL "JQL for the tickets that count as support tickets" 'project = SUP AND issuetype in ("RCI", "MMT Risk")' 1 0 is_jql
-    else
-        for k in JIRA_EMAIL JIRA_API_TOKEN JIRA_RCI_ISSUE_TYPE JIRA_RISK_ISSUE_TYPE RELEASES_JIRA_PROJECT RELEASES_SUPPORT_JQL; do printf -v "$k" '%s' "$(known "$k")"; done
+        need JIRA_EMAIL JIRA_BASE_URL; need JIRA_API_TOKEN JIRA_BASE_URL; need RELEASES_JIRA_PROJECT JIRA_BASE_URL
     fi
-    echo; echo "  ${B}Claude${N}"
-    ask ANTHROPIC_API_KEY "Anthropic API key, so the Jira automation reads ticket text with Claude (optional)" "" 0 1
-    echo; echo "  ${B}MCP servers for Claude${N}"
-    ask FEATURE_LENS_MCP "This project's MCP tools (replay links, tickets, clients, screens, releases): on or off" on 1 0 is_onoff
-    ask POSTHOG_MCP_URL "PostHog's own MCP server address (optional), e.g. https://mcp.posthog.com/mcp" "" 0 0 is_url
+    setting ANTHROPIC_API_KEY ""
+    setting FEATURE_LENS_MCP on is_onoff
+    setting POSTHOG_MCP_URL "" is_url
+    setting POSTHOG_MCP_API_KEY ""
     if [ -n "$POSTHOG_MCP_URL" ]; then
-        ask POSTHOG_MCP_API_KEY "Personal API key for PostHog's MCP server, WITHOUT any session_recording scope" "" 1 1
-        ask FEATURE_POSTHOG_MCP "Give Claude PostHog's MCP server: on or off" on 1 0 is_onoff
+        need POSTHOG_MCP_API_KEY POSTHOG_MCP_URL
+        setting FEATURE_POSTHOG_MCP on is_onoff
     else
-        POSTHOG_MCP_API_KEY=""; FEATURE_POSTHOG_MCP=off
+        FEATURE_POSTHOG_MCP=off
     fi
-    echo; echo "  ${B}This service${N}"
-    local host; host="$(hosts_of "$POSTHOG_ADDRESS")"
-    ask SERVICE_PUBLIC_URL "Where people open clip links and Claude reaches /mcp (put HTTPS in front before sharing it widely)" "http://$host:8080" 1 0 is_url
-    ask CLIP_ALLOWED_HOSTS "Hosts a recording may load while it renders (your app's hosts and CDN), comma-separated" "$(hosts_of "$APP_URLS")" 1
-    echo; echo "  ${B}Status page${N}"
-    ask STATUS_PUBLIC "Status page for everyone on port 8090, behind a password (yes), or only on this machine (no)" no 1 0 is_yesno
+    setting SERVICE_PUBLIC_URL "http://$host:8080" is_url
+    setting CLIP_ALLOWED_HOSTS "$([ -n "$APP_URLS" ] && hosts_of "$APP_URLS" || echo localhost)"
+    setting STATUS_PUBLIC no is_yesno
     STATUS_PASSWORD=""
-    [ "$STATUS_PUBLIC" = yes ] && ask STATUS_PASSWORD "Status page password (Enter: keep the one shown masked, made up for you)" "$(openssl rand -hex 12)" 1 1
+    [ "$STATUS_PUBLIC" = yes ] && setting STATUS_PASSWORD "$(openssl rand -hex 12)"
     save_answer POSTHOG_DIR "$POSTHOG_DIR"; save_answer SCALE "$SCALE"
 }
 
 show_plan() {
-    local scheme=http host; host="$(hosts_of "$POSTHOG_ADDRESS")"
-    [[ "$POSTHOG_ADDRESS" == http://* ]] || [[ "$host" =~ ^[0-9.]+$ ]] || scheme=https
+    local scheme host a others=""; host="$(hosts_of "${POSTHOG_ADDRESS%%,*}")"
+    scheme="$(addr_kind "${POSTHOG_ADDRESS%%,*}")"
     POSTHOG_PUBLIC_URL="$scheme://$host"
+    for a in $(hosts_of "$POSTHOG_ADDRESS" | tr , ' '); do [ "$a" = "$host" ] || others="${others:+$others, }$scheme://$a"; done
     . "$HERE/migrate/versions/versions.env"
     step "Plan"
     say "PostHog         $POSTHOG_PUBLIC_URL  ($([ $scheme = https ] && echo "HTTPS, certificate from Let's Encrypt" || echo "plain HTTP: private network or VPN only"))"
+    [ -z "$others" ] || say "                also at $others"
     if [ $USE_EXISTING = 1 ]; then say "                keep the PostHog already in $POSTHOG_DIR"
     else say "                version ${TARGET_COMMIT:0:12}, installed in $POSTHOG_DIR$([ "$SCALE" = yes ] && echo ", tuned for ~200 events/s")"; fi
-    say "login           $ADMIN_EMAIL (organization \"$ORG_NAME\"), recording on $APP_URLS"
+    say "login           $ADMIN_EMAIL (organization \"$ORG_NAME\"), recording on ${APP_URLS:-every site that sends events}"
     say "PostHog Lens    $SERVICE_PUBLIC_URL, from $APP_DIR, as user $APP_USER, starts at boot"
     say "Jira            $([ -n "$JIRA_BASE_URL" ] && echo "$JIRA_BASE_URL (releases from $RELEASES_JIRA_PROJECT)" || echo "not connected yet (connect it later in .secrets.env)")"
     say "Claude reading  $([ -n "$ANTHROPIC_API_KEY" ] && echo on || echo "off (keyword rules)")"
     say "MCP             Lens tools $FEATURE_LENS_MCP, PostHog's MCP $FEATURE_POSTHOG_MCP"
     say "Status page     $([ "$STATUS_PUBLIC" = yes ] && echo "http://$host:8090 with a password" || echo "http://127.0.0.1:8090 on this machine only")"
+    say "${D}Other settings (event names, Jira, Claude, MCP, status page): defaults above. Change them with${N}"
+    say "${D}--config FILE (deploy/install.env.example), or later in $SECRETS.${N}"
     if [ $INTERACTIVE = 1 ]; then
         local a; echo; read -r -p "  Install now? [y/N] " a </dev/tty
         [[ "$a" =~ ^[Yy] ]] || { CURRENT=""; echo "Nothing was installed. Your answers are kept for next time."; exit 0; }
@@ -345,6 +371,18 @@ step_scale() {
     local i; for i in $(seq 1 40); do posthog_healthy && break; sleep 15; done
     posthog_healthy || die "PostHog is not healthy after scale.sh. Undo with: sudo deploy/posthog/scale.sh --undo"
     finish scale
+}
+
+step_addresses() {
+    CURRENT=addresses; step "PostHog addresses"
+    if [ "$(read_env_file "$POSTHOG_DIR/.env" ADDRESSES)" = "$POSTHOG_ADDRESS" ]; then
+        ok "PostHog answers on $POSTHOG_ADDRESS"
+    else
+        POSTHOG_INSTALL_DIR="$POSTHOG_DIR" bash "$HERE/posthog/install-posthog-hobby.sh" --addresses-only "$POSTHOG_ADDRESS" </dev/null
+        local i; for i in $(seq 1 40); do posthog_healthy && break; sleep 15; done
+        posthog_healthy || die "PostHog is not healthy after the address change. See: cd $POSTHOG_DIR && docker compose logs --tail 50 web"
+    fi
+    finish addresses
 }
 
 step_node() {
@@ -539,24 +577,24 @@ write_summary() {
     CURRENT=""
     local host token mcp_on f="$STATE_DIR/summary.txt"
     local sport; sport="$(read_env_file "$SECRETS" SERVICE_PORT)"; sport="${sport:-8080}"
-    host="$(hosts_of "$POSTHOG_ADDRESS")"
+    host="$(hosts_of "${POSTHOG_ADDRESS%%,*}")"
     token="$(read_env_file "$SECRETS" POSTHOG_PROJECT_TOKEN)"
     mcp_on="$(read_env_file "$SECRETS" FEATURE_LENS_MCP)"
     umask 077
     cat >"$f" <<EOF
 PostHog Lens is installed ($(date -u '+%Y-%m-%d %H:%M UTC')).
 
-EC2 security group (inbound): 22 from your address; 80$(case "$POSTHOG_ADDRESS" in http://*|[0-9]*) ;; *) echo " and 443";; esac) from where
+EC2 security group (inbound): 22 from your address; 80$([ "$(addr_kind "${POSTHOG_ADDRESS%%,*}")" = http ] || echo " and 443") from where
 your users and app reach PostHog; $sport (this service) from where people open clip links$([ "$STATUS_PUBLIC" = yes ] && echo "; 8090 for the status page").
 
 PostHog
-  Open            $POSTHOG_PUBLIC_URL
+  Open            $POSTHOG_PUBLIC_URL$([ "$POSTHOG_ADDRESS" = "${POSTHOG_ADDRESS%%,*}" ] || echo " (also: ${POSTHOG_ADDRESS#*,})")
   Login           $ADMIN_EMAIL, password: sudo grep POSTHOG_ADMIN_PASSWORD $SECRETS
   Files           $POSTHOG_DIR (back up $POSTHOG_DIR/.env: its secrets encrypt data)
   Start / stop    sudo systemctl start posthog / sudo systemctl stop posthog
   Upgrade         sudo $HERE/migrate/posthog-upgrade.sh (backs up first, asks before deleting)
 
-Your app: add PostHog to it (it records only on $APP_URLS)
+Your app: add PostHog to it ($([ -n "$APP_URLS" ] && echo "it records only on $APP_URLS" || echo "any site with this snippet records"))
   posthog.init('$token', { api_host: '$POSTHOG_PUBLIC_URL', person_profiles: 'identified_only' })
   posthog.identify(userId, { $PROP_PERSON_EMAIL: user.email })
   posthog.register({ $PROP_CLIENT_ID: account.id, $PROP_CLIENT_NAME: account.name$([ "$PROP_APP_VERSION" = none ] || echo ", $PROP_APP_VERSION: '<your release, e.g. 26.10.0>'") })
@@ -610,7 +648,7 @@ show_plan
 for s in "${STEPS[@]}"; do
     if done_step "$s" && [[ "$ALWAYS" != *" $s "* ]]; then echo; say "${D}step $s: already done ($(cat "$STATE_DIR/done/$s"))${N}"; continue; fi
     case "$s" in
-        posthog|scale) if [ $USE_EXISTING = 1 ]; then say "${D}step $s: skipped (--use-existing-posthog)${N}"; continue; fi ;;
+        posthog|scale|addresses) if [ $USE_EXISTING = 1 ]; then say "${D}step $s: skipped (--use-existing-posthog)${N}"; continue; fi ;;
     esac
     [ "$s" = scale ] && [ "$SCALE" != yes ] && { say "${D}step scale: skipped (SCALE=$SCALE)${N}"; continue; }
     "step_$s"
