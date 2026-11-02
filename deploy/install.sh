@@ -393,9 +393,11 @@ step_check() {
     [ "$ram" -ge "$MIN_RAM_GB" ] || die "Needs 16 GB of memory or more (this machine has ${ram} GB). On EC2: m7i.xlarge or larger."
     mkdir -p "$POSTHOG_DIR"
     disk=$(( $(df -Pk "$POSTHOG_DIR" | awk 'NR==2 {print $4}') / 1024 / 1024 ))
-    # An upgrade checks its own disk needs (twice the data plus 30 GB), in its first phase.
-    [ "$MODE" != fresh ] || [ "$disk" -ge "$MIN_DISK_GB" ] || die "Needs ${MIN_DISK_GB} GB free at $POSTHOG_DIR (has ${disk} GB). On EC2: grow the instance's EBS volume (EC2 > Volumes > Modify volume) and reboot; Amazon Linux grows the disk at boot."
+    # The 60 GB are for installing PostHog: once it is installed it uses them, so later runs only warn when
+    # the disk is nearly full. An upgrade checks its own disk needs (twice the data plus 30 GB), in its first phase.
+    [ "$MODE" != fresh ] || done_step posthog || [ "$disk" -ge "$MIN_DISK_GB" ] || die "Needs ${MIN_DISK_GB} GB free at $POSTHOG_DIR (has ${disk} GB). On EC2: grow the instance's EBS volume (EC2 > Volumes > Modify volume) and reboot; Amazon Linux grows the disk at boot."
     ok "memory ${ram} GB, free disk ${disk} GB, $(nproc) CPUs"
+    [ "$disk" -ge 10 ] || warn "Only ${disk} GB free at $POSTHOG_DIR. PostHog stops taking events when the disk is full."
     [ "$(getenforce 2>/dev/null || echo Permissive)" != Enforcing ] || warn "SELinux is enforcing. Amazon Linux 2023 ships it permissive, and this setup is tested that way: sudo setenforce 0, and SELINUX=permissive in /etc/selinux/config"
     # The service user must reach the project folder: no folder on the way may be private (like /root).
     local d="$APP_DIR"
