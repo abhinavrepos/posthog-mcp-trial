@@ -4,7 +4,8 @@
 // "Watch clips" role can open it; a session's "Make a clip" link goes through the clip page as usual.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { GAP_CHOICES, includesToday, liveNow, parsePresenceQuery, presenceReport, presenceSessions, presenceSettings, validTimeZone, type PresenceQuery } from '../core/presence.ts'
+import { config } from '../core/config.ts'
+import { GAP_CHOICES, includesToday, liveNow, parsePresenceQuery, personDay, presenceReport, presenceSessions, presenceSettings, validTimeZone, type PresenceQuery } from '../core/presence.ts'
 import type { Viewer } from './access.ts'
 import { APP_NAME, headerHtml, PAGE_CSS } from './replays.ts'
 
@@ -42,6 +43,14 @@ export async function handleLive(req: IncomingMessage, res: ServerResponse, url:
             json(res, 200, await cached(`now|${tz}|${gap}`, 15_000, () => liveNow(tz, gap)))
             return true
         }
+        if (p === '/replays/live/api/person') {
+            const q = parsePresenceQuery(url.searchParams)
+            if ('error' in q) return (json(res, 400, { error: q.error }), true)
+            if (!q.user) return (json(res, 400, { error: 'Pick a person first.' }), true)
+            const one = { ...q, to: q.from, user: q.user }
+            json(res, 200, await cached(`person|${JSON.stringify(one)}`, ttlFor(one), () => personDay(one)))
+            return true
+        }
         if (p === '/replays/live/api/time' || p === '/replays/live/api/sessions') {
             const q = parsePresenceQuery(url.searchParams)
             if ('error' in q) return (json(res, 400, { error: q.error }), true)
@@ -63,7 +72,7 @@ export async function handleLive(req: IncomingMessage, res: ServerResponse, url:
 
 export function liveHtml(v: Viewer): string {
     const s = presenceSettings()
-    const boot = JSON.stringify({ gap: s.gap_s, gaps: [...new Set([...GAP_CHOICES, s.gap_s])].sort((a, b) => a - b), liveMinutes: s.live_minutes }).replace(/</g, '\\u003c')
+    const boot = JSON.stringify({ gap: s.gap_s, gaps: [...new Set([...GAP_CHOICES, s.gap_s])].sort((a, b) => a - b), liveMinutes: s.live_minutes, replayBase: `${config.posthog.publicHost}/project/${config.posthog.projectId}/replay/` }).replace(/</g, '\\u003c')
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Live · ${APP_NAME}</title><style>${PAGE_CSS()}
 :root{--act:#2a78d6;--idle:#86b6ef;--grid:#e1e0d9;--axis:#c3c2b7;--live:#0ca30c}
 main.wide{max-width:1180px}
@@ -76,7 +85,7 @@ main.wide{max-width:1180px}
 .tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
 .seg{display:flex;gap:2px;height:8px;width:100%;margin-top:8px}.seg i{display:block;height:8px;border-radius:999px}.seg .a{background:var(--act)}.seg .i{background:var(--idle)}
 td .seg{width:90px;margin:0;display:inline-flex;vertical-align:middle}
-.legend{display:flex;gap:14px;font-size:13px;color:var(--muted);margin:-4px 0 6px}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--muted);margin:-4px 0 6px}.legend span{white-space:nowrap}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 .chart svg{display:block;width:100%;overflow:visible}.chart text{font:12px system-ui,sans-serif;fill:var(--muted);font-variant-numeric:tabular-nums}
 .chart .hit{fill:transparent;cursor:default;outline:none}.chart g.col:hover path,.chart g.col.on path{filter:brightness(1.12)}
 .chart g.col:focus-visible .hit{stroke:var(--accent);stroke-width:1}
@@ -92,17 +101,33 @@ tr.click{cursor:pointer}tr.click:hover td{background:var(--bg)}td.num,th.num{tex
 .loading{opacity:.55;transition:opacity .2s}.pill{display:inline-flex;gap:6px;align-items:center;background:var(--chip);border-radius:999px;padding:3px 10px;font-size:13px}
 .pill button{padding:0 4px;border:0;background:none;color:var(--accent);font-size:15px;line-height:1}
 details.how summary{cursor:pointer;font-weight:600}details.how li{margin:4px 0}
+.tl-head{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}.tl-nav{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tl-nav input[type=date]{width:auto;padding:6px 8px}.tl-nav button{padding:6px 11px}.tl-whole{display:flex;gap:5px;align-items:center;margin:0 4px;font-size:13px;color:var(--muted)}.tl-whole input{width:auto}
+.tl-facts{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tl-facts span{background:var(--bg);border-radius:7px;padding:5px 9px;font-size:13px;color:var(--muted)}.tl-facts b{color:var(--ink);font-variant-numeric:tabular-nums}
+#tl-chart{outline:none;border-radius:6px}#tl-chart:focus-visible{box-shadow:0 0 0 2px var(--accent)}#tl-chart svg{cursor:crosshair}
+.tlbtn{padding:3px 9px;font-size:13px}#tl-pick{min-height:34px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 </style></head>
 <body>${headerHtml(v, 'Live')}<main class="wide">
 
 <div class="card"><div class="now"><span class="pulse off" id="pulse"></span><span class="hero" id="now-count">–</span><span class="muted" id="now-sub">Loading…</span></div>
-<div class="table-wrap"><table><thead><tr><th>Client</th><th>Person</th><th>Last action</th><th>In the app since</th><th class="num">Today in the app</th><th class="num">Today active</th></tr></thead><tbody id="now-rows"></tbody></table></div></div>
+<div class="table-wrap"><table><thead><tr><th>Client</th><th>Person</th><th>Last action</th><th>In the app since</th><th class="num">Today in the app</th><th class="num">Today active</th><th></th></tr></thead><tbody id="now-rows"></tbody></table></div></div>
 
 <div class="filters" id="filters">
 <div><label for="range">Period</label><select id="range"><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="custom">Pick dates…</option></select></div>
 <div class="custom hidden"><label for="from">From</label><input type="date" id="from"></div><div class="custom hidden"><label for="to">To</label><input type="date" id="to"></div>
 <div class="grow"><label for="client">Client</label><select id="client"><option value="">All clients</option></select></div>
 <div><label for="gap">Active for … after each action</label><select id="gap"></select></div>
+</div>
+
+<div class="card hidden" id="tl-card">
+<div class="tl-head"><div style="flex:1;min-width:220px"><h2 id="tl-title" style="margin:0">Timeline</h2><div class="small muted" id="tl-sub"></div></div>
+<div class="tl-nav"><button class="ghost" id="tl-prev" type="button" aria-label="Previous day">‹</button><input type="date" id="tl-day" aria-label="Day"><button class="ghost" id="tl-next" type="button" aria-label="Next day">›</button>
+<button class="ghost" id="tl-today" type="button">Today</button><label class="tl-whole"><input type="checkbox" id="tl-whole">Whole day</label><button class="ghost" id="tl-close" type="button" aria-label="Close the timeline">×</button></div></div>
+<div class="tl-facts" id="tl-facts"></div>
+<div class="legend"><span><i style="background:var(--act)"></i>Active</span><span><i style="background:var(--idle)"></i>Idle (app open, no action)</span><span><i style="background:var(--muted);width:2px"></i>An action</span><span><i style="background:var(--ink);width:2px;height:12px"></i>Opened a screen</span></div>
+<div class="chart" id="tl-chart" tabindex="0" aria-label="Timeline of the day. Use the left and right arrow keys to step through the actions."></div>
+<div id="tl-pick" class="small muted">Point at the timeline to see what happened. Click a moment to make a clip from it.</div>
+<details><summary class="small" id="tl-list-sum">Every action</summary><div class="table-wrap"><table id="tl-list"></table></div><p><button class="ghost hidden" id="tl-more" type="button">Show more</button></p></details>
 </div>
 
 <div id="report">
@@ -145,12 +170,13 @@ CFG.gaps.forEach(g=>{const o=el('option',null,g<60?g+' seconds':g===60?'1 minute
 
 // ---------------------------------------------------------------- state, kept in the address so a view can be shared
 const S={range:'today',from:'',to:'',client:'',user:'',gap:CFG.gap};
-(()=>{const q=new URLSearchParams(location.search);for(const k of ['range','from','to','client','user'])if(q.get(k))S[k]=q.get(k);if(q.get('gap'))S.gap=Number(q.get('gap'))})();
+const TL={user:'',client:'',clientName:'',day:'',data:null,pin:null,shown:300,whole:false};let tlbusy=0;
+(()=>{const q=new URLSearchParams(location.search);for(const k of ['range','from','to','client','user'])if(q.get(k))S[k]=q.get(k);if(q.get('gap'))S.gap=Number(q.get('gap'));if(q.get('who')){TL.user=q.get('who');TL.client=q.get('wclient')||'';TL.day=q.get('wday')||''}})();
 function period(){const today=dayOf(new Date());
  if(S.range==='today')return[today,today];if(S.range==='yesterday'){const y=addDays(today,-1);return[y,y]}
  if(S.range==='custom'&&S.from&&S.to)return[S.from,S.to];const n=Number(S.range)||7;return[addDays(today,1-n),today]}
 function params(extra){const[f,t]=period();const q=new URLSearchParams({from:f,to:t,tz:TZ,gap:String(S.gap)});if(S.client)q.set('client',S.client);if(extra&&S.user)q.set('user',S.user);return q}
-function syncUrl(){const q=new URLSearchParams();q.set('range',S.range);if(S.range==='custom'){q.set('from',S.from);q.set('to',S.to)}if(S.client)q.set('client',S.client);if(S.user)q.set('user',S.user);if(S.gap!==CFG.gap)q.set('gap',S.gap);history.replaceState(null,'','?'+q)}
+function syncUrl(){const q=new URLSearchParams();q.set('range',S.range);if(S.range==='custom'){q.set('from',S.from);q.set('to',S.to)}if(S.client)q.set('client',S.client);if(S.user)q.set('user',S.user);if(S.gap!==CFG.gap)q.set('gap',S.gap);if(TL.user){q.set('who',TL.user);if(TL.client)q.set('wclient',TL.client);q.set('wday',TL.day)}history.replaceState(null,'','?'+q)}
 function syncControls(){$('range').value=S.range;document.querySelectorAll('.custom').forEach(d=>d.classList.toggle('hidden',S.range!=='custom'));const[f,t]=period();$('from').value=f;$('to').value=t;$('gap').value=String(S.gap)}
 
 // ---------------------------------------------------------------- tooltip
@@ -167,11 +193,11 @@ async function loadNow(){try{const r=await api('/replays/live/api/now?tz='+encod
  $('now-count').textContent=String(r.people.length);$('pulse').classList.toggle('off',!r.people.length);
  $('now-sub').textContent=(r.people.length===1?'person':'people')+' in the app now'+(r.people.length?', from '+clients+' client'+(clients===1?'':'s'):'')+' · an action in the last '+r.minutes+' minutes · updated '+new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
  const tb=$('now-rows');tb.innerHTML='';
- if(!r.people.length){const tr=el('tr');const td=el('td','muted','Nobody has done anything in the app in the last '+r.minutes+' minutes.');td.colSpan=6;tr.appendChild(td);tb.appendChild(tr)}
+ if(!r.people.length){const tr=el('tr');const td=el('td','muted','Nobody has done anything in the app in the last '+r.minutes+' minutes.');td.colSpan=7;tr.appendChild(td);tb.appendChild(tr)}
  r.people.forEach(p=>{const tr=el('tr','click');tr.title='Show '+p.client_name;tr.onclick=()=>{S.client=p.client_id;S.user='';S.range='today';syncControls();load()};
   const c=el('td');c.appendChild(el('span','dot'));c.appendChild(document.createTextNode(p.client_name));tr.appendChild(c);
   tr.appendChild(el('td',null,p.user));tr.appendChild(el('td',null,ago(p.last_seen)));tr.appendChild(el('td',null,timeOf(p.session_start)));
-  tr.appendChild(el('td','num',dur(p.today.open_s)));tr.appendChild(el('td','num',dur(p.today.active_s)));tb.appendChild(tr)});
+  tr.appendChild(el('td','num',dur(p.today.open_s)));tr.appendChild(el('td','num',dur(p.today.active_s)));tr.appendChild(tlCell(p.user,p.client_id,dayOf(new Date()),p.client_name));tb.appendChild(tr)});
  if(R)renderList()}catch(e){$('now-sub').textContent=e.message;$('now-sub').className='err'}}
 
 // ---------------------------------------------------------------- the report
@@ -239,14 +265,14 @@ function renderHeat(){const[f,t]=period();const card=$('heat-card');if(f===t){ca
  const sc=$('scale');sc.innerHTML='';sc.appendChild(el('span',null,'Less'));[0,2,4,6,8,10,12].forEach(i=>{const s=el('i');s.style.background=RAMP[i];sc.appendChild(s)});sc.appendChild(el('span',null,'More · up to '+dur(max)+' active in one hour'))}
 
 // clients, or the people of one client
-function cols(){return S.client?[['user','Person'],['sessions','Sessions',1],['open_s','In the app',1],['active_s','Active',1],['idle_s','Idle',1],['share','Active share'],['first','First action'],['last','Last action']]
+function cols(){return S.client?[['user','Person'],['sessions','Sessions',1],['open_s','In the app',1],['active_s','Active',1],['idle_s','Idle',1],['share','Active share'],['first','First action'],['last','Last action'],['tl','']]
  :[['client_name','Client'],['people','People',1],['sessions','Sessions',1],['open_s','In the app',1],['active_s','Active',1],['idle_s','Idle',1],['share','Active share'],['last','Last action']]}
 function rows(){return S.client?(R.people||[]):R.clients}
 function renderList(){const pick=R.clients.find(c=>c.client_id===S.client);
  $('list-title').textContent=S.client?'People at '+(pick?pick.client_name:S.client):'Clients';
  const pill=$('who-pill');pill.innerHTML='';if(S.client){const p=el('span','pill',pick?pick.client_name:S.client);const x=el('button',null,'×');x.title='Show all clients';x.onclick=()=>{S.client='';S.user='';load()};p.appendChild(x);pill.appendChild(p)}
  const t=$('list');t.innerHTML='';const hr=el('tr');
- cols().forEach(([k,label,num])=>{const th=el('th','sort'+(num?' num':''),label);if(k===sortKey)th.appendChild(el('span','arr',sortDir<0?'▼':'▲'));th.onclick=()=>{if(sortKey===k)sortDir=-sortDir;else{sortKey=k;sortDir=num||k==='last'||k==='share'?-1:1}renderList()};hr.appendChild(th)});
+ cols().forEach(([k,label,num])=>{if(k==='tl'){hr.appendChild(el('th'));return}const th=el('th','sort'+(num?' num':''),label);if(k===sortKey)th.appendChild(el('span','arr',sortDir<0?'▼':'▲'));th.onclick=()=>{if(sortKey===k)sortDir=-sortDir;else{sortKey=k;sortDir=num||k==='last'||k==='share'?-1:1}renderList()};hr.appendChild(th)});
  const th=el('thead');th.appendChild(hr);t.appendChild(th);const bd=el('tbody');
  const val=(r,k)=>k==='share'?(r.open_s?r.active_s/r.open_s:0):r[k];
  const list=[...rows()].sort((a,b)=>{const x=val(a,sortKey),y=val(b,sortKey);return(typeof x==='string'?x.localeCompare(y):(x||0)-(y||0))*sortDir});
@@ -259,6 +285,7 @@ function renderList(){const pick=R.clients.find(c=>c.client_id===S.client);
    else if(k==='share'){td=el('td');td.appendChild(segBar(r.active_s,r.idle_s));td.appendChild(el('span','small muted',' '+pct(r.active_s,r.open_s)))}
    else if(k==='first'||k==='last')td=el('td','small',whenOf(r[k]));
    else if(k==='user')td=el('td',null,r.user);
+   else if(k==='tl'){const[f,t]=period();td=tlCell(r.user,S.client,f===t?f:dayOf(new Date(r.last)),pick?pick.client_name:'')}
    else td=el('td','num',k.endsWith('_s')?dur(r[k]):Number(r[k]).toLocaleString());
    tr.appendChild(td)});bd.appendChild(tr)});
  if(cut){const tr=el('tr');const td=el('td');td.colSpan=cols().length;const b=el('button','ghost','Show all '+list.length.toLocaleString()+' '+(S.client?'people':'clients'));b.type='button';b.onclick=()=>{listAll=true;renderList()};td.appendChild(b);tr.appendChild(td);bd.appendChild(tr)}
@@ -266,13 +293,108 @@ function renderList(){const pick=R.clients.find(c=>c.client_id===S.client);
 
 function renderSessions(){const card=$('sessions-card');card.classList.remove('hidden');
  $('sessions-title').textContent=(S.user?S.user+"'s sessions":'Every session')+' ('+SESS.length.toLocaleString()+(SESS.length>=1000?'+':'')+')';
- const t=$('sessions');t.innerHTML='';const hr=el('tr');['Person','Started','Ended','In the app','Active','Idle','Actions',''].forEach((h,i)=>hr.appendChild(el('th',i>=3&&i<=6?'num':null,h)));const th=el('thead');th.appendChild(hr);t.appendChild(th);
- const bd=el('tbody');if(!SESS.length){const tr=el('tr');const td=el('td','muted','No sessions in this period.');td.colSpan=8;tr.appendChild(td);bd.appendChild(tr)}
+ const t=$('sessions');t.innerHTML='';const hr=el('tr');['Person','Started','Ended','In the app','Active','Idle','Actions','',''].forEach((h,i)=>hr.appendChild(el('th',i>=3&&i<=6?'num':null,h)));const th=el('thead');th.appendChild(hr);t.appendChild(th);
+ const bd=el('tbody');if(!SESS.length){const tr=el('tr');const td=el('td','muted','No sessions in this period.');td.colSpan=9;tr.appendChild(td);bd.appendChild(tr)}
  SESS.slice(0,shown).forEach(s=>{const tr=el('tr');tr.appendChild(el('td',null,s.user));tr.appendChild(el('td','small',whenOf(s.start)));tr.appendChild(el('td','small',timeOf(s.end)));
   [dur(s.open_s),dur(s.active_s),dur(s.idle_s),String(s.actions)].forEach(v=>tr.appendChild(el('td','num',v)));
-  const td=el('td');const a=el('a','btn ghost small','Make a clip');a.href='/replays?url='+encodeURIComponent(s.session_id);a.title='Open this session on the clip page';a.style.padding='3px 9px';td.appendChild(a);tr.appendChild(td);bd.appendChild(tr)});
+  const td=el('td');const a=el('a','btn ghost small','Make a clip');a.href='/replays?url='+encodeURIComponent(s.session_id);a.title='Open this session on the clip page';a.style.padding='3px 9px';td.appendChild(a);tr.appendChild(td);tr.appendChild(tlCell(s.user,s.client_id,dayOf(new Date(s.start)),s.client_name));bd.appendChild(tr)});
  t.appendChild(bd);$('more').classList.toggle('hidden',SESS.length<=shown);$('more').textContent='Show '+Math.min(200,SESS.length-shown)+' more'}
 $('more').onclick=()=>{shown+=200;renderSessions()};
+
+// ---------------------------------------------------------------- one person's day
+function tlCell(user,client,day,name){const td=el('td');const b=el('button','ghost tlbtn','Timeline');b.type='button';b.title='Show '+user+"'s day as a timeline";b.onclick=e=>{e.stopPropagation();openTimeline(user,client,day,name)};td.appendChild(b);return td}
+function openTimeline(user,client,day,name){TL.user=user;TL.client=client||'';TL.clientName=name||'';TL.day=day||dayOf(new Date());TL.pin=null;TL.shown=300;TL.data=null;$('tl-card').classList.remove('hidden');syncUrl();loadTimeline();$('tl-card').scrollIntoView({behavior:'smooth',block:'start'})}
+async function loadTimeline(){if(!TL.user)return;const my=++tlbusy;$('tl-card').classList.add('loading');
+ try{const q=new URLSearchParams({user:TL.user,from:TL.day,to:TL.day,tz:TZ,gap:String(S.gap)});if(TL.client)q.set('client',TL.client);
+  const d=await api('/replays/live/api/person?'+q);if(my!==tlbusy)return;TL.data=d;renderTimeline()}
+ catch(e){if(my!==tlbusy)return;$('tl-title').textContent=TL.user;$('tl-sub').textContent=e.message;$('tl-sub').className='small err'}
+ finally{if(my===tlbusy)$('tl-card').classList.remove('loading')}}
+const PF=new Intl.DateTimeFormat('en-GB',{timeZone:TZ,hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
+const secOf=iso=>{const o={};PF.formatToParts(new Date(iso)).forEach(x=>o[x.type]=x.value);return(+o.hour)*3600+(+o.minute)*60+(+o.second)};
+const hms=x=>{x=Math.max(0,Math.round(x));return String(Math.floor(x/3600)).padStart(2,'0')+':'+String(Math.floor(x%3600/60)).padStart(2,'0')+':'+String(x%60).padStart(2,'0')};
+const hm=x=>hms(x).slice(0,5);
+function fact(label,value){const sp=el('span');sp.appendChild(document.createTextNode(label+' '));sp.appendChild(el('b',null,value));$('tl-facts').appendChild(sp)}
+// Sessions with their active stretches, in seconds since midnight (viewer's timezone), and lanes so
+// sessions at the same time (two browsers) do not hide each other.
+function tlModel(d){const acts=d.actions.map(a=>({...a,s:secOf(a.t)})).sort((a,b)=>a.s-b.s);
+ const sessions=d.sessions.map(x=>({...x,s0:secOf(x.start),s1:Math.max(secOf(x.start),secOf(x.end)),active:[]})).sort((a,b)=>a.s0-b.s0);
+ const byId=new Map(sessions.map(x=>[x.session_id,x]));
+ acts.forEach(a=>{const x=byId.get(a.session_id);if(!x)return;const e=Math.min(86400,a.s+Math.min(a.gap_s,d.gap_s));if(e<=a.s)return;const last=x.active[x.active.length-1];if(last&&a.s<=last[1])last[1]=Math.max(last[1],e);else x.active.push([a.s,e])});
+ const lanes=[];sessions.forEach(x=>{let i=lanes.findIndex(end=>end<x.s0);if(i<0){i=lanes.length;lanes.push(0)}lanes[i]=x.s1;x.lane=i});
+ return{acts,sessions,lanes:Math.max(1,lanes.length)}}
+let TM=null;
+function renderTimeline(){const d=TL.data;TM=tlModel(d);const today=dayOf(new Date());
+ if(d.actions.length&&d.client_name)TL.clientName=d.client_name;$('tl-title').textContent=d.user;$('tl-sub').className='small muted';$('tl-sub').textContent=[TL.clientName||d.client_name,dayName(d.day)+(d.day===today?' (today)':'')].filter(Boolean).join(' · ');
+ $('tl-day').value=d.day;$('tl-next').disabled=d.day>=today;$('tl-whole').checked=TL.whole;
+ $('tl-facts').innerHTML='';const T=d.totals;
+ if(!T.sessions){fact('No activity on','this day');}
+ else{fact('In the app',dur(T.open_s));fact('Active',dur(T.active_s)+' ('+pct(T.active_s,T.open_s)+')');fact('Idle',dur(T.idle_s));fact('Sessions',String(T.sessions));fact('Actions',T.actions.toLocaleString());
+  fact('First action',hm(secOf(T.first)));fact('Last action',hm(secOf(T.last)));if(T.longest_pause_s>=60)fact('Longest pause',dur(T.longest_pause_s))}
+ drawTimeline();renderPin();renderTlList()}
+function tlRange(){if(TL.whole||!TM.sessions.length)return[0,86400];const a=Math.min(...TM.sessions.map(x=>x.s0)),b=Math.max(...TM.sessions.map(x=>x.s1));
+ let r0=Math.floor(a/3600)*3600,r1=Math.ceil((b+1)/3600)*3600;if(r1-r0<3600)r1=Math.min(86400,r0+3600);if(r1-r0<3600)r0=Math.max(0,r1-3600);return[r0,r1]}
+let TG=null;
+function drawTimeline(){const box=$('tl-chart');box.innerHTML='';const[r0,r1]=tlRange();
+ const W=Math.max(320,box.clientWidth||900),L=4,R=4,TICK=14,LANE=26,GAPL=12,AX=22,lanes=TM.lanes;
+ const laneTop=i=>TICK+i*(LANE+TICK+GAPL);const H=laneTop(lanes)-GAPL+AX;const pw=W-L-R;const X=v=>L+(Math.min(r1,Math.max(r0,v))-r0)/(r1-r0)*pw;
+ const svg=sv('svg',{viewBox:'0 0 '+W+' '+H,height:H,role:'img','aria-label':'Timeline of '+TL.data.user+' on '+dayName(TL.data.day)});
+ const span=r1-r0,steps=[900,1800,3600,7200,10800,21600];const step=steps.find(st=>pw/(span/st)>=56)||21600;
+ for(let v=Math.ceil(r0/step)*step;v<=r1;v+=step){const x=X(v);svg.appendChild(sv('line',{x1:x,x2:x,y1:0,y2:H-AX,stroke:'var(--grid)','stroke-width':1}));const tx=sv('text',{x:x,y:H-6,'text-anchor':v===r0?'start':v===r1?'end':'middle'});tx.textContent=v>=86400?'24:00':hm(v);svg.appendChild(tx)}
+ for(let i=0;i<lanes;i++)svg.appendChild(sv('rect',{x:L,y:laneTop(i)+TICK,width:pw,height:LANE,rx:4,fill:'var(--bg)'}));
+ TM.sessions.forEach(x=>{const y=laneTop(x.lane)+TICK;const x0=X(x.s0),w=Math.max(2,X(x.s1)-x0);svg.appendChild(sv('rect',{x:x0,y:y,width:w,height:LANE,rx:3,fill:'var(--idle)'}));
+  x.active.forEach(([a,b])=>{const ax=X(a);svg.appendChild(sv('rect',{x:ax,y:y,width:Math.max(1.5,X(b)-ax),height:LANE,fill:'var(--act)'}))})});
+ const lane=new Map(TM.sessions.map(x=>[x.session_id,x.lane]));
+ TM.acts.forEach(a=>{const i=lane.get(a.session_id)||0;const opened=a.label.startsWith('Opened');const x=X(a.s);const y=laneTop(i)+TICK;svg.appendChild(sv('line',{x1:x,x2:x,y1:y-(opened?12:7),y2:y-2,stroke:opened?'var(--ink)':'var(--muted)','stroke-width':1,'stroke-opacity':opened?0.9:0.55}))});
+ const cross=sv('line',{x1:0,x2:0,y1:0,y2:H-AX,stroke:'var(--ink)','stroke-width':1,visibility:'hidden'});svg.appendChild(cross);
+ const pin=sv('line',{x1:0,x2:0,y1:0,y2:H-AX,stroke:'var(--accent)','stroke-width':2,visibility:'hidden'});svg.appendChild(pin);
+ const hit=sv('rect',{x:L,y:0,width:pw,height:H-AX,fill:'transparent'});svg.appendChild(hit);box.appendChild(svg);
+ TG={r0,r1,L,pw,W,X,cross,pin,svg};
+ const secAt=ev=>{const b=svg.getBoundingClientRect();const px=(ev.clientX-b.left)*W/b.width;return r0+(px-L)/pw*(r1-r0)};
+ hit.addEventListener('pointermove',ev=>{const sec=secAt(ev);const info=tlAt(sec);cross.setAttribute('x1',X(info.sec));cross.setAttribute('x2',X(info.sec));cross.setAttribute('visibility','visible');
+  const rows=[[info.state==='active'?'var(--act)':info.state==='idle'?'var(--idle)':null,info.state==='out'?'Not in the app':info.state==='active'?'Active':'Idle',info.pause?'· pause of '+dur(info.pause):'']];
+  if(info.act)rows.push([null,info.act.label,info.act.screen&&!info.act.label.includes(info.act.screen)?'on '+info.act.screen:'']);
+  showTipXY(ev.clientX,ev.clientY,hms(info.sec),rows)});
+ hit.addEventListener('pointerleave',()=>{cross.setAttribute('visibility','hidden');hideTip()});
+ hit.addEventListener('click',ev=>{TL.pin=tlAt(secAt(ev));renderPin()})}
+// What was happening at a second: the nearest action (if close), and whether the person was active,
+// idle or not in the app.
+function tlAt(sec){const acts=TM.acts;let lo=0,hi=acts.length-1,best=null;
+ while(lo<=hi){const m=(lo+hi)>>1;if(acts[m].s<sec)lo=m+1;else hi=m-1}
+ [acts[lo-1],acts[lo]].forEach(a=>{if(a&&(!best||Math.abs(a.s-sec)<Math.abs(best.s-sec)))best=a});
+ const tol=Math.max(15,(TG.r1-TG.r0)/TG.pw*6);const act=best&&Math.abs(best.s-sec)<=tol?best:null;const at=act?act.s:sec;
+ const x=TM.sessions.find(z=>at>=z.s0&&at<=z.s1);let state='out',pause=0;
+ if(x){state=x.active.some(([a,b])=>at>=a&&at<b)?'active':'idle';if(state==='idle'){const before=acts.filter(a=>a.session_id===x.session_id&&a.s<=at).pop();if(before)pause=before.gap_s}}
+ if(act&&state==='idle'&&act.s===at)state='active';
+ return{sec:at,act,session:x,state,pause}}
+function showTipXY(x,y,title,rows){tip.innerHTML='';tip.appendChild(el('div','t',title));rows.forEach(([color,value,label])=>{const r=el('div','r');if(color){const k=el('span','k');k.style.background=color;r.appendChild(k)}r.appendChild(el('b',null,value));if(label)r.appendChild(el('span','muted',label));tip.appendChild(r)});
+ tip.hidden=false;const w=tip.offsetWidth,h=tip.offsetHeight;let left=x+14,top=y-h-12;if(left+w>innerWidth-4)left=x-w-14;if(top<4)top=y+16;tip.style.left=Math.max(4,left)+'px';tip.style.top=top+'px'}
+function clipLink(session,abs){if(!session||!session.recording_start)return null;const rs=Date.parse(session.recording_start);const off=Math.max(0,Math.floor((abs-rs)/1000)-10);return{off,from:secOf(new Date(rs+off*1000).toISOString()),href:'/replays?url='+encodeURIComponent(CFG.replayBase+session.session_id+'?t='+off)}}
+function absOf(sec,session){return Date.parse(session.start)+(sec-session.s0)*1000}
+function renderPin(){const box=$('tl-pick');box.innerHTML='';box.className='small';const P=TL.pin;
+ if(!P||!TG){TG&&TG.pin.setAttribute('visibility','hidden');box.className='small muted';box.textContent='Point at the timeline to see what happened. Click a moment to make a clip from it.';return}
+ TG.pin.setAttribute('x1',TG.X(P.sec));TG.pin.setAttribute('x2',TG.X(P.sec));TG.pin.setAttribute('visibility','visible');
+ box.appendChild(el('b',null,hms(P.sec)));
+ box.appendChild(document.createTextNode(P.state==='out'?' Not in the app.':P.act?' '+P.act.label+(P.act.screen&&!P.act.label.includes(P.act.screen)?' on '+P.act.screen:'')+'.':' '+(P.state==='active'?'Active':'Idle')+'.'));
+ if(P.session){const abs=P.act?Date.parse(P.act.t):absOf(P.sec,P.session);const c=clipLink(P.session,abs);
+  if(c){const a=el('a','btn ghost tlbtn','Make a clip from '+hms(c.from));a.href=c.href;a.title='Opens the clip page 10 seconds before this moment (or where the recording starts)';box.appendChild(a)}
+  else box.appendChild(el('span','muted','This session has no recording, so there is no clip.'))}}
+$('tl-chart').addEventListener('keydown',e=>{if(!TM||!TM.acts.length)return;const acts=TM.acts;let i=TL.pin&&TL.pin.act?acts.indexOf(acts.find(a=>a.t===TL.pin.act.t&&a.session_id===TL.pin.act.session_id)):-1;
+ if(e.key==='ArrowRight')i=Math.min(acts.length-1,i+1);else if(e.key==='ArrowLeft')i=i<0?acts.length-1:Math.max(0,i-1);else if(e.key==='Home')i=0;else if(e.key==='End')i=acts.length-1;else return;
+ e.preventDefault();TL.pin=tlAt(acts[i].s);TL.pin.act=acts[i];renderPin()});
+function renderTlList(){const d=TL.data,t=$('tl-list');t.innerHTML='';$('tl-list-sum').textContent='Every action ('+d.actions.length.toLocaleString()+(d.truncated?'+, the first '+d.actions.length.toLocaleString()+' shown':'')+')';
+ const hr=el('tr');['Time','What','Screen','Then',''].forEach(h=>hr.appendChild(el('th',null,h)));const th=el('thead');th.appendChild(hr);t.appendChild(th);const bd=el('tbody');
+ const sess=new Map(TM.sessions.map(x=>[x.session_id,x]));
+ TM.acts.slice(0,TL.shown).forEach(a=>{const tr=el('tr');tr.appendChild(el('td','small',hms(a.s)));tr.appendChild(el('td',null,a.label));tr.appendChild(el('td','small muted',a.screen));
+  tr.appendChild(el('td','small muted',a.last?'last action of the session':a.gap_s>d.gap_s?'idle '+dur(a.gap_s-d.gap_s):''));
+  const td=el('td');const c=clipLink(sess.get(a.session_id),Date.parse(a.t));if(c){const l=el('a','btn ghost tlbtn','Clip');l.href=c.href;l.title='Make a clip from 10 seconds before this action';td.appendChild(l)}tr.appendChild(td);bd.appendChild(tr)});
+ t.appendChild(bd);$('tl-more').classList.toggle('hidden',TM.acts.length<=TL.shown)}
+$('tl-more').onclick=()=>{TL.shown+=300;renderTlList()};
+$('tl-close').onclick=()=>{TL.user='';TL.data=null;$('tl-card').classList.add('hidden');hideTip();syncUrl()};
+$('tl-prev').onclick=()=>{TL.day=addDays(TL.day,-1);TL.pin=null;syncUrl();loadTimeline()};
+$('tl-next').onclick=()=>{const t=dayOf(new Date());if(TL.day>=t)return;TL.day=addDays(TL.day,1);TL.pin=null;syncUrl();loadTimeline()};
+$('tl-today').onclick=()=>{TL.day=dayOf(new Date());TL.pin=null;syncUrl();loadTimeline()};
+$('tl-day').onchange=()=>{if(!$('tl-day').value)return;TL.day=$('tl-day').value;TL.pin=null;syncUrl();loadTimeline()};
+$('tl-whole').onchange=()=>{TL.whole=$('tl-whole').checked;if(TL.data){drawTimeline();renderPin()}};
 
 // ---------------------------------------------------------------- CSV
 function csv(name,head,lines){const q=v=>{v=v==null?'':String(v);return/[",\\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v};
@@ -287,9 +409,10 @@ $('sessions-csv').onclick=()=>{const[f,t]=period();csv('sessions_'+S.client+'_'+
 $('range').onchange=()=>{S.range=$('range').value;if(S.range==='custom'){const[f,t]=period();S.from=S.from||f;S.to=S.to||t}syncControls();load()};
 $('from').onchange=$('to').onchange=()=>{S.from=$('from').value;S.to=$('to').value;if(S.from&&S.to&&S.to>=S.from)load()};
 $('client').onchange=()=>{S.client=$('client').value;S.user='';sortKey='open_s';sortDir=-1;load()};
-$('gap').onchange=()=>{S.gap=Number($('gap').value);load();loadNow()};
-let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(()=>{if(R)renderChart()},150)});
+$('gap').onchange=()=>{S.gap=Number($('gap').value);load();loadNow();loadTimeline()};
+let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(()=>{if(R)renderChart();if(TL.data){drawTimeline();renderPin()}},150)});
 syncControls();load();loadNow();
-setInterval(()=>{if(document.hidden)return;loadNow();if(period()[1]>=dayOf(new Date()))load()},30000);
+setInterval(()=>{if(document.hidden)return;loadNow();if(period()[1]>=dayOf(new Date()))load();if(TL.user&&TL.day===dayOf(new Date()))loadTimeline()},30000);
+if(TL.user){if(!TL.day)TL.day=dayOf(new Date());$('tl-card').classList.remove('hidden');loadTimeline()}
 </script></body></html>`
 }
