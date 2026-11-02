@@ -5,6 +5,7 @@
 //   clips         one row per MP4 file in clips/. Two people asking for the same part of the same
 //                 recording get the same file, so it is stored once.
 //   clip_holders  who has which clip: made it, and whether they saved it
+//   clip_comments comments pinned to a second of a clip, shown over the video and burned into downloads
 //   audit         sign-ins, views, downloads, shares and access changes
 //   releases, release_tickets, release_snapshots, release_verdicts
 //                 release outcomes for the MCP tools: the last N Jira releases (default 12), their
@@ -134,6 +135,19 @@ const MIGRATIONS: string[] = [
         at TEXT NOT NULL
     );
     CREATE INDEX release_verdicts_ticket ON release_verdicts (ticket, id);`,
+
+    // 4: comments pinned to moments of a clip, shown big over the video and burned into downloads.
+    `CREATE TABLE clip_comments (
+        id INTEGER PRIMARY KEY,
+        clip_name TEXT NOT NULL REFERENCES clips (name) ON DELETE CASCADE,
+        at_s REAL NOT NULL,
+        duration_s REAL NOT NULL,
+        text TEXT NOT NULL,
+        author TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX clip_comments_clip ON clip_comments (clip_name, at_s);`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */
