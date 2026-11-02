@@ -9,6 +9,14 @@ PostHog Lens is a PostHog extension with three parts:
 
 The site is at `http://<host>:8080`. `APP_NAME` and `APP_TAG` rename it.
 
+**Install** on a fresh machine: `sudo deploy/install.sh` (see [Install](#install-on-a-fresh-machine)).
+**Upgrade** an existing PostHog to the tested version: `sudo deploy/migrate/posthog-upgrade.sh`
+(see [deploy/migrate/README.md](deploy/migrate/README.md)).
+
+Jira is optional until you connect it: without `JIRA_BASE_URL`, `JIRA_EMAIL` and `JIRA_API_TOKEN`,
+the Jira webhook answers 503 and release outcomes keep the numbers they last had. Everything else
+(replay links, clips, the MCP tools, `triage_ticket`) works.
+
 When a ticket lands in Jira, this finds the client's session in PostHog and attaches a clip of
 the moment it went wrong. The comment also covers how many other clients hit the same error, how
 the screen is used, and a suggested priority with its reasons. The same logic is available to
@@ -241,29 +249,55 @@ The local `.mcp.json` server has the same tools.
 | `src/jira/` | Jira Cloud REST v3 client, webhook signatures, Markdown ↔ ADF |
 | `src/service/` | The web service: webhooks, signed clip links, MCP over HTTP, `/replays`, admin |
 | `src/mcp/` | MCP tools and the stdio entry point |
-| `src/mock-jira/` | Stand-in Jira with the same REST calls and an issue UI |
 | `demo-app/` | Acme Portal, the demo B2B app with a planted bug |
 | `scripts/` | Setup, stack control, session generator, history seeder, rasterizer build |
+| `vendor/` | PostHog's replay rasterizer and player page, prebuilt (`pnpm build:rasterizer` rebuilds them) |
+| `deploy/install.sh` | Fresh install: PostHog, this service, the status page (answers: `deploy/install.env.example`) |
+| `deploy/migrate/` | Upgrading an existing PostHog to the tested version, with backups |
+| `deploy/posthog/` | PostHog's installer (pinned), scaling, load tests |
+| `deploy/status/` | The status page |
 
-## Setup (self-hosted PostHog on one machine)
+## Install on a fresh machine
 
-Needs: Ubuntu, 16 GB+ RAM, Node 24, pnpm 10, and a PostHog checkout for building the rasterizer.
+Needs: Ubuntu 22.04+ or Debian 12 on x86_64, 16 GB+ RAM, 60 GB+ free disk, ports 80 (and 443 for
+HTTPS), 8080 open to your users. Nothing else: the script installs Docker, PostHog, Node and pnpm.
 
 ```bash
-# 1. PostHog (hobby install, about 30 minutes the first time)
-sudo bash install-posthog-hobby.sh <public-ip-or-domain>
-
-# 2. This project
-pnpm install                               # also downloads Chrome and ffmpeg
-POSTHOG_SRC=/path/to/posthog pnpm build:rasterizer
-PUBLIC_HOST=<public-ip> ADMIN_EMAIL=you@example.com scripts/setup-posthog.sh
-
-# 3. Data and processes
-scripts/demo-prep.sh --reset-board          # starts everything, records sessions, seeds history
+sudo git clone --branch ticket-triage --single-branch https://github.com/abhinavrepos/posthog-mcp-trial /srv/ticket-triage
+cd /srv/ticket-triage
+sudo deploy/install.sh                      # asks every setting, shows the plan, then installs (about 1 hour)
 ```
 
-Then open the mock Jira at `http://<host>:4000` (no login) and file an example ticket. Its
-**Releases** page lists the ACP releases the release tools read.
+It asks for: the address of PostHog (a domain gets HTTPS), the first login and organization, your
+app's addresses, the names your events use, your screens, Jira (optional, can be added later), an
+Anthropic key (optional), the two MCP switches and whether the status page is public. To answer from
+a file instead, fill in a copy of `deploy/install.env.example` and run
+`sudo deploy/install.sh --config my-install.env --yes`.
+
+It installs PostHog at the exact version tested here (every image pinned by digest), tunes it for
+load, creates the login and a read-only API key, writes `.secrets.env`, runs the service under
+systemd (`ticket-triage.service`, starts at boot), starts the status page, writes `.mcp.json` and
+ends with `pnpm doctor`. Every step checks its result. If one fails, fix it and run the same command
+again: finished steps are skipped. The closing summary (`sudo deploy/install.sh status` shows it again)
+has everything you need next: addresses, where each password and token is, the snippet for your app,
+and how to connect Jira and Claude.
+
+## Upgrade PostHog
+
+`sudo deploy/migrate/posthog-upgrade.sh` takes an existing PostHog (for example the 3 Sep 2025 one)
+to the tested version on top of its own data: it backs everything up and checks the backup first,
+asks whether to copy the session replays, shows progress, can be resumed or rolled back, and deletes
+nothing until you confirm. Details: [deploy/migrate/README.md](deploy/migrate/README.md).
+
+## Demo machine
+
+The demo (Acme Portal, recorded sessions, a year of history) on a machine with PostHog installed:
+
+```bash
+pnpm install                               # also downloads Chrome and ffmpeg
+PUBLIC_HOST=<public-ip> ADMIN_EMAIL=you@example.com scripts/setup-posthog.sh
+scripts/demo-prep.sh                        # starts everything, records sessions, seeds history
+```
 
 For Claude Code, run `pnpm mcp:config`: it writes `.mcp.json` with the servers that are switched on.
 Claude Code asks once to approve a project MCP server. Remote MCP clients use `http://<host>:8080/mcp` with
@@ -283,8 +317,9 @@ use. The other 100 are generated the same way every time, so the history has a r
 (`pnpm seed:feedback`), which turn sour while a screen is broken for that client.
 
 Acme Portal ships a release every month, named like `26.1.0`. The plan in
-`src/core/release-plan.ts` is the single source for both the mock Jira's ACP releases (with 50
-tickets) and the year of PostHog history the seeder generates (`pnpm seed`, from 2025-09-01).
+`src/core/release-plan.ts` plans those releases (ACP, with 50 tickets) and the year of PostHog
+history the seeder generates from them (`pnpm seed`, from 2025-09-01). The release tools read the
+releases from Jira, so with a real Jira they show your project's releases instead.
 Clients take each release 0 to 12 days after it ships, then use the features it added, and hit
 its rage clicks and errors until the fix ships:
 
@@ -308,7 +343,10 @@ All names, companies and email domains are invented.
 The demo lives in PostHog project 3 ("Acme Portal"). Projects 1 and 2 are older, smaller demos,
 kept unchanged.
 
-## Moving to a real Jira and PostHog
+## Connecting Jira and your own PostHog
+
+`deploy/install.sh` asks for all of this. To change it later, edit `.secrets.env` and run
+`sudo systemctl restart ticket-triage` (or `scripts/stack.sh restart service`).
 
 - **Jira Cloud**: set `JIRA_BASE_URL=https://<site>.atlassian.net`, `JIRA_EMAIL` and
   `JIRA_API_TOKEN` (an API token for a bot user). Add a webhook for "Issue created" pointing at
@@ -368,7 +406,7 @@ plugin fails or any container restarts.
   rejected. Jira redelivers webhooks, so each triage comment carries a marker. A second delivery
   for the same issue does nothing.
 - Clip links are signed with `CLIP_LINK_SECRET` and expire after `CLIP_LINK_TTL_HOURS` (default
-  7 days). `/mcp` and `/status` need `MCP_TOKEN`. The mock Jira UI needs `DEMO_UI_PASSWORD`.
+  7 days). `/mcp` and `/status` need `MCP_TOKEN`.
 - Recordings are untrusted content. The renderer's Chrome can only resolve the hosts in
   `CLIP_ALLOWED_HOSTS`, and every other hostname fails to resolve. This replaces PostHog's
   production egress proxy. Two gaps remain: it does not stop a URL with a literal IP, and

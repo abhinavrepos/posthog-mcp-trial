@@ -2,7 +2,8 @@
   "name": "ticket-triage",
   "version": "0.1.0",
   "private": true,
-  "description": "Jira ticket triage on top of PostHog: finds the client's session, clips the replay, and adds usage and blast-radius data.",
+  "packageManager": "pnpm@10.29.3",
+  "description": "Ticket triage on top of PostHog: finds the client's session, clips the replay, and adds usage and blast-radius data.",
   "type": "module",
   "engines": {
     "node": ">=24 <25"
@@ -12,7 +13,6 @@
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx --test test/*.test.ts",
     "service": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx src/service/server.ts",
-    "mock-jira": "tsx src/mock-jira/server.ts",
     "demo-app": "tsx demo-app/server.ts",
     "mcp": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx src/mcp/stdio.ts",
     "sessions": "tsx scripts/generate-sessions.ts",
