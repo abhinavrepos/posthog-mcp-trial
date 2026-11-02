@@ -100,7 +100,7 @@ export const config = {
         tag: env('APP_TAG', 'for ION'),
     },
     jira: {
-        baseUrl: stripSlash(env('JIRA_BASE_URL', 'http://localhost:4000')),
+        baseUrl: stripSlash(env('JIRA_BASE_URL')),
         email: env('JIRA_EMAIL'),
         apiToken: env('JIRA_API_TOKEN'),
         webhookSecret: env('JIRA_WEBHOOK_SECRET'),
@@ -133,6 +133,9 @@ export const config = {
 }
 
 /** PostHog's MCP server is in use: switched on and configured. */
+/** Jira is connected: a site and a login. Without it, webhooks answer 503 and release outcomes keep the numbers they have. */
+export const jiraConfigured = () => !!config.jira.baseUrl && !!config.jira.email && !!config.jira.apiToken
+
 export const posthogMcpActive = (): boolean => config.features.posthogMcp && !!config.posthog.mcpUrl && !!config.posthog.mcpApiKey
 
 export function requirePosthog(): void {

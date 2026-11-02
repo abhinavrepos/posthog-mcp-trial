@@ -1,7 +1,9 @@
 # Five-minute demo
 
-Before the demo: `scripts/demo-prep.sh --reset-board` (a few minutes). Open three tabs:
-the mock Jira board (`:4000`), PostHog (`:80`), and Claude Code in this folder.
+Before the demo: `scripts/demo-prep.sh` (a few minutes). Open two tabs: PostHog (`:80`) and
+Claude Code in this folder. The tickets below are pasted into Claude, which runs the same triage
+the Jira webhook runs (`triage_ticket`). With Jira connected, filing them in Jira posts the same
+report as a comment.
 
 ## 1. The problem (30 s)
 
@@ -11,8 +13,15 @@ ticket."
 
 ## 2. A client bug, end to end (90 s)
 
-On the board, click **Client bug: PDF export stuck**. Point out how vague the ticket is: a name,
-"this afternoon", and "Preparing PDF…". Within a few seconds the comment appears:
+Ask Claude:
+
+> Triage this ticket (reporter in Europe/London). "Brightwater Logistics cannot export invoices to
+> PDF. Ben Okafor (ben.okafor@brightwater.example) called this afternoon. When he exports the
+> selected invoices to PDF the page sits on "Preparing PDF…" and nothing downloads. He tried several
+> times."
+
+Point out how vague the ticket is: a name, "this afternoon", and "Preparing PDF…". Within a few
+seconds the report is back:
 
 - It found **Ben's session** from an email and a London-time "this afternoon".
 - The **clip** is attached. Play it: the export hangs and Ben clicks again and again. Search
@@ -24,11 +33,14 @@ On the board, click **Client bug: PDF export stuck**. Point out how vague the ti
 
 ## 3. The hard cases (60 s)
 
-- **Vague ticket: client name only**: "Nordlicht says invoices are broken." No user and no
-  time. It still finds the session and says how it found it.
-- **No error: report shows zero**: nothing crashed. It finds the session where Maya refreshed
+- **Vague ticket, client name only** (Europe/Berlin): "Nordlicht says invoices are broken. Said
+  downloading their invoices does not work this week." No user and no time. It still finds the
+  session and says how it found it.
+- **No error** (America/New_York): "Cobalt Health: revenue report shows $0 for the quarter. Maya
+  refreshed it a few times and switched ranges. No error on screen." Nothing crashed. It finds the session where Maya refreshed
   the report five times and attaches that clip. Silent bugs never reach error tracking.
-- **MMT risk review**: a different layout with exposure, affected clients, the trend and the
+- **Risk review** (ask for a risk triage): "Risk review: invoice PDF export after the 26.10.0
+  release. Which clients are affected, how often, and is it getting worse?" A different layout with exposure, affected clients, the trend and the
   release comparison table.
 
 ## 4. Ask Claude (60 s)
@@ -66,12 +78,12 @@ them. Ask "why is ACP-230 grouped under errors?" and it quotes the rule and the 
 ## 6. Close (30 s)
 
 "Same logic, two front doors: Jira automation for every ticket, and Claude for follow-up
-questions. Moving to our real Jira is three settings. Nothing here changes how the product team
+questions. Connecting our real Jira is three settings. Nothing here changes how the product team
 works. Tickets just arrive with the evidence attached."
 
 ## If something goes wrong
 
-- No comment after 30 s: `scripts/stack.sh status`, then `tail logs/service.log`.
-- "No session found": run `pnpm sessions --only brightwater --count 2`, wait a minute, file the
-  ticket again.
-- Clip fails: the comment still links the full replay in PostHog.
+- No answer after 30 s: `scripts/stack.sh status`, then `tail logs/service.log`.
+- "No session found": run `pnpm sessions --only brightwater --count 2`, wait a minute, ask
+  again.
+- Clip fails: the report still links the full replay in PostHog.
