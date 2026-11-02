@@ -37,8 +37,8 @@ cp deploy/status/status.env.example deploy/status/status.env    # set STATUS_PAS
 STATUS_BIND=0.0.0.0 deploy/status/up.sh                         # http://<server>:8090/
 ```
 
-`up.sh` refuses a public address without a password, because Docker opens published ports past
-`ufw`.
+`up.sh` refuses a public address without a password: once the port is published, only the EC2
+security group decides who reaches it. Open 8090 there only for the addresses that need the page.
 
 ## What it can see
 

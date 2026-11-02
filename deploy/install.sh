@@ -11,14 +11,14 @@
 #
 # Steps (each one checks its result; a finished step is skipped when you run the script again, a failed
 # one is retried):
-#   check     root, Ubuntu or Debian, x86_64, memory, disk, ports, where the project folder is
+#   check     root, Amazon Linux 2023, x86_64, memory, disk, ports, where the project folder is
 #   packages  base tools, the libraries and fonts Chrome needs to render replay clips
 #   posthog   PostHog through deploy/posthog/install-posthog-hobby.sh, every image pinned by digest
 #             (deploy/migrate/versions), started at boot by posthog.service. 30-60 minutes.
 #   scale     deploy/posthog/scale.sh: about 200 events a second without losing any (SCALE=no skips it)
 #   node      Node 24 (checked against nodejs.org's checksums) and pnpm 10
 #   user      the unprivileged "triage" user the service runs as; it owns the project folder
-#   app       pnpm install (with Chrome for rendering), the AppArmor rule Chrome's sandbox needs
+#   app       pnpm install (with Chrome for rendering), the user-namespace setting Chrome's sandbox needs
 #   account   the PostHog login, organization, project settings and a read-only API key
 #             (scripts/setup-posthog.sh)
 #   settings  your answers into .secrets.env (mode 600), keeping anything already there
@@ -178,7 +178,16 @@ is_address() { [[ "$1" =~ ^(https?://)?[A-Za-z0-9.-]+$ ]] || { warn "a domain (p
 is_file() { local f="$1"; [[ "$f" = /* ]] || f="$APP_DIR/$f"; [ -f "$f" ] && python3 -c 'import json,sys; l=json.load(open(sys.argv[1])); assert isinstance(l,list) and all(x["path"].startswith("/") and x["name"] for x in l)' "$f" 2>/dev/null || { warn "not found, or not a JSON list like config/screens.example.json"; return 1; }; }
 is_jql() { [ -n "$1" ]; }
 hosts_of() { local u h out=""; for u in ${1//,/ }; do h="${u#*://}"; h="${h%%/*}"; h="${h%%:*}"; out="${out:+$out,}$h"; done; echo "$out"; }
-public_ip() { curl -fs -m 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}'; }
+# On EC2 the instance metadata service (IMDSv2) knows the public IP; elsewhere ask ipify, then use the
+# first local address.
+public_ip() {
+    local t ip
+    t="$(curl -fs -m 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null || true)"
+    [ -n "$t" ] && ip="$(curl -fs -m 2 -H "X-aws-ec2-metadata-token: $t" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)"
+    [[ "${ip:-}" =~ ^[0-9.]+$ ]] || ip="$(curl -fs -m 5 https://api.ipify.org 2>/dev/null || true)"
+    [[ "${ip:-}" =~ ^[0-9.]+$ ]] || ip="$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)"
+    echo "$ip"
+}
 
 POSTHOG_DIR="$(known POSTHOG_DIR)"; POSTHOG_DIR="${POSTHOG_DIR:-/opt/posthog}"
 SCALE="$(known SCALE)"; SCALE="${SCALE:-yes}"
@@ -187,7 +196,7 @@ collect_answers() {
     step "Settings"
     [ $INTERACTIVE = 1 ] && say "Press Enter to keep the value in [brackets]. Type - to clear one."
     echo; echo "  ${B}PostHog${N}"
-    ask POSTHOG_ADDRESS "Address people use to reach PostHog: a domain gets HTTPS (DNS must point here, ports 80 and 443 open); an IP or http://name is plain HTTP" "$(public_ip)" 1 0 is_address
+    ask POSTHOG_ADDRESS "Address people use to reach PostHog: a domain gets HTTPS (DNS must point here, ports 80 and 443 open in the security group); an IP or http://name is plain HTTP" "$(public_ip)" 1 0 is_address
     ask ADMIN_EMAIL "Email for the first PostHog login" "" 1 0 is_email
     ask ORG_NAME "Organization name in PostHog" "" 1
     ask APP_URLS "Your product's addresses, comma-separated (PostHog records sessions only there), e.g. https://app.example.com" "" 1 0 is_urls
@@ -265,14 +274,16 @@ port_user() {
 step_check() {
     CURRENT=check; step "Checking this machine"
     . /etc/os-release
-    case "$ID" in ubuntu|debian) ok "OS: $PRETTY_NAME" ;; *) die "Ubuntu or Debian only (this is $PRETTY_NAME)." ;; esac
-    [ "$(uname -m)" = x86_64 ] || die "x86_64 only: Chrome for rendering clips has no Linux arm64 build (this is $(uname -m))."
+    [ "$ID" = amzn ] && [[ "$VERSION_ID" == 2023* ]] || die "Amazon Linux 2023 only (this is $PRETTY_NAME). For Ubuntu or Debian use the ticket-triage branch."
+    ok "OS: $PRETTY_NAME"
+    [ "$(uname -m)" = x86_64 ] || die "x86_64 only: Chrome for rendering clips has no Linux arm64 build (this is $(uname -m)). Pick an Intel or AMD instance type (m7i, m6i, m6a, t3...), not Graviton."
     local ram disk; ram=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1024 / 1024 ))
-    [ "$ram" -ge "$MIN_RAM_GB" ] || die "Needs 16 GB of memory or more (this machine has ${ram} GB)."
+    [ "$ram" -ge "$MIN_RAM_GB" ] || die "Needs 16 GB of memory or more (this machine has ${ram} GB). On EC2: m7i.xlarge or larger."
     mkdir -p "$POSTHOG_DIR"
     disk=$(( $(df -Pk "$POSTHOG_DIR" | awk 'NR==2 {print $4}') / 1024 / 1024 ))
-    [ "$disk" -ge "$MIN_DISK_GB" ] || die "Needs ${MIN_DISK_GB} GB free at $POSTHOG_DIR (has ${disk} GB)."
+    [ "$disk" -ge "$MIN_DISK_GB" ] || die "Needs ${MIN_DISK_GB} GB free at $POSTHOG_DIR (has ${disk} GB). On EC2: grow the instance's EBS volume (EC2 > Volumes > Modify volume) and reboot; Amazon Linux grows the disk at boot."
     ok "memory ${ram} GB, free disk ${disk} GB, $(nproc) CPUs"
+    [ "$(getenforce 2>/dev/null || echo Permissive)" != Enforcing ] || warn "SELinux is enforcing. Amazon Linux 2023 ships it permissive, and this setup is tested that way: sudo setenforce 0, and SELINUX=permissive in /etc/selinux/config"
     # The service user must reach the project folder: no folder on the way may be private (like /root).
     local d="$APP_DIR"
     while [ "$d" != / ]; do
@@ -302,18 +313,14 @@ step_check() {
 
 step_packages() {
     CURRENT=packages; step "Installing base tools and what Chrome needs"
-    export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a
-    apt-get update -qq
-    apt-get install -y -qq curl ca-certificates git openssl python3 xz-utils iproute2 util-linux apparmor >/dev/null
-    # Chrome's libraries; Ubuntu 24.04+ renamed some to …t64.
-    local pkgs=() p
-    for p in libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 libcups2 libdrm2 libgbm1 libasound2 \
-        libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libxfixes3 libxext6 libxi6 libxrender1 libx11-6 libxcb1 \
-        libdbus-1-3 libexpat1 libglib2.0-0 libpango-1.0-0 libcairo2 \
-        fonts-liberation fonts-noto-core fonts-noto-mono fonts-noto-color-emoji; do
-        if apt-cache show "${p}t64" >/dev/null 2>&1; then pkgs+=("${p}t64"); else pkgs+=("$p"); fi
-    done
-    apt-get install -y -qq "${pkgs[@]}" >/dev/null
+    # curl comes as curl-minimal on Amazon Linux: installing "curl" would conflict with it, and it is enough.
+    dnf install -y -q ca-certificates git openssl python3 tar xz iproute util-linux shadow-utils procps-ng >/dev/null
+    # Chrome's libraries and fonts.
+    local pkgs=(nss nspr atk at-spi2-atk at-spi2-core cups-libs libdrm mesa-libgbm alsa-lib libxkbcommon
+        libXcomposite libXdamage libXrandr libXfixes libXext libXi libXrender libX11 libxcb dbus-libs expat glib2
+        pango cairo liberation-fonts google-noto-sans-fonts google-noto-serif-fonts google-noto-sans-mono-fonts
+        google-noto-sans-symbols-fonts google-noto-sans-symbols2-fonts dejavu-sans-fonts google-noto-emoji-color-fonts)
+    dnf install -y -q "${pkgs[@]}" >/dev/null
     ok "installed ${#pkgs[@]} packages for Chrome and fonts"
     finish packages
 }
@@ -385,14 +392,12 @@ step_app() {
     chrome="$(ls -d "$APP_DIR"/.cache/puppeteer/chrome-headless-shell/linux-*/chrome-headless-shell-linux64/chrome-headless-shell 2>/dev/null | head -1)"
     [ -x "$chrome" ] || die "Chrome for rendering was not downloaded (pnpm install should have fetched it)."
     ok "Chrome: ${chrome#"$APP_DIR"/}"
-    # Ubuntu 23.10+ blocks unprivileged user namespaces, which Chrome's sandbox needs: allow them for
-    # this project's Chrome only.
-    if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = 1 ]; then
-        local profile=ticket-triage-chrome
-        [ "$APP_DIR" = /srv/ticket-triage ] || profile="$profile$(echo "$APP_DIR" | tr -c 'a-zA-Z0-9\n' '-')"
-        sed "s#/srv/ticket-triage#$APP_DIR#g; s#profile ticket-triage-chrome #profile $profile #" "$HERE/apparmor-ticket-triage-chrome" >"/etc/apparmor.d/$profile"
-        apparmor_parser -r "/etc/apparmor.d/$profile"
-        ok "AppArmor rule for Chrome's sandbox loaded"
+    # Chrome's sandbox needs unprivileged user namespaces. Amazon Linux 2023 allows them; a hardened
+    # image may have turned them off with user.max_user_namespaces=0.
+    if [ "$(sysctl -n user.max_user_namespaces 2>/dev/null || echo 1)" = 0 ]; then
+        echo 'user.max_user_namespaces = 15000' >/etc/sysctl.d/90-ticket-triage-chrome.conf
+        sysctl -q -p /etc/sysctl.d/90-ticket-triage-chrome.conf
+        ok "user namespaces turned on for Chrome's sandbox (/etc/sysctl.d/90-ticket-triage-chrome.conf)"
     fi
     run_as_app "$chrome" --headless --disable-gpu --dump-dom about:blank >/dev/null 2>&1 \
         || die "Chrome does not start as $APP_USER: run  sudo -u $APP_USER $chrome --headless --dump-dom about:blank  to see why."
@@ -533,12 +538,16 @@ step_doctor() {
 write_summary() {
     CURRENT=""
     local host token mcp_on f="$STATE_DIR/summary.txt"
+    local sport; sport="$(read_env_file "$SECRETS" SERVICE_PORT)"; sport="${sport:-8080}"
     host="$(hosts_of "$POSTHOG_ADDRESS")"
     token="$(read_env_file "$SECRETS" POSTHOG_PROJECT_TOKEN)"
     mcp_on="$(read_env_file "$SECRETS" FEATURE_LENS_MCP)"
     umask 077
     cat >"$f" <<EOF
 PostHog Lens is installed ($(date -u '+%Y-%m-%d %H:%M UTC')).
+
+EC2 security group (inbound): 22 from your address; 80$(case "$POSTHOG_ADDRESS" in http://*|[0-9]*) ;; *) echo " and 443";; esac) from where
+your users and app reach PostHog; $sport (this service) from where people open clip links$([ "$STATUS_PUBLIC" = yes ] && echo "; 8090 for the status page").
 
 PostHog
   Open            $POSTHOG_PUBLIC_URL

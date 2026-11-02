@@ -21,7 +21,7 @@ docker network inspect "$net" >/dev/null 2>&1 || { echo "Docker network $net not
 pw=$( [ -f status.env ] && grep -E '^STATUS_PASSWORD=.+' status.env || true )
 if [ "${STATUS_BIND:-127.0.0.1}" != 127.0.0.1 ] && [ -z "$pw" ]; then
     echo "STATUS_BIND=${STATUS_BIND} makes the page reachable from outside: set STATUS_PASSWORD in $(pwd)/status.env first."
-    echo "(Docker opens published ports past ufw, so the firewall does not protect it.)"
+    echo "(Once published, only the EC2 security group decides who reaches port ${STATUS_PORT:-8090}.)"
     exit 1
 fi
 docker compose up -d --build
