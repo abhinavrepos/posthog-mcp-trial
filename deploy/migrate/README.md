@@ -18,6 +18,15 @@ check of everything, and fixes for the problems the rehearsal found in PostHog's
 
 ## Steps
 
+The simplest route is the installer, which also sets up PostHog Lens on the same machine: clone this
+repository (as in the main README), stop the apps that send events, and run `sudo deploy/install.sh`. It
+finds the running PostHog by itself, asks three things (PostHog's address, which preset comes from the
+PostHog; the login Lens works as, preset to its first admin; and whether to copy the session replays),
+shows the plan, then runs `posthog-upgrade.sh --yes` as its PostHog step and sets up Lens after it.
+Running it again continues where it stopped, in the upgrade too.
+
+To upgrade PostHog alone, without Lens:
+
 ```bash
 # 1. Copy this repository's deploy/ folder to the machine, for example to /root/deploy
 # 2. Stop the apps that send events to PostHog

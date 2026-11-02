@@ -7,6 +7,9 @@
 #   sudo deploy/install.sh --config my-install.env          # every other setting from a file (deploy/install.env.example)
 #   sudo deploy/install.sh --config my-install.env --yes    # no questions at all
 #   sudo deploy/install.sh --use-existing-posthog           # PostHog is already on this version: keep it
+# On a machine that already runs a self-hosted PostHog, the same command upgrades that PostHog in place
+# (deploy/migrate/posthog-upgrade.sh: backup first, every image pinned, its data kept) instead of
+# installing one. It finds that PostHog by itself and also asks whether to copy the session replays.
 #   sudo deploy/install.sh status                           # which steps are done, and the summary
 #
 # Steps (each one checks its result; a finished step is skipped when you run the script again, a failed
@@ -15,6 +18,7 @@
 #   packages  base tools, the libraries and fonts Chrome needs to render replay clips
 #   posthog   PostHog through deploy/posthog/install-posthog-hobby.sh, every image pinned by digest
 #             (deploy/migrate/versions), started at boot by posthog.service. 30-60 minutes.
+#             With a PostHog already here: deploy/migrate/posthog-upgrade.sh instead. About 2 hours.
 #   scale     deploy/posthog/scale.sh: about 200 events a second without losing any (SCALE=no skips it)
 #   addresses PostHog answers on every address in POSTHOG_ADDRESS, each one trusted for logins (CSRF)
 #   node      Node 24 (checked against nodejs.org's checksums) and pnpm 10
@@ -205,16 +209,37 @@ is_jql() { [ -n "$1" ]; }
 hosts_of() { local u h out=""; for u in ${1//,/ }; do h="${u#*://}"; h="${h%%/*}"; h="${h%%:*}"; out="${out:+$out,}$h"; done; echo "$out"; }
 public_ip() { curl -fs -m 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}'; }
 
-POSTHOG_DIR="$(known POSTHOG_DIR)"; POSTHOG_DIR="${POSTHOG_DIR:-/opt/posthog}"
+POSTHOG_DIR="$(known POSTHOG_DIR)"; POSTHOG_DIR_GIVEN="${POSTHOG_DIR:+1}"; POSTHOG_DIR="${POSTHOG_DIR:-/opt/posthog}"
 LOCAL_MCP_URL=http://127.0.0.1:8787/mcp
 SCALE="$(known SCALE)"; SCALE="${SCALE:-yes}"
 
 collect_answers() {
     step "Settings"
+    local def_address def_admin n
+    if [ "$MODE" = fresh ]; then
+        def_address="$(public_ip)"
+    else
+        say "Found a PostHog in $POSTHOG_DIR: $([ "$MODE" = upgrade ] && echo "it is upgraded in place, keeping its data" || echo "already on the tested version, kept as it is")."
+        def_address="$(existing_address)"; [ -n "$def_address" ] || def_address="$(public_ip)"
+        [ -n "$(known ADMIN_EMAIL)" ] || def_admin="$(existing_admin)"
+    fi
     [ $INTERACTIVE = 1 ] && say "Press Enter to keep the value in [brackets]."
-    ask POSTHOG_ADDRESS "Address(es) people use to reach PostHog, comma-separated (the first is the main one). Domains get HTTPS (DNS must point here, ports 80 and 443 open); IPs and http://names are plain HTTP. Do not mix the two." "$(public_ip)" 1 0 is_addresses
+    ask POSTHOG_ADDRESS "Address(es) people use to reach PostHog, comma-separated (the first is the main one). Domains get HTTPS (DNS must point here, ports 80 and 443 open); IPs and http://names are plain HTTP. Do not mix the two." "$def_address" 1 0 is_addresses
     POSTHOG_ADDRESS="${POSTHOG_ADDRESS// /}"; save_answer POSTHOG_ADDRESS "$POSTHOG_ADDRESS"
-    ask ADMIN_EMAIL "Email for the first PostHog login" "" 1 0 is_email
+    if [ "$MODE" = fresh ]; then
+        ask ADMIN_EMAIL "Email for the first PostHog login" "" 1 0 is_email
+    else
+        ask ADMIN_EMAIL "Email of a PostHog login that PostHog Lens works as (its current project is the one Lens uses)" "${def_admin:-}" 1 0 is_email
+    fi
+    if [ "$MODE" = upgrade ]; then
+        # posthog-upgrade.sh keeps the choice once made; a run that continues does not ask again.
+        if [ -n "$(cat "$POSTHOG_DIR/upgrade-state/replays" 2>/dev/null)" ]; then
+            MIGRATE_REPLAYS="$([ "$(cat "$POSTHOG_DIR/upgrade-state/replays")" = copy ] && echo yes || echo no)"
+        else
+            n="$(existing_recordings)"
+            ask MIGRATE_REPLAYS "Copy the ${n:+$n }session replays to the new version (yes), or leave them in the old storage for now (no: the new version lists them but cannot play them until you copy them with deploy/migrate/posthog-upgrade.sh replays)" yes 1 0 is_yesno
+        fi
+    fi
 
     # Everything below has a default and is never asked. Change one in a --config file
     # (deploy/install.env.example), or in .secrets.env afterwards.
@@ -266,9 +291,17 @@ show_plan() {
     step "Plan"
     say "PostHog         $POSTHOG_PUBLIC_URL  ($([ $scheme = https ] && echo "HTTPS, certificate from Let's Encrypt" || echo "plain HTTP: private network or VPN only"))"
     [ -z "$others" ] || say "                also at $others"
-    if [ $USE_EXISTING = 1 ]; then say "                keep the PostHog already in $POSTHOG_DIR"
-    else say "                version ${TARGET_COMMIT:0:12}, installed in $POSTHOG_DIR$([ "$SCALE" = yes ] && echo ", tuned for ~200 events/s")"; fi
-    say "login           $ADMIN_EMAIL (organization \"$ORG_NAME\"), recording on ${APP_URLS:-every site that sends events}"
+    case "$MODE" in
+        existing) say "                keep the PostHog already in $POSTHOG_DIR" ;;
+        upgrade)
+            say "                ${B}upgrade the PostHog in $POSTHOG_DIR${N} to version ${TARGET_COMMIT:0:12}, keeping its data"
+            say "                (deploy/migrate/posthog-upgrade.sh: full backup first; PostHog is down about 2 hours;"
+            say "                stop the apps that send events first, or it stops at its first check)"
+            say "                session replays: $([ "$MIGRATE_REPLAYS" = yes ] && echo "copied, then every one played to check it" || echo "NOT copied now (they stay in the old storage)")" ;;
+        *) say "                version ${TARGET_COMMIT:0:12}, installed in $POSTHOG_DIR$([ "$SCALE" = yes ] && echo ", tuned for ~200 events/s")" ;;
+    esac
+    if [ "$MODE" = fresh ]; then say "login           $ADMIN_EMAIL (organization \"$ORG_NAME\"), recording on ${APP_URLS:-every site that sends events}"
+    else say "login           $ADMIN_EMAIL (its current project), recording on ${APP_URLS:-every site that sends events}"; fi
     say "PostHog Lens    $SERVICE_PUBLIC_URL, from $APP_DIR, as user $APP_USER, starts at boot"
     say "Jira            $([ -n "$JIRA_BASE_URL" ] && echo "$JIRA_BASE_URL (releases from $RELEASES_JIRA_PROJECT)" || echo "not connected yet (connect it later in .secrets.env)")"
     say "Claude reading  $([ -n "$ANTHROPIC_API_KEY" ] && echo on || echo "off (keyword rules)")"
@@ -286,6 +319,48 @@ run_as_app() { runuser -u "$APP_USER" -- env HOME="$APP_HOME" PUPPETEER_CACHE_DI
 # This installer began the posthog step before (and it did not finish): the PostHog in POSTHOG_DIR is
 # ours, and running the step again continues it. The log covers runs from before the marker existed.
 posthog_started_here() { [ -f "$STATE_DIR/posthog-started" ] || grep -q '==> Installing PostHog (30-60 minutes' "$STATE_DIR/install.log" 2>/dev/null; }
+# The PostHog this run works with, in MODE: fresh (install one), upgrade (one that is already here, on an
+# older version), existing (one that is already on the tested version). Sets POSTHOG_DIR when it finds one.
+find_posthog() {
+    . "$HERE/migrate/versions/versions.env"
+    local d="$POSTHOG_DIR" found
+    if [ $USE_EXISTING = 1 ]; then MODE=existing; return; fi
+    if [ ! -f "$d/.env" ] && [ -z "$POSTHOG_DIR_GIVEN" ] && command -v docker >/dev/null 2>&1; then
+        # Not in /opt/posthog, and no folder given: a running PostHog (compose services web and db) somewhere else.
+        found="$(docker ps --filter label=com.docker.compose.service=db --format '{{.Label "com.docker.compose.project.working_dir"}}' 2>/dev/null \
+            | sort -u | while read -r w; do [ -f "$w/.env" ] && [ -f "$w/docker-compose.yml" ] && grep -q 'posthog' "$w/docker-compose.yml" && echo "$w"; done)"
+        if [ "$(echo "$found" | grep -c .)" -gt 1 ]; then
+            die "Several PostHogs run on this machine: $(echo "$found" | paste -sd' '). Say which one: sudo POSTHOG_DIR=<folder> $0"
+        fi
+        [ -n "$found" ] && d="$found"
+    fi
+    if [ ! -f "$d/.env" ] || done_step posthog || posthog_started_here; then MODE=fresh; return; fi
+    POSTHOG_DIR="$d"
+    if [ "$(git -C "$d/posthog" rev-parse HEAD 2>/dev/null)" = "$TARGET_COMMIT" ] && { [ ! -d "$d/upgrade-state" ] || [ -f "$d/upgrade-state/done/verify" ]; }; then
+        MODE=existing
+    else
+        MODE=upgrade
+    fi
+}
+# What the PostHog found by find_posthog already knows: its address(es) and its first admin.
+existing_address() {
+    local a; a="$(read_env_file "$POSTHOG_DIR/.env" ADDRESSES)"
+    [ -n "$a" ] && { echo "$a"; return; }
+    a="$(read_env_file "$POSTHOG_DIR/.env" DOMAIN)"; a="${a%%:*}"
+    [ -n "$a" ] || return 0
+    if [ "$(read_env_file "$POSTHOG_DIR/.env" HTTP_ONLY)" = 1 ] || [[ ! "$a" =~ ^[0-9.]+$ && "$(cd "$POSTHOG_DIR" && docker compose config 2>/dev/null | grep -m1 -E '^ +SITE_URL:' | awk '{print $2}')" == http://* ]]; then
+        [[ "$a" =~ ^[0-9.]+$ ]] || a="http://$a"
+    fi
+    echo "$a"
+}
+existing_admin() {
+    (cd "$POSTHOG_DIR" && timeout 120 docker compose exec -T web python manage.py shell -c \
+        "from posthog.models import User; u = User.objects.filter(is_active=True).order_by('-is_staff', 'id').first(); print('ADMIN=' + (u.email if u else ''))" 2>/dev/null \
+        </dev/null | grep '^ADMIN=' | cut -d= -f2- | tail -1) || true
+}
+existing_recordings() {
+    (cd "$POSTHOG_DIR" && docker compose exec -T clickhouse clickhouse-client -q "SELECT uniqExact(session_id) FROM posthog.session_replay_events" 2>/dev/null </dev/null) || true
+}
 posthog_healthy() { [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$POSTHOG_URL/_health" || true)" = 200 ]; }
 # The command line of whatever listens on a TCP port (empty when the port is free).
 port_user() {
@@ -304,7 +379,8 @@ step_check() {
     [ "$ram" -ge "$MIN_RAM_GB" ] || die "Needs 16 GB of memory or more (this machine has ${ram} GB)."
     mkdir -p "$POSTHOG_DIR"
     disk=$(( $(df -Pk "$POSTHOG_DIR" | awk 'NR==2 {print $4}') / 1024 / 1024 ))
-    [ "$disk" -ge "$MIN_DISK_GB" ] || die "Needs ${MIN_DISK_GB} GB free at $POSTHOG_DIR (has ${disk} GB)."
+    # An upgrade checks its own disk needs (twice the data plus 30 GB), in its first phase.
+    [ "$MODE" != fresh ] || [ "$disk" -ge "$MIN_DISK_GB" ] || die "Needs ${MIN_DISK_GB} GB free at $POSTHOG_DIR (has ${disk} GB)."
     ok "memory ${ram} GB, free disk ${disk} GB, $(nproc) CPUs"
     # The service user must reach the project folder: no folder on the way may be private (like /root).
     local d="$APP_DIR"
@@ -313,12 +389,12 @@ step_check() {
         [ "$(( 0$(stat -c %a "$d") & 1 ))" = 1 ] || die "$APP_DIR is inside $d, which other users cannot enter. Clone the project to /srv/ticket-triage and run it from there."
     done
     ok "project folder $APP_DIR"
-    if [ $USE_EXISTING = 1 ]; then
-        posthog_healthy || die "--use-existing-posthog: PostHog in $POSTHOG_DIR is not answering on $POSTHOG_URL/_health."
-        ok "using the PostHog already running in $POSTHOG_DIR"
-    elif [ -f "$POSTHOG_DIR/.env" ] && ! done_step posthog && ! posthog_started_here; then
-        die "$POSTHOG_DIR already holds a PostHog. Bring it to the tested version with deploy/migrate/posthog-upgrade.sh, then run this with --use-existing-posthog."
-    fi
+    case "$MODE" in
+        existing)
+            posthog_healthy || die "PostHog in $POSTHOG_DIR is not answering on $POSTHOG_URL/_health. Start it: cd $POSTHOG_DIR && sudo docker compose up -d"
+            ok "using the PostHog already running in $POSTHOG_DIR" ;;
+        upgrade) ok "the PostHog in $POSTHOG_DIR is upgraded in step posthog" ;;
+    esac
     local p u sp; sp="$(known SERVICE_PORT)"; sp="${sp:-8080}"
     for p in 80 443 "$sp" 8090; do
         u="$(port_user "$p")"
@@ -352,9 +428,19 @@ step_packages() {
 }
 
 step_posthog() {
+    . "$HERE/migrate/versions/versions.env"
+    if [ "$MODE" = upgrade ]; then
+        CURRENT=posthog; step "Upgrading the PostHog in $POSTHOG_DIR (about 2 hours; it continues where it stopped)"
+        REPLAYS="$([ "$MIGRATE_REPLAYS" = yes ] && echo copy || echo skip)" POSTHOG_DIR="$POSTHOG_DIR" \
+            bash "$HERE/migrate/posthog-upgrade.sh" --yes </dev/null
+        posthog_healthy || die "PostHog is not healthy after the upgrade (curl $POSTHOG_URL/_health)."
+        [ "$(git -C "$POSTHOG_DIR/posthog" rev-parse HEAD)" = "$TARGET_COMMIT" ] || die "PostHog's source is not at $TARGET_COMMIT."
+        ok "PostHog upgraded to ${TARGET_COMMIT:0:12}, its data checked (RESULT: PASS)"
+        finish posthog
+        return
+    fi
     CURRENT=posthog; step "Installing PostHog (30-60 minutes the first time)"
     touch "$STATE_DIR/posthog-started"
-    . "$HERE/migrate/versions/versions.env"
     POSTHOG_APP_TAG="$TARGET_COMMIT" POSTHOG_PINNED_COMPOSE="$HERE/migrate/versions/docker-compose.pinned.yml" \
         POSTHOG_INSTALL_DIR="$POSTHOG_DIR" bash "$HERE/posthog/install-posthog-hobby.sh" "$POSTHOG_ADDRESS" </dev/null
     local i
@@ -605,10 +691,17 @@ PostHog Lens is installed ($(date -u '+%Y-%m-%d %H:%M UTC')).
 
 PostHog
   Open            $POSTHOG_PUBLIC_URL$([ "$POSTHOG_ADDRESS" = "${POSTHOG_ADDRESS%%,*}" ] || echo " (also: ${POSTHOG_ADDRESS#*,})")
-  Login           $ADMIN_EMAIL, password: sudo grep POSTHOG_ADMIN_PASSWORD $SECRETS
+  Login           $ADMIN_EMAIL, password: $([ "$MODE" = fresh ] && echo "sudo grep POSTHOG_ADMIN_PASSWORD $SECRETS" || echo "the one it already had")
   Files           $POSTHOG_DIR (back up $POSTHOG_DIR/.env: its secrets encrypt data)
   Start / stop    sudo systemctl start posthog / sudo systemctl stop posthog
   Upgrade         sudo $HERE/migrate/posthog-upgrade.sh (backs up first, asks before deleting)
+$([ "$MODE" = upgrade ] && cat <<EOT
+  Upgrade backup  $POSTHOG_DIR/upgrade-backup (rollback: sudo POSTHOG_DIR=$POSTHOG_DIR $HERE/migrate/posthog-upgrade.sh rollback)
+                  Once you have checked PostHog, delete it, asking about each item:
+                  sudo POSTHOG_DIR=$POSTHOG_DIR $HERE/migrate/posthog-upgrade.sh cleanup
+$([ "$MIGRATE_REPLAYS" = yes ] || echo "  Old replays     not copied yet. Copy them: sudo POSTHOG_DIR=$POSTHOG_DIR $HERE/migrate/posthog-upgrade.sh replays, then ... verify")
+EOT
+)
 
 Your app: add PostHog to it ($([ -n "$APP_URLS" ] && echo "it records only on $APP_URLS" || echo "any site with this snippet records"))
   posthog.init('$token', { api_host: '$POSTHOG_PUBLIC_URL', person_profiles: 'identified_only' })
@@ -668,12 +761,16 @@ EOF
 }
 
 # ------------------------------------------------------------------ run
+MODE=fresh; MIGRATE_REPLAYS=""
+find_posthog
+save_answer POSTHOG_DIR "$POSTHOG_DIR"
 collect_answers
 show_plan
 for s in "${STEPS[@]}"; do
     if done_step "$s" && [[ "$ALWAYS" != *" $s "* ]]; then echo; say "${D}step $s: already done ($(cat "$STATE_DIR/done/$s"))${N}"; continue; fi
-    case "$s" in
-        posthog|scale|addresses) if [ $USE_EXISTING = 1 ]; then say "${D}step $s: skipped (--use-existing-posthog)${N}"; continue; fi ;;
+    case "$MODE:$s" in
+        existing:posthog|existing:scale) say "${D}step $s: skipped (PostHog is already on the tested version)${N}"; continue ;;
+        upgrade:scale) say "${D}step scale: skipped (the upgrade starts PostHog through scale.sh)${N}"; continue ;;
     esac
     [ "$s" = scale ] && [ "$SCALE" != yes ] && { say "${D}step scale: skipped (SCALE=$SCALE)${N}"; continue; }
     "step_$s"

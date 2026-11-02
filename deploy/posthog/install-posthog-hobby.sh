@@ -424,6 +424,7 @@ EOF
 # install changes: every address as a trusted origin (Django refuses a login form posted from an origin
 # it does not trust), Caddy's site list for several HTTPS domains, and plain HTTP.
 write_override() {
+    local out="${1:-docker-compose.override.yml}"
     {
         echo "# Written by install-posthog-hobby.sh. Re-run the script to change it."
         echo "services:"
@@ -457,12 +458,20 @@ EOF
             echo "        environment:"
             echo "            CADDY_HOST: '$(caddy_host)'"
         fi
-    } > docker-compose.override.yml
-    # A COMPOSE_FILE list (scale.sh writes one) replaces the automatic merge, so the override must be in it.
+    } > "$out"
+    # A COMPOSE_FILE list (scale.sh writes one) replaces the automatic merge, so the file must be in it.
     local files
-    files="$(grep -E '^COMPOSE_FILE=' .env 2>/dev/null | cut -d= -f2- || true)"
-    if [ -n "$files" ] && [[ ":$files:" != *":docker-compose.override.yml:"* ]]; then
-        set_env_value COMPOSE_FILE "${files/docker-compose.yml/docker-compose.yml:docker-compose.override.yml}"
+    files="$(grep -E '^COMPOSE_FILE=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
+    if [ "$out" = docker-compose.override.yml ]; then
+        if [ -n "$files" ] && [[ ":$files:" != *":docker-compose.override.yml:"* ]]; then
+            set_env_value COMPOSE_FILE "${files/docker-compose.yml/docker-compose.yml:docker-compose.override.yml}"
+        fi
+    else
+        # Last, so it wins. EXTRA_COMPOSE_FILES keeps it when scale.sh or posthog-upgrade.sh rewrite the list.
+        [ -n "$files" ] || { files=docker-compose.yml; [ -f docker-compose.override.yml ] && files="$files:docker-compose.override.yml"; }
+        [[ ":$files:" == *":$out:"* ]] || set_env_value COMPOSE_FILE "$files:$out"
+        local extra; extra="$(grep -E '^EXTRA_COMPOSE_FILES=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
+        [[ ":$extra:" == *":$out:"* ]] || set_env_value EXTRA_COMPOSE_FILES "${extra:+$extra:}$out"
     fi
     # Without this, Django marks cookies HTTPS-only and redirects to https://, so login fails.
     if [ "$HTTP_ONLY" = 1 ] && ! grep -q '^SECURE_COOKIES=false' .env.services; then
@@ -693,12 +702,23 @@ EOF
 addresses_only() {
     [ -f "$INSTALL_DIR/.env" ] && [ -f "$INSTALL_DIR/docker-compose.yml" ] || die "No PostHog installed in $INSTALL_DIR."
     [ -n "${1:-}" ] || die "Usage: install-posthog-hobby.sh --addresses-only ADDRESS[,ADDRESS...]"
-    local before; before="$(grep -E '^HTTP_ONLY=' "$INSTALL_DIR/.env" | cut -d= -f2)"
-    ask_domain "$1"
-    [ "${before:-0}" = "$HTTP_ONLY" ] || die "That switches PostHog between HTTP and HTTPS. Run the whole script for that: sudo bash $0 $1"
-    write_env
     cd "$INSTALL_DIR"
-    write_override
+    local before out=docker-compose.override.yml
+    before="$(grep -E '^HTTP_ONLY=' .env | cut -d= -f2 || true)"
+    # A PostHog this script did not install (an upgraded one) has no HTTP_ONLY: its SITE_URL tells.
+    if [ -z "$before" ]; then
+        case "$(docker compose config 2>/dev/null | grep -m1 -E '^ +SITE_URL:' | awk '{print $2}' | tr -d "\"'")" in
+            http://*) before=1 ;; *) before=0 ;;
+        esac
+    fi
+    ask_domain "$1"
+    [ "$before" = "$HTTP_ONLY" ] || die "That switches PostHog between HTTP and HTTPS. Run the whole script for that: sudo bash $0 $1"
+    write_env
+    # Someone else's docker-compose.override.yml is kept: the addresses go in a file of their own.
+    if [ -f docker-compose.override.yml ] && ! head -1 docker-compose.override.yml | grep -q 'install-posthog-hobby.sh'; then
+        out=docker-compose.addresses.yml
+    fi
+    write_override "$out"
     docker compose up -d --no-build >/dev/null 2>&1 || docker compose up -d --no-build || die "Docker Compose could not apply the change."
     ok "PostHog now answers on: $ORIGINS"
 }

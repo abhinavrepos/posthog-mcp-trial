@@ -92,7 +92,8 @@ team.session_recording_opt_in = True
 team.capture_console_log_opt_in = True
 team.autocapture_exceptions_opt_in = True
 team.capture_dead_clicks = True
-team.app_urls = urls
+if urls:
+    team.app_urls = urls
 # Empty: PostHog records on every domain.
 team.recording_domains = urls
 team.save()

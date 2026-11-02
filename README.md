@@ -285,6 +285,14 @@ limits recording to your app's addresses) or change any other default, fill in a
 to ask nothing. To add an address later, run the installer again with the longer list: only the
 addresses change, and the data is kept.
 
+**A machine that already runs a self-hosted PostHog** (for example production on the 2025 version):
+stop the apps that send events, then run the same `sudo deploy/install.sh`. It finds that PostHog and
+upgrades it in place, on top of its own data, instead of installing a new one (`deploy/migrate/`, full
+backup first, about 2 hours). The questions are the same two, preset from that PostHog (its address,
+its first admin), plus one: whether to copy the session replays now. Lens then uses the current project
+of that login. The upgrade's backup stays until you delete it with `deploy/migrate/posthog-upgrade.sh
+cleanup` (see [deploy/migrate/README.md](deploy/migrate/README.md)).
+
 It installs PostHog at the exact version tested here (every image pinned by digest), tunes it for
 load, creates the login and a read-only API key, writes `.secrets.env`, runs the service under
 systemd (`ticket-triage.service`, starts at boot), starts the status page, writes `.mcp.json` and
