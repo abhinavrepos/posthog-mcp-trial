@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { dayIn, includesToday, liveNow, parsePresenceQuery, presenceReport, presenceSessions, timedEvents, validTimeZone, type PresenceQuery, type PresenceSettings } from '../src/core/presence.ts'
+import { actionLabel, dayIn, includesToday, liveNow, parsePresenceQuery, personDay, presenceReport, presenceSessions, timedEvents, validTimeZone, type PresenceQuery, type PresenceSettings } from '../src/core/presence.ts'
 
 const SETTINGS: PresenceSettings = { gap_s: 60, live_minutes: 5, ignore_events: ['$feature_flag_called'] }
 const NOW = new Date('2026-11-01T20:00:00Z') // already 2 November in India, still 1 November in New York
@@ -146,13 +146,15 @@ describe('row limits', () => {
         const run = async (query: string) => {
             seen.push(query)
             if (/toIntervalMinute/.test(query)) return [{ client: 'acme', client_name: 'Acme', user: 'a@acme.example', sid: 's1', last_seen: '2026-11-01 19:59:30' }]
+            if (/GROUP BY sid ORDER BY start DESC/.test(query)) return [{ sid: 's1', user: 'a@acme.example', client: 'acme', start: '2026-11-01 09:00:00', end: '2026-11-01 09:10:00', actions: 3, open_ms: 1, active_ms: 1 }]
             return []
         }
         const q = parse({ tz: 'UTC', client: 'acme', from: '2026-08-04', to: '2026-11-01' }) as PresenceQuery
         await presenceReport(q, SETTINGS, run)
         await presenceSessions(q, SETTINGS, 1000, run)
         await liveNow('UTC', 60, SETTINGS, NOW, run)
-        assert.equal(seen.length, 9)
+        await personDay({ ...q, to: q.from, user: 'a@acme.example' }, SETTINGS, run)
+        assert.equal(seen.length, 12)
         for (const query of seen) assert.match(query, /LIMIT (\d+|\{limit\})\s*$/, query.slice(0, 80))
         // 92 days of 24 hours must fit.
         const hours = seen.find((x) => /GROUP BY day, hour/.test(x))!
@@ -194,5 +196,78 @@ describe('live now', () => {
         const todayCall = calls.find((c) => /user IN \{users\}/.test(c.query))!
         assert.deepEqual(todayCall.values.users, ['a@acme.example', 'b@beta.example'])
         assert.equal(todayCall.values.from, '2026-11-01')
+    })
+})
+
+describe("one person's day", () => {
+    test('actions get short, readable names', () => {
+        assert.equal(actionLabel('$pageview', '', '', '/invoices'), 'Opened /invoices')
+        assert.equal(actionLabel('$autocapture', 'click', 'button.btn:text="Approve batch"nth-child="2";div.toolbar', '/payments'), 'Clicked "Approve batch"')
+        assert.equal(actionLabel('$autocapture', 'change', 'input:attr__id="amount"', ''), 'Changed a field')
+        assert.equal(actionLabel('$autocapture', 'submit', 'form:attr__id="f"', ''), 'Submitted something')
+        assert.equal(actionLabel('$autocapture', 'click', 'span:text="' + 'x'.repeat(60) + '"', ''), 'Clicked "' + 'x'.repeat(39) + '…"')
+        assert.equal(actionLabel('$autocapture', 'click', 'a:text="Say \\"hi\\""', ''), 'Clicked "Say "hi""')
+        assert.equal(actionLabel('$autocapture', 'click', '', ''), 'Clicked something')
+        assert.equal(actionLabel('invoice_export_started', '', '', '/invoices'), 'Invoice export started')
+        assert.equal(actionLabel('$rageclick', 'click', '', ''), 'Clicked repeatedly')
+        assert.equal(actionLabel('$some_new_event', '', '', ''), 'Some new event')
+    })
+
+    test('builds the day: actions in order, sessions with their recordings, totals', async () => {
+        const q = { ...(parse({ tz: 'UTC', from: '2026-11-01', client: 'acme' }) as PresenceQuery), user: 'a@acme.example' }
+        const { run, calls } = fake([
+            { match: /ORDER BY ts LIMIT/, rows: [
+                { ts: '2026-11-01 09:00:00', sid: 's1', client: 'acme', client_name: 'Acme', event: '$pageview', etype: '', chain: '', screen: '/dashboard', gap: 30_000 },
+                { ts: '2026-11-01 09:00:30', sid: 's1', client: 'acme', client_name: 'Acme', event: '$autocapture', etype: 'click', chain: 'button:text="Run"', screen: '/dashboard', gap: 600_000 },
+                { ts: '2026-11-01 09:10:30', sid: 's1', client: 'acme', client_name: 'Acme', event: 'report_loaded', etype: '', chain: '', screen: '/dashboard', gap: 0 },
+                { ts: '2026-11-01 14:00:00', sid: 's2', client: 'acme', client_name: 'Acme', event: '$pageview', etype: '', chain: '', screen: '/invoices', gap: 0 },
+            ] },
+            { match: /GROUP BY sid ORDER BY start DESC/, rows: [
+                { sid: 's2', user: 'a@acme.example', client: 'acme', client_name: 'Acme', start: '2026-11-01 14:00:00', end: '2026-11-01 14:00:00', actions: 1, open_ms: 0, active_ms: 0 },
+                { sid: 's1', user: 'a@acme.example', client: 'acme', client_name: 'Acme', start: '2026-11-01 09:00:00', end: '2026-11-01 09:10:30', actions: 3, open_ms: 630_000, active_ms: 90_000 },
+            ] },
+            { match: /raw_session_replay_events/, rows: [{ session_id: 's1', start: '2026-11-01 08:59:58' }] },
+        ])
+        const d = await personDay(q, SETTINGS, run, 5000)
+        assert.deepEqual(d.actions.map((a) => [a.t.slice(11, 19), a.label, a.gap_s, a.last]), [
+            ['09:00:00', 'Opened /dashboard', 30, false],
+            ['09:00:30', 'Clicked "Run"', 600, false],
+            ['09:10:30', 'Report loaded', 0, true],
+            ['14:00:00', 'Opened /invoices', 0, true],
+        ])
+        assert.deepEqual(d.sessions.map((x) => [x.session_id, x.recording_start]), [['s1', '2026-11-01T08:59:58.000Z'], ['s2', undefined]])
+        assert.deepEqual(d.totals, { sessions: 2, actions: 4, first: '2026-11-01T09:00:00.000Z', last: '2026-11-01T14:00:00.000Z', longest_pause_s: 600, open_s: 630, active_s: 90, idle_s: 540 })
+        assert.equal(d.client_name, 'Acme')
+        assert.equal(d.truncated, false)
+        // The person and the client are bound values, and the recording lookup only asks for this person's sessions.
+        const main = calls.find((c) => /ORDER BY ts LIMIT/.test(c.query))!
+        assert.match(main.query, /user = \{user\}/)
+        assert.equal(main.values.user, 'a@acme.example')
+        assert.equal(main.values.limit, 5001)
+        assert.deepEqual(calls.find((c) => /raw_session_replay_events/.test(c.query))!.values.ids, ['s2', 's1'])
+    })
+
+    test('two actions in the same second are not "the last action"', async () => {
+        const at = (t: string, gap: number) => ({ ts: t, sid: 's1', client: 'acme', client_name: 'Acme', event: '$autocapture', etype: 'click', chain: '', screen: '', gap })
+        const { run } = fake([
+            { match: /ORDER BY ts LIMIT/, rows: [at('2026-11-01 09:00:00.100', 300), at('2026-11-01 09:00:00.400', 5000), at('2026-11-01 09:00:05.400', 0)] },
+            { match: /GROUP BY sid ORDER BY start DESC/, rows: [{ sid: 's1', user: 'a', client: 'acme', start: '2026-11-01 09:00:00.100', end: '2026-11-01 09:00:05.400', actions: 3, open_ms: 5300, active_ms: 5300 }] },
+        ])
+        const d = await personDay({ ...(parse({ tz: 'UTC' }) as PresenceQuery), user: 'a' }, SETTINGS, run)
+        assert.deepEqual(d.actions.map((a) => [a.gap_s, a.last]), [[0, false], [5, false], [0, true]])
+    })
+
+    test('a very busy day is cut at the limit, and says so', async () => {
+        const rows = Array.from({ length: 4 }, (_, i) => ({ ts: `2026-11-01 09:00:0${i}`, sid: 's1', client: 'acme', client_name: 'Acme', event: 'x', etype: '', chain: '', screen: '', gap: 1000 }))
+        const { run } = fake([{ match: /ORDER BY ts LIMIT/, rows }])
+        const d = await personDay({ ...(parse({ tz: 'UTC' }) as PresenceQuery), user: 'a@acme.example' }, SETTINGS, run, 3)
+        assert.equal(d.actions.length, 3)
+        assert.equal(d.truncated, true)
+    })
+
+    test('a day with nothing in it', async () => {
+        const d = await personDay({ ...(parse({ tz: 'UTC' }) as PresenceQuery), user: 'nobody@acme.example' }, SETTINGS, fake([]).run)
+        assert.deepEqual(d.totals, { sessions: 0, actions: 0, first: undefined, last: undefined, longest_pause_s: 0, open_s: 0, active_s: 0, idle_s: 0 })
+        assert.deepEqual(d.actions, [])
     })
 })

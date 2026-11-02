@@ -95,13 +95,18 @@ export const includesToday = (q: PresenceQuery, now = new Date()) => q.to >= day
 // ------------------------------------------------------------------ the queries
 const USER = `coalesce(nullIf(toString(${P.email}), ''), distinct_id)`
 
-/** Every action in the range, with the time until the next action in its session (`gap`, ms). */
-export function timedEvents(q: PresenceQuery): string {
+/** Every action in the range, with the time until the next action in its session (`gap`, ms).
+ * `detail` adds what each action was (event, screen, element), for one person's timeline. */
+export function timedEvents(q: PresenceQuery, detail = false): string {
+    const more = detail ? ', event, etype, chain, screen' : ''
+    const moreInner = detail
+        ? `, event, toString(properties.$event_type) AS etype, if(event = '$autocapture', elements_chain, '') AS chain, toString(properties.$pathname) AS screen`
+        : ''
     // The window looks one day either side of the range, so gaps that cross midnight in any timezone
     // are found; the outer WHERE keeps only the days asked for.
-    return `SELECT client, client_name, user, sid, ts, day, hour, gap FROM (
+    return `SELECT client, client_name, user, sid, ts, day, hour, gap${more} FROM (
         SELECT toString(${P.client}) AS client, toString(${P.clientName}) AS client_name, ${USER} AS user,
-               toString(properties.$session_id) AS sid, timestamp AS ts,
+               toString(properties.$session_id) AS sid, timestamp AS ts${moreInner},
                toDate(toTimeZone(timestamp, {tz})) AS day, toHour(toTimeZone(timestamp, {tz})) AS hour,
                least(greatest(dateDiff('millisecond', timestamp,
                    leadInFrame(timestamp, 1, timestamp) OVER (PARTITION BY properties.$session_id ORDER BY timestamp ASC ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING)), 0), ${SESSION_TIMEOUT_MS}) AS gap
@@ -258,5 +263,110 @@ export async function liveNow(tz: string, gap_s: number, settings = presenceSett
                 today: { first: iso(t.first) || last, ...time(t) },
             }
         }),
+    }
+}
+
+// ------------------------------------------------------------------ one person's day
+const NAMED: Record<string, string> = {
+    $pageview: 'Opened a screen',
+    $pageleave: 'Left the page',
+    $rageclick: 'Clicked repeatedly',
+    $dead_click: 'Clicked, nothing happened',
+    $identify: 'Signed in',
+    $exception: 'An error was shown',
+    'survey sent': 'Answered a survey',
+}
+
+/** A short, readable name for an action: "Clicked "Approve"", "Opened /invoices", "Invoice searched". */
+export function actionLabel(event: string, etype: string, chain: string, screen: string): string {
+    if (event === '$pageview') return screen ? `Opened ${screen}` : NAMED.$pageview
+    if (event === '$autocapture') {
+        const verb = etype === 'change' ? 'Changed' : etype === 'submit' ? 'Submitted' : 'Clicked'
+        const first = chain.split(';')[0] || ''
+        let text = /(?:^|:)text="((?:[^"\\]|\\.)*)"/.exec(first)?.[1]?.replace(/\\"/g, '"').trim()
+        if (text && text.length > 40) text = text.slice(0, 39) + '…'
+        if (text) return `${verb} "${text}"`
+        const tag = /^([a-z0-9]+)/i.exec(first)?.[1]?.toLowerCase()
+        const what = tag === 'input' || tag === 'textarea' ? 'a field' : tag === 'select' ? 'a list' : tag === 'a' ? 'a link' : tag === 'button' ? 'a button' : 'something'
+        return `${verb} ${what}`
+    }
+    if (NAMED[event]) return NAMED[event]
+    const plain = event.replace(/^\$/, '').replace(/[_.-]+/g, ' ').trim()
+    return plain ? plain[0].toUpperCase() + plain.slice(1) : event
+}
+
+export interface PersonAction {
+    t: string
+    label: string
+    screen: string
+    session_id: string
+    gap_s: number // seconds until the next action in the same session, rounded
+    last: boolean // the session's last action (a gap of 0 s can also be two actions in the same second)
+}
+
+export interface PersonDay {
+    user: string
+    client_id: string
+    client_name: string
+    day: string
+    tz: string
+    gap_s: number
+    totals: Time & { sessions: number; actions: number; first?: string; last?: string; longest_pause_s: number }
+    sessions: (SessionRow & { recording_start?: string })[]
+    actions: PersonAction[]
+    truncated: boolean // more actions than `limit`: the list and the ticks stop there, the totals do not
+}
+
+/** One person's day: their sessions with time in the app, active and idle, every action in order,
+ * and when each session's recording starts (from the replay index: timestamps only), so a moment
+ * can be turned into a clip. */
+export async function personDay(q: PresenceQuery & { user: string }, settings = presenceSettings(), run: Run = hogql, limit = 5000): Promise<PersonDay> {
+    const v = values(q, settings)
+    const [rows, sessions] = await Promise.all([
+        run(`SELECT ts, sid, client, client_name, event, etype, chain, screen, gap FROM (${timedEvents(q, true)}) ORDER BY ts LIMIT {limit}`, { ...v, limit: limit + 1 }),
+        presenceSessions(q, settings, 1000, run),
+    ])
+    const ids = sessions.map((x) => x.session_id).filter(Boolean)
+    const recs = ids.length
+        ? await run(
+              `SELECT session_id, min(min_first_timestamp) AS start FROM raw_session_replay_events
+               WHERE session_id IN {ids} GROUP BY session_id LIMIT 1000`,
+              { ids }
+          )
+        : []
+    const recStart = new Map(recs.map((r) => [String(r.session_id), iso(r.start)!]))
+    const truncated = rows.length > limit
+    const endOf = new Map(sessions.map((x) => [x.session_id, x.end]))
+    const actions: PersonAction[] = rows.slice(0, limit).map((r) => ({
+        t: iso(r.ts)!,
+        label: actionLabel(String(r.event), String(r.etype || ''), String(r.chain || ''), String(r.screen || '')),
+        screen: String(r.screen || ''),
+        session_id: String(r.sid),
+        gap_s: Math.round(Number(r.gap || 0) / 1000),
+        last: Number(r.gap || 0) === 0 && iso(r.ts) === endOf.get(String(r.sid)),
+    }))
+    const sum = (k: 'open_s' | 'active_s' | 'idle_s') => sessions.reduce((a, x) => a + x[k], 0)
+    const ordered = [...sessions].sort((a, b) => a.start.localeCompare(b.start))
+    const first = rows[0] || {}
+    return {
+        user: q.user,
+        client_id: String(first.client || q.client || ordered[0]?.client_id || ''),
+        client_name: String(first.client_name || ordered[0]?.client_name || q.client || ''),
+        day: q.from,
+        tz: q.tz,
+        gap_s: q.gap_s,
+        totals: {
+            sessions: sessions.length,
+            actions: sessions.reduce((a, x) => a + x.actions, 0),
+            first: ordered[0]?.start,
+            last: ordered.reduce<string | undefined>((a, x) => (!a || x.end > a ? x.end : a), undefined),
+            longest_pause_s: actions.reduce((a, x) => Math.max(a, x.gap_s), 0),
+            open_s: sum('open_s'),
+            active_s: sum('active_s'),
+            idle_s: sum('idle_s'),
+        },
+        sessions: ordered.map((x) => (recStart.has(x.session_id) ? { ...x, recording_start: recStart.get(x.session_id) } : x)),
+        actions,
+        truncated,
     }
 }
