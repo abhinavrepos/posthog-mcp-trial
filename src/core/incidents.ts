@@ -116,7 +116,8 @@ export async function recordingSpans(sessionIds: string[]): Promise<Map<string, 
         `SELECT session_id, min(min_first_timestamp) AS start, max(max_last_timestamp) AS end
          FROM raw_session_replay_events
          WHERE session_id IN {ids}
-         GROUP BY session_id`,
+         GROUP BY session_id
+         LIMIT 50000`,
         { ids }
     )
     return new Map(
