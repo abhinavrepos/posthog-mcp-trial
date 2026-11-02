@@ -2,7 +2,7 @@
 // has Jira tickets (project ACP), and most tickets leave a trace in PostHog: a new event people
 // use, rage clicks, errors that a later fix removes.
 //
-// The mock Jira serves these releases and tickets, and the history seeder (scripts/seed-history.ts)
+// The history seeder (scripts/seed-history.ts)
 // generates the matching PostHog usage, so the release dashboard has a consistent story:
 //   26.5.0  a new chart engine breaks the revenue report; 26.6.0 fixes it
 //   26.7.0  new client list filters cause rage clicks; 26.8.0 brings quick search back

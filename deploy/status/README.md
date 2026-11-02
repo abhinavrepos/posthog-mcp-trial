@@ -11,7 +11,7 @@ deploy/status/up.sh down     # stop it
 | Section | What is checked | Down when |
 | --- | --- | --- |
 | PostHog | the app through the proxy, web, event capture, replay capture, feature flags, the replay reader, ClickHouse (their health endpoints) | no answer in 8 s, or an error |
-| Lens | the triage service (and which of its switches are on: Lens MCP, PostHog MCP, Claude reading tickets), mock Jira, demo app | no answer |
+| Lens | the triage service (and which of its switches are on: Lens MCP, PostHog MCP, Claude reading tickets), demo app | no answer |
 | Data arriving | events in the last 5 minutes and hour, and when the newest arrived; replay metadata updates in the last hour | only with `STATUS_MAX_EVENT_AGE_MINUTES` set and no event for that long |
 | Containers | every container of the PostHog compose project: running, health, restarts in the last 15 minutes | stopped, crashed, restarting or unhealthy (warning: starting, or restarted recently) |
 | Machine | free disk, memory, load | disk under 10% free (warning under 20%), memory under 5% (warning under 10%) |

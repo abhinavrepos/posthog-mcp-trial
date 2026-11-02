@@ -14,7 +14,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 
 import { makeAi } from '../core/ai.ts'
 import { shutdownClips } from '../core/clip.ts'
-import { config, posthogMcpActive } from '../core/config.ts'
+import { config, jiraConfigured, posthogMcpActive } from '../core/config.ts'
 import { verifyClipLink } from '../core/links.ts'
 import { renderReport } from '../core/report.ts'
 import { triage } from '../core/triage.ts'
@@ -98,6 +98,7 @@ async function runJob(job: Job) {
 }
 
 async function handleWebhook(req: IncomingMessage, res: ServerResponse) {
+    if (!jiraConfigured()) return send(res, 503, { error: 'Jira is not connected: set JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN' })
     const raw = await readRaw(req)
     if (!verifyWebhookSignature(raw, req.headers['x-hub-signature'] as string | undefined)) {
         log('webhook rejected: bad signature')
@@ -131,7 +132,7 @@ function serveClip(req: IncomingMessage, res: ServerResponse, url: URL) {
 }
 
 function featureState() {
-    return { lens_mcp: config.features.lensMcp, posthog_mcp: posthogMcpActive(), posthog_mcp_switch: config.features.posthogMcp, ai: !!ai }
+    return { lens_mcp: config.features.lensMcp, posthog_mcp: posthogMcpActive(), posthog_mcp_switch: config.features.posthogMcp, jira: jiraConfigured(), ai: !!ai }
 }
 
 function bearerOk(req: IncomingMessage): boolean {
@@ -188,7 +189,8 @@ const server = createServer(async (req, res) => {
     }
 })
 
-for (const [name, value] of Object.entries({ JIRA_WEBHOOK_SECRET: config.jira.webhookSecret, CLIP_LINK_SECRET: config.service.clipLinkSecret, ...(config.features.lensMcp ? { MCP_TOKEN: config.service.mcpToken } : {}) })) {
+if (!jiraConfigured()) log('Jira is not connected: webhooks answer 503 and release outcomes keep their last numbers until JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN are set')
+for (const [name, value] of Object.entries({ ...(jiraConfigured() ? { JIRA_WEBHOOK_SECRET: config.jira.webhookSecret } : {}), CLIP_LINK_SECRET: config.service.clipLinkSecret, ...(config.features.lensMcp ? { MCP_TOKEN: config.service.mcpToken } : {}) })) {
     if (!value) log(`warning: ${name} is not set; that feature refuses every request until it is`)
 }
 
@@ -197,10 +199,12 @@ setInterval(() => pruneOldClips(), 6 * 3_600_000).unref()
 
 // The release dashboard reads Jira and PostHog at start (when its data is older than an hour)
 // and every 6 hours. Numbers for the latest release keep moving while it is new.
-const syncNow = (why: string) =>
-    syncReleases()
+const syncNow = async (why: string) => {
+    if (!jiraConfigured()) return
+    await syncReleases()
         .then((r) => log('releases synced', { why, releases: r.releases.length, tickets: r.tickets, seconds: r.seconds, dropped: r.dropped }))
         .catch((e) => log('release sync failed', { why, error: (e as Error).message }))
+}
 const last = syncStatus().at
 if (!keptReleases().length || !last || Date.now() - Date.parse(last) > 3_600_000) setTimeout(() => void syncNow('start'), 5_000).unref()
 setInterval(() => void syncNow('schedule'), 6 * 3_600_000).unref()

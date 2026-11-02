@@ -5,7 +5,7 @@
 //     healthy, restarts. Read from the Docker socket, GET requests only.
 //   - PostHog's own health endpoints (app, capture, replay capture, flags, replay reader, ClickHouse), on
 //     PostHog's Docker network
-//   - this project's processes on the host: the triage service (and its MCP switches), mock Jira, demo app
+//   - this project's processes on the host: the triage service (and its MCP switches), demo app
 //   - data flowing: events and replay metadata received in the last 5 minutes and hour, and when the
 //     newest event arrived. Counts and times only, read-only (ClickHouse readonly=1); no event or
 //     replay content is ever read.
@@ -43,7 +43,6 @@ const DEFAULT_HTTP = [
     `PostHog|Replay reader|http://recording-api:6738/_health`,
     `PostHog|ClickHouse|${CLICKHOUSE}/ping`,
     `Lens|Triage service|${HOST}:8080/health`,
-    `Lens|Mock Jira|${HOST}:4000/|any`,
     `Lens|Demo app|${HOST}:3000/healthz|any`,
 ].join(',')
 const HTTP_CHECKS = env('STATUS_HTTP', DEFAULT_HTTP)

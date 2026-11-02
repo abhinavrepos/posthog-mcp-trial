@@ -1,6 +1,5 @@
-// Jira Cloud REST v3 client: the handful of calls triage needs. The mock Jira implements the same
-// calls, so moving to a real Jira site only means changing JIRA_BASE_URL, JIRA_EMAIL and
-// JIRA_API_TOKEN.
+// Jira Cloud REST v3 client: the handful of calls triage needs. Connecting a Jira site means setting
+// JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN.
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { basename } from 'node:path'
@@ -13,7 +12,7 @@ import { adfToText, markdownToAdf, type AdfNode } from './adf.ts'
 export const TRIAGE_MARKER = 'ticket-triage'
 
 function auth(): Record<string, string> {
-    if (!config.jira.email || !config.jira.apiToken) throw new Error('Jira is not configured: set JIRA_EMAIL and JIRA_API_TOKEN')
+    if (!config.jira.baseUrl || !config.jira.email || !config.jira.apiToken) throw new Error('Jira is not connected yet: set JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN')
     return { authorization: 'Basic ' + Buffer.from(`${config.jira.email}:${config.jira.apiToken}`).toString('base64'), accept: 'application/json' }
 }
 

@@ -116,7 +116,8 @@ if (ph.mcpUrl && f.posthogMcp) {
 
 // ------------------------------------------------------------------ Jira
 const j = config.jira
-if (!j.email || !j.apiToken) say('fail', 'Jira settings', 'set JIRA_EMAIL and JIRA_API_TOKEN')
+if (!j.baseUrl && !j.email && !j.apiToken) say('warn', 'Jira is not connected yet', 'webhooks and release outcomes stay off until JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN are set')
+else if (!j.baseUrl || !j.email || !j.apiToken) say('fail', 'Jira settings', 'set all three: JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN')
 else {
     try {
         const me = await get(`${j.baseUrl}/rest/api/3/myself`, { authorization: `Basic ${Buffer.from(`${j.email}:${j.apiToken}`).toString('base64')}` })
@@ -125,8 +126,9 @@ else {
         say('fail', `Jira at ${j.baseUrl}`, (e as Error).message)
     }
 }
-if (isLocal(j.baseUrl)) say('warn', 'Jira is the local mock', 'set JIRA_BASE_URL to your Jira Cloud site for real tickets')
-if (!j.webhookSecret) say('fail', 'JIRA_WEBHOOK_SECRET', 'without it every Jira webhook is rejected')
+if (!j.baseUrl) {
+    // nothing more to check until Jira is connected
+} else if (!j.webhookSecret) say('fail', 'JIRA_WEBHOOK_SECRET', 'without it every Jira webhook is rejected')
 else if (j.webhookSecret.length < 24) say('warn', 'JIRA_WEBHOOK_SECRET is short', 'use 24+ random characters')
 
 // ------------------------------------------------------------------ This service
