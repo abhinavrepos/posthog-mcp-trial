@@ -1,0 +1,24 @@
+# PostHog's own MCP server (SQL, insights, flags, dashboards...), run next to a self-hosted PostHog.
+# Started by up.sh, which also makes its API key. The image is PostHog's, pinned by digest: the newest
+# build before the PostHog version in ../migrate/versions.
+services:
+    posthog-mcp:
+        image: ghcr.io/posthog/posthog-mcp@sha256:08cd52341758062ada992fb80d93c4bb3ed38480851f27da26301f91cc0b39b3
+        restart: unless-stopped
+        environment:
+            NODE_ENV: production
+            PORT: '3001'
+            # PostHog's own Redis. Database 7 keeps the MCP sessions apart from PostHog's keys.
+            REDIS_URL: redis://redis7:6379/7
+            # Where the server calls PostHog's API, and the address its links point at.
+            POSTHOG_API_BASE_URL: ${MCP_POSTHOG_API_URL:?}
+            POSTHOG_PUBLIC_URL: ${MCP_POSTHOG_PUBLIC_URL:?}
+            MCP_APPS_BASE_URL: http://127.0.0.1:${MCP_PORT:-8787}
+        ports:
+            # Only this machine. Every request still needs a PostHog personal API key.
+            - '127.0.0.1:${MCP_PORT:-8787}:3001'
+        networks: [posthog]
+networks:
+    posthog:
+        external: true
+        name: ${POSTHOG_NETWORK:-posthog_default}
