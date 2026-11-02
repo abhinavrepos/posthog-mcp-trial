@@ -18,7 +18,7 @@ export function serverInstructions(withPosthog = posthogMcpActive()): string {
     return `${intro}${withPosthog ? ` PostHog's own MCP server ("posthog") may be connected too, on the same project.` : ''}
 
 Replays are private: never call PostHog's session-recording-*, query-session-recordings-list or vision-* tools, even if offered. To show a session, use get_replay_link and give the person the link.
-
+${withPosthog ? `\nTwo calling styles: this server's tools take their arguments directly (get_replay_link: {"session_id": "...", "start_s": 4}). PostHog's server has one tool, exec, that takes a command string. Never send this server's tool names to exec, or command strings to this server.\n` : ''}
 Use THIS server when the question names a Jira key, a client, a release or a screen:
 - ticket, RCI, MMT Risk, "what happened to <client>": triage_ticket, or find_client_incidents
 - which client a name, id or email means: resolve_client (a client is the event property "${p.client}", not a person, group or cohort)
