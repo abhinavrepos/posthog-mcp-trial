@@ -10,6 +10,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 if [ "${1:-}" = down ]; then docker compose down; exit 0; fi
+# STATUS_BIND can also be set in status.env (deploy/install.sh writes it there).
+[ -n "${STATUS_BIND:-}" ] || STATUS_BIND=$( [ -f status.env ] && grep -E '^STATUS_BIND=' status.env | tail -1 | cut -d= -f2- || true)
+export STATUS_BIND="${STATUS_BIND:-127.0.0.1}"
 export DOCKER_GID STATUS_DISK_FOLDER="${STATUS_DISK_FOLDER:-/var/lib/lens-status}"
 DOCKER_GID=$(stat -c %g /var/run/docker.sock)
 mkdir -p "$STATUS_DISK_FOLDER"
