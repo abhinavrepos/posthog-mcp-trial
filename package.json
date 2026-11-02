@@ -18,6 +18,7 @@
     "sessions": "tsx scripts/generate-sessions.ts",
     "seed": "tsx scripts/seed-history.ts",
     "releases:sync": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/sync-releases.ts",
+    "live-demo": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/live-demo.ts",
     "seed:feedback": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/seed-feedback.ts",
     "doctor": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/doctor.ts",
     "mcp:config": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx scripts/mcp-config.ts",
