@@ -2,6 +2,10 @@
 //
 //   pnpm sessions                      # the standard demo mix (16 sessions, 4 at a time)
 //   pnpm sessions --count 4 --only brightwater
+//   pnpm sessions --count 1000 --concurrency 10 --mixed
+//                                      # every client and user; each session a random chain of 3 to 6
+//                                      # activities (invoices, PDF export, revenue report, clients,
+//                                      # settings, dashboard), so no two sessions look the same
 //
 // Chrome runs headless. posthog-js would drop it as a bot; the demo app turns that filter off
 // with `opt_out_useragent_filter` (see demo-app/public/app.js).
@@ -17,6 +21,7 @@ const { values } = parseArgs({
         count: { type: 'string', default: '16' },
         concurrency: { type: 'string', default: '4' },
         only: { type: 'string' }, // client id
+        mixed: { type: 'boolean', default: false },
     },
 })
 const BASE = values.url!
@@ -26,7 +31,7 @@ const jitter = (ms: number) => ms * (0.7 + Math.random() * 0.6)
 interface Plan {
     client: DemoClient
     user: DemoUser
-    scenario: 'export' | 'revenue' | 'browse'
+    scenario: 'export' | 'revenue' | 'browse' | 'mixed'
 }
 
 /** The standard mix: every EU client on 26.10.0 hits the bug, Cobalt has its silent report issue. */
@@ -72,6 +77,68 @@ async function go(page: Page, path: string) {
     await page.mouse.wheel({ deltaY: -300 })
 }
 
+/** Every client and every one of its users in turn, each session a random chain of activities. */
+function mixedPlans(count: number): Plan[] {
+    return Array.from({ length: count }, (_, i) => {
+        const client = CLIENTS[i % CLIENTS.length]
+        return { client, user: client.users[Math.floor(i / CLIENTS.length) % client.users.length], scenario: 'mixed' as const }
+    })
+}
+
+type Activity = (page: Page, plan: Plan) => Promise<void>
+const ACTIVITIES: Record<string, Activity> = {
+    'search invoices': async (page) => {
+        await go(page, '/invoices')
+        await moveAndClick(page, '#search')
+        await page.keyboard.type(['INV', 'INV-20', 'paid', 'overdue'][Math.floor(Math.random() * 4)], { delay: 110 })
+        await sleep(jitter(1200))
+        await page.keyboard.down('Control')
+        await page.keyboard.press('a')
+        await page.keyboard.up('Control')
+        await page.keyboard.press('Backspace')
+        await sleep(jitter(700))
+    },
+    'export PDF': async (page, plan) => {
+        await go(page, '/invoices')
+        await moveAndClick(page, '#export-pdf')
+        await sleep(3500)
+        if (hitsExportBug(plan.client)) {
+            for (let i = 0; i < 5; i++) {
+                await page.click('#export-pdf')
+                await sleep(140)
+            }
+            await sleep(jitter(3000))
+        }
+    },
+    'revenue report': async (page, plan) => {
+        await go(page, '/reports/revenue')
+        await sleep(jitter(2000))
+        const refreshes = 1 + Math.floor(Math.random() * (plan.client.id === 'cobalt' ? 4 : 2))
+        for (let i = 0; i < refreshes; i++) {
+            await moveAndClick(page, '#refresh')
+            await sleep(jitter(2500))
+        }
+        if (Math.random() < 0.5) {
+            await page.select('#range', Math.random() < 0.5 ? 'mtd' : 'qtd')
+            await sleep(jitter(2500))
+        }
+    },
+    clients: async (page) => {
+        await go(page, '/clients')
+        await page.mouse.wheel({ deltaY: 500 })
+        await sleep(jitter(1200))
+    },
+    'save settings': async (page) => {
+        await go(page, '/settings')
+        await moveAndClick(page, '#save')
+        await sleep(jitter(1500))
+    },
+    dashboard: async (page) => {
+        await go(page, '/dashboard')
+        await sleep(jitter(1500))
+    },
+}
+
 async function runSession(browser: Browser, plan: Plan, n: number) {
     const ctx = await browser.createBrowserContext()
     const page = await ctx.newPage()
@@ -85,7 +152,12 @@ async function runSession(browser: Browser, plan: Plan, n: number) {
         await Promise.all([page.waitForNavigation({ waitUntil: 'networkidle2' }), moveAndClick(page, '#signin')])
         await sleep(jitter(2500))
 
-        if (plan.scenario === 'export') {
+        let did: string = plan.scenario
+        if (plan.scenario === 'mixed') {
+            const names = Object.keys(ACTIVITIES).sort(() => Math.random() - 0.5).slice(0, 3 + Math.floor(Math.random() * 4))
+            for (const name of names) await ACTIVITIES[name](page, plan)
+            did = names.join(', ')
+        } else if (plan.scenario === 'export') {
             await go(page, '/invoices')
             await moveAndClick(page, '#search')
             await page.keyboard.type('INV', { delay: 120 })
@@ -129,7 +201,7 @@ async function runSession(browser: Browser, plan: Plan, n: number) {
         }
         // posthog-js flushes on a timer and on unload; give it time before the page closes.
         await sleep(6000)
-        console.log(`#${n} ${plan.client.name} / ${plan.user.email} / ${plan.scenario}${errors.length ? ` (page error: ${errors[0]})` : ''}`)
+        console.log(`#${n} ${plan.client.name} / ${plan.user.email} / ${did}${errors.length ? ` (page error: ${errors[0]})` : ''}`)
     } finally {
         await page.close({ runBeforeUnload: true })
         await sleep(1500)
@@ -138,14 +210,15 @@ async function runSession(browser: Browser, plan: Plan, n: number) {
 }
 
 const count = Number(values.count)
-let plans = demoPlans(Math.max(count, values.only ? 1 : count))
+let plans = values.mixed ? mixedPlans(count) : demoPlans(Math.max(count, values.only ? 1 : count))
 if (values.only) {
     const client = CLIENTS.find((c) => c.id === values.only)
     if (!client) throw new Error(`unknown client ${values.only}`)
-    plans = Array.from({ length: count }, (_, i) => ({ client, user: client.users[i % client.users.length], scenario: hitsExportBug(client) ? 'export' : 'revenue' }) as Plan)
+    plans = Array.from({ length: count }, (_, i) => ({ client, user: client.users[i % client.users.length], scenario: values.mixed ? 'mixed' : hitsExportBug(client) ? 'export' : 'revenue' }) as Plan)
 }
 
-const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] })
+// chrome-headless-shell: the build deploy/install.sh checks that it starts on this machine.
+const browser = await puppeteer.launch({ headless: 'shell', args: ['--no-sandbox'] })
 try {
     const queue = plans.map((p, i) => [p, i + 1] as const)
     const workers = Array.from({ length: Number(values.concurrency) }, async () => {
