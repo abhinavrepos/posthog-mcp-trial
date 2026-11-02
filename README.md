@@ -136,9 +136,20 @@ long each client spent in it. Anyone with the "Watch clips" role can open it.
   - a grid of active time by hour of each day;
   - clients, or the people of one client, sortable, each with its active share;
   - every session of a client or a person, with **Make a clip** to open it on the clip page.
+- **Timeline**: the Timeline button on a person (in "In the app now", the people of a client, or
+  a session) opens their day as a timeline: each session as a bar, active and idle stretches, a
+  tick for every action and a taller one when they opened a screen, with the totals, first and
+  last action and the longest pause. Point at it to see what happened at that second; click (or
+  use the arrow keys) to pick a moment and **Make a clip** from 10 seconds before it. Sessions at
+  the same time (two browsers) get their own lanes. ‹ › move a day; every action is listed below,
+  each with its own clip link. Today's timeline refreshes every 30 seconds.
 - **CSV**: the client or people list and the session log download as CSV.
 - The view is kept in the address (period, client, person, active time), so a link opens the same
   view for someone else. Times are in the viewer's timezone.
+
+Action names on the timeline come from the events: "Opened /invoices", "Clicked "Approve"" (the
+button text PostHog's autocapture recorded), or your own event names in plain words. The clip
+links use each recording's start time from PostHog's replay index (timestamps only).
 
 **How time is counted** (`src/core/presence.ts`). Within each PostHog session, the time from one
 action to the next is **in the app**. Of that, up to `LIVE_ACTIVE_GAP_S` (60) seconds after each
