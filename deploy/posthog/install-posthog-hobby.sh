@@ -7,6 +7,11 @@
 #   sudo bash install-posthog-hobby.sh posthog.example.com   # HTTPS with a Let's Encrypt certificate
 #   sudo bash install-posthog-hobby.sh 10.0.1.25             # plain HTTP on an IP address, no TLS
 #   sudo bash install-posthog-hobby.sh http://posthog.internal   # plain HTTP on a domain, no TLS
+#   sudo bash install-posthog-hobby.sh 10.0.1.25,52.1.2.3,http://posthog.internal   # several addresses
+#
+# Several addresses, comma-separated, all reach the same PostHog and every one of them can log in
+# (each is a trusted CSRF origin). The first one is the main address: links in emails and exports use
+# it. All of them must be the same kind: all domains with HTTPS, or all plain HTTP.
 #
 # Plain HTTP sends logins and data unencrypted. Use it only on a private network or VPN.
 #
@@ -27,6 +32,9 @@
 #   SKIP_CHECKS=1         skip the RAM and disk checks
 #
 # Re-running the script is safe: it keeps the existing .env (secrets) and data volumes.
+#
+#   sudo bash install-posthog-hobby.sh --addresses-only 10.0.1.25,52.1.2.3
+# changes only the addresses of an installed PostHog (same kind as before) and restarts what uses them.
 
 set -euo pipefail
 
@@ -109,9 +117,12 @@ is_ipv4() {
 ask_domain() {
     local raw="${1:-}"
     if [ -z "$raw" ] && [ -f "$INSTALL_DIR/.env" ]; then
-        raw="$(grep -E '^DOMAIN=' "$INSTALL_DIR/.env" | head -1 | cut -d= -f2- || true)"
-        if [ -n "$raw" ] && grep -qE '^HTTP_ONLY=1' "$INSTALL_DIR/.env"; then
-            raw="http://$raw"
+        raw="$(grep -E '^ADDRESSES=' "$INSTALL_DIR/.env" | head -1 | cut -d= -f2- || true)"
+        if [ -z "$raw" ]; then
+            raw="$(grep -E '^DOMAIN=' "$INSTALL_DIR/.env" | head -1 | cut -d= -f2- || true)"
+            if [ -n "$raw" ] && grep -qE '^HTTP_ONLY=1' "$INSTALL_DIR/.env"; then
+                raw="http://$raw"
+            fi
         fi
         [ -n "$raw" ] && info "Using the address from the existing install: $raw"
     fi
@@ -121,17 +132,34 @@ ask_domain() {
         echo "  A domain such as posthog.example.com gets HTTPS. An IP address or http://… runs plain HTTP."
         read -r -p "> " raw </dev/tty || die "No address given."
     done
-    DOMAIN="$(normalize_domain "$raw")"
-    HTTP_ONLY=0
-    if [[ "$raw" == http://* ]] || [[ "$DOMAIN" =~ ^[0-9.]+$ ]]; then
-        HTTP_ONLY=1
-    fi
-    if [[ "$DOMAIN" =~ ^[0-9.]+$ ]]; then
-        is_ipv4 "$DOMAIN" || die "'$DOMAIN' is not a valid IPv4 address."
-    elif ! [[ "$DOMAIN" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] \
-        || { [ "$HTTP_ONLY" = 0 ] && ! [[ "$DOMAIN" =~ \.[a-z]{2,}$ ]]; }; then
-        die "'$DOMAIN' does not look like a valid domain name."
-    fi
+    raw="${raw// /}"
+    ADDRESSES="$raw"
+    ALL_DOMAINS=()
+    local one d kind first_kind=""
+    for one in ${raw//,/ }; do
+        d="$(normalize_domain "$one")"
+        kind=https
+        if [[ "$one" == http://* ]] || [[ "$d" =~ ^[0-9.]+$ ]]; then
+            kind=http
+        fi
+        if [[ "$d" =~ ^[0-9.]+$ ]]; then
+            is_ipv4 "$d" || die "'$d' is not a valid IPv4 address."
+        elif ! [[ "$d" =~ ^([a-z0-9]([a-z0-9-]*[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] \
+            || { [ "$kind" = https ] && ! [[ "$d" =~ \.[a-z]{2,}$ ]]; }; then
+            die "'$d' does not look like a valid domain name."
+        fi
+        if [ -z "$first_kind" ]; then
+            first_kind="$kind"
+            DOMAIN="$d"
+            HTTP_ONLY=0; [ "$kind" = http ] && HTTP_ONLY=1
+        elif [ "$kind" != "$first_kind" ]; then
+            # HTTPS turns on secure cookies and redirects every request to https://, which an IP or a
+            # plain-HTTP name cannot serve.
+            die "'$one' is a different kind of address than '${raw%%,*}'. Use only domains (HTTPS), or only IPs and http:// names (plain HTTP)."
+        fi
+        case " ${ALL_DOMAINS[*]} " in *" $d "*) ;; *) ALL_DOMAINS+=("$d") ;; esac
+    done
+    [ ${#ALL_DOMAINS[@]} -gt 0 ] || die "No address given."
     if [ "$HTTP_ONLY" = 1 ]; then
         SITE_URL="http://${DOMAIN}"
         ok "Address: $SITE_URL (plain HTTP, no TLS)"
@@ -140,6 +168,11 @@ ask_domain() {
         SITE_URL="https://${DOMAIN}"
         ok "Address: $SITE_URL"
     fi
+    ORIGINS=""
+    for d in "${ALL_DOMAINS[@]}"; do
+        ORIGINS="${ORIGINS:+$ORIGINS,}$([ "$HTTP_ONLY" = 1 ] && echo http || echo https)://$d"
+    done
+    [ ${#ALL_DOMAINS[@]} = 1 ] || ok "Also reachable at: ${ORIGINS#*,}"
 }
 
 check_resources() {
@@ -292,7 +325,9 @@ caddy_host() {
     if [ "$HTTP_ONLY" = 1 ]; then
         echo "http://"
     else
-        echo "${DOMAIN}, http://, https://"
+        local d out=""
+        for d in "${ALL_DOMAINS[@]}"; do out="${out}${d}, "; done
+        echo "${out}http://, https://"
     fi
 }
 
@@ -309,6 +344,7 @@ write_env() {
     if [ -f .env ]; then
         # Never regenerate secrets: that logs everyone out and breaks encrypted data.
         set_env_value DOMAIN "${DOMAIN}"
+        set_env_value ADDRESSES "${ADDRESSES}"
         set_env_value HTTP_ONLY "${HTTP_ONLY}"
         set_env_value CADDY_HOST "\"$(caddy_host)\""
         ok "Kept the existing .env (secrets unchanged)"
@@ -320,6 +356,7 @@ POSTHOG_SECRET=$(openssl rand -hex 28)
 ENCRYPTION_SALT_KEYS=$(openssl rand -hex 16)
 BROWSERLESS_SECRET=$(openssl rand -hex 32)
 DOMAIN=${DOMAIN}
+ADDRESSES=${ADDRESSES}
 HTTP_ONLY=${HTTP_ONLY}
 TLS_BLOCK=
 CADDY_TLS_BLOCK=
@@ -343,7 +380,7 @@ write_compose_files() {
     # visitor IPs instead of Caddy's Docker address.
     printf '\n# Added by install-posthog-hobby.sh\nTRUST_ALL_PROXIES=true\n' >> .env.services
 
-    write_http_only_override
+    write_override
     write_pinned_images
 
     mkdir -p compose share
@@ -383,20 +420,19 @@ EOF
     ok "Compose files written"
 }
 
-# docker-compose.hobby.yml hardcodes https:// URLs and a Caddy site with TLS. Docker Compose
-# merges docker-compose.override.yml on top automatically, so plain HTTP lives there.
-write_http_only_override() {
-    if [ "$HTTP_ONLY" != 1 ]; then
-        rm -f docker-compose.override.yml
-        return
-    fi
-    # Without this, Django marks cookies HTTPS-only and redirects to https://, so login fails.
-    printf 'SECURE_COOKIES=false\n' >> .env.services
-    cat > docker-compose.override.yml <<EOF
-# Written by install-posthog-hobby.sh for plain HTTP. Remove it and re-run the script for HTTPS.
-services:
-    web:
-        environment:
+# Docker Compose merges docker-compose.override.yml on top of the hobby files. It holds what this
+# install changes: every address as a trusted origin (Django refuses a login form posted from an origin
+# it does not trust), Caddy's site list for several HTTPS domains, and plain HTTP.
+write_override() {
+    {
+        echo "# Written by install-posthog-hobby.sh. Re-run the script to change it."
+        echo "services:"
+        echo "    web:"
+        echo "        environment:"
+        echo "            EXTRA_CSRF_TRUSTED_ORIGINS: '${ORIGINS}'"
+        if [ "$HTTP_ONLY" = 1 ]; then
+            # docker-compose.hobby.yml hardcodes https:// URLs.
+            cat <<EOF
             SITE_URL: ${SITE_URL}
             LIVESTREAM_HOST: ${SITE_URL}/livestream
             OBJECT_STORAGE_PUBLIC_ENDPOINT: ${SITE_URL}
@@ -415,6 +451,24 @@ services:
         environment:
             SITE_URL: ${SITE_URL}
 EOF
+        else
+            # Caddy gets a certificate for each domain in its site list.
+            echo "    proxy:"
+            echo "        environment:"
+            echo "            CADDY_HOST: '$(caddy_host)'"
+        fi
+    } > docker-compose.override.yml
+    # A COMPOSE_FILE list (scale.sh writes one) replaces the automatic merge, so the override must be in it.
+    local files
+    files="$(grep -E '^COMPOSE_FILE=' .env 2>/dev/null | cut -d= -f2- || true)"
+    if [ -n "$files" ] && [[ ":$files:" != *":docker-compose.override.yml:"* ]]; then
+        set_env_value COMPOSE_FILE "${files/docker-compose.yml/docker-compose.yml:docker-compose.override.yml}"
+    fi
+    # Without this, Django marks cookies HTTPS-only and redirects to https://, so login fails.
+    if [ "$HTTP_ONLY" = 1 ] && ! grep -q '^SECURE_COOKIES=false' .env.services; then
+        printf 'SECURE_COOKIES=false\n' >> .env.services
+    fi
+    return 0
 }
 
 # Exact images by digest, layered on top of the hobby compose files. Compose files added later (scale.sh
@@ -617,6 +671,7 @@ print_summary() {
     echo
     if [ "$healthy" = 0 ]; then
         echo "${GREEN}${BOLD}🎉 PostHog is installed.${RESET} Open ${BOLD}${SITE_URL}${RESET} and create your account."
+        [ ${#ALL_DOMAINS[@]} = 1 ] || echo "It also answers on: ${ORIGINS#*,}"
     else
         echo "${YELLOW}${BOLD}PostHog is installed, but it was not healthy yet when the script finished.${RESET}"
         echo "It may still be migrating. Check again in a few minutes:  curl http://localhost/_health"
@@ -634,8 +689,26 @@ print_summary() {
 EOF
 }
 
+# Writes new addresses into an installed PostHog and recreates the containers that read them.
+addresses_only() {
+    [ -f "$INSTALL_DIR/.env" ] && [ -f "$INSTALL_DIR/docker-compose.yml" ] || die "No PostHog installed in $INSTALL_DIR."
+    [ -n "${1:-}" ] || die "Usage: install-posthog-hobby.sh --addresses-only ADDRESS[,ADDRESS...]"
+    local before; before="$(grep -E '^HTTP_ONLY=' "$INSTALL_DIR/.env" | cut -d= -f2)"
+    ask_domain "$1"
+    [ "${before:-0}" = "$HTTP_ONLY" ] || die "That switches PostHog between HTTP and HTTPS. Run the whole script for that: sudo bash $0 $1"
+    write_env
+    cd "$INSTALL_DIR"
+    write_override
+    docker compose up -d --no-build >/dev/null 2>&1 || docker compose up -d --no-build || die "Docker Compose could not apply the change."
+    ok "PostHog now answers on: $ORIGINS"
+}
+
 main() {
     require_root "$@"
+    if [ "${1:-}" = "--addresses-only" ]; then
+        addresses_only "${2:-}"
+        return
+    fi
     mkdir -p "$INSTALL_DIR"
     LOG_FILE="$INSTALL_DIR/install.log"
     exec > >(tee -a "$LOG_FILE") 2>&1
@@ -659,7 +732,9 @@ main() {
     download_geoip
 
     step "Checking DNS"
-    check_dns
+    local primary="$DOMAIN" d
+    for d in "${ALL_DOMAINS[@]}"; do DOMAIN="$d" check_dns; done
+    DOMAIN="$primary"
 
     step "Starting PostHog"
     pull_images
