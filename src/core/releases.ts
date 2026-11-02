@@ -451,7 +451,7 @@ async function computeSnapshot(rel: ReleaseRow, next: ReleaseRow | undefined, ct
         const branches = targets.map((tg, i) => `${tg.event ? `event = {e${i}}` : `(event = '$pageview' AND properties.$pathname = {p${i}})`}, ${i}`).join(', ')
         const wrows = await hogql(
             `SELECT toStartOfWeek(timestamp, 1) AS week, multiIf(${branches}, -1) AS target, count() AS n, uniq(${cp}) AS clients FROM events
-             WHERE timestamp >= toDateTime({b0}) AND timestamp < toDateTime({a1}) GROUP BY week, target HAVING target >= 0 ORDER BY week`,
+             WHERE timestamp >= toDateTime({b0}) AND timestamp < toDateTime({a1}) GROUP BY week, target HAVING target >= 0 ORDER BY week LIMIT 50000`,
             values
         )
         for (const r of wrows) {
@@ -466,7 +466,7 @@ async function computeSnapshot(rel: ReleaseRow, next: ReleaseRow | undefined, ct
     if (s.version_property) {
         const arows = await hogql(
             `SELECT toStartOfWeek(timestamp, 1) AS week, uniqIf(${cp}, toString(properties.${s.version_property}) = {name}) AS on_v, uniq(${cp}) AS all_c FROM events
-             WHERE timestamp >= toDateTime({r}) AND timestamp < toDateTime({a1}) GROUP BY week ORDER BY week`,
+             WHERE timestamp >= toDateTime({r}) AND timestamp < toDateTime({a1}) GROUP BY week ORDER BY week LIMIT 1000`,
             values
         )
         adoption = arows.map((r) => ({ week: String(r.week).slice(0, 10), on: n(r.on_v), all: n(r.all_c) }))

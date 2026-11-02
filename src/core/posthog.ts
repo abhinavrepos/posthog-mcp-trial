@@ -39,7 +39,8 @@ const projectPath = (p: string) => `/api/projects/${config.posthog.projectId}${p
 
 export type Row = Record<string, unknown>
 
-/** Runs a HogQL query and returns rows as objects keyed by column name. */
+/** Runs a HogQL query and returns rows as objects keyed by column name. Give every query that can
+ * return more than 100 rows its own LIMIT: without one, PostHog returns only the first 100. */
 export async function hogql(query: string, values: Record<string, unknown> = {}): Promise<Row[]> {
     const out = await api<{ columns: string[]; results: unknown[][] }>(projectPath('/query/'), {
         method: 'POST',
