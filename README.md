@@ -122,6 +122,37 @@ renamed `*.imported`.
 
 Each person can make `CLIPS_PER_HOUR` clips (default 20).
 
+## Live page
+
+`http://<host>:8080/replays/live` (the **Live** tab) shows who is in the app right now and how
+long each client spent in it. Anyone with the "Watch clips" role can open it.
+
+- **In the app now**: everyone with an action in the last `LIVE_NOW_MINUTES` (5), with their
+  client, when their session started and their time today. It refreshes every 30 seconds.
+- **Time in the app**, for today, yesterday, the last 7, 30 or 90 days, or any dates (at most 92
+  days), for every client or one:
+  - totals: time in the app, active, idle, clients, people and sessions;
+  - a column per hour (one day) or per day, split into active and idle;
+  - a grid of active time by hour of each day;
+  - clients, or the people of one client, sortable, each with its active share;
+  - every session of a client or a person, with **Make a clip** to open it on the clip page.
+- **CSV**: the client or people list and the session log download as CSV.
+- The view is kept in the address (period, client, person, active time), so a link opens the same
+  view for someone else. Times are in the viewer's timezone.
+
+**How time is counted** (`src/core/presence.ts`). Within each PostHog session, the time from one
+action to the next is **in the app**. Of that, up to `LIVE_ACTIVE_GAP_S` (60) seconds after each
+action is **active**, and the rest is **idle**. The page can switch the limit between 15 seconds and
+10 minutes. PostHog ends a session after 30 minutes without an action, so longer breaks are not
+counted, and neither is the time after a person's last action. Each stretch counts in the hour it
+started. Automatic events (`LIVE_IGNORE_EVENTS`) do not count as actions. The page reads events
+only, never recordings.
+
+To try it with demo data: `pnpm live-demo` sends today's sessions so far (with pauses) and keeps
+four people active for 10 minutes (`--minutes 30` for longer). `pnpm live-demo --selftest` sends
+one session with known timings to check the counting: with the default limit, the "Lens
+self-test" client on 2025-10-01 shows 410 s in the app, 160 s active and 250 s idle.
+
 ## Release outcomes
 
 Claude reads these through MCP tools; there is no web page. The service gathers facts, and the
@@ -245,12 +276,12 @@ The local `.mcp.json` server has the same tools.
 
 | Path | What |
 | --- | --- |
-| `src/core/` | Shared logic: resolution, incidents, usage, impact, silent issues, clips, severity, report; `releases.ts` (release outcomes), `db.ts` (SQLite) |
+| `src/core/` | Shared logic: resolution, incidents, usage, impact, silent issues, clips, severity, report; `releases.ts` (release outcomes), `presence.ts` (time in the app), `db.ts` (SQLite) |
 | `src/jira/` | Jira Cloud REST v3 client, webhook signatures, Markdown ↔ ADF |
-| `src/service/` | The web service: webhooks, signed clip links, MCP over HTTP, `/replays`, admin |
+| `src/service/` | The web service: webhooks, signed clip links, MCP over HTTP, `/replays`, the Live page, admin |
 | `src/mcp/` | MCP tools and the stdio entry point |
 | `demo-app/` | Acme Portal, the demo B2B app with a planted bug |
-| `scripts/` | Setup, stack control, session generator, history seeder, rasterizer build |
+| `scripts/` | Setup, stack control, session generator, history seeder, Live page demo, rasterizer build |
 | `vendor/` | PostHog's replay rasterizer and player page, prebuilt (`pnpm build:rasterizer` rebuilds them) |
 | `deploy/install.sh` | Fresh install: PostHog, this service, the status page (answers: `deploy/install.env.example`) |
 | `deploy/migrate/` | Upgrading an existing PostHog to the tested version, with backups |
