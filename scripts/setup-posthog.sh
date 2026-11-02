@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # One-time setup of the PostHog side, on the machine that runs PostHog (the hobby install):
 #   1. creates the first account and organization (skipped if the email already exists)
-#   2. turns on session recording, exception capture, console logs and dead clicks for its project, and
-#      allows recording on your app's addresses
+#   2. turns on session recording, exception capture, console logs and dead clicks for its project.
+#      Recording works on every site that sends events, unless APP_URLS limits it
 #   3. creates a read-only personal API key for the triage service, scoped to that project
 #   4. writes the PostHog settings into .secrets.env, and fresh secrets for MCP, clip links and the Jira
 #      webhook where they are missing. Every other line in the file is kept.
@@ -14,8 +14,8 @@
 #   PUBLIC_HOST         the IP or name people use to reach this machine, or POSTHOG_PUBLIC_URL
 #   POSTHOG_PUBLIC_URL  where browsers reach PostHog                         [http://PUBLIC_HOST]
 #   ORG_NAME            the organization created with the account                         [Acme]
-#   APP_URLS            your app's addresses, comma-separated: recording is allowed there only
-#                                             [http://PUBLIC_HOST:3000,http://localhost:3000]
+#   APP_URLS            optional: your app's addresses, comma-separated. Set, recording is allowed
+#                       there only. Empty, every site that sends events records             [empty]
 #   SERVICE_PUBLIC_URL  where people open clip links, kept if already set   [http://PUBLIC_HOST:8080]
 #   POSTHOG_URL         where this script reaches PostHog's API                   [http://localhost]
 #   POSTHOG_DIR         the PostHog install, for its Django shell                   [/opt/posthog]
@@ -34,7 +34,7 @@ fi
 POSTHOG_PUBLIC_URL="${POSTHOG_PUBLIC_URL%/}"
 host_only="${POSTHOG_PUBLIC_URL#*://}"; host_only="${host_only%%/*}"; host_only="${host_only%%:*}"
 ORG_NAME="${ORG_NAME:-Acme}"
-APP_URLS="${APP_URLS:-http://$host_only:3000,http://localhost:3000}"
+APP_URLS="${APP_URLS:-}"
 KEY_LABEL="${KEY_LABEL:-ticket-triage}"
 SECRETS="${SECRETS:-.secrets.env}"
 umask 077
@@ -93,6 +93,7 @@ team.capture_console_log_opt_in = True
 team.autocapture_exceptions_opt_in = True
 team.capture_dead_clicks = True
 team.app_urls = urls
+# Empty: PostHog records on every domain.
 team.recording_domains = urls
 team.save()
 
@@ -130,4 +131,4 @@ default CLIP_LINK_SECRET "$(rand 32)"
 default JIRA_WEBHOOK_SECRET "$(rand 32)"
 echo "==> Wrote the PostHog settings to $SECRETS"
 echo "    PostHog login: $POSTHOG_PUBLIC_URL  ($ADMIN_EMAIL, password in $SECRETS)"
-echo "    Recording allowed on: $APP_URLS"
+echo "    Recording allowed on: ${APP_URLS:-every site that sends events}"

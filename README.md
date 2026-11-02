@@ -265,14 +265,24 @@ HTTPS), 8080 open to your users. Nothing else: the script installs Docker, PostH
 ```bash
 sudo git clone --branch ticket-triage --single-branch https://github.com/abhinavrepos/posthog-mcp-trial /srv/ticket-triage
 cd /srv/ticket-triage
-sudo deploy/install.sh                      # asks every setting, shows the plan, then installs (about 1 hour)
+sudo deploy/install.sh                      # asks two things, shows the plan, then installs (about 1 hour)
 ```
 
-It asks for: the address of PostHog (a domain gets HTTPS), the first login and organization, your
-app's addresses, the names your events use, your screens, Jira (optional, can be added later), an
-Anthropic key (optional), the two MCP switches and whether the status page is public. To answer from
-a file instead, fill in a copy of `deploy/install.env.example` and run
-`sudo deploy/install.sh --config my-install.env --yes`.
+It asks two things:
+
+- **The address(es) of PostHog**, comma-separated, for example `10.0.1.25,52.1.2.3`. The first one is
+  the main one (links in emails and exports use it). PostHog answers on all of them, and each one is a
+  trusted origin for logins (CSRF). Domains get HTTPS, while IPs and `http://` names are plain HTTP.
+  Don't mix the two kinds.
+- **The email of the first PostHog login.**
+
+Everything else has a default: organization `ION`, event names `client_id`, `client_name`,
+`app_version` and `email`, Jira not connected, Claude reading off, Lens MCP on, and the status page on
+this machine only. Session recording works on every site that sends events. To set APP_URLS (which
+limits recording to your app's addresses) or change any other default, fill in a copy of
+`deploy/install.env.example` and run `sudo deploy/install.sh --config my-install.env`. Add `--yes`
+to ask nothing. To add an address later, run the installer again with the longer list: only the
+addresses change, and the data is kept.
 
 It installs PostHog at the exact version tested here (every image pinned by digest), tunes it for
 load, creates the login and a read-only API key, writes `.secrets.env`, runs the service under
@@ -345,7 +355,7 @@ kept unchanged.
 
 ## Connecting Jira and your own PostHog
 
-`deploy/install.sh` asks for all of this. To change it later, edit `.secrets.env` and run
+`deploy/install.sh` takes all of this from a `--config` file. To change it later, edit `.secrets.env` and run
 `sudo systemctl restart ticket-triage` (or `scripts/stack.sh restart service`).
 
 - **Jira Cloud**: set `JIRA_BASE_URL=https://<site>.atlassian.net`, `JIRA_EMAIL` and
