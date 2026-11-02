@@ -22,12 +22,14 @@
 #   app       pnpm install (with Chrome for rendering), the AppArmor rule Chrome's sandbox needs
 #   account   the PostHog login, organization, project settings and a read-only API key
 #             (scripts/setup-posthog.sh)
+#   posthog_mcp  PostHog's own MCP server on this machine (deploy/posthog-mcp), with its own read-only
+#             key that has no session replay scopes. FEATURE_POSTHOG_MCP=off skips it.
 #   settings  your answers into .secrets.env (mode 600), keeping anything already there
 #   service   ticket-triage.service: starts at boot, restarts on failure, logs to logs/service.log
 #   status    the status page (deploy/status), only on this machine or behind a password
 #   mcp       .mcp.json for Claude Code, from the two MCP switches
 #   doctor    pnpm doctor: checks every setting against the running services
-# check, addresses, settings, service, status, mcp and doctor run every time, so changed answers take effect.
+# check, addresses, posthog_mcp, settings, service, status, mcp and doctor run every time, so changed answers take effect.
 # At the end it prints (and saves) everything you need: addresses, logins, where each secret is, the
 # snippet for your app, how to connect Jira and Claude.
 set -Eeuo pipefail
@@ -79,9 +81,9 @@ chmod 700 "$STATE_DIR"
 
 done_step() { [ -f "$STATE_DIR/done/$1" ]; }
 finish() { date -u +%Y-%m-%dT%H:%M:%SZ >"$STATE_DIR/done/$1"; ok "step $1 done"; }
-STEPS=(check packages posthog scale addresses node user app account settings service status mcp doctor)
+STEPS=(check packages posthog scale addresses node user app account posthog_mcp settings service status mcp doctor)
 # Cheap and safe to repeat, so they run every time and changed answers take effect.
-ALWAYS=" check addresses settings service status mcp doctor "
+ALWAYS=" check addresses posthog_mcp settings service status mcp doctor "
 
 if [ "$CMD" = status ]; then
     for s in "${STEPS[@]}"; do
@@ -204,6 +206,7 @@ hosts_of() { local u h out=""; for u in ${1//,/ }; do h="${u#*://}"; h="${h%%/*}
 public_ip() { curl -fs -m 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}'; }
 
 POSTHOG_DIR="$(known POSTHOG_DIR)"; POSTHOG_DIR="${POSTHOG_DIR:-/opt/posthog}"
+LOCAL_MCP_URL=http://127.0.0.1:8787/mcp
 SCALE="$(known SCALE)"; SCALE="${SCALE:-yes}"
 
 collect_answers() {
@@ -237,13 +240,14 @@ collect_answers() {
     fi
     setting ANTHROPIC_API_KEY ""
     setting FEATURE_LENS_MCP on is_onoff
+    setting FEATURE_POSTHOG_MCP on is_onoff
+    # Empty, or the address of the one this installer runs: PostHog's MCP server on this machine.
     setting POSTHOG_MCP_URL "" is_url
     setting POSTHOG_MCP_API_KEY ""
-    if [ -n "$POSTHOG_MCP_URL" ]; then
-        need POSTHOG_MCP_API_KEY POSTHOG_MCP_URL
-        setting FEATURE_POSTHOG_MCP on is_onoff
-    else
-        FEATURE_POSTHOG_MCP=off
+    LOCAL_MCP=0
+    if [ "$FEATURE_POSTHOG_MCP" = on ]; then
+        if [ -z "$POSTHOG_MCP_URL" ] || [ "$POSTHOG_MCP_URL" = "$LOCAL_MCP_URL" ]; then LOCAL_MCP=1
+        else need POSTHOG_MCP_API_KEY POSTHOG_MCP_URL; fi
     fi
     setting SERVICE_PUBLIC_URL "http://$host:8080" is_url
     setting CLIP_ALLOWED_HOSTS "$([ -n "$APP_URLS" ] && hosts_of "$APP_URLS" || echo localhost)"
@@ -268,7 +272,7 @@ show_plan() {
     say "PostHog Lens    $SERVICE_PUBLIC_URL, from $APP_DIR, as user $APP_USER, starts at boot"
     say "Jira            $([ -n "$JIRA_BASE_URL" ] && echo "$JIRA_BASE_URL (releases from $RELEASES_JIRA_PROJECT)" || echo "not connected yet (connect it later in .secrets.env)")"
     say "Claude reading  $([ -n "$ANTHROPIC_API_KEY" ] && echo on || echo "off (keyword rules)")"
-    say "MCP             Lens tools $FEATURE_LENS_MCP, PostHog's MCP $FEATURE_POSTHOG_MCP"
+    say "MCP             Lens tools $FEATURE_LENS_MCP, PostHog's MCP $FEATURE_POSTHOG_MCP$([ "$LOCAL_MCP" = 1 ] && echo " (on this machine, read-only key without replay access)")"
     say "Status page     $([ "$STATUS_PUBLIC" = yes ] && echo "http://$host:8090 with a password" || echo "http://127.0.0.1:8090 on this machine only")"
     say "${D}Other settings (event names, Jira, Claude, MCP, status page): defaults above. Change them with${N}"
     say "${D}--config FILE (deploy/install.env.example), or later in $SECRETS.${N}"
@@ -279,6 +283,9 @@ show_plan() {
 }
 
 run_as_app() { runuser -u "$APP_USER" -- env HOME="$APP_HOME" PUPPETEER_CACHE_DIR="$APP_DIR/.cache/puppeteer" PATH="/usr/local/bin:$PATH" COREPACK_ENABLE_DOWNLOAD_PROMPT=0 "$@"; }
+# This installer began the posthog step before (and it did not finish): the PostHog in POSTHOG_DIR is
+# ours, and running the step again continues it. The log covers runs from before the marker existed.
+posthog_started_here() { [ -f "$STATE_DIR/posthog-started" ] || grep -q '==> Installing PostHog (30-60 minutes' "$STATE_DIR/install.log" 2>/dev/null; }
 posthog_healthy() { [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$POSTHOG_URL/_health" || true)" = 200 ]; }
 # The command line of whatever listens on a TCP port (empty when the port is free).
 port_user() {
@@ -309,7 +316,7 @@ step_check() {
     if [ $USE_EXISTING = 1 ]; then
         posthog_healthy || die "--use-existing-posthog: PostHog in $POSTHOG_DIR is not answering on $POSTHOG_URL/_health."
         ok "using the PostHog already running in $POSTHOG_DIR"
-    elif [ -f "$POSTHOG_DIR/.env" ] && ! done_step posthog; then
+    elif [ -f "$POSTHOG_DIR/.env" ] && ! done_step posthog && ! posthog_started_here; then
         die "$POSTHOG_DIR already holds a PostHog. Bring it to the tested version with deploy/migrate/posthog-upgrade.sh, then run this with --use-existing-posthog."
     fi
     local p u sp; sp="$(known SERVICE_PORT)"; sp="${sp:-8080}"
@@ -346,6 +353,7 @@ step_packages() {
 
 step_posthog() {
     CURRENT=posthog; step "Installing PostHog (30-60 minutes the first time)"
+    touch "$STATE_DIR/posthog-started"
     . "$HERE/migrate/versions/versions.env"
     POSTHOG_APP_TAG="$TARGET_COMMIT" POSTHOG_PINNED_COMPOSE="$HERE/migrate/versions/docker-compose.pinned.yml" \
         POSTHOG_INSTALL_DIR="$POSTHOG_DIR" bash "$HERE/posthog/install-posthog-hobby.sh" "$POSTHOG_ADDRESS" </dev/null
@@ -446,6 +454,23 @@ step_account() {
     chown "$APP_USER:$APP_USER" "$SECRETS"; chmod 600 "$SECRETS"
     [ -n "$(read_env_file "$SECRETS" POSTHOG_PERSONAL_API_KEY)" ] || die "No API key was written to .secrets.env."
     finish account
+}
+
+step_posthog_mcp() {
+    CURRENT=posthog_mcp; step "PostHog's MCP server"
+    if [ "$LOCAL_MCP" = 1 ]; then
+        SECRETS="$SECRETS" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/posthog-mcp/up.sh"
+        POSTHOG_MCP_URL="$(read_env_file "$SECRETS" POSTHOG_MCP_URL)"
+        POSTHOG_MCP_API_KEY="$(read_env_file "$SECRETS" POSTHOG_MCP_API_KEY)"
+        [ -n "$POSTHOG_MCP_API_KEY" ] || die "No key for PostHog's MCP server was written to .secrets.env."
+        save_answer POSTHOG_MCP_URL "$POSTHOG_MCP_URL"
+        ok "on $POSTHOG_MCP_URL, for this machine only"
+    else
+        # A server this installer started earlier is not needed any more.
+        bash "$HERE/posthog-mcp/up.sh" down >/dev/null 2>&1 || true
+        say "$([ "$FEATURE_POSTHOG_MCP" = on ] && echo "using $POSTHOG_MCP_URL" || echo "off (FEATURE_POSTHOG_MCP=off)")"
+    fi
+    finish posthog_mcp
 }
 
 set_secret() { # key value: writes it into .secrets.env, replacing the old line
@@ -604,6 +629,15 @@ Claude
   Claude Code     run claude in $APP_DIR: .mcp.json is ready (approve the server once)
   Other clients   $SERVICE_PUBLIC_URL/mcp with the header  Authorization: Bearer <MCP_TOKEN>
                   token: sudo grep MCP_TOKEN $SECRETS
+EOF
+    fi
+    if [ "$LOCAL_MCP" = 1 ]; then cat >>"$f" <<EOF
+
+PostHog's MCP server (SQL, insights, flags, dashboards...)
+  Address         $POSTHOG_MCP_URL, this machine only (Claude Code here gets it through .mcp.json)
+  Key             read-only, project $(read_env_file "$SECRETS" POSTHOG_PROJECT_ID) only, no session replay scopes
+                  (label posthog-mcp in PostHog). New key: sudo $HERE/posthog-mcp/up.sh --new-key
+  Logs            cd $HERE/posthog-mcp && sudo docker compose logs -f
 EOF
     fi
     cat >>"$f" <<EOF
