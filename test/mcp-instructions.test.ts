@@ -41,9 +41,11 @@ describe('instructions for using this server next to PostHog MCP', () => {
     })
     test('every tool they name exists, and every question-answering tool is named', async () => {
         const text = client.getInstructions() || ''
-        const names = new Set((await client.listTools()).tools.map((t) => t.name))
+        const tools = (await client.listTools()).tools
+        const names = new Set(tools.map((t) => t.name))
+        const args = new Set(tools.flatMap((t) => Object.keys(t.inputSchema.properties || {})))
         const properties = new Set(Object.values(config.properties))
-        const mentioned = [...text.matchAll(/\b[a-z]+(?:_[a-z]+)+\b/g)].map((m) => m[0]).filter((w) => !properties.has(w))
+        const mentioned = [...text.matchAll(/\b[a-z]+(?:_[a-z]+)+\b/g)].map((m) => m[0]).filter((w) => !properties.has(w) && !args.has(w))
         for (const m of mentioned) assert.ok(names.has(m), `instructions name ${m}, which is not a tool`)
         for (const n of names) if (n !== 'refresh_releases') assert.ok(text.includes(n), `${n} is not in the instructions`)
     })
@@ -54,5 +56,9 @@ describe('instructions for using this server next to PostHog MCP', () => {
         assert.match(tools.error_blast_radius, /rather than PostHog's error tracking queries/)
         assert.match(tools.screen_usage, /rather than a PostHog trends query/)
         assert.match(tools.client_feedback, /use PostHog's survey tools instead/)
+    })
+    test("every tool says it is called directly, not through PostHog's exec tool", async () => {
+        for (const t of (await client.listTools()).tools) assert.match(t.description || '', /never through PostHog's exec tool/, t.name)
+        assert.match(client.getInstructions() || '', /PostHog's server has one tool, exec/)
     })
 })

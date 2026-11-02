@@ -55,7 +55,22 @@ function screenPath(screen?: string): string | undefined {
 const when = z.string().optional().describe('When, in plain words: "yesterday afternoon", "30 Oct around 14:00", "last 3 days". Default: last 7 days.')
 const tz = z.string().optional().describe('IANA timezone the "when" is in, e.g. Europe/Berlin. Default UTC.')
 
+// PostHog's own MCP server has a single tool, exec, that takes a command string ("call <tool> {json}").
+// With both servers connected, Claude sometimes calls this server's tools that way too, and then the
+// arguments never arrive. Every description says how these tools are called, since a client may not
+// pass the server instructions on to Claude.
+export const DIRECT_CALL = 'Call this tool directly with the arguments below, never through PostHog\'s exec tool or as a command string.'
+
+/** A PostHog replay link (…/replay/<id>?t=…) or a bare session id, as a session id. */
+export function sessionIdOf(value: string): string {
+    const m = /\/replay\/([0-9A-Za-z-]{8,})/.exec(value)
+    return (m ? m[1] : value).trim()
+}
+
 export function registerTools(server: McpServer, ai?: TriageAi): void {
+    const register = server.registerTool.bind(server)
+    server.registerTool = ((name: string, cfg: { description?: string }, cb: unknown) =>
+        register(name, { ...cfg, description: `${cfg.description ?? ''} ${DIRECT_CALL}`.trim() } as never, cb as never)) as typeof server.registerTool
     server.registerTool(
         'resolve_client',
         {
@@ -103,13 +118,19 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
             description:
                 'Returns links a person can open to watch a session at the right moment: the PostHog replay (needs a PostHog login) and, when rendering works, a short MP4 clip. You cannot see the replay yourself; pass the links on to the user. This is the only allowed way to share a replay: never use PostHog\'s session recording or Replay Vision tools.',
             inputSchema: {
-                session_id: z.string(),
-                start_s: z.number().min(0).describe('Seconds from the start of the recording. Use offset_s minus about 10.'),
+                session_id: z
+                    .string({ error: 'session_id is missing. Call get_replay_link directly with arguments like {"session_id": "01a19b90-8c82-7185-ba5a-8333dd59c200", "start_s": 4}, not through PostHog\'s exec tool.' })
+                    .describe('The session id, e.g. 01a19b90-8c82-7185-ba5a-8333dd59c200. A PostHog replay link works too.'),
+                start_s: z
+                    .number({ error: 'start_s is missing: seconds from the start of the recording, a number, e.g. {"start_s": 4}.' })
+                    .min(0)
+                    .describe('Seconds from the start of the recording. Use offset_s minus about 10.'),
                 duration_s: z.number().min(3).max(120).default(30),
             },
             annotations: { readOnlyHint: true },
         },
-        async ({ session_id, start_s, duration_s }) => {
+        async ({ session_id: raw, start_s, duration_s }) => {
+            const session_id = sessionIdOf(raw)
             const lines = [`Replay in PostHog from ${Math.floor(start_s)}s (PostHog login needed): ${replayUrl(session_id, start_s)}`]
             try {
                 const clip = await renderClip({ sessionId: session_id, startOffsetS: start_s, durationS: duration_s })
