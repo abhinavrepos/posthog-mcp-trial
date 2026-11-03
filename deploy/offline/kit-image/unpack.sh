@@ -11,9 +11,12 @@ if [ ! -d "$out" ]; then
     exit 1
 fi
 owner="$(stat -c %u:%g "$out")"
+mode="$(stat -c %a "$out")"
 cd /kit/repo
 find . -mindepth 1 -type d | while read -r d; do mkdir -p "$out/$d"; done
 cp -a . "$out/"
+# cp -a also copies the kit folder's own owner and mode onto the mounted folder: put them back.
+chown "$owner" "$out"; chmod "$mode" "$out"
 mkdir -p "$out/deploy/offline/kit"
 cp /kit/files/* "$out/deploy/offline/kit/"
 # Only what was unpacked changes owner, so the service user's data folders stay as they are.
