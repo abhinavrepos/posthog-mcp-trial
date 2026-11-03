@@ -38,6 +38,8 @@ FILES="docker-compose.yml"
 EXTRA="$(setting EXTRA_COMPOSE_FILES '')"
 [ -n "$EXTRA" ] && FILES="$FILES:$EXTRA"
 NODE_BASE_IMAGE="$(setting NODE_BASE_IMAGE ghcr.io/posthog/posthog-node:master)"
+# Images from ECR on a machine without internet (deploy/offline/ecr.env): the Node image comes ready-built.
+. "$HERE/../offline/ecr.sh"
 rpk() { docker compose exec -T kafka rpk "$@"; }
 
 # Busy topics get more partitions so several consumers can share them. Ordering is per key (person,
@@ -91,9 +93,16 @@ if grep -q '^COMPOSE_FILE=' .env; then sed -i "s|^COMPOSE_FILE=.*|COMPOSE_FILE=$
 else echo "COMPOSE_FILE=$FILES:docker-compose.scale.yml" >> .env; fi
 docker compose config -q
 
-echo "==> Building the Node image (PostHog's current one plus PLUGINS_DISABLED_CAPABILITIES)"
-docker pull -q "$NODE_BASE_IMAGE" >/dev/null
-docker build -q --build-arg BASE="$NODE_BASE_IMAGE" -t posthog-node-lens:latest "$HERE/node-image" >/dev/null
+if [ -n "$POSTHOG_NODE_PREBUILT" ]; then
+    echo "==> The Node image from $IMAGE_REGISTRY (PostHog's, plus PLUGINS_DISABLED_CAPABILITIES; built by push-images.sh)"
+    images_login
+    ecr_pull_tag "$POSTHOG_NODE_PREBUILT" posthog-node-lens:latest
+    ecr_check_images "$POSTHOG_DIR"
+else
+    echo "==> Building the Node image (PostHog's current one plus PLUGINS_DISABLED_CAPABILITIES)"
+    docker pull -q "$NODE_BASE_IMAGE" >/dev/null
+    docker build -q --build-arg BASE="$NODE_BASE_IMAGE" -t posthog-node-lens:latest "$HERE/node-image" >/dev/null
+fi
 
 echo "==> Restarting with the new settings (data is kept)"
 docker compose up -d

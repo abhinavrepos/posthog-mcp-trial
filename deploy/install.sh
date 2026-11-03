@@ -14,16 +14,17 @@
 #
 # Steps (each one checks its result; a finished step is skipped when you run the script again, a failed
 # one is retried):
-#   check     root, Amazon Linux 2023, x86_64, memory, disk, ports, where the project folder is
-#   packages  base tools, the libraries and fonts Chrome needs to render replay clips
+#   check     root, Amazon Linux 2023, x86_64, memory, disk, ports; with images from ECR, that Docker can log in
+#   packages  base tools
 #   posthog   PostHog through deploy/posthog/install-posthog-hobby.sh, every image pinned by digest
 #             (deploy/migrate/versions), started at boot by posthog.service. 30-60 minutes.
 #             With a PostHog already here: deploy/migrate/posthog-upgrade.sh instead. About 2 hours.
 #   scale     deploy/posthog/scale.sh: about 200 events a second without losing any (SCALE=no skips it)
 #   addresses PostHog answers on every address in POSTHOG_ADDRESS, each one trusted for logins (CSRF)
-#   node      Node 24 (checked against nodejs.org's checksums) and pnpm 10
-#   user      the unprivileged "triage" user the service runs as; it owns the project folder
-#   app       pnpm install (with Chrome for rendering), the user-namespace setting Chrome's sandbox needs
+#   user      the unprivileged "triage" user the service runs as; it owns the data folders (run, clips...)
+#   app       the PostHog Lens image (Node, the service, Chrome and ffmpeg for clips) as posthog-lens:current:
+#             pulled from ECR when deploy/offline/ecr.env is here, else built from deploy/lens/Dockerfile;
+#             then Chrome is started in it, sandboxed
 #   account   the PostHog login, organization, project settings and a read-only API key
 #             (scripts/setup-posthog.sh)
 #   posthog_mcp  PostHog's own MCP server on this machine (deploy/posthog-mcp), with its own read-only
@@ -32,11 +33,17 @@
 #             its MCP server or this service makes fails at once instead of hanging
 #             (deploy/offline/no-internet.sh)
 #   settings  your answers into .secrets.env (mode 600), keeping anything already there
-#   service   ticket-triage.service: starts at boot, restarts on failure, logs to logs/service.log
+#   service   ticket-triage.service: runs the image through deploy/lens/lens.sh (this machine's network,
+#             as the triage user); starts at boot, restarts on failure, logs to logs/service.log
 #   status    the status page (deploy/status), only on this machine or behind a password
 #   mcp       .mcp.json for Claude Code, from the two MCP switches
-#   doctor    pnpm doctor: checks every setting against the running services
-# check, addresses, posthog_mcp, settings, service, status, mcp and doctor run every time, so changed answers take effect.
+#   doctor    checks every setting against the running services (deploy/lens/lens.sh doctor)
+# check, addresses, app, posthog_mcp, settings, service, status, mcp and doctor run every time, so changed
+# answers (and a new image) take effect.
+#
+# Images: on a machine without internet, unpack the kit first (deploy/offline/README.md): it brings
+# deploy/offline/ecr.env, and every image then comes from your ECR, PostHog's source, the GeoIP database
+# and Docker Compose from the kit. Nothing is downloaded from the internet.
 # At the end it prints (and saves) everything you need: addresses, logins, where each secret is, the
 # snippet for your app, how to connect Jira and Claude.
 set -Eeuo pipefail
@@ -50,8 +57,6 @@ UNIT="${SERVICE_UNIT:-ticket-triage.service}"   # SERVICE_UNIT, POSTHOG_URL, INS
 POSTHOG_URL="${POSTHOG_URL:-http://localhost}"
 APP_USER=triage
 APP_HOME=/var/lib/triage
-NODE_MAJOR=24
-PNPM_VERSION=10.29.3
 # docker compose build (the status page) needs buildx 0.17 or later; Amazon Linux's docker package has an
 # older one or none. This one is installed when it is missing, checked against its release checksum.
 BUILDX_VERSION=v0.37.2
@@ -92,9 +97,11 @@ chmod 700 "$STATE_DIR"
 
 done_step() { [ -f "$STATE_DIR/done/$1" ]; }
 finish() { date -u +%Y-%m-%dT%H:%M:%SZ >"$STATE_DIR/done/$1"; ok "step $1 done"; }
-STEPS=(check packages posthog scale addresses node user app account posthog_mcp offline settings service status mcp doctor)
+STEPS=(check packages posthog scale addresses user app account posthog_mcp offline settings service status mcp doctor)
 # Cheap and safe to repeat, so they run every time and changed answers take effect.
-ALWAYS=" check addresses posthog_mcp offline settings service status mcp doctor "
+ALWAYS=" check addresses app posthog_mcp offline settings service status mcp doctor "
+# Where the images come from (deploy/offline/ecr.sh: IMAGES_FROM=ecr when deploy/offline/ecr.env is here).
+. "$HERE/migrate/versions/versions.env"
 
 if [ "$CMD" = status ]; then
     for s in "${STEPS[@]}"; do
@@ -318,6 +325,7 @@ show_plan() {
     step "Plan"
     say "PostHog         $POSTHOG_PUBLIC_URL  ($([ $scheme = https ] && echo "HTTPS, certificate from Let's Encrypt" || echo "plain HTTP: private network or VPN only"))"
     say "Internet        $([ "$OFFLINE" = yes ] && echo "none here: every outside call will be refused at once" || echo "reachable")"
+    say "Images          $([ "$IMAGES_FROM" = ecr ] && echo "from $IMAGE_REGISTRY (pushed ${IMAGES_PUSHED:-?} from commit ${IMAGES_COMMIT:0:12})" || echo "from Docker Hub and GitHub; PostHog Lens built here")"
     [ -z "$others" ] || say "                also at $others"
     case "$MODE" in
         existing) say "                keep the PostHog already in $POSTHOG_DIR" ;;
@@ -330,7 +338,7 @@ show_plan() {
     esac
     if [ "$MODE" = fresh ]; then say "login           $ADMIN_EMAIL (organization \"$ORG_NAME\"), recording on ${APP_URLS:-every site that sends events}"
     else say "login           $ADMIN_EMAIL (its current project), recording on ${APP_URLS:-every site that sends events}"; fi
-    say "PostHog Lens    $SERVICE_PUBLIC_URL, from $APP_DIR, as user $APP_USER, starts at boot"
+    say "PostHog Lens    $SERVICE_PUBLIC_URL, a container (data in $APP_DIR), as user $APP_USER, starts at boot"
     say "Jira            $([ -n "$JIRA_BASE_URL" ] && echo "$JIRA_BASE_URL (releases from $RELEASES_JIRA_PROJECT)" || echo "not connected yet (connect it later in .secrets.env)")"
     say "Claude reading  $([ -n "$ANTHROPIC_API_KEY" ] && echo on || echo "off (keyword rules)")"
     say "MCP             Lens tools $FEATURE_LENS_MCP, PostHog's MCP $FEATURE_POSTHOG_MCP$([ "$LOCAL_MCP" = 1 ] && echo " (read-only key without replay access)")"
@@ -346,7 +354,6 @@ show_plan() {
     fi
 }
 
-run_as_app() { runuser -u "$APP_USER" -- env HOME="$APP_HOME" PUPPETEER_CACHE_DIR="$APP_DIR/.cache/puppeteer" PATH="/usr/local/bin:$PATH" COREPACK_ENABLE_DOWNLOAD_PROMPT=0 "$@"; }
 # This installer began the posthog step before (and it did not finish): the PostHog in POSTHOG_DIR is
 # ours, and running the step again continues it. The log covers runs from before the marker existed.
 posthog_started_here() { [ -f "$STATE_DIR/posthog-started" ] || grep -q '==> Installing PostHog (30-60 minutes' "$STATE_DIR/install.log" 2>/dev/null; }
@@ -417,13 +424,17 @@ step_check() {
     ok "memory ${ram} GB, free disk ${disk} GB, $(nproc) CPUs"
     [ "$disk" -ge 10 ] || warn "Only ${disk} GB free at $POSTHOG_DIR. PostHog stops taking events when the disk is full."
     [ "$(getenforce 2>/dev/null || echo Permissive)" != Enforcing ] || warn "SELinux is enforcing. Amazon Linux 2023 ships it permissive, and this setup is tested that way: sudo setenforce 0, and SELINUX=permissive in /etc/selinux/config"
-    # The service user must reach the project folder: no folder on the way may be private (like /root).
-    local d="$APP_DIR"
-    while [ "$d" != / ]; do
-        d="$(dirname "$d")"
-        [ "$(( 0$(stat -c %a "$d") & 1 ))" = 1 ] || die "$APP_DIR is inside $d, which other users cannot enter. Clone the project to /srv/ticket-triage and run it from there."
-    done
+    # The service runs as a container that mounts its data folders, so the project folder can be anywhere,
+    # even inside a private home folder.
     ok "project folder $APP_DIR"
+    if [ "$IMAGES_FROM" = ecr ]; then
+        if command -v docker >/dev/null 2>&1; then
+            images_login || die "Docker cannot log in to $IMAGE_REGISTRY (above). Nothing was changed."
+            ok "Docker logs in to $IMAGE_REGISTRY (images pushed ${IMAGES_PUSHED:-?})"
+        else
+            say "images from $IMAGE_REGISTRY (Docker is installed in step posthog, then it logs in)"
+        fi
+    fi
     case "$MODE" in
         existing)
             posthog_healthy || die "PostHog in $POSTHOG_DIR is not answering on $POSTHOG_URL/_health. Start it: cd $POSTHOG_DIR && sudo docker compose up -d"
@@ -445,16 +456,13 @@ step_check() {
 }
 
 step_packages() {
-    CURRENT=packages; step "Installing base tools and what Chrome needs"
+    CURRENT=packages; step "Installing base tools"
     # curl comes as curl-minimal on Amazon Linux: installing "curl" would conflict with it, and it is enough.
-    dnf install -y -q ca-certificates git openssl python3 tar xz iproute util-linux shadow-utils procps-ng iptables-nft hostname >/dev/null
-    # Chrome's libraries and fonts.
-    local pkgs=(nss nspr atk at-spi2-atk at-spi2-core cups-libs libdrm mesa-libgbm alsa-lib libxkbcommon
-        libXcomposite libXdamage libXrandr libXfixes libXext libXi libXrender libX11 libxcb dbus-libs expat glib2
-        pango cairo liberation-fonts google-noto-sans-fonts google-noto-serif-fonts google-noto-sans-mono-fonts
-        google-noto-sans-symbols-fonts google-noto-sans-symbols2-fonts dejavu-sans-fonts google-noto-emoji-color-fonts)
-    dnf install -y -q "${pkgs[@]}" >/dev/null
-    ok "installed ${#pkgs[@]} packages for Chrome and fonts"
+    # Chrome, its libraries and fonts are in the PostHog Lens image, not on this machine. The AWS CLI logs
+    # Docker in to ECR. On a machine without internet dnf reaches Amazon Linux's repositories through the
+    # VPC's S3 gateway endpoint.
+    dnf install -y -q ca-certificates git openssl python3 tar xz iproute util-linux shadow-utils procps-ng iptables-nft hostname awscli-2 >/dev/null
+    ok "base tools installed"
     finish packages
 }
 
@@ -503,51 +511,32 @@ step_addresses() {
     finish addresses
 }
 
-step_node() {
-    CURRENT=node; step "Node $NODE_MAJOR and pnpm"
-    if command -v node >/dev/null && [ "$(node -p 'process.versions.node.split(".")[0]')" = "$NODE_MAJOR" ]; then
-        ok "Node $(node -v) is already installed"
-    else
-        local base="https://nodejs.org/dist/latest-v${NODE_MAJOR}.x" tmp file
-        tmp="$(mktemp -d)"
-        curl -fsSL --connect-timeout 10 "$base/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt"
-        file="$(grep -oE "node-v${NODE_MAJOR}\.[0-9.]+-linux-x64\.tar\.xz" "$tmp/SHASUMS256.txt" | head -1)"
-        [ -n "$file" ] || die "Could not find Node $NODE_MAJOR for linux-x64 on nodejs.org."
-        curl -fsSL --connect-timeout 10 "$base/$file" -o "$tmp/$file"
-        (cd "$tmp" && grep " $file\$" SHASUMS256.txt | sha256sum -c --quiet -) || die "Node download does not match its checksum."
-        tar -xJf "$tmp/$file" -C /usr/local --strip-components=1 --exclude='*.md' --exclude=LICENSE
-        rm -rf "$tmp"
-        ok "Node $(/usr/local/bin/node -v) installed in /usr/local"
-    fi
-    if command -v pnpm >/dev/null && [ "$(pnpm -v | cut -d. -f1)" = "${PNPM_VERSION%%.*}" ]; then
-        ok "pnpm $(pnpm -v) is already installed"
-    else
-        npm install -g --silent "pnpm@$PNPM_VERSION" >/dev/null
-        ok "pnpm $(pnpm -v) installed"
-    fi
-    finish node
-}
-
 step_user() {
     CURRENT=user; step "Service user"
     if id "$APP_USER" >/dev/null 2>&1; then ok "user $APP_USER exists"
     else useradd --system --home-dir "$APP_HOME" --create-home --shell /usr/sbin/nologin "$APP_USER"; ok "created user $APP_USER"; fi
     mkdir -p "$APP_HOME"; chown "$APP_USER:$APP_USER" "$APP_HOME"; chmod 750 "$APP_HOME"
-    mkdir -p "$APP_DIR"/{run,logs,clips,.cache}
-    chown -R "$APP_USER:$APP_USER" "$APP_DIR"
-    git config --system --get-all safe.directory 2>/dev/null | grep -qx "$APP_DIR" || git config --system --add safe.directory "$APP_DIR"
-    ok "$APP_DIR belongs to $APP_USER"
+    # Only what the container writes; the rest of the project folder keeps its owner.
+    mkdir -p "$APP_DIR"/{run,logs,clips,.cache,config}
+    chown -R "$APP_USER:$APP_USER" "$APP_DIR"/{run,logs,clips,.cache}
+    ok "$APP_DIR/{run,logs,clips,.cache} belong to $APP_USER"
     finish user
 }
 
 step_app() {
-    CURRENT=app; step "Installing the project (pnpm install, Chrome for rendering)"
-    [ -f "$APP_DIR/vendor/rasterizer.cjs" ] && [ -f "$APP_DIR/vendor/player.html" ] || die "vendor/rasterizer.cjs or vendor/player.html is missing from the project folder."
-    (cd "$APP_DIR" && run_as_app CI=true pnpm install --frozen-lockfile --reporter=append-only) | tail -5
-    local chrome
-    chrome="$(ls -d "$APP_DIR"/.cache/puppeteer/chrome-headless-shell/linux-*/chrome-headless-shell-linux64/chrome-headless-shell 2>/dev/null | head -1)"
-    [ -x "$chrome" ] || die "Chrome for rendering was not downloaded (pnpm install should have fetched it)."
-    ok "Chrome: ${chrome#"$APP_DIR"/}"
+    CURRENT=app; step "The PostHog Lens image"
+    local want
+    if [ "$IMAGES_FROM" = ecr ]; then
+        images_login || die "Docker cannot log in to $IMAGE_REGISTRY (above)."
+        ecr_pull_tag "$ECR_LENS" posthog-lens:current
+        ok "posthog-lens:current is $ECR_LENS"
+    else
+        ensure_buildx
+        say "building it from deploy/lens/Dockerfile (5-10 minutes the first time)"
+        (cd "$APP_DIR" && docker buildx build --load -q -f deploy/lens/Dockerfile -t posthog-lens:current .) >/dev/null \
+            || die "The PostHog Lens image did not build: cd $APP_DIR && docker buildx build -f deploy/lens/Dockerfile ."
+        ok "posthog-lens:current built"
+    fi
     # Chrome's sandbox needs unprivileged user namespaces. Amazon Linux 2023 allows them; a hardened
     # image may have turned them off with user.max_user_namespaces=0.
     if [ "$(sysctl -n user.max_user_namespaces 2>/dev/null || echo 1)" = 0 ]; then
@@ -555,9 +544,12 @@ step_app() {
         sysctl -q -p /etc/sysctl.d/90-ticket-triage-chrome.conf
         ok "user namespaces turned on for Chrome's sandbox (/etc/sysctl.d/90-ticket-triage-chrome.conf)"
     fi
-    run_as_app "$chrome" --headless --disable-gpu --dump-dom about:blank >/dev/null 2>&1 \
-        || die "Chrome does not start as $APP_USER: run  sudo -u $APP_USER $chrome --headless --dump-dom about:blank  to see why."
-    ok "Chrome starts, sandboxed, as $APP_USER"
+    want="$(docker image inspect -f '{{.Id}}' posthog-lens:current)"
+    if [ "$(cat "$STATE_DIR/chrome-checked" 2>/dev/null)" != "$want" ]; then
+        bash "$HERE/lens/lens.sh" chrome-check || die "Chrome does not start in the PostHog Lens container (above)."
+        echo "$want" >"$STATE_DIR/chrome-checked"
+    fi
+    ok "Chrome starts in it, sandboxed, as $APP_USER"
     finish app
 }
 
@@ -652,19 +644,16 @@ step_service() {
     CURRENT=service; step "Starting the triage service (systemd)"
     cat >/etc/systemd/system/$UNIT <<EOF
 # Written by deploy/install.sh. PostHog Lens: the triage service.
+# The container (image posthog-lens:current) runs as $APP_USER on this machine's network; see deploy/lens/lens.sh.
 [Unit]
 Description=PostHog Lens triage service
 After=network-online.target docker.service posthog.service
 Wants=network-online.target
+Requires=docker.service
 
 [Service]
-User=$APP_USER
-Group=$APP_USER
-WorkingDirectory=$APP_DIR
-Environment=HOME=$APP_HOME
-Environment=PUPPETEER_CACHE_DIR=$APP_DIR/.cache/puppeteer
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/local/bin/node --disable-warning=ExperimentalWarning --import tsx src/service/server.ts
+ExecStart=/usr/bin/env bash $HERE/lens/lens.sh serve
+ExecStop=/usr/bin/docker stop -t 20 posthog-lens
 Restart=on-failure
 RestartSec=5
 StandardOutput=append:$APP_DIR/logs/service.log
@@ -698,7 +687,7 @@ ensure_buildx() {
 
 step_status() {
     CURRENT=status; step "Status page"
-    ensure_buildx
+    [ "$IMAGES_FROM" = ecr ] || ensure_buildx   # from ECR it is pulled, not built
     local f="$HERE/status/status.env" port project
     port="$(read_env_file "$SECRETS" SERVICE_PORT)"; port="${port:-8080}"
     project="$(basename "$POSTHOG_DIR")"
@@ -732,16 +721,16 @@ PY
 
 step_mcp() {
     CURRENT=mcp; step "MCP config for Claude Code"
-    (cd "$APP_DIR" && run_as_app node --disable-warning=ExperimentalWarning --import tsx scripts/mcp-config.ts)
+    bash "$HERE/lens/lens.sh" mcp-config
     finish mcp
 }
 
 step_doctor() {
-    CURRENT=doctor; step "Checking everything (pnpm doctor)"
-    if (cd "$APP_DIR" && run_as_app node --disable-warning=ExperimentalWarning --import tsx scripts/doctor.ts); then
+    CURRENT=doctor; step "Checking everything (deploy/lens/lens.sh doctor)"
+    if bash "$HERE/lens/lens.sh" doctor; then
         finish doctor
     else
-        die "pnpm doctor found a problem (✘ above). Fix the setting in $SECRETS, then run this script again."
+        die "The check found a problem (✘ above). Fix the setting in $SECRETS, then run this script again."
     fi
 }
 
@@ -778,14 +767,15 @@ Your app: add PostHog to it ($([ -n "$APP_URLS" ] && echo "it records only on $A
   posthog.init('$token', { api_host: '$POSTHOG_PUBLIC_URL', person_profiles: 'identified_only' })
   posthog.identify(userId, { $PROP_PERSON_EMAIL: user.email })
   posthog.register({ $PROP_CLIENT_ID: account.id, $PROP_CLIENT_NAME: account.name$([ "$PROP_APP_VERSION" = none ] || echo ", $PROP_APP_VERSION: '<your release, e.g. 26.10.0>'") })
-  PostHog Lens finds a ticket's session by those names. pnpm doctor checks that your events carry them.
+  PostHog Lens finds a ticket's session by those names. sudo $HERE/lens/lens.sh doctor checks that your events carry them.
 
 PostHog Lens
   Clip links      $SERVICE_PUBLIC_URL
   Settings        $SECRETS (every setting is explained in $APP_DIR/.env.example)
-  After a change  sudo systemctl restart ${UNIT%.service}      (and pnpm mcp:config after an MCP switch)
+  After a change  sudo systemctl restart ${UNIT%.service}      (and sudo $HERE/lens/lens.sh mcp-config after an MCP switch)
   Logs            $APP_DIR/logs/service.log
-  Check           cd $APP_DIR && sudo -u $APP_USER pnpm doctor
+  Check           sudo $HERE/lens/lens.sh doctor
+  Image           posthog-lens:current ($([ "$IMAGES_FROM" = ecr ] && echo "from $IMAGE_REGISTRY" || echo "built from deploy/lens/Dockerfile")); a new one: run this installer again
 EOF
     if [ "$mcp_on" != off ]; then cat >>"$f" <<EOF
 

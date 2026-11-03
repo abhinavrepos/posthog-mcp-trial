@@ -3,7 +3,8 @@
 # build before the PostHog version in ../migrate/versions.
 services:
     posthog-mcp:
-        image: ghcr.io/posthog/posthog-mcp@sha256:08cd52341758062ada992fb80d93c4bb3ed38480851f27da26301f91cc0b39b3
+        # POSTHOG_MCP_IMAGE: the copy in ECR on a machine without internet (up.sh sets it from deploy/offline/ecr.env).
+        image: ${POSTHOG_MCP_IMAGE:-ghcr.io/posthog/posthog-mcp@sha256:08cd52341758062ada992fb80d93c4bb3ed38480851f27da26301f91cc0b39b3}
         restart: unless-stopped
         environment:
             NODE_ENV: production

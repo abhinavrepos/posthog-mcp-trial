@@ -86,6 +86,9 @@ fi
 local_host="$MCP_BIND"; [ "$local_host" = 0.0.0.0 ] && local_host=127.0.0.1
 put POSTHOG_MCP_URL "http://$local_host:$MCP_PORT/mcp"
 
+# A machine without internet takes the image from ECR (deploy/offline/ecr.env).
+. ../offline/ecr.sh
+if [ "$IMAGES_FROM" = ecr ]; then export POSTHOG_MCP_IMAGE="$ECR_POSTHOG_MCP"; images_login; fi
 docker compose up -d --quiet-pull --remove-orphans 2>&1 | grep -v -E "^ *(Container|Network) " || true
 for _ in $(seq 1 60); do curl -fs -o /dev/null -m 2 "http://$local_host:$MCP_PORT/healthz" && break; sleep 1; done
 curl -fs -o /dev/null -m 2 "http://$local_host:$MCP_PORT/healthz" || { docker compose logs --tail 20; echo "The MCP server did not start."; exit 1; }

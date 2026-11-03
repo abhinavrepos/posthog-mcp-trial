@@ -107,6 +107,12 @@ remember() { echo "$2" > "$STATE/$1"; }
 recall() { cat "$STATE/$1" 2>/dev/null || true; }
 elapsed() { local s=$(( $(date +%s) - $1 )); if [ "$s" -ge 3600 ]; then printf '%dh%02dm' $((s / 3600)) $((s % 3600 / 60)); else printf '%dm%02ds' $((s / 60)) $((s % 60)); fi; }
 if [ -n "$REPLAYS_FLAG" ] && [ "$ONLY" != status ]; then remember replays "$REPLAYS_FLAG"; fi
+# Images from ECR on a machine without internet (deploy/offline/ecr.env): log in, and fetch the small
+# image every phase uses for copying and measuring files (HELPER_IMAGE, a copy of alpine).
+if [ "$IMAGES_FROM" = ecr ] && [ "$ONLY" != status ]; then
+    images_login || { echo "Docker cannot log in to $IMAGE_REGISTRY (above)."; exit 1; }
+    docker image inspect "$HELPER_IMAGE" >/dev/null 2>&1 || docker pull -q "$HELPER_IMAGE" >/dev/null
+fi
 
 # ---------------------------------------------------------------- questions
 # ask QUESTION DEFAULT(y|n): 0 for yes. With --yes it takes the default without asking.
@@ -246,7 +252,7 @@ wait_web() {
     echo "PostHog did not come up in an hour. See: ${DC[*]} logs web"
     exit 1
 }
-vsize() { docker run --rm -v "$1:/v:ro" alpine du -sh /v 2>/dev/null | cut -f1; }
+vsize() { docker run --rm -v "$1:/v:ro" "$HELPER_IMAGE" du -sh /v 2>/dev/null | cut -f1; }
 # The Django migrations a web image would apply now, without applying them; empty when it cannot tell.
 PLAN_PY='import os,django;os.environ.setdefault("DJANGO_SETTINGS_MODULE","posthog.settings");django.setup();from django.db import connection;from django.db.migrations.executor import MigrationExecutor as E;e=E(connection);print("PENDING",len(e.migration_plan(e.loader.graph.leaf_nodes())))'
 pending() { "$@" python -c "$PLAN_PY" 2>/dev/null < /dev/null | grep -oE '^PENDING [0-9]+' | cut -d' ' -f2 | tail -1 || true; }
@@ -292,7 +298,7 @@ if [ "$ONLY" = rollback ]; then
     while read -r v; do
         docker volume rm -f "$v" >/dev/null 2>&1 || true
         docker volume create --label com.docker.compose.project="$PROJECT" --label com.docker.compose.volume="${v#"${PROJECT}"_}" "$v" >/dev/null
-        docker run --rm -v "$v:/v" -v "$BACKUP_DIR/volumes:/b:ro" alpine sh -c "cd /v && tar -xf /b/$v.tar"
+        docker run --rm -v "$v:/v" -v "$BACKUP_DIR/volumes:/b:ro" "$HELPER_IMAGE" sh -c "cd /v && tar -xf /b/$v.tar"
         say "    restored volume $v"
     done < "$BACKUP_DIR/volumes/list.txt"
     # Volumes the new version created (SeaweedFS, for example) go, so a new attempt starts clean.
@@ -383,10 +389,12 @@ if phase check; then
     done
     minio_vol=""
     for v in $(docker volume ls -q | grep -E "^${PROJECT}_"); do
-        docker run --rm -v "$v:/data:ro" alpine test -d /data/.minio.sys 2>/dev/null && minio_vol="$v"
+        docker run --rm -v "$v:/data:ro" "$HELPER_IMAGE" test -d /data/.minio.sys 2>/dev/null && minio_vol="$v"
     done
     remember minio_volume "$minio_vol"
     say "MinIO volume: ${minio_vol:-none (nothing to copy)}"
+    # From ECR: the registry's copy of the MinIO image, under the name the copy steps use.
+    if [ -n "$minio_vol" ] && [ "$IMAGES_FROM" = ecr ]; then ecr_pull_tag "$ECR_MINIO" "$MINIO_IMAGE" && say "MinIO image from $IMAGE_REGISTRY"; fi
     if [ -n "$minio_vol" ] && ! docker image inspect "$MINIO_IMAGE" >/dev/null 2>&1; then
         if docker image inspect minio/minio:RELEASE.2025-04-22T22-12-26Z >/dev/null 2>&1; then
             docker tag minio/minio:RELEASE.2025-04-22T22-12-26Z "$MINIO_IMAGE"
@@ -397,8 +405,8 @@ if phase check; then
             exit 1
         fi
     fi
-    pg_mb=$(docker run --rm -v "${PROJECT}_postgres-data:/a:ro" alpine du -sm /a | cut -f1)
-    used_mb=$(docker run --rm -v "${PROJECT}_postgres-data:/a:ro" -v "${PROJECT}_clickhouse-data:/b:ro" ${minio_vol:+-v "$minio_vol:/c:ro"} alpine du -sm /a /b ${minio_vol:+/c} | awk '{s+=$1} END {print s}')
+    pg_mb=$(docker run --rm -v "${PROJECT}_postgres-data:/a:ro" "$HELPER_IMAGE" du -sm /a | cut -f1)
+    used_mb=$(docker run --rm -v "${PROJECT}_postgres-data:/a:ro" -v "${PROJECT}_clickhouse-data:/b:ro" ${minio_vol:+-v "$minio_vol:/c:ro"} "$HELPER_IMAGE" du -sm /a /b ${minio_vol:+/c} | awk '{s+=$1} END {print s}')
     free_mb=$(( $(df -Pk "$BACKUP_DIR" | awk 'NR==2 {print $4}') / 1024 ))
     # backup of every volume, the Postgres 12 copy, the copied files and the new images
     need_mb=$(( ${SKIP_VOLUME_BACKUP:-0} == 1 ? used_mb / 4 + pg_mb + 30000 : used_mb * 2 + pg_mb + 30000 ))
@@ -453,7 +461,7 @@ dump_pg() { dc exec -T db pg_dumpall --clean -U posthog | gzip > "$BACKUP_DIR/pg
 # tar_volume VOLUME: tar the volume, then check the archive reads back whole with as many entries as the
 # volume has (sockets aside, which tar skips); only then is it renamed to VOLUME.tar.
 tar_volume() {
-    docker run --rm -v "$1:/v:ro" -v "$BACKUP_DIR/volumes:/b" alpine sh -c "cd /v && tar -cf '/b/$1.tar.partial' . \
+    docker run --rm -v "$1:/v:ro" -v "$BACKUP_DIR/volumes:/b" "$HELPER_IMAGE" sh -c "cd /v && tar -cf '/b/$1.tar.partial' . \
         && f=\$(find . ! -type s | wc -l) && t=\$(tar -tf '/b/$1.tar.partial' | wc -l) && echo \"\$f files and folders, \$t in the backup\" && [ \"\$f\" = \"\$t\" ]"
 }
 make_sums() { (cd "$BACKUP_DIR" && sha256sum pg_dumpall.sql.gz install-files.tgz volumes/*.tar > SHA256SUMS.partial); }
@@ -480,7 +488,7 @@ if phase backup; then
         while read -r v; do
             i=$((i + 1))
             if [ -f "$BACKUP_DIR/volumes/$v.tar" ]; then say "    volume $i of $n, $v: backed up already"; continue; fi
-            PROGRESS_FILE="$BACKUP_DIR/volumes/$v.tar.partial" PROGRESS_WHAT="$v" PROGRESS_OF=$(docker run --rm -v "$v:/v:ro" alpine du -sm /v | cut -f1)
+            PROGRESS_FILE="$BACKUP_DIR/volumes/$v.tar.partial" PROGRESS_WHAT="$v" PROGRESS_OF=$(docker run --rm -v "$v:/v:ro" "$HELPER_IMAGE" du -sm /v | cut -f1)
             watch_run "$STATE/backup-$v.log" p_size tar_volume "$v" || { cat "$STATE/backup-$v.log"; echo "The backup of volume $v is incomplete."; exit 1; }
             mv "$BACKUP_DIR/volumes/$v.tar.partial" "$BACKUP_DIR/volumes/$v.tar"
             say "    volume $i of $n, $v: $(du -h "$BACKUP_DIR/volumes/$v.tar" | cut -f1) ($(tail -1 "$STATE/backup-$v.log"))"
@@ -498,7 +506,11 @@ fi
 
 # ---------------------------------------------------------------- 4 source
 if phase source; then
-    if [ -d posthog/.git ]; then
+    if [ -n "$(kit_file posthog-src.tar.gz)" ]; then
+        # No GitHub here: the kit's checkout of the pinned commit (with its .git).
+        mv posthog "posthog.before-upgrade.$(date +%s)" 2>/dev/null || true
+        mkdir posthog && tar -xzf "$(kit_file posthog-src.tar.gz)" -C posthog --no-same-owner
+    elif [ -d posthog/.git ]; then
         git -C posthog fetch -q --depth 1 origin "$TARGET_COMMIT"
         git -C posthog checkout -q -f FETCH_HEAD
     else
@@ -536,6 +548,11 @@ if phase configure; then
     envset REGISTRY_URL posthog/posthog
     envset POSTHOG_APP_TAG "$TARGET_COMMIT"
     mkdir -p share
+    if [ ! -f share/GeoLite2-City.mmdb ] && [ -n "$(kit_file GeoLite2-City.mmdb)" ]; then
+        cp "$(kit_file GeoLite2-City.mmdb)" share/GeoLite2-City.mmdb
+        cp "$(kit_file GeoLite2-City.json)" share/GeoLite2-City.json 2>/dev/null || echo "{\"date\": \"$(date +%Y-%m-%d)\"}" > share/GeoLite2-City.json
+        say "GeoIP database from the kit"
+    fi
     if [ ! -f share/GeoLite2-City.mmdb ]; then
         # Fails within seconds where there is no internet; GeoIP then stays off.
         curl -fsSL --connect-timeout 5 --max-time 120 'https://mmdbcdn.posthog.net/' --http1.1 | brotli --decompress --output=share/GeoLite2-City.mmdb && echo "{\"date\": \"$(date +%Y-%m-%d)\"}" > share/GeoLite2-City.json || say "GeoIP download failed; GeoIP stays off until share/GeoLite2-City.mmdb exists"
@@ -555,6 +572,9 @@ if phase configure; then
     files="$files:docker-compose.pinned.yml${EXTRA_COMPOSE_FILES:+:$EXTRA_COMPOSE_FILES}"
     envset COMPOSE_FILE "$files"
     [ -n "${EXTRA_COMPOSE_FILES:-}" ] && envset EXTRA_COMPOSE_FILES "$EXTRA_COMPOSE_FILES"
+    # From ECR: every service's image from the registry (docker-compose.ecr.yml, last in the list).
+    ecr_compose_override "$POSTHOG_DIR" || exit 1
+    files="$(grep -E '^COMPOSE_FILE=' .env | cut -d= -f2-)"
     dc config -q
     say "compose files: $files"
     finish configure
@@ -563,6 +583,9 @@ fi
 # ---------------------------------------------------------------- 6 pull
 pull_all() { dc pull -q && docker pull -q "$NODE_BASE_IMAGE"; }
 if phase pull; then
+    # From ECR: every image must be in the registry before PostHog goes down for the pull.
+    ecr_check_images "$POSTHOG_DIR" || exit 1
+    images_login || exit 1
     IMAGES="$(dc config --images | sort -u | tr '\n' ' ') $NODE_BASE_IMAGE"
     watch_run "$STATE/pull.log" p_images pull_all || { tail -20 "$STATE/pull.log"; echo "Downloading the images failed (network?); run the script again to retry."; exit 1; }
     say "    $(p_images)"
@@ -578,11 +601,11 @@ if phase postgres; then
         say "Postgres 12 -> 15: old data copied aside, new volume, then restore (before anything else starts)"
         dc down
         keep="${PROJECT}_postgres12-before-upgrade"
-        if docker run --rm -v "${PROJECT}_postgres-data:/v:ro" alpine grep -qx 12 /v/PG_VERSION; then
+        if docker run --rm -v "${PROJECT}_postgres-data:/v:ro" "$HELPER_IMAGE" grep -qx 12 /v/PG_VERSION; then
             # The Postgres 12 files are kept in a volume of their own; only `cleanup` deletes it.
             docker volume rm -f "$keep" >/dev/null 2>&1 || true
             docker volume create "$keep" >/dev/null
-            docker run --rm -v "${PROJECT}_postgres-data:/from:ro" -v "$keep:/to" alpine sh -c 'cp -a /from/. /to/ && [ "$(cd /from && find . | wc -l)" = "$(cd /to && find . | wc -l)" ]' \
+            docker run --rm -v "${PROJECT}_postgres-data:/from:ro" -v "$keep:/to" "$HELPER_IMAGE" sh -c 'cp -a /from/. /to/ && [ "$(cd /from && find . | wc -l)" = "$(cd /to && find . | wc -l)" ]' \
                 || { echo "Could not copy the Postgres 12 data aside; nothing was deleted."; exit 1; }
             say "    Postgres 12 data copied to volume $keep ($(vsize "$keep")); it stays until '$0 cleanup'"
         else
@@ -631,6 +654,7 @@ if phase stone; then
         say "the database is past the stepping stone already"
     else
         say "migrating the database with PostHog $STEPPING_STONE_COMMIT (the last version before the squash) first"
+        images_login
         docker pull -q "$STEPPING_STONE_IMAGE" >/dev/null
         printf 'services:\n    web:\n        image: %s\n' "$STEPPING_STONE_IMAGE" > "$STATE/stone.yml"
         stone_files=(); IFS=: read -ra cf <<< "$(grep -E '^COMPOSE_FILE=' .env | cut -d= -f2-)"
@@ -729,7 +753,7 @@ hobby_storage() { echo y | COMPOSE_FILE="$(grep -E '^COMPOSE_FILE=' .env | cut -
 storage_copy() { # SERVICE
     local svc="$1" bucket=posthog log="$STATE/storage-$1.log"
     [ "$svc" = ai-blobs ] && bucket=ai-blobs
-    if ! docker run --rm -v "$(recall minio_volume):/data:ro" alpine test -d "/data/$bucket"; then say "    $svc: the old MinIO has no $bucket bucket; nothing to copy"; return 0; fi
+    if ! docker run --rm -v "$(recall minio_volume):/data:ro" "$HELPER_IMAGE" test -d "/data/$bucket"; then say "    $svc: the old MinIO has no $bucket bucket; nothing to copy"; return 0; fi
     say "copying $svc with PostHog's migrate-storage-hobby"
     watch_run "$log" p_storage hobby_storage "$svc" || { tr '\r' '\n' < "$log" | tail -20; echo "migrate-storage-hobby $svc failed; see $log"; exit 1; }
     tr '\r' '\n' < "$log" | grep -E "Found [0-9]+ objects|Completed:|Skipped:|Failed:|Data transferred" | sed 's/^/        /' || true

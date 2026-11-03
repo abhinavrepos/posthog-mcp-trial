@@ -31,7 +31,11 @@ cat >> "$OUT/versions.env" <<EOF
 STEPPING_STONE_COMMIT=$stone
 STEPPING_STONE_IMAGE=$(docker image inspect -f '{{index .RepoDigests 0}}' "posthog/posthog:$stone")
 STEPPING_STONE_LAST_MIGRATION=1343_teammarketinganalyticsconfig_filter_test_accounts
+# On a machine that takes its images from ECR (deploy/offline/ecr.env, written by push-images.sh), the
+# same versions from there: TARGET_APP_IMAGE, STEPPING_STONE_IMAGE and NODE_BASE_IMAGE are replaced.
+. "\$(dirname "\${BASH_SOURCE[0]}")/../../offline/ecr.sh"
 EOF
+echo "Images changed: run deploy/offline/push-images.sh again so the registry has them."
 
 {
     echo "# Exact images as running on $(hostname) at $(date -u +%Y-%m-%dT%H:%M:%SZ). Written by pin-versions.sh."
