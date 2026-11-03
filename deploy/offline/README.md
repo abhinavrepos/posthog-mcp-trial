@@ -92,6 +92,47 @@ again.
 | `sudo deploy/lens/lens.sh run sh` | a shell in the image, with the same settings and folders |
 | `sudo systemctl restart ticket-triage` | restarts PostHog Lens. Logs go to `logs/service.log` |
 
+## Updates on the machine: one command
+
+The ops user should not need root for everything, so updates run through one root-owned command,
+`/usr/local/sbin/posthog-lens`. Its project folder is `/data04/posthog-lens`, also root-owned. The
+ops user gets sudo for that command only:
+
+```
+ph_ops ALL=(root) NOPASSWD: /usr/local/sbin/posthog-lens
+ph_ops ALL=(root) NOPASSWD: /usr/local/sbin/posthog-lens *
+```
+
+| Command | What it does |
+|---|---|
+| `sudo posthog-lens update <kit tag>` | logs in to ECR, unpacks that kit into the project folder, then installs or upgrades with no questions. When the kit has a new PostHog version, PostHog is upgraded first (full backup, migrations) |
+| `sudo posthog-lens status` | what is installed, and whether PostHog and Lens answer |
+| `sudo posthog-lens doctor` | Lens's full check of its settings and services |
+| `sudo posthog-lens restart` | restarts Lens |
+| `sudo posthog-lens cleanup` | after an upgrade, deletes its backup (asks about each item) |
+| `sudo posthog-lens rollback` | after an upgrade, goes back to the PostHog from before it |
+
+The kit tag is the end of the kit name `push-images.sh` prints, for example `685049943753-92fb46e1`.
+An update to a new PostHog version refuses to start while the last upgrade's backup is still there
+(`cleanup` first).
+
+**Setup, once, by an admin.** First unpack a kit that has this command into any folder, as you did
+for the first install. Read the command, then:
+
+```bash
+sudo bash <that folder>/deploy/offline/posthog-lens setup <kit tag>
+```
+
+It does 4 things:
+- installs itself as `/usr/local/sbin/posthog-lens`
+- writes its settings to `/etc/posthog-lens/posthog-lens.env` (project folder, PostHog folder,
+  registry, and `MIGRATE_REPLAYS=no`; the installer reads its answers from there too)
+- copies Lens's settings and data from the earlier project folder (`OLD_DIR`, default
+  `/data04/ph_ops/posthog-mcp-trial`)
+- runs `update`, which also moves Lens's startup service to the new folder
+
+The earlier folder is left as it was. Delete it once the new one works.
+
 ## Rehearsing without AWS
 
 `SKIP_AWS=1 REGISTRY=localhost:5000 deploy/offline/push-images.sh` pushes everything into a local
