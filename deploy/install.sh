@@ -28,6 +28,9 @@
 #             (scripts/setup-posthog.sh)
 #   posthog_mcp  PostHog's own MCP server on this machine (deploy/posthog-mcp), with its own read-only
 #             key that has no session replay scopes. FEATURE_POSTHOG_MCP=off skips it.
+#   offline   on a machine without internet (NO_INTERNET=auto finds out): every outside call PostHog,
+#             its MCP server or this service makes fails at once instead of hanging
+#             (deploy/offline/no-internet.sh)
 #   settings  your answers into .secrets.env (mode 600), keeping anything already there
 #   service   ticket-triage.service: starts at boot, restarts on failure, logs to logs/service.log
 #   status    the status page (deploy/status), only on this machine or behind a password
@@ -89,9 +92,9 @@ chmod 700 "$STATE_DIR"
 
 done_step() { [ -f "$STATE_DIR/done/$1" ]; }
 finish() { date -u +%Y-%m-%dT%H:%M:%SZ >"$STATE_DIR/done/$1"; ok "step $1 done"; }
-STEPS=(check packages posthog scale addresses node user app account posthog_mcp settings service status mcp doctor)
+STEPS=(check packages posthog scale addresses node user app account posthog_mcp offline settings service status mcp doctor)
 # Cheap and safe to repeat, so they run every time and changed answers take effect.
-ALWAYS=" check addresses posthog_mcp settings service status mcp doctor "
+ALWAYS=" check addresses posthog_mcp offline settings service status mcp doctor "
 
 if [ "$CMD" = status ]; then
     for s in "${STEPS[@]}"; do
@@ -196,6 +199,7 @@ is_url() { [[ "$1" =~ ^https?://[^[:space:]/]+(/[^[:space:]]*)?$ ]] || { warn "m
 is_urls() { local u; for u in ${1//,/ }; do is_url "$u" || return 1; done; }
 is_onoff() { [[ "$1" =~ ^(on|off)$ ]] || { warn "on or off"; return 1; }; }
 is_yesno() { [[ "$1" =~ ^(yes|no)$ ]] || { warn "yes or no"; return 1; }; }
+is_autoyesno() { [[ "$1" =~ ^(auto|yes|no)$ ]] || { warn "auto, yes or no"; return 1; }; }
 is_address() { [[ "$1" =~ ^(https?://)?[A-Za-z0-9.-]+$ ]] || { warn "a domain (posthog.example.com), an IP address, or http://name"; return 1; }; }
 is_private_ip() { [[ "$1" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)[0-9.]+$ ]]; }
 addr_kind() { local h="${1#*://}"; [[ "$1" == http://* ]] || [[ "$h" =~ ^[0-9.]+$ ]] && echo http || echo https; }
@@ -294,6 +298,12 @@ collect_answers() {
     setting SERVICE_PUBLIC_URL "http://$host:8080" is_url
     setting CLIP_ALLOWED_HOSTS "$([ -n "$APP_URLS" ] && hosts_of "$APP_URLS" || echo localhost)"
     setting STATUS_PUBLIC no is_yesno
+    # No internet here: outside calls are refused at once (deploy/offline/no-internet.sh). auto: when this
+    # machine cannot reach the internet. NO_INTERNET_ALLOW: public addresses that must stay reachable.
+    setting NO_INTERNET auto is_autoyesno
+    setting NO_INTERNET_ALLOW ""
+    OFFLINE="$NO_INTERNET"
+    if [ "$OFFLINE" = auto ]; then internet_reachable && OFFLINE=no || OFFLINE=yes; fi
     STATUS_PASSWORD=""
     [ "$STATUS_PUBLIC" = yes ] && setting STATUS_PASSWORD "$(openssl rand -hex 12)"
     save_answer POSTHOG_DIR "$POSTHOG_DIR"; save_answer SCALE "$SCALE"
@@ -307,6 +317,7 @@ show_plan() {
     . "$HERE/migrate/versions/versions.env"
     step "Plan"
     say "PostHog         $POSTHOG_PUBLIC_URL  ($([ $scheme = https ] && echo "HTTPS, certificate from Let's Encrypt" || echo "plain HTTP: private network or VPN only"))"
+    say "Internet        $([ "$OFFLINE" = yes ] && echo "none here: every outside call will be refused at once" || echo "reachable")"
     [ -z "$others" ] || say "                also at $others"
     case "$MODE" in
         existing) say "                keep the PostHog already in $POSTHOG_DIR" ;;
@@ -499,10 +510,10 @@ step_node() {
     else
         local base="https://nodejs.org/dist/latest-v${NODE_MAJOR}.x" tmp file
         tmp="$(mktemp -d)"
-        curl -fsSL "$base/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt"
+        curl -fsSL --connect-timeout 10 "$base/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt"
         file="$(grep -oE "node-v${NODE_MAJOR}\.[0-9.]+-linux-x64\.tar\.xz" "$tmp/SHASUMS256.txt" | head -1)"
         [ -n "$file" ] || die "Could not find Node $NODE_MAJOR for linux-x64 on nodejs.org."
-        curl -fsSL "$base/$file" -o "$tmp/$file"
+        curl -fsSL --connect-timeout 10 "$base/$file" -o "$tmp/$file"
         (cd "$tmp" && grep " $file\$" SHASUMS256.txt | sha256sum -c --quiet -) || die "Node download does not match its checksum."
         tar -xJf "$tmp/$file" -C /usr/local --strip-components=1 --exclude='*.md' --exclude=LICENSE
         rm -rf "$tmp"
@@ -558,6 +569,26 @@ step_account() {
     chown "$APP_USER:$APP_USER" "$SECRETS"; chmod 600 "$SECRETS"
     [ -n "$(read_env_file "$SECRETS" POSTHOG_PERSONAL_API_KEY)" ] || die "No API key was written to .secrets.env."
     finish account
+}
+
+# Any answer from two well-known addresses within 5 seconds counts. Root's traffic is never refused by
+# no-internet.sh and these names are not on its list, so the answer stays true once it is set up.
+internet_reachable() { curl -s -o /dev/null --connect-timeout 4 -m 6 https://1.1.1.1/ || curl -s -o /dev/null --connect-timeout 4 -m 6 https://www.google.com/; }
+
+step_offline() {
+    CURRENT=offline; step "No internet"
+    local script="$HERE/offline/no-internet.sh"
+    if [ "$OFFLINE" = yes ]; then
+        ALLOW_CIDRS="$NO_INTERNET_ALLOW" POSTHOG_DIR="$POSTHOG_DIR" SERVICE_USER=triage bash "$script" apply
+        ALLOW_CIDRS="$NO_INTERNET_ALLOW" POSTHOG_DIR="$POSTHOG_DIR" SERVICE_USER=triage bash "$script" check || warn "Some no-internet checks failed (above)."
+        ok "outside calls are refused at once$([ "$NO_INTERNET" = auto ] && echo " (this machine cannot reach the internet)")"
+    elif [ "$NO_INTERNET" = no ] && [ -f /etc/systemd/system/posthog-no-internet.service ]; then
+        POSTHOG_DIR="$POSTHOG_DIR" bash "$script" remove
+        ok "removed the no-internet setup (NO_INTERNET=no)"
+    else
+        say "this machine reaches the internet: nothing to do (NO_INTERNET=yes sets it up anyway)"
+    fi
+    finish offline
 }
 
 step_posthog_mcp() {
@@ -659,7 +690,7 @@ ensure_buildx() {
     if [ -n "$v" ] && [ "$(printf '%s\n' 0.17 "$v" | sort -V | head -1)" = 0.17 ]; then return 0; fi
     local dir=/usr/local/lib/docker/cli-plugins tmp; tmp="$(mktemp)"
     mkdir -p "$dir"
-    curl -fsSL -o "$tmp" "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64"
+    curl -fsSL --connect-timeout 10 -o "$tmp" "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64"
     echo "$BUILDX_SHA256  $tmp" | sha256sum -c --quiet - || { rm -f "$tmp"; die "The buildx download does not match its checksum."; }
     install -m 755 "$tmp" "$dir/docker-buildx"; rm -f "$tmp"
     ok "docker buildx $BUILDX_VERSION installed (the status page is built with it; it had ${v:-none})"
@@ -734,6 +765,7 @@ PostHog
   Files           $POSTHOG_DIR (back up $POSTHOG_DIR/.env: its secrets encrypt data)
   Start / stop    sudo systemctl start posthog / sudo systemctl stop posthog
   Upgrade         sudo $HERE/migrate/posthog-upgrade.sh (backs up first, asks before deleting)
+  Internet        $([ "$OFFLINE" = yes ] && echo "none: outside calls are refused at once. Check: sudo $HERE/offline/no-internet.sh check" || echo "reachable (NO_INTERNET=yes would refuse outside calls anyway)")
 $([ "$MODE" = upgrade ] && cat <<EOT
   Upgrade backup  $POSTHOG_DIR/upgrade-backup (rollback: sudo POSTHOG_DIR=$POSTHOG_DIR $HERE/migrate/posthog-upgrade.sh rollback)
                   Once you have checked PostHog, delete it, asking about each item:
