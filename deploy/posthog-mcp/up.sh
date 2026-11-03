@@ -90,7 +90,10 @@ put POSTHOG_MCP_URL "http://$local_host:$MCP_PORT/mcp"
 . ../offline/ecr.sh
 if [ "$IMAGES_FROM" = ecr ]; then export POSTHOG_MCP_IMAGE="$ECR_POSTHOG_MCP"; images_login; fi
 docker compose up -d --quiet-pull --remove-orphans 2>&1 | grep -v -E "^ *(Container|Network) " || true
-for _ in $(seq 1 60); do curl -fs -o /dev/null -m 2 "http://$local_host:$MCP_PORT/healthz" && break; sleep 1; done
+# Up to 3 minutes: at start the server fetches its skills catalog from github.com and waits up to 60 s
+# for it. Without internet it then starts without those skills (its tools all work) and keeps trying.
+echo "Starting PostHog's MCP server (up to 3 minutes without internet: it waits 60 s for GitHub first)"
+for _ in $(seq 1 180); do curl -fs -o /dev/null -m 2 "http://$local_host:$MCP_PORT/healthz" && break; sleep 1; done
 curl -fs -o /dev/null -m 2 "http://$local_host:$MCP_PORT/healthz" || { docker compose logs --tail 20; echo "The MCP server did not start."; exit 1; }
 if [ "$MCP_BIND" = 127.0.0.1 ]; then where="this machine only"; else where="also ${MCP_NETWORK_URL:-port $MCP_PORT on the network}"; fi
 echo "PostHog's MCP server: http://$local_host:$MCP_PORT/mcp ($where), calling PostHog at $MCP_POSTHOG_API_URL"
