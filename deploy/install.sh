@@ -447,7 +447,7 @@ step_check() {
 step_packages() {
     CURRENT=packages; step "Installing base tools and what Chrome needs"
     # curl comes as curl-minimal on Amazon Linux: installing "curl" would conflict with it, and it is enough.
-    dnf install -y -q ca-certificates git openssl python3 tar xz iproute util-linux shadow-utils procps-ng >/dev/null
+    dnf install -y -q ca-certificates git openssl python3 tar xz iproute util-linux shadow-utils procps-ng iptables-nft hostname >/dev/null
     # Chrome's libraries and fonts.
     local pkgs=(nss nspr atk at-spi2-atk at-spi2-core cups-libs libdrm mesa-libgbm alsa-lib libxkbcommon
         libXcomposite libXdamage libXrandr libXfixes libXext libXi libXrender libX11 libxcb dbus-libs expat glib2
