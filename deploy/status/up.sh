@@ -24,7 +24,15 @@ if [ "${STATUS_BIND:-127.0.0.1}" != 127.0.0.1 ] && [ -z "$pw" ]; then
     echo "(Once published, only the EC2 security group decides who reaches port ${STATUS_PORT:-8090}.)"
     exit 1
 fi
-docker compose up -d --build
+# A machine without internet takes the image from ECR (deploy/offline/ecr.env) instead of building it.
+. ../offline/ecr.sh
+if [ "$IMAGES_FROM" = ecr ]; then
+    images_login
+    ecr_pull_tag "$ECR_STATUS" posthog-lens-status:latest
+    docker compose up -d --no-build
+else
+    docker compose up -d --build
+fi
 for _ in $(seq 1 30); do
     if curl -fsS -o /dev/null "http://127.0.0.1:${STATUS_PORT:-8090}/healthz" 2>/dev/null || [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${STATUS_PORT:-8090}/healthz")" = 503 ]; then break; fi
     sleep 1

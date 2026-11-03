@@ -1,5 +1,7 @@
 // The MCP servers Claude Code gets from .mcp.json, following the two switches:
-//   FEATURE_LENS_MCP     this service's tools (stdio), on by default
+//   FEATURE_LENS_MCP     this service's tools, on by default: stdio (node on this machine), or, where
+//                        Lens runs as a container (LENS_CONTAINER=1, deploy/lens), its /mcp address over
+//                        HTTP with MCP_TOKEN, since there is no node outside the container
 //   FEATURE_POSTHOG_MCP  PostHog's own MCP server (HTTP), on by default, used only when POSTHOG_MCP_URL
 //                        and POSTHOG_MCP_API_KEY are set
 // scripts/mcp-config.ts writes the result; scripts/doctor.ts compares it with .mcp.json.
@@ -12,12 +14,23 @@ export interface McpClientConfig {
     mcpServers: Record<string, Record<string, unknown>>
 }
 
-export function mcpClientConfig(features = config.features, ph: { mcpUrl: string; mcpApiKey: string } = config.posthog): { file: McpClientConfig; notes: string[] } {
+export function mcpClientConfig(
+    features = config.features,
+    ph: { mcpUrl: string; mcpApiKey: string } = config.posthog,
+    lens: { container: boolean; port: number; token: string } = { container: process.env.LENS_CONTAINER === '1', port: config.service.port, token: config.service.mcpToken },
+): { file: McpClientConfig; notes: string[] } {
     const servers: McpClientConfig['mcpServers'] = {}
     const notes: string[] = []
     if (features.lensMcp) {
-        servers[LENS_SERVER] = { command: 'node', args: ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'src/mcp/stdio.ts'] }
-        notes.push(`${LENS_SERVER}: on (${config.app.name}'s tools, stdio)`)
+        if (!lens.container) {
+            servers[LENS_SERVER] = { command: 'node', args: ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'src/mcp/stdio.ts'] }
+            notes.push(`${LENS_SERVER}: on (${config.app.name}'s tools, stdio)`)
+        } else if (!lens.token) notes.push(`${LENS_SERVER}: off (set MCP_TOKEN: ${config.app.name} runs as a container, so Claude Code reaches its tools over HTTP)`)
+        else {
+            const url = `http://127.0.0.1:${lens.port}/mcp`
+            servers[LENS_SERVER] = { type: 'http', url, headers: { Authorization: `Bearer ${lens.token}` } }
+            notes.push(`${LENS_SERVER}: on (${config.app.name}'s tools, ${url})`)
+        }
     } else notes.push(`${LENS_SERVER}: off (FEATURE_LENS_MCP=off)`)
     if (!features.posthogMcp) notes.push(`${POSTHOG_SERVER}: off (FEATURE_POSTHOG_MCP=off)`)
     else if (!ph.mcpUrl || !ph.mcpApiKey) notes.push(`${POSTHOG_SERVER}: off (set POSTHOG_MCP_URL and POSTHOG_MCP_API_KEY to add it)`)

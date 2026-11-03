@@ -1,0 +1,12 @@
+# Only what the service needs goes into the image: no data, settings, logs or other deploy files.
+.git
+node_modules
+.cache
+clips
+logs
+run
+.secrets.env
+.mcp.json
+*.log
+deploy
+demo-app

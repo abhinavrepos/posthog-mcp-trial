@@ -308,7 +308,8 @@ The local `.mcp.json` server has the same tools.
 | `deploy/migrate/` | Upgrading an existing PostHog to the tested version, with backups |
 | `deploy/posthog/` | PostHog's installer (pinned), scaling, load tests |
 | `deploy/status/` | The status page |
-| `deploy/offline/` | `no-internet.sh`: outside calls fail at once on a machine without internet |
+| `deploy/offline/` | `push-images.sh`: every image into your ECR, plus the kit; `ecr.sh`: the machine takes them from there; `no-internet.sh`: outside calls fail at once ([README](deploy/offline/README.md)) |
+| `deploy/lens/` | PostHog Lens as a container: `Dockerfile`, `lens.sh` (serve, doctor, mcp-config, test), Chrome's seccomp profile |
 
 ## Install on a fresh machine
 
@@ -324,7 +325,10 @@ and Debian). The EC2 instance needs:
 - With a domain: an A record pointing at the instance's Elastic IP, so the address does not change
   when the instance stops.
 
-Nothing else: the script installs Docker, PostHog, Node and pnpm. Log in as `ec2-user`, then:
+Nothing else: the script installs Docker and PostHog, and runs PostHog Lens as a container (built on
+the machine, or taken from your ECR). **Without internet**, push everything to ECR first and install
+from the kit instead of `git clone`: see [deploy/offline/README.md](deploy/offline/README.md).
+With internet, log in as `ec2-user`, then:
 
 ```bash
 sudo dnf install -y git
@@ -360,8 +364,9 @@ cleanup` (see [deploy/migrate/README.md](deploy/migrate/README.md)).
 
 It installs PostHog at the exact version tested here (every image pinned by digest), tunes it for
 load, creates the login and a read-only API key, writes `.secrets.env`, runs the service under
-systemd (`ticket-triage.service`, starts at boot), starts the status page, writes `.mcp.json` and
-ends with `pnpm doctor`. Every step checks its result. If one fails, fix it and run the same command
+systemd (`ticket-triage.service`, starts at boot; the `posthog-lens:current` container through
+`deploy/lens/lens.sh`), starts the status page, writes `.mcp.json` and ends with
+`sudo deploy/lens/lens.sh doctor`. Every step checks its result. If one fails, fix it and run the same command
 again: finished steps are skipped. The closing summary (`sudo deploy/install.sh status` shows it again)
 has everything you need next: addresses, where each password and token is, the snippet for your app,
 and how to connect Jira and Claude.
@@ -392,7 +397,9 @@ sudo deploy/offline/no-internet.sh remove   # undo it
    docker restart.
 
 `deploy/migrate/posthog-upgrade.sh` keeps all of it and extends it to the new version's services.
-Downloads the install scripts make (GeoIP, Node, buildx) give up within seconds.
+Downloads the install scripts make (GeoIP, buildx) give up within seconds. With the kit
+([deploy/offline/README.md](deploy/offline/README.md)) there are none: images come from your ECR,
+and PostHog's source, the GeoIP database and Docker Compose come from the kit.
 
 ## Upgrade PostHog
 

@@ -47,6 +47,19 @@ SWAP_BELOW_RAM_GB=15  # Instances with less RAM than this get a 4 GB swap file.
 MIN_FREE_DISK_GB=30
 HEALTH_TIMEOUT_MIN=75 # A first boot runs ~700 migrations; 4 vCPUs took 35 minutes in testing.
 
+# Inside this project, a machine without internet takes everything from ECR and the kit image instead
+# (../offline/ecr.sh, on when ../offline/ecr.env exists). Copied on its own, this script downloads as usual.
+_HOBBY_HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+if [ -f "$_HOBBY_HERE/../offline/ecr.sh" ]; then
+    # shellcheck disable=SC1091
+    . "$_HOBBY_HERE/../offline/ecr.sh"
+else
+    IMAGES_FROM=upstream
+    kit_file() { true; }
+    images_login() { true; }
+    ecr_compose_override() { true; }
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 
@@ -252,9 +265,13 @@ install_docker() {
         local arch plugin_dir=/usr/local/lib/docker/cli-plugins
         arch="$(uname -m)"
         mkdir -p "$plugin_dir"
-        curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_STANDALONE_VERSION}/docker-compose-linux-${arch}" \
-            -o "$plugin_dir/docker-compose"
-        chmod +x "$plugin_dir/docker-compose"
+        if [ -n "$(kit_file docker-compose)" ]; then
+            install -m 755 "$(kit_file docker-compose)" "$plugin_dir/docker-compose"
+        else
+            curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_STANDALONE_VERSION}/docker-compose-linux-${arch}" \
+                -o "$plugin_dir/docker-compose"
+            chmod +x "$plugin_dir/docker-compose"
+        fi
     fi
     systemctl enable --now docker >/dev/null
     docker compose version >/dev/null || die "Docker Compose did not install correctly."
@@ -303,6 +320,18 @@ PY
 # ---------------------------------------------------------------------------
 fetch_posthog_repo() {
     cd "$INSTALL_DIR"
+    local src; src="$(kit_file posthog-src.tar.gz)"
+    if [ -n "$src" ]; then
+        # The kit's copy: a checkout of the pinned commit, with its .git, so the version checks still work.
+        info "PostHog's compose files from the kit (no GitHub)"
+        rm -rf posthog && mkdir posthog
+        tar -xzf "$src" -C posthog --no-same-owner
+        if [[ "$POSTHOG_APP_TAG" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C posthog rev-parse HEAD)" != "$POSTHOG_APP_TAG" ]; then
+            die "The kit has PostHog $(git -C posthog rev-parse HEAD), not $POSTHOG_APP_TAG: unpack the kit built for this version."
+        fi
+        ok "PostHog source at commit $(git -C posthog rev-parse --short HEAD) (from the kit)"
+        return
+    fi
     # The compose files must match the images: use master for "latest", or the exact commit.
     local ref=master
     [[ "$POSTHOG_APP_TAG" =~ ^[0-9a-f]{40}$ ]] && ref="$POSTHOG_APP_TAG"
@@ -503,6 +532,13 @@ download_geoip() {
         ok "GeoIP database already present"
         return
     fi
+    if [ -n "$(kit_file GeoLite2-City.mmdb)" ]; then
+        cp "$(kit_file GeoLite2-City.mmdb)" share/GeoLite2-City.mmdb
+        cp "$(kit_file GeoLite2-City.json)" share/GeoLite2-City.json 2>/dev/null || echo "{\"date\": \"$(date +%Y-%m-%d)\"}" > share/GeoLite2-City.json
+        chmod 644 share/GeoLite2-City.mmdb share/GeoLite2-City.json
+        ok "GeoIP database from the kit"
+        return
+    fi
     if ! command -v brotli >/dev/null 2>&1; then
         warn "Skipping the GeoIP database (brotli is missing). Events will not get a location."
         return
@@ -584,6 +620,7 @@ check_dns() {
 pull_images() {
     cd "$INSTALL_DIR"
     local attempt out
+    images_login || die "Docker cannot log in to the image registry (above)."
     for attempt in 1 2 3 4; do
         info "Pulling images, attempt $attempt/4 (about 20 GB the first time)"
         if out=$(docker compose pull --quiet 2>&1); then
@@ -749,6 +786,7 @@ main() {
     fetch_posthog_repo
     write_env
     write_compose_files
+    ecr_compose_override "$INSTALL_DIR" || die "Some images are not in the registry (above)."
     download_geoip
 
     step "Checking DNS"
