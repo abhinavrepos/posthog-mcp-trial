@@ -308,6 +308,7 @@ The local `.mcp.json` server has the same tools.
 | `deploy/migrate/` | Upgrading an existing PostHog to the tested version, with backups |
 | `deploy/posthog/` | PostHog's installer (pinned), scaling, load tests |
 | `deploy/status/` | The status page |
+| `deploy/offline/` | `no-internet.sh`: outside calls fail at once on a machine without internet |
 
 ## Install on a fresh machine
 
@@ -352,6 +353,34 @@ ends with `pnpm doctor`. Every step checks its result. If one fails, fix it and 
 again: finished steps are skipped. The closing summary (`sudo deploy/install.sh status` shows it again)
 has everything you need next: addresses, where each password and token is, the snippet for your app,
 and how to connect Jira and Claude.
+
+### A machine without internet
+
+Where the machine cannot reach the internet, every call PostHog, its MCP server or this service would
+make to it is refused at once, instead of hanging on DNS or on a connection that never answers.
+`deploy/install.sh` sets this up by itself when it cannot reach the internet (`NO_INTERNET=auto`), on a
+fresh install and on an upgrade; `NO_INTERNET=yes` or `no` forces it. By hand:
+
+```bash
+sudo deploy/offline/no-internet.sh apply    # set it up (again)
+sudo deploy/offline/no-internet.sh check    # outside calls refused in milliseconds, inside ones working
+sudo deploy/offline/no-internet.sh remove   # undo it
+```
+
+1. **Names.** The hosts PostHog and these tools call by themselves point to `0.0.0.0` in `/etc/hosts`
+   and inside every PostHog container. Examples: PostHog's usage reporting (`us.i.posthog.com`, seen
+   every few minutes on a running install), billing, the GeoIP download, GitHub and npm. No DNS lookup
+   happens, and the connection is refused at once.
+2. **PostHog's switches.** Usage reporting is off (`OPT_OUT_CAPTURE`), and billing points at a closed
+   port.
+3. **A firewall for everything else.** Containers and this service's user get an immediate refusal
+   for any public address. Private networks stay open, and so does `NO_INTERNET_ALLOW` (e.g. an
+   in-house Jira on a public IP). The machine's own traffic (docker pulling from ECR, dnf through the
+   S3 endpoint) is not touched. `posthog-no-internet.service` puts the rules back after a reboot or a
+   docker restart.
+
+`deploy/migrate/posthog-upgrade.sh` keeps all of it and extends it to the new version's services.
+Downloads the install scripts make (GeoIP, Node, buildx) give up within seconds.
 
 ## Upgrade PostHog
 
