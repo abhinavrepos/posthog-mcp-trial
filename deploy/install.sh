@@ -727,6 +727,9 @@ step_mcp() {
 
 step_doctor() {
     CURRENT=doctor; step "Checking everything (deploy/lens/lens.sh doctor)"
+    # Step offline restarts PostHog's containers; its web app takes a few minutes to answer again.
+    local i
+    for i in $(seq 1 40); do posthog_healthy && break; [ "$i" = 1 ] && say "waiting for PostHog to answer again (up to 10 minutes)"; sleep 15; done
     if bash "$HERE/lens/lens.sh" doctor; then
         finish doctor
     else
