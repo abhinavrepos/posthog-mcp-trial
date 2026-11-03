@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# posthog-lens: the one command for running PostHog and PostHog Lens on a machine without internet.
+# Installed as /usr/local/sbin/posthog-lens (root-owned) by "setup". The ops user gets sudo for this
+# command only:
+#
+#   ph_ops ALL=(root) NOPASSWD: /usr/local/sbin/posthog-lens
+#   ph_ops ALL=(root) NOPASSWD: /usr/local/sbin/posthog-lens *
+#
+#   sudo posthog-lens update <kit tag>   unpack that kit from ECR into the project folder, then install or
+#                                        upgrade PostHog and PostHog Lens with it (no questions asked)
+#   sudo posthog-lens status             what is installed, and whether PostHog and Lens answer
+#   sudo posthog-lens doctor             PostHog Lens's full check of its settings and services
+#   sudo posthog-lens restart            restart PostHog Lens
+#   sudo posthog-lens cleanup            after an upgrade: delete its backup (asks about each item)
+#   sudo posthog-lens rollback           after an upgrade: go back to the PostHog from before it
+#
+# The kit tag is the part after "posthog/kit:" that deploy/offline/push-images.sh prints at the end
+# (for example 685049943753-92fb46e1); the full image name works too.
+#
+# One-time setup, by an admin, from a copy of this file (it copies itself into place):
+#   sudo bash posthog-lens setup <kit tag>
+# It writes /etc/posthog-lens/posthog-lens.env (the settings below, root-owned), creates the project
+# folder (root-owned), moves PostHog Lens's settings and data there from an earlier project folder
+# (OLD_DIR), installs /usr/local/sbin/posthog-lens and runs "update <kit tag>".
+#
+# Settings, in /etc/posthog-lens/posthog-lens.env (also the installer's answers, deploy/install.env.example):
+#   LENS_DIR         the project folder                                        [/data04/posthog-lens]
+#   POSTHOG_DIR      the PostHog install
+#   REGISTRY, REGION where the images are       [555011114032.dkr.ecr.ca-central-1.amazonaws.com, ca-central-1]
+#   MIGRATE_REPLAYS  copy old session replays during a PostHog upgrade (yes/no)                    [no]
+set -euo pipefail
+
+CONF="${POSTHOG_LENS_CONF:-/etc/posthog-lens/posthog-lens.env}"   # POSTHOG_LENS_CONF, SBIN: for tests only
+SBIN="${POSTHOG_LENS_SBIN:-/usr/local/sbin/posthog-lens}"
+die() { echo "posthog-lens: $*" >&2; exit 1; }
+say() { echo "==> $*"; }
+[ "$(id -u)" = 0 ] || die "run it with sudo: sudo posthog-lens ${1:-status}"
+# sudo resets PATH; the AWS CLI and Docker live in the usual places.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+conf() { grep -E "^$1=" "$CONF" 2>/dev/null | tail -1 | cut -d= -f2- | sed -E 's/^"(.*)"$/\1/' || true; }
+load() {
+    [ -f "$CONF" ] || die "$CONF is missing: run the one-time setup first (sudo bash posthog-lens setup <kit tag>)."
+    LENS_DIR="$(conf LENS_DIR)"; LENS_DIR="${LENS_DIR:-/data04/posthog-lens}"
+    POSTHOG_DIR="$(conf POSTHOG_DIR)"
+    REGISTRY="$(conf REGISTRY)"; REGISTRY="${REGISTRY:-555011114032.dkr.ecr.ca-central-1.amazonaws.com}"
+    REGION="$(conf REGION)"; REGION="${REGION:-ca-central-1}"
+    [ -n "$POSTHOG_DIR" ] || die "POSTHOG_DIR is not set in $CONF."
+}
+
+# A kit tag (685049943753-92fb46e1) or the full image name -> the full image name, from our registry only.
+kit_image() {
+    local t="${1:-}"
+    t="${t#"$REGISTRY/posthog/kit:"}"
+    [[ "$t" =~ ^[0-9a-f]{12}-[0-9a-f]{8}$ ]] || die "\"${1:-}\" is not a kit tag. It looks like 685049943753-92fb46e1: the end of the kit name push-images.sh printed."
+    echo "$REGISTRY/posthog/kit:$t"
+}
+
+ecr_login() {
+    local pw
+    pw="$(aws ecr get-login-password --region "$REGION" 2>&1)" || die "cannot log in to $REGISTRY: $pw"
+    docker login --username AWS --password-stdin "$REGISTRY" <<<"$pw" >/dev/null 2>&1 || die "docker login to $REGISTRY failed."
+}
+
+update() {
+    local image; image="$(kit_image "${1:-}")"
+    mkdir -p "$LENS_DIR"
+    chown root:root "$LENS_DIR"; chmod 755 "$LENS_DIR"
+    say "logging in to $REGISTRY"
+    ecr_login
+    say "unpacking $image into $LENS_DIR"
+    docker pull -q "$image" >/dev/null || die "cannot pull $image (is the tag right?)."
+    docker run --rm -v "$LENS_DIR:/out" "$image"
+    # A kit for another PostHog version: PostHog is upgraded first (deploy/migrate/posthog-upgrade.sh,
+    # backup first), through the installer's posthog step.
+    local want have
+    want="$(bash -c '. "$1" >/dev/null 2>&1; echo "$TARGET_COMMIT"' _ "$LENS_DIR/deploy/migrate/versions/versions.env")"
+    have="$(git -C "$POSTHOG_DIR/posthog" rev-parse HEAD 2>/dev/null || true)"
+    if [ -n "$have" ] && [ -n "$want" ] && [ "$have" != "$want" ]; then
+        if [ -n "$(ls -A "$POSTHOG_DIR/upgrade-backup" 2>/dev/null)" ]; then
+            die "this kit upgrades PostHog (${have:0:12} -> ${want:0:12}), but the last upgrade's backup is still in $POSTHOG_DIR/upgrade-backup. Once you no longer need it: sudo posthog-lens cleanup, then run this again."
+        fi
+        if [ -f "$POSTHOG_DIR/upgrade-state/done/verify" ]; then
+            mv "$POSTHOG_DIR/upgrade-state" "$POSTHOG_DIR/upgrade-state.${have:0:12}.$(date -u +%Y%m%d%H%M)"
+        fi
+        rm -f "${INSTALL_STATE_DIR:-/var/lib/posthog-lens-install}/done/posthog"
+        say "PostHog ${have:0:12} -> ${want:0:12}: it is upgraded first (full backup, then the migrations; PostHog is down meanwhile)"
+    fi
+    say "installing / upgrading (answers from $CONF)"
+    cd "$LENS_DIR"
+    POSTHOG_DIR="$POSTHOG_DIR" bash deploy/install.sh --config "$CONF" --yes
+}
+
+status() {
+    echo "project folder  $LENS_DIR"
+    echo "PostHog folder  $POSTHOG_DIR"
+    if [ -f "$LENS_DIR/deploy/offline/ecr.env" ]; then
+        echo "kit             commit $(conf_of "$LENS_DIR/deploy/offline/ecr.env" IMAGES_COMMIT | cut -c1-12), images pushed $(conf_of "$LENS_DIR/deploy/offline/ecr.env" IMAGES_PUSHED)"
+    fi
+    echo "PostHog         $(curl -s -o /dev/null -m 5 -w '%{http_code}' http://localhost/_health | sed 's/^200$/answering (200)/')"
+    local port; port="$(conf_of "$LENS_DIR/.secrets.env" SERVICE_PORT)"; port="${port:-8080}"
+    echo "PostHog Lens    $(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:$port/healthz" | sed 's/^200$/answering (200)/'), $(systemctl is-active ticket-triage 2>/dev/null || true)"
+    echo
+    [ -x "$LENS_DIR/deploy/install.sh" ] && bash "$LENS_DIR/deploy/install.sh" status | sed -n '1,20p' || true
+}
+conf_of() { grep -E "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
+
+setup() {
+    local tag="${1:-}" old="${OLD_DIR:-/data04/ph_ops/posthog-mcp-trial}" self
+    [ -n "$tag" ] || die "usage: sudo bash posthog-lens setup <kit tag>"
+    [[ "${tag##*:}" =~ ^[0-9a-f]{12}-[0-9a-f]{8}$ ]] || die "\"$tag\" is not a kit tag. It looks like 685049943753-92fb46e1: the end of the kit name push-images.sh printed."
+    self="$(readlink -f "$0")"
+    # Settings: kept when they exist; otherwise from the earlier install's answers where it has them.
+    mkdir -p "$(dirname "$CONF")"; chmod 755 "$(dirname "$CONF")"
+    if [ ! -f "$CONF" ]; then
+        local ph; ph="${POSTHOG_DIR:-$(grep -E '^POSTHOG_DIR=' "${INSTALL_STATE_DIR:-/var/lib/posthog-lens-install}/install.env" 2>/dev/null | tail -1 | cut -d= -f2-)}"
+        [ -n "$ph" ] || die "where is PostHog installed? Run: sudo POSTHOG_DIR=/data04/<posthog folder> bash posthog-lens setup $tag"
+        umask 022
+        cat >"$CONF" <<EOF
+# posthog-lens settings, and the answers deploy/install.sh uses (deploy/install.env.example lists them all).
+LENS_DIR=${LENS_DIR:-/data04/posthog-lens}
+POSTHOG_DIR=$ph
+REGISTRY=${REGISTRY:-555011114032.dkr.ecr.ca-central-1.amazonaws.com}
+REGION=${REGION:-ca-central-1}
+MIGRATE_REPLAYS=no
+EOF
+        chown root:root "$CONF"; chmod 644 "$CONF"
+        say "wrote $CONF"
+    else
+        say "keeping $CONF"
+    fi
+    load
+    # The command itself, root-owned.
+    install -o root -g root -m 755 "$self" "$SBIN"
+    say "installed $SBIN"
+    # PostHog Lens's settings and data from the earlier project folder, unless the new one has them.
+    mkdir -p "$LENS_DIR"; chown root:root "$LENS_DIR"; chmod 755 "$LENS_DIR"
+    if [ -d "$old" ] && [ "$(readlink -f "$old")" != "$(readlink -f "$LENS_DIR")" ] && [ ! -f "$LENS_DIR/.secrets.env" ]; then
+        local f
+        for f in .secrets.env .mcp.json run clips config logs; do
+            [ -e "$old/$f" ] && cp -a "$old/$f" "$LENS_DIR/"
+        done
+        say "copied PostHog Lens's settings and data from $old (it stays there; delete it once the new folder works)"
+    fi
+    update "$tag"
+    echo
+    say "done. From now on: sudo posthog-lens update <kit tag> | status | doctor | restart | cleanup | rollback"
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+    setup) setup "$@" ;;
+    update) load; update "$@" ;;
+    status) load; status ;;
+    doctor) load; exec bash "$LENS_DIR/deploy/lens/lens.sh" doctor ;;
+    restart) systemctl restart ticket-triage && say "PostHog Lens restarted" ;;
+    cleanup) load; POSTHOG_DIR="$POSTHOG_DIR" exec bash "$LENS_DIR/deploy/migrate/posthog-upgrade.sh" cleanup ;;
+    rollback) load; POSTHOG_DIR="$POSTHOG_DIR" exec bash "$LENS_DIR/deploy/migrate/posthog-upgrade.sh" rollback ;;
+    *) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
