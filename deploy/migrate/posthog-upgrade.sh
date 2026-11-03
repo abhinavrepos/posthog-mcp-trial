@@ -84,6 +84,8 @@ esac
 case "$REPLAYS_FLAG" in ""|copy|skip) ;; *) echo "REPLAYS must be copy or skip."; exit 2 ;; esac
 
 POSTHOG_DIR="${POSTHOG_DIR:-$PWD}"
+# Site compose files recorded by earlier runs (the address override, no-internet.sh) are kept unless given.
+EXTRA_COMPOSE_FILES="${EXTRA_COMPOSE_FILES:-$(grep -E '^EXTRA_COMPOSE_FILES=' "$POSTHOG_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || true)}"
 cd "$POSTHOG_DIR"
 [ -f .env ] && [ -f docker-compose.yml ] || { echo "Run this in the PostHog folder (with .env and docker-compose.yml), or set POSTHOG_DIR."; exit 1; }
 . "$HERE/versions/versions.env"
@@ -535,7 +537,8 @@ if phase configure; then
     envset POSTHOG_APP_TAG "$TARGET_COMMIT"
     mkdir -p share
     if [ ! -f share/GeoLite2-City.mmdb ]; then
-        curl -sL 'https://mmdbcdn.posthog.net/' --http1.1 | brotli --decompress --output=share/GeoLite2-City.mmdb && echo "{\"date\": \"$(date +%Y-%m-%d)\"}" > share/GeoLite2-City.json || say "GeoIP download failed; GeoIP stays off until share/GeoLite2-City.mmdb exists"
+        # Fails within seconds where there is no internet; GeoIP then stays off.
+        curl -fsSL --connect-timeout 5 --max-time 120 'https://mmdbcdn.posthog.net/' --http1.1 | brotli --decompress --output=share/GeoLite2-City.mmdb && echo "{\"date\": \"$(date +%Y-%m-%d)\"}" > share/GeoLite2-City.json || say "GeoIP download failed; GeoIP stays off until share/GeoLite2-City.mmdb exists"
     fi
     # Compose files, rendered from the new source the way upgrade-hobby renders them.
     cp posthog/docker-compose.base.yml docker-compose.base.yml
@@ -693,6 +696,8 @@ fi
 # PostHog's Docker Hub Node image is months old and would crash-loop until replaced.
 if phase start; then
     require_backup
+    # A machine without internet: the new version's services get the same fail-fast names and settings.
+    if [ -f docker-compose.no-internet.yml ]; then POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/../offline/no-internet.sh" apply --no-restart; fi
     if [ "$(recall async_check)" = TRUE ]; then dc up -d db redis7 clickhouse && dc run --rm -T asyncmigrationscheck < /dev/null; fi
     dc up -d --remove-orphans db redis7 clickhouse kafka >/dev/null 2>&1   # the old redis 6.2 and cyclotron-janitor are gone
     NODE_BASE_IMAGE="$NODE_BASE_IMAGE" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/../posthog/scale.sh" < /dev/null

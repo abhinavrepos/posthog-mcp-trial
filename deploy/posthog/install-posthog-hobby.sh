@@ -507,7 +507,7 @@ download_geoip() {
         warn "Skipping the GeoIP database (brotli is missing). Events will not get a location."
         return
     fi
-    if curl -fsSL --http1.1 --retry 3 'https://mmdbcdn.posthog.net/' | brotli --decompress > share/GeoLite2-City.mmdb.tmp \
+    if curl -fsSL --http1.1 --connect-timeout 5 --max-time 120 --retry 2 'https://mmdbcdn.posthog.net/' | brotli --decompress > share/GeoLite2-City.mmdb.tmp \
         && [ -s share/GeoLite2-City.mmdb.tmp ]; then
         mv share/GeoLite2-City.mmdb.tmp share/GeoLite2-City.mmdb
         echo "{\"date\": \"$(date +%Y-%m-%d)\"}" > share/GeoLite2-City.json
