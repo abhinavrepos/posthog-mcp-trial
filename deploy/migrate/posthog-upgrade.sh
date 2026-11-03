@@ -112,6 +112,9 @@ if [ -n "$REPLAYS_FLAG" ] && [ "$ONLY" != status ]; then remember replays "$REPL
 if [ "$IMAGES_FROM" = ecr ] && [ "$ONLY" != status ]; then
     images_login || { echo "Docker cannot log in to $IMAGE_REGISTRY (above)."; exit 1; }
     docker image inspect "$HELPER_IMAGE" >/dev/null 2>&1 || docker pull -q "$HELPER_IMAGE" >/dev/null
+    # PostHog's own tools (bin/migrate-storage-hobby, bin/upgrade-postgres) run plain "alpine", which
+    # cannot be downloaded here: the registry's copy answers to that name too.
+    docker image inspect alpine:latest >/dev/null 2>&1 || docker tag "$HELPER_IMAGE" alpine:latest
 fi
 
 # ---------------------------------------------------------------- questions
