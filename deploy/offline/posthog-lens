@@ -71,6 +71,8 @@ update() {
     say "unpacking $image into $LENS_DIR"
     docker pull -q "$image" >/dev/null || die "cannot pull $image (is the tag right?)."
     docker run --rm -v "$LENS_DIR:/out" "$image"
+    # This command comes with the kit too, so a fix to it reaches the machine with the update.
+    install -o root -g root -m 755 "$LENS_DIR/deploy/offline/posthog-lens" "$SBIN"
     # A kit for another PostHog version: PostHog is upgraded first (deploy/migrate/posthog-upgrade.sh,
     # backup first), through the installer's posthog step.
     local want have

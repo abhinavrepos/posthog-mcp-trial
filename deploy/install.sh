@@ -462,7 +462,7 @@ step_packages() {
     # Chrome, its libraries and fonts are in the PostHog Lens image, not on this machine. The AWS CLI logs
     # Docker in to ECR. On a machine without internet dnf reaches Amazon Linux's repositories through the
     # VPC's S3 gateway endpoint.
-    dnf install -y -q ca-certificates git openssl python3 tar xz iproute util-linux shadow-utils procps-ng iptables-nft hostname awscli-2 >/dev/null
+    dnf install -y -q ca-certificates git openssl python3 tar xz iproute util-linux shadow-utils procps-ng iptables-nft hostname gettext awscli-2 >/dev/null
     ok "base tools installed"
     finish packages
 }
