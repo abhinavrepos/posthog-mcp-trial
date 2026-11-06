@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, test } from 'node:test'
 
+import { moveFile } from '../src/core/files.ts'
 import { fillDays } from '../src/core/impact.ts'
 import { bestPerSession, elementLabel, type Incident } from '../src/core/incidents.ts'
 import { verifyClipLink } from '../src/core/links.ts'
@@ -171,5 +175,25 @@ describe('misc', () => {
     })
     test('tokens drop company suffixes', () => {
         assert.deepEqual(tokens('Verdant Foods BV'), ['verdant', 'food'])
+    })
+})
+
+describe('moving finished files', () => {
+    test('the file ends up at the target, the source is gone, no temporary file is left', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'lens-move-'))
+        const [from, to] = [join(dir, 'from.mp4'), join(dir, 'to.mp4')]
+        writeFileSync(from, 'video')
+        moveFile(from, to)
+        assert.equal(readFileSync(to, 'utf8'), 'video')
+        assert.deepEqual(readdirSync(dir), ['to.mp4'])
+        rmSync(dir, { recursive: true })
+    })
+    test('a failed copy leaves the source in place', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'lens-move-'))
+        const from = join(dir, 'from.mp4')
+        writeFileSync(from, 'video')
+        assert.throws(() => moveFile(from, join(dir, 'missing', 'to.mp4')))
+        assert.equal(readFileSync(from, 'utf8'), 'video')
+        rmSync(dir, { recursive: true })
     })
 })

@@ -354,9 +354,10 @@ show_plan() {
     fi
 }
 
-# This installer began the posthog step before (and it did not finish): the PostHog in POSTHOG_DIR is
-# ours, and running the step again continues it. The log covers runs from before the marker existed.
-posthog_started_here() { [ -f "$STATE_DIR/posthog-started" ] || grep -q '==> Installing PostHog (30-60 minutes' "$STATE_DIR/install.log" 2>/dev/null; }
+# This installer began the posthog step before and it did not finish: the PostHog in POSTHOG_DIR is ours,
+# and running the step again continues it. The marker goes when the step finishes, so a later kit with a
+# new PostHog version takes the upgrade (with its backup), not this fresh install.
+posthog_started_here() { [ -f "$STATE_DIR/posthog-started" ]; }
 # The PostHog this run works with, in MODE: fresh (install one), upgrade (one that is already here, on an
 # older version), existing (one that is already on the tested version). Sets POSTHOG_DIR when it finds one.
 find_posthog() {
@@ -487,6 +488,7 @@ step_posthog() {
     posthog_healthy || die "PostHog is not healthy (curl $POSTHOG_URL/_health). See: cd $POSTHOG_DIR && docker compose logs --tail 50 web"
     [ "$(git -C "$POSTHOG_DIR/posthog" rev-parse HEAD)" = "$TARGET_COMMIT" ] || die "PostHog's source is not at $TARGET_COMMIT."
     ok "PostHog is up at version ${TARGET_COMMIT:0:12}"
+    rm -f "$STATE_DIR/posthog-started"
     finish posthog
 }
 
@@ -499,9 +501,17 @@ step_scale() {
     finish scale
 }
 
+# A plain http PostHog needs SECURE_COOKIES=false, or every login lands back on the login page. An upgrade
+# from an older version of these scripts removed it. The "http://" case is a PostHog this script did not install.
+lost_http_cookies() {
+    [ "$(read_env_file "$POSTHOG_DIR/.env.services" SECURE_COOKIES)" != false ] || return 1
+    [ "$(read_env_file "$POSTHOG_DIR/.env" HTTP_ONLY)" = 1 ] && return 0
+    (cd "$POSTHOG_DIR" && docker compose config 2>/dev/null) | grep -m1 -E '^ +SITE_URL:' | grep -q 'http://'
+}
+
 step_addresses() {
     CURRENT=addresses; step "PostHog addresses"
-    if [ "$(read_env_file "$POSTHOG_DIR/.env" ADDRESSES)" = "$POSTHOG_ADDRESS" ]; then
+    if [ "$(read_env_file "$POSTHOG_DIR/.env" ADDRESSES)" = "$POSTHOG_ADDRESS" ] && ! lost_http_cookies; then
         ok "PostHog answers on $POSTHOG_ADDRESS"
     else
         POSTHOG_INSTALL_DIR="$POSTHOG_DIR" bash "$HERE/posthog/install-posthog-hobby.sh" --addresses-only "$POSTHOG_ADDRESS" </dev/null
@@ -572,6 +582,7 @@ step_offline() {
     local script="$HERE/offline/no-internet.sh"
     if [ "$OFFLINE" = yes ]; then
         ALLOW_CIDRS="$NO_INTERNET_ALLOW" POSTHOG_DIR="$POSTHOG_DIR" SERVICE_USER=triage bash "$script" apply
+        local i; for i in $(seq 1 40); do posthog_healthy && break; sleep 15; done   # apply restarts PostHog
         ALLOW_CIDRS="$NO_INTERNET_ALLOW" POSTHOG_DIR="$POSTHOG_DIR" SERVICE_USER=triage bash "$script" check || warn "Some no-internet checks failed (above)."
         ok "outside calls are refused at once$([ "$NO_INTERNET" = auto ] && echo " (this machine cannot reach the internet)")"
     elif [ "$NO_INTERNET" = no ] && [ -f /etc/systemd/system/posthog-no-internet.service ]; then

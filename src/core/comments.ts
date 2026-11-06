@@ -10,12 +10,13 @@
 // the same clip are removed when a new one is made, and all of them go with the clip.
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
 import { config } from './config.ts'
+import { moveFile } from './files.ts'
 import { all, one, run } from './db.ts'
 
 const exec = promisify(execFile)
@@ -220,7 +221,7 @@ export async function burn(source: string, target: string, list: Cue[]): Promise
         const filter = `subtitles=comments.ass${font ? `:fontsdir=${font.dir.replace(/[\\:',[\]]/g, '\\$&')}` : ''}`
         const tmp = join(work, 'out.mp4')
         await exec(ffmpeg(), ['-v', 'error', '-y', '-i', source, '-vf', filter, '-map', '0:v:0', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', tmp], { cwd: work, timeout: 180_000 })
-        renameSync(tmp, target)
+        moveFile(tmp, target)
     } finally {
         rmSync(work, { recursive: true, force: true })
     }

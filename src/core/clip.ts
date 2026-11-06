@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 
 import { config, ROOT } from './config.ts'
+import { moveFile } from './files.ts'
 import { getRecording, getSnapshotsJsonl } from './posthog.ts'
 
 const run = promisify(execFile)
@@ -157,7 +158,7 @@ export async function renderClip(req: ClipRequest): Promise<Clip> {
             recording_fps: 12,
             output_format: 'mp4',
         })
-        renameSync(join(work, 'video.mp4'), file)
+        moveFile(join(work, 'video.mp4'), file)
         rmSync(work, { recursive: true, force: true })
         return {
             session_id: req.sessionId,

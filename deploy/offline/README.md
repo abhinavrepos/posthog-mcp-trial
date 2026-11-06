@@ -133,6 +133,12 @@ It does 4 things:
 
 The earlier folder is left as it was. Delete it once the new one works.
 
+## After a reboot
+
+Everything comes back by itself and needs nothing from ECR. PostHog answers 502 for several minutes
+while it starts (about 8 minutes on the test box, 24 CPUs), so wait before treating that as a problem.
+`sudo posthog-lens status` shows when it is answering.
+
 ## Rehearsing without AWS
 
 `SKIP_AWS=1 REGISTRY=localhost:5000 deploy/offline/push-images.sh` pushes everything into a local
