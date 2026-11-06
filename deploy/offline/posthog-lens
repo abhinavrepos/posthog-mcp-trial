@@ -28,6 +28,9 @@
 #   POSTHOG_DIR      the PostHog install
 #   REGISTRY, REGION where the images are       [555011114032.dkr.ecr.ca-central-1.amazonaws.com, ca-central-1]
 #   MIGRATE_REPLAYS  copy old session replays during a PostHog upgrade (yes/no)                    [no]
+#   SITE             this machine's folder in deploy/offline/sites, set by setup when one exists: its
+#                    site.env is added here, and its docker-compose.site.yml goes to the PostHog folder
+#   ALLOW_LIVE       1: a PostHog upgrade goes ahead while apps keep sending events
 set -euo pipefail
 
 CONF="${POSTHOG_LENS_CONF:-/etc/posthog-lens/posthog-lens.env}"   # POSTHOG_LENS_CONF, SBIN: for tests only
@@ -62,8 +65,26 @@ ecr_login() {
     docker login --username AWS --password-stdin "$REGISTRY" <<<"$pw" >/dev/null 2>&1 || die "docker login to $REGISTRY failed."
 }
 
+# A site's compose file, for this machine only, kept through upgrades by EXTRA_COMPOSE_FILES.
+site_check() {
+    local site; site="$(conf SITE)"
+    [ -z "$site" ] || [ "$site" = "$(hostname -s)" ] || die "$CONF is for $site, but this machine is $(hostname -s)."
+}
+site_files() {
+    local site extra env="$POSTHOG_DIR/.env" name=docker-compose.site.yml; site="$(conf SITE)"
+    [ -n "$site" ] || return 0
+    [ -f "$LENS_DIR/deploy/offline/sites/$site/$name" ] || die "this kit has no deploy/offline/sites/$site/$name."
+    install -o root -g root -m 644 "$LENS_DIR/deploy/offline/sites/$site/$name" "$POSTHOG_DIR/$name"
+    extra="$(grep -E '^EXTRA_COMPOSE_FILES=' "$env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || true)"
+    case ":$extra:" in
+        *":$name:"*) ;;
+        *) sed -i '/^EXTRA_COMPOSE_FILES=/d' "$env"; echo "EXTRA_COMPOSE_FILES=${extra:+$extra:}$name" >>"$env" ;;
+    esac
+}
+
 update() {
     local image; image="$(kit_image "${1:-}")"
+    site_check
     mkdir -p "$LENS_DIR"
     chown root:root "$LENS_DIR"; chmod 755 "$LENS_DIR"
     say "logging in to $REGISTRY"
@@ -73,11 +94,15 @@ update() {
     docker run --rm -v "$LENS_DIR:/out" "$image"
     # This command comes with the kit too, so a fix to it reaches the machine with the update.
     install -o root -g root -m 755 "$LENS_DIR/deploy/offline/posthog-lens" "$SBIN"
+    site_files
+    export ALLOW_LIVE="${ALLOW_LIVE:-$(conf ALLOW_LIVE)}"
     # A kit for another PostHog version: PostHog is upgraded first (deploy/migrate/posthog-upgrade.sh,
     # backup first), through the installer's posthog step.
     local want have
     want="$(bash -c '. "$1" >/dev/null 2>&1; echo "$TARGET_COMMIT"' _ "$LENS_DIR/deploy/migrate/versions/versions.env")"
     have="$(git -C "$POSTHOG_DIR/posthog" rev-parse HEAD 2>/dev/null || true)"
+    # A PostHog with no .git in its source, or a machine with no git yet.
+    have="${have:-$(grep -E '^POSTHOG_APP_TAG=' "$POSTHOG_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || true)}"
     if [ -n "$have" ] && [ -n "$want" ] && [ "$have" != "$want" ]; then
         # A finished upgrade's backup is the way back from it: it goes first, by hand. After a rollback, or an
         # upgrade that stopped, the backup belongs to this attempt, which carries on with it.
@@ -117,7 +142,7 @@ setup() {
     # Settings: kept when they exist; otherwise from the earlier install's answers where it has them.
     mkdir -p "$(dirname "$CONF")"; chmod 755 "$(dirname "$CONF")"
     if [ ! -f "$CONF" ]; then
-        local ph; ph="${POSTHOG_DIR:-$(grep -E '^POSTHOG_DIR=' "${INSTALL_STATE_DIR:-/var/lib/posthog-lens-install}/install.env" 2>/dev/null | tail -1 | cut -d= -f2-)}"
+        local ph site; ph="${POSTHOG_DIR:-$(grep -E '^POSTHOG_DIR=' "${INSTALL_STATE_DIR:-/var/lib/posthog-lens-install}/install.env" 2>/dev/null | tail -1 | cut -d= -f2-)}"
         [ -n "$ph" ] || die "where is PostHog installed? Run: sudo POSTHOG_DIR=/data04/<posthog folder> bash posthog-lens setup $tag"
         umask 022
         cat >"$CONF" <<EOF
@@ -128,6 +153,11 @@ REGISTRY=${REGISTRY:-555011114032.dkr.ecr.ca-central-1.amazonaws.com}
 REGION=${REGION:-ca-central-1}
 MIGRATE_REPLAYS=no
 EOF
+        site="$(hostname -s)"
+        if [ -f "$(dirname "$self")/sites/$site/site.env" ]; then
+            { echo "SITE=$site"; grep -vE '^#' "$(dirname "$self")/sites/$site/site.env"; } >>"$CONF"
+            say "settings for $site added"
+        fi
         chown root:root "$CONF"; chmod 644 "$CONF"
         say "wrote $CONF"
     else

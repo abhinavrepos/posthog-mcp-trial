@@ -1,0 +1,17 @@
+# Production (sastraph1p): what its hand-edited docker-compose.yml set that PostHog's stock file does not. The
+# upgrade replaces that file; "posthog-lens update" keeps this one in EXTRA_COMPOSE_FILES. The patched
+# posthog-web-csrf image is no longer needed: PostHog reads EXTRA_CSRF_TRUSTED_ORIGINS itself.
+services:
+    web:
+        environment:
+            EXTRA_CSRF_TRUSTED_ORIGINS: 'https://ph.treasura.com,http://ph.treasura.com,https://sastraph1p,http://sastraph1p,https://ph.treasura.com:8443,http://ph.treasura.com:8443'
+            SECURE_COOKIES: 'false'
+            OPT_OUT_CAPTURE: 'true'
+            DISABLE_PAID_FEATURE_SHOWCASING: 'true'
+            SKIP_SERVICE_VERSION_REQUIREMENTS: 'true'
+            OTEL_SDK_DISABLED: 'true'
+            OTEL_EXPORTER_OTLP_ENDPOINT: ''
+            PLUGINS_PREINSTALLED_URLS: ''
+    livestream:
+        ports:
+            - '8666:8080'

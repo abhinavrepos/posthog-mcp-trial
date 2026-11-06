@@ -654,6 +654,7 @@ Description=PostHog (docker compose)
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target
+RequiresMountsFor=${INSTALL_DIR}
 
 [Service]
 Type=oneshot
@@ -766,6 +767,10 @@ main() {
     require_root "$@"
     if [ "${1:-}" = "--addresses-only" ]; then
         addresses_only "${2:-}"
+        return
+    fi
+    if [ "${1:-}" = "--boot-service" ]; then
+        install_boot_service
         return
     fi
     mkdir -p "$INSTALL_DIR"
