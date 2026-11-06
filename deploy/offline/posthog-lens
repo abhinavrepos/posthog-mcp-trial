@@ -79,10 +79,12 @@ update() {
     want="$(bash -c '. "$1" >/dev/null 2>&1; echo "$TARGET_COMMIT"' _ "$LENS_DIR/deploy/migrate/versions/versions.env")"
     have="$(git -C "$POSTHOG_DIR/posthog" rev-parse HEAD 2>/dev/null || true)"
     if [ -n "$have" ] && [ -n "$want" ] && [ "$have" != "$want" ]; then
-        if [ -n "$(ls -A "$POSTHOG_DIR/upgrade-backup" 2>/dev/null)" ]; then
-            die "this kit upgrades PostHog (${have:0:12} -> ${want:0:12}), but the last upgrade's backup is still in $POSTHOG_DIR/upgrade-backup. Once you no longer need it: sudo posthog-lens cleanup, then run this again."
-        fi
+        # A finished upgrade's backup is the way back from it: it goes first, by hand. After a rollback, or an
+        # upgrade that stopped, the backup belongs to this attempt, which carries on with it.
         if [ -f "$POSTHOG_DIR/upgrade-state/done/verify" ]; then
+            if [ -n "$(ls -A "$POSTHOG_DIR/upgrade-backup" 2>/dev/null)" ]; then
+                die "this kit upgrades PostHog (${have:0:12} -> ${want:0:12}), but the last upgrade's backup is still in $POSTHOG_DIR/upgrade-backup. Once you no longer need it: sudo posthog-lens cleanup, then run this again."
+            fi
             mv "$POSTHOG_DIR/upgrade-state" "$POSTHOG_DIR/upgrade-state.${have:0:12}.$(date -u +%Y%m%d%H%M)"
         fi
         rm -f "${INSTALL_STATE_DIR:-/var/lib/posthog-lens-install}"/{done/posthog,posthog-started}
