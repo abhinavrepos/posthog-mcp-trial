@@ -506,6 +506,7 @@ EOF
     if [ "$HTTP_ONLY" = 1 ] && ! grep -q '^SECURE_COOKIES=false' .env.services; then
         printf 'SECURE_COOKIES=false\n' >> .env.services
     fi
+    grep -q '^TRUST_ALL_PROXIES=' .env.services || printf 'TRUST_ALL_PROXIES=true\n' >> .env.services
     return 0
 }
 
@@ -666,7 +667,8 @@ TimeoutStartSec=600
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable posthog.service >/dev/null 2>&1
+    # --now: only a unit that has started runs its ExecStop at shutdown. PostHog is up already, so this changes nothing.
+    systemctl enable --now posthog.service >/dev/null 2>&1
     ok "PostHog will start automatically after a reboot"
 }
 

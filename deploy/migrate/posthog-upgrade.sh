@@ -562,7 +562,12 @@ if phase configure; then
     fi
     # Compose files, rendered from the new source the way upgrade-hobby renders them.
     cp posthog/docker-compose.base.yml docker-compose.base.yml
+    # PostHog's stock file replaces this one. This site's own lines go back in: without SECURE_COOKIES=false
+    # a plain http PostHog marks its login cookies https-only, the browser drops them, and every login
+    # lands back on the login page.
+    site_lines="$(grep -E '^(SECURE_COOKIES|TRUST_ALL_PROXIES)=' .env.services 2>/dev/null || true)"
     [ -f posthog/.env.services ] && cp posthog/.env.services .env.services
+    [ -z "$site_lines" ] || printf '\n# Kept by posthog-upgrade.sh\n%s\n' "$site_lines" >> .env.services
     ( set -a; . ./.env; set +a; bash posthog/bin/helpers/render-hobby-compose.sh < posthog/docker-compose.hobby.yml > docker-compose.yml.new )
     mv docker-compose.yml.new docker-compose.yml
     mkdir -p compose

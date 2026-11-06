@@ -83,7 +83,7 @@ update() {
         if [ -f "$POSTHOG_DIR/upgrade-state/done/verify" ]; then
             mv "$POSTHOG_DIR/upgrade-state" "$POSTHOG_DIR/upgrade-state.${have:0:12}.$(date -u +%Y%m%d%H%M)"
         fi
-        rm -f "${INSTALL_STATE_DIR:-/var/lib/posthog-lens-install}/done/posthog"
+        rm -f "${INSTALL_STATE_DIR:-/var/lib/posthog-lens-install}"/{done/posthog,posthog-started}
         say "PostHog ${have:0:12} -> ${want:0:12}: it is upgraded first (full backup, then the migrations; PostHog is down meanwhile)"
     fi
     say "installing / upgrading (answers from $CONF)"
