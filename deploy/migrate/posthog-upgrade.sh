@@ -378,6 +378,9 @@ fi
 
 # ---------------------------------------------------------------- 1 check
 if phase check; then
+    # Stops here, while PostHog still runs, rather than in phase 5 with PostHog down. envsubst renders PostHog's
+    # compose file (Amazon Linux: dnf install gettext).
+    command -v envsubst >/dev/null 2>&1 || { echo "envsubst is missing: sudo dnf install -y gettext, then run this again."; exit 1; }
     dc ps --status running --services | grep -qx db || { echo "PostHog is not running. Start it first (${DC[*]} up -d)."; exit 1; }
     PROJECT=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$(dc ps -q db | head -1)")
     remember project "$PROJECT"
@@ -576,10 +579,13 @@ if phase configure; then
     chmod +x compose/start compose/temporal-django-worker
     cp "$HERE/versions/docker-compose.pinned.yml" docker-compose.pinned.yml
     files="docker-compose.yml"; [ -f docker-compose.override.yml ] && files="$files:docker-compose.override.yml"
+    # docker-compose.no-internet.yml also names services of docker-compose.scale.yml, which is out of the list
+    # until phase start, and Compose refuses a service with no image. Phase start writes it again for this version.
+    EXTRA_COMPOSE_FILES="$(tr ':' '\n' <<<"$EXTRA_COMPOSE_FILES" | grep -vx docker-compose.no-internet.yml | paste -sd: || true)"
     # EXTRA_COMPOSE_FILES: site-specific compose files to keep (colon-separated), applied last.
     files="$files:docker-compose.pinned.yml${EXTRA_COMPOSE_FILES:+:$EXTRA_COMPOSE_FILES}"
     envset COMPOSE_FILE "$files"
-    [ -n "${EXTRA_COMPOSE_FILES:-}" ] && envset EXTRA_COMPOSE_FILES "$EXTRA_COMPOSE_FILES"
+    envset EXTRA_COMPOSE_FILES "$EXTRA_COMPOSE_FILES"
     # From ECR: every service's image from the registry (docker-compose.ecr.yml, last in the list).
     ecr_compose_override "$POSTHOG_DIR" || exit 1
     files="$(grep -E '^COMPOSE_FILE=' .env | cut -d= -f2-)"
