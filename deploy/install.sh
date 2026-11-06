@@ -270,6 +270,11 @@ collect_answers() {
     # (deploy/install.env.example), or in .secrets.env afterwards.
     local host; host="$(hosts_of "${POSTHOG_ADDRESS%%,*}")"
     setting ORG_NAME ION
+    # yes: a PostHog set up by hand keeps its addresses, its Caddy site list and its project's recording settings.
+    setting KEEP_POSTHOG_ADDRESSES no is_yesno
+    setting KEEP_PROJECT_SETTINGS no is_yesno
+    # Where people open PostHog when that is not POSTHOG_ADDRESS (a load balancer in front): Lens's links use it.
+    setting POSTHOG_LINK_URL "" is_url
     # Only from the environment or --config: empty means PostHog records on every site that sends events.
     APP_URLS="${APP_URLS:-$(read_env_file "$CONFIG" APP_URLS)}"
     [ -z "$APP_URLS" ] || is_urls "$APP_URLS" || die "APP_URLS: \"$APP_URLS\" is not a list of http(s):// addresses."
@@ -319,7 +324,7 @@ collect_answers() {
 show_plan() {
     local scheme host a others=""; host="$(hosts_of "${POSTHOG_ADDRESS%%,*}")"
     scheme="$(addr_kind "${POSTHOG_ADDRESS%%,*}")"
-    POSTHOG_PUBLIC_URL="$scheme://$host"
+    POSTHOG_PUBLIC_URL="${POSTHOG_LINK_URL:-$scheme://$host}"
     for a in $(hosts_of "$POSTHOG_ADDRESS" | tr , ' '); do [ "$a" = "$host" ] || others="${others:+$others, }$scheme://$a"; done
     . "$HERE/migrate/versions/versions.env"
     step "Plan"
@@ -511,7 +516,10 @@ lost_http_cookies() {
 
 step_addresses() {
     CURRENT=addresses; step "PostHog addresses"
-    if [ "$(read_env_file "$POSTHOG_DIR/.env" ADDRESSES)" = "$POSTHOG_ADDRESS" ] && ! lost_http_cookies; then
+    if [ "$KEEP_POSTHOG_ADDRESSES" = yes ]; then
+        POSTHOG_INSTALL_DIR="$POSTHOG_DIR" bash "$HERE/posthog/install-posthog-hobby.sh" --boot-service </dev/null
+        ok "PostHog's addresses stay as they are"
+    elif [ "$(read_env_file "$POSTHOG_DIR/.env" ADDRESSES)" = "$POSTHOG_ADDRESS" ] && ! lost_http_cookies; then
         ok "PostHog answers on $POSTHOG_ADDRESS"
     else
         POSTHOG_INSTALL_DIR="$POSTHOG_DIR" bash "$HERE/posthog/install-posthog-hobby.sh" --addresses-only "$POSTHOG_ADDRESS" </dev/null
@@ -566,7 +574,7 @@ step_app() {
 step_account() {
     CURRENT=account; step "PostHog login, project and API key"
     posthog_healthy || die "PostHog is not answering on $POSTHOG_URL/_health."
-    ADMIN_EMAIL="$ADMIN_EMAIL" POSTHOG_PUBLIC_URL="$POSTHOG_PUBLIC_URL" ORG_NAME="$ORG_NAME" APP_URLS="$APP_URLS" \
+    KEEP_PROJECT_SETTINGS="$KEEP_PROJECT_SETTINGS" ADMIN_EMAIL="$ADMIN_EMAIL" POSTHOG_PUBLIC_URL="$POSTHOG_PUBLIC_URL" ORG_NAME="$ORG_NAME" APP_URLS="$APP_URLS" \
         SERVICE_PUBLIC_URL="$SERVICE_PUBLIC_URL" POSTHOG_DIR="$POSTHOG_DIR" POSTHOG_URL="$POSTHOG_URL" SECRETS="$SECRETS" bash "$APP_DIR/scripts/setup-posthog.sh"
     chown "$APP_USER:$APP_USER" "$SECRETS"; chmod 600 "$SECRETS"
     [ -n "$(read_env_file "$SECRETS" POSTHOG_PERSONAL_API_KEY)" ] || die "No API key was written to .secrets.env."

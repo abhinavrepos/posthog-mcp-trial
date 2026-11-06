@@ -2,14 +2,17 @@
 # Compares the counts taken before and after an upgrade (counts.py). Prints every difference and
 # RESULT: PASS or RESULT: FAIL. Exit code 0 only on PASS.
 #
-#   python3 compare.py before.json after.json [--no-replays]
+#   python3 compare.py before.json after.json [--no-replays] [--live]
 # --no-replays: the replay files were not copied (posthog-upgrade.sh --no-replays); the replay metadata
 # must still be complete, but the replay store is not checked.
+# --live: apps kept sending during the upgrade (ALLOW_LIVE=1), so more than before is expected; nothing
+# counted before may be missing. Merging persons can lower their count, which is reported but is no failure.
 import json
 import re
 import sys
 
 NO_REPLAYS = "--no-replays" in sys.argv
+LIVE = "--live" in sys.argv
 before, after = (json.load(open(p)) for p in [a for a in sys.argv[1:] if not a.startswith("--")][:2])
 problems = []
 
@@ -22,7 +25,13 @@ def check(ok, what):
 
 def same(name, label):
     a, b = before.get(name, {}), after.get(name, {})
-    diff = {k: (a.get(k), b.get(k)) for k in set(a) | set(b) if a.get(k) != b.get(k)}
+    if LIVE:
+        diff = {k: (v, b.get(k)) for k, v in a.items() if b.get(k, 0) < v}
+    else:
+        diff = {k: (a.get(k), b.get(k)) for k in set(a) | set(b) if a.get(k) != b.get(k)}
+    if LIVE and name == "persons" and diff:
+        print(f"  note  persons: fewer than before, from merges while apps kept sending: {diff}")
+        return
     check(not diff, f"{label}: {sum(v for v in a.values() if isinstance(v, int))} before, {sum(v for v in b.values() if isinstance(v, int))} after" + (f"; {len(diff)} differ, e.g. {dict(list(diff.items())[:3])}" if diff else ""))
 
 
@@ -35,7 +44,7 @@ same("groups", "groups")
 print("replays")
 for team, r in before.get("replays", {}).items():
     a = after.get("replays", {}).get(team, {})
-    check(r == a, f"project {team}: {r['recordings']} recordings, {r['replay_events']} replay events, {r['blocks']} blocks before; after {a or 'none'}")
+    check(r == a or (LIVE and a and all(a[k] >= r[k] for k in r)), f"project {team}: {r['recordings']} recordings, {r['replay_events']} replay events, {r['blocks']} blocks before; after {a or 'none'}")
 replay_store = after.get("storage", {}).get("replays", {})
 if NO_REPLAYS:
     print(f"  skip  replay files not copied, as chosen: {len(before.get('replay_block_files', []))} files stay in the old MinIO volume")

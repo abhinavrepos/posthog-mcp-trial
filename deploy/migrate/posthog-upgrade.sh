@@ -308,8 +308,14 @@ if [ "$ONLY" = rollback ]; then
     for v in $(docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT"); do
         grep -qx "$v" "$BACKUP_DIR/volumes/list.txt" || { docker volume rm "$v" >/dev/null && say "    removed $v (created by the upgrade)"; }
     done
-    git -C posthog checkout -q "$(recall old_commit)" 2>/dev/null || true
-    rm -rf "$STATE/done" "$STATE/replays" "$STATE/volume_backup"
+    # The old source: phase source set it aside when it had no git history to go back in.
+    if [ -n "$(recall old_source)" ] && [ -d "$(recall old_source)" ]; then
+        rm -rf posthog; mv "$(recall old_source)" posthog
+        say "    restored PostHog's old source folder"
+    else
+        git -C posthog checkout -q "$(recall old_commit)" 2>/dev/null || true
+    fi
+    rm -rf "$STATE/done" "$STATE/replays" "$STATE/volume_backup" "$STATE/old_source"
     CURRENT=""
     say "rolled back. Start the old version with: ${DC[*]} up -d"
     exit 0
@@ -421,7 +427,10 @@ if phase check; then
     a=$(dc exec -T clickhouse clickhouse-client -q "SELECT count() FROM posthog.events WHERE _timestamp > now() - INTERVAL 10 MINUTE" < /dev/null)
     sleep 30
     b=$(dc exec -T clickhouse clickhouse-client -q "SELECT count() FROM posthog.events WHERE _timestamp > now() - INTERVAL 10 MINUTE" < /dev/null)
+    # ALLOW_LIVE=1: the apps keep sending and what arrives meanwhile may be lost. Remembered, so a run that
+    # continues later compares the same way (phases postgres and verify then accept more rows than phase before).
     if [ "$b" -gt "$a" ]; then say "events are still arriving: stop the apps sending them first"; [ "${ALLOW_LIVE:-0}" = 1 ] || exit 1; fi
+    [ "${ALLOW_LIVE:-0}" != 1 ] || remember live yes
     recordings=$(dc exec -T clickhouse clickhouse-client -q "SELECT uniqExact(session_id) FROM posthog.session_replay_events" < /dev/null)
     if [ -z "$minio_vol" ]; then remember replays copy
     elif [ -z "$(recall replays)" ]; then
@@ -514,7 +523,12 @@ fi
 if phase source; then
     if [ -n "$(kit_file posthog-src.tar.gz)" ]; then
         # No GitHub here: the kit's checkout of the pinned commit (with its .git).
-        mv posthog "posthog.before-upgrade.$(date +%s)" 2>/dev/null || true
+        if [ -z "$(recall old_source)" ] && [ -d posthog ]; then
+            remember old_source "posthog.before-upgrade.$(date +%s)"
+            mv posthog "$(recall old_source)"
+        else
+            rm -rf posthog
+        fi
         mkdir posthog && tar -xzf "$(kit_file posthog-src.tar.gz)" -C posthog --no-same-owner
     elif [ -d posthog/.git ]; then
         git -C posthog fetch -q --depth 1 origin "$TARGET_COMMIT"
@@ -638,7 +652,8 @@ if phase postgres; then
 import json, sys
 want = json.load(open(sys.argv[1]))["postgres"]
 got = dict(line.split() for line in open(sys.argv[2]) if line.strip())
-bad = [f"{t}: {n} before, {got.get(t, 'none')} restored" for t, n in want.items() if str(n) != got.get(t)]
+# More than counted is fine: with ALLOW_LIVE=1 rows arrive between the count and the dump.
+bad = [f"{t}: {n} before, {got.get(t, 'none')} restored" for t, n in want.items() if int(got.get(t, -1)) < n]
 print(f"    restored: {len(want) - len(bad)} of {len(want)} checked tables have every row")
 for b in bad:
     print("    MISSING ROWS", b)
@@ -836,6 +851,7 @@ if phase verify; then
     say "counting everything again"
     web_python counts.py -e STORES=both > "$STATE/after.json"
     args=("$STATE/before.json" "$STATE/after.json"); [ "$replays_copied" = 1 ] || args+=(--no-replays)
+    [ "$(recall live)" != yes ] || args+=(--live)
     python3 "$HERE/compare.py" "${args[@]}" > "$STATE/verify.txt" || true
     cat "$STATE/verify.txt"
     if [ "$replays_copied" = 1 ]; then

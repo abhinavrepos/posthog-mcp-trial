@@ -21,6 +21,7 @@
 #   POSTHOG_DIR         the PostHog install, for its Django shell                   [/opt/posthog]
 #   KEY_LABEL           name of the API key in PostHog; replaced on every run     [ticket-triage]
 #   SECRETS             the settings file to write                                  [.secrets.env]
+#   KEEP_PROJECT_SETTINGS  yes: an existing PostHog's login and project settings stay as they are       [no]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -65,18 +66,20 @@ ADMIN_PASSWORD="$(get POSTHOG_ADMIN_PASSWORD)"
 
 curl -fs -m 10 "$POSTHOG_URL/_health" >/dev/null || { echo "PostHog is not healthy yet (curl $POSTHOG_URL/_health)"; exit 1; }
 
-echo "==> Creating the PostHog account for $ADMIN_EMAIL"
-body=$(python3 -c 'import json,sys; print(json.dumps({"first_name": "Admin", "email": sys.argv[1], "password": sys.argv[2], "organization_name": sys.argv[3], "role_at_organization": "engineering"}))' "$ADMIN_EMAIL" "$ADMIN_PASSWORD" "$ORG_NAME")
-resp=$(mktemp)
-code=$(curl -s -o "$resp" -w '%{http_code}' -X POST "$POSTHOG_URL/api/signup/" -H 'content-type: application/json' -d "$body")
-case "$code" in
-    200|201) echo "    created (organization \"$ORG_NAME\")" ;;
-    *) echo "    signup returned $code (an existing account is fine): $(head -c 200 "$resp")" ;;
-esac
-rm -f "$resp"
+if [ "${KEEP_PROJECT_SETTINGS:-no}" != yes ]; then
+    echo "==> Creating the PostHog account for $ADMIN_EMAIL"
+    body=$(python3 -c 'import json,sys; print(json.dumps({"first_name": "Admin", "email": sys.argv[1], "password": sys.argv[2], "organization_name": sys.argv[3], "role_at_organization": "engineering"}))' "$ADMIN_EMAIL" "$ADMIN_PASSWORD" "$ORG_NAME")
+    resp=$(mktemp)
+    code=$(curl -s -o "$resp" -w '%{http_code}' -X POST "$POSTHOG_URL/api/signup/" -H 'content-type: application/json' -d "$body")
+    case "$code" in
+        200|201) echo "    created (organization \"$ORG_NAME\")" ;;
+        *) echo "    signup returned $code (an existing account is fine): $(head -c 200 "$resp")" ;;
+    esac
+    rm -f "$resp"
+fi
 
 echo "==> Configuring the project and creating the API key"
-out=$(cd "$POSTHOG_DIR" && docker compose exec -T -e ADMIN_EMAIL="$ADMIN_EMAIL" -e APP_URLS="$APP_URLS" -e KEY_LABEL="$KEY_LABEL" web python manage.py shell 2>/dev/null <<'PY'
+out=$(cd "$POSTHOG_DIR" && docker compose exec -T -e ADMIN_EMAIL="$ADMIN_EMAIL" -e APP_URLS="$APP_URLS" -e KEY_LABEL="$KEY_LABEL" -e KEEP_PROJECT_SETTINGS="${KEEP_PROJECT_SETTINGS:-no}" web python manage.py shell 2>/dev/null <<'PY'
 import json, os
 from posthog.models import User
 from posthog.models.personal_api_key import PersonalAPIKey
@@ -88,15 +91,16 @@ if user is None:
     raise SystemExit
 team = user.team
 urls = [u.strip().rstrip("/") for u in os.environ["APP_URLS"].split(",") if u.strip()]
-team.session_recording_opt_in = True
-team.capture_console_log_opt_in = True
-team.autocapture_exceptions_opt_in = True
-team.capture_dead_clicks = True
-if urls:
-    team.app_urls = urls
-# Empty: PostHog records on every domain.
-team.recording_domains = urls
-team.save()
+if os.environ["KEEP_PROJECT_SETTINGS"] != "yes":
+    team.session_recording_opt_in = True
+    team.capture_console_log_opt_in = True
+    team.autocapture_exceptions_opt_in = True
+    team.capture_dead_clicks = True
+    if urls:
+        team.app_urls = urls
+    # Empty: PostHog records on every domain.
+    team.recording_domains = urls
+    team.save()
 
 label = os.environ["KEY_LABEL"]
 PersonalAPIKey.objects.filter(user=user, label=label).delete()
