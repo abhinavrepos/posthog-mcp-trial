@@ -116,6 +116,9 @@ export const config = {
         mcpToken: env('MCP_TOKEN'),
         clipLinkSecret: env('CLIP_LINK_SECRET'),
         clipLinkTtlHours: Number(env('CLIP_LINK_TTL_HOURS', '168')),
+        // The status page (deploy/status), which the System page reads.
+        statusUrl: stripSlash(env('STATUS_URL', 'http://127.0.0.1:8090')),
+        statusPassword: env('STATUS_PASSWORD'),
     },
     clip: {
         cacheDir: env('CLIP_CACHE_DIR', join(ROOT, '.cache')),
