@@ -9,7 +9,9 @@
 //   - data flowing: events and replay metadata received in the last 5 minutes and hour, and when the
 //     newest event arrived. Counts and times only, read-only (ClickHouse readonly=1); no event or
 //     replay content is ever read.
-//   - the machine: free disk, memory, load
+//   - the machine: free disk, memory, CPU, load, and the last hour of CPU and memory
+//   - each running container's CPU and memory; hourly event counts, people and recordings in the last
+//     24 hours, ClickHouse's size. Counts again, never content. PostHog Lens's System page shows these.
 //
 //   GET /             the page (refreshes itself)
 //   GET /api/status   the same as JSON
@@ -99,6 +101,25 @@ const ago = (ms) => {
 const num = (n) => Number(n).toLocaleString('en-US')
 const gb = (bytes) => `${(bytes / 1024 ** 3).toFixed(1)} GB`
 
+// One container's CPU (share of the whole machine, between two checks) and memory (what `docker stats`
+// shows: usage without the file cache that can be dropped).
+const lastCpu = new Map() // container id -> { total, system }
+async function containerUsage(id) {
+    try {
+        const s = await docker(`/containers/${id}/stats?stream=false&one-shot=true`)
+        const total = s.cpu_stats?.cpu_usage?.total_usage
+        const system = s.cpu_stats?.system_cpu_usage
+        const prev = lastCpu.get(id)
+        lastCpu.set(id, { total, system })
+        const cpu = prev && system > prev.system ? Math.max(0, ((total - prev.total) / (system - prev.system)) * 100) : null
+        const m = s.memory_stats || {}
+        const cache = m.stats?.inactive_file ?? m.stats?.total_inactive_file ?? 0
+        return { cpu_pct: cpu, mem_bytes: m.usage ? Math.max(0, m.usage - cache) : null }
+    } catch {
+        return {}
+    }
+}
+
 // ------------------------------------------------------------------ checks
 async function checkContainers() {
     const rows = []
@@ -153,7 +174,8 @@ async function checkContainers() {
                 level = DOWN
                 detail = `${st.Status}${st.Status === 'exited' ? `, exit code ${st.ExitCode}` : ''} since ${ago(Date.now() - Date.parse(st.FinishedAt || st.StartedAt))}`
             }
-            rows.push({ group: `Containers: ${project}`, name, level, detail })
+            const usage = st.Status === 'running' ? await containerUsage(c.Id) : {}
+            rows.push({ group: `Containers: ${project}`, name, level, detail, state: st.Status, health: health || null, restarts, ...usage })
         }
     }
     return rows
@@ -212,14 +234,69 @@ async function checkData() {
     }
 }
 
+// Slower numbers, once a minute. Each stands alone, so one missing table costs only its own number.
+const EXTRAS_EVERY = 60_000
+let extras = { at: 0, data: {} }
+async function collectExtras() {
+    if (Date.now() - extras.at < EXTRAS_EVERY) return
+    const one = async (sql) => {
+        try {
+            return await clickhouse(sql)
+        } catch {
+            return null
+        }
+    }
+    const [hours, people, sessions, warnings, size] = await Promise.all([
+        one(`SELECT toUnixTimestamp(toStartOfHour(_timestamp)) AS h, count() FROM posthog.events WHERE _timestamp > now() - INTERVAL 24 HOUR GROUP BY h ORDER BY h`),
+        one(`SELECT uniq(distinct_id) FROM posthog.events WHERE _timestamp > now() - INTERVAL 24 HOUR`),
+        one(`SELECT uniq(session_id) FROM posthog.session_replay_events WHERE _timestamp > now() - INTERVAL 24 HOUR`),
+        one(`SELECT count() FROM posthog.ingestion_warnings WHERE timestamp > now() - INTERVAL 24 HOUR`),
+        one(`SELECT sum(bytes_on_disk) FROM system.parts WHERE active`),
+    ])
+    const first = (r) => (r?.[0]?.[0] === undefined ? null : Number(r[0][0]))
+    extras = {
+        at: Date.now(),
+        data: {
+            events_by_hour: hours ? hours.map(([h, n]) => [Number(h) * 1000, Number(n)]) : null,
+            people_24h: first(people),
+            recordings_24h: first(sessions),
+            ingestion_warnings_24h: first(warnings),
+            clickhouse_bytes: first(size),
+        },
+    }
+}
+
+// The whole machine's CPU between two checks, from /proc/stat, which a container sees for the host.
+let lastStat = null
+function machineCpu() {
+    try {
+        const n = readFileSync('/proc/stat', 'utf8').split('\n')[0].trim().split(/\s+/).slice(1).map(Number)
+        const idle = n[3] + (n[4] || 0)
+        const total = n.slice(0, 8).reduce((a, b) => a + (b || 0), 0)
+        const prev = lastStat
+        lastStat = { idle, total }
+        return prev && total > prev.total ? Math.min(100, Math.max(0, (1 - (idle - prev.idle) / (total - prev.total)) * 100)) : null
+    } catch {
+        return null
+    }
+}
+
+const HISTORY = 240 // an hour at one check every 15 seconds
+const history = [] // [time, CPU %, memory %]
+let machine = {}
+
 function checkMachine() {
     const G = 'Machine'
     const rows = []
+    const cpuPct = machineCpu()
+    machine = { cpu_pct: cpuPct, cores: os.cpus().length || 1, uptime_s: Math.round(os.uptime()) }
     try {
         const s = statfsSync(DISK)
         const total = s.blocks * s.bsize
         const free = s.bavail * s.bsize
         const pct = (free / total) * 100
+        machine.disk_total = total
+        machine.disk_free = free
         rows.push({ group: G, name: 'Disk', level: pct < 10 ? DOWN : pct < 20 ? WARN : OK, detail: `${gb(free)} free of ${gb(total)} (${pct.toFixed(0)}%)` })
     } catch {
         rows.push({ group: G, name: 'Disk', level: WARN, detail: `cannot read (mount a host folder at ${DISK})` })
@@ -233,10 +310,19 @@ function checkMachine() {
                 .map(([k, v]) => [k, parseInt(v, 10) * 1024]),
         )
         const pct = (m.MemAvailable / m.MemTotal) * 100
+        machine.mem_total = m.MemTotal
+        machine.mem_available = m.MemAvailable
         rows.push({ group: G, name: 'Memory', level: pct < 5 ? DOWN : pct < 10 ? WARN : OK, detail: `${gb(m.MemAvailable)} available of ${gb(m.MemTotal)} (${pct.toFixed(0)}%)` })
     } catch {}
     const [l1, l5] = os.loadavg()
     const cpus = os.cpus().length || 1
+    machine.load_1 = l1
+    machine.load_5 = l5
+    if (cpuPct !== null) {
+        const memPct = machine.mem_total ? (1 - machine.mem_available / machine.mem_total) * 100 : null
+        history.push([Date.now(), cpuPct, memPct])
+        if (history.length > HISTORY) history.shift()
+    }
     rows.push({ group: G, name: 'Load', level: l5 > cpus * 2 ? WARN : OK, detail: `${l1.toFixed(1)} now, ${l5.toFixed(1)} over 5 min, ${cpus} cores` })
     rows.push({ group: G, name: 'Uptime', level: INFO, detail: ago(os.uptime() * 1000) })
     return rows
@@ -246,7 +332,7 @@ function checkMachine() {
 let latest = { at: null, rows: [], took_ms: 0 }
 async function runChecks() {
     const t = Date.now()
-    const parts = await Promise.allSettled([checkHttp(), checkData(), checkContainers(), Promise.resolve(checkMachine())])
+    const parts = await Promise.allSettled([checkHttp(), checkData(), checkContainers(), Promise.resolve(checkMachine()), collectExtras().then(() => [])])
     const rows = parts.flatMap((p) => (p.status === 'fulfilled' ? p.value : [{ group: 'Status page', name: 'a check', level: WARN, detail: String(p.reason) }]))
     for (const r of rows) r.since = track(`${r.group}/${r.name}`, r.level)
     latest = { at: Date.now(), rows, took_ms: Date.now() - t }
@@ -377,7 +463,7 @@ http
         if (!authorized(req)) return send(401, 'text/plain', 'password needed\n', { 'www-authenticate': `Basic realm="${TITLE}", charset="UTF-8"` })
         if (path === '/') return send(200, 'text/html; charset=utf-8', page(), { 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'" })
         if (path === '/fragment') return send(200, 'text/html; charset=utf-8', fragment())
-        if (path === '/api/status') return send(200, 'application/json', JSON.stringify({ ...summary(), checked_at: latest.at && new Date(latest.at).toISOString(), checks: latest.rows }, null, 2))
+        if (path === '/api/status') return send(200, 'application/json', JSON.stringify({ ...summary(), checked_at: latest.at && new Date(latest.at).toISOString(), checks: latest.rows, metrics: { machine, history, ...extras.data } }, null, 2))
         send(404, 'text/plain', 'not found\n')
     })
     .listen(PORT, '0.0.0.0', () => {
