@@ -19,8 +19,16 @@ deploy/status/up.sh down     # stop it
 Checks run every 15 seconds. The page refreshes itself. Problems show first, with how long they have
 lasted; long lists fold what is fine.
 
-- `GET /api/status`: the same as JSON
+- `GET /api/status`: the same as JSON, plus the numbers behind PostHog Lens's System page (below)
 - `GET /healthz`: `200 ok` or `503 N problem(s)`, no details and no password, for an uptime monitor
+
+## The System page in PostHog Lens
+
+Admins can see all of this, with more numbers, without a tunnel: the **System** tab in PostHog Lens
+(`http://<server>:8080/replays/system`, signed in with PostHog). It adds CPU and memory for the
+machine and each container, events per hour for 24 hours, people, recordings, ingestion warnings and
+ClickHouse's size. Lens reads this page's `/api/status` from `STATUS_URL` (`http://127.0.0.1:8090`).
+Everything on it is a count or a time; no event or replay content is read.
 
 ## Seeing it from your computer
 

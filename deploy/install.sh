@@ -641,7 +641,7 @@ PY
 
 APP_KEYS=(PROP_CLIENT_ID PROP_CLIENT_NAME PROP_APP_VERSION PROP_PERSON_EMAIL SCREENS_FILE JIRA_BASE_URL JIRA_EMAIL JIRA_API_TOKEN
     JIRA_RCI_ISSUE_TYPE JIRA_RISK_ISSUE_TYPE RELEASES_JIRA_PROJECT RELEASES_SUPPORT_JQL ANTHROPIC_API_KEY FEATURE_LENS_MCP
-    FEATURE_POSTHOG_MCP POSTHOG_MCP_URL POSTHOG_MCP_API_KEY SERVICE_PUBLIC_URL CLIP_ALLOWED_HOSTS)
+    FEATURE_POSTHOG_MCP POSTHOG_MCP_URL POSTHOG_MCP_API_KEY SERVICE_PUBLIC_URL CLIP_ALLOWED_HOSTS STATUS_PASSWORD)
 step_settings() {
     CURRENT=settings; step "Writing .secrets.env"
     local k v n=0
@@ -734,7 +734,8 @@ lines = [l for l in open(path).read().splitlines() if l.split("=", 1)[0] not in 
 lines += [f"{k}={v}" for k, v in want.items()]
 open(path, "w").write("\n".join(lines) + "\n")
 PY
-    POSTHOG_NETWORK="${project}_default" bash "$HERE/status/up.sh"
+    # Disk space is read from this folder, so it has to sit on the disk the project and PostHog use.
+    STATUS_DISK_FOLDER="$HERE/status/.disk" POSTHOG_NETWORK="${project}_default" bash "$HERE/status/up.sh"
     finish status
 }
 
