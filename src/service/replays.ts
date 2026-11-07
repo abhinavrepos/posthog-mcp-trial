@@ -21,6 +21,7 @@ import { downloadName, formatClock, HourlyLimit, parseReplayInput, parseStartTim
 import { audit, can, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
 import { handleAdmin } from './admin.ts'
 import { handleLive, liveHtml } from './live.ts'
+import { handleSystem } from './system.ts'
 
 const RETENTION_DAYS = Number(process.env.CLIP_RETENTION_DAYS || 14)
 const AUDIT_RETENTION_DAYS = Number(process.env.AUDIT_RETENTION_DAYS || 365)
@@ -333,6 +334,11 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         res.end(!viewer ? loginHtml() : can(viewer.role, 'watch') ? pageHtml(viewer) : noAccessHtml(viewer))
         return true
     }
+    if (!viewer && (p === '/replays/system' || p === '/replays/system/')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
+        res.end(loginHtml('System'))
+        return true
+    }
     if (p === '/replays/live' || p === '/replays/live/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
         res.end(!viewer ? loginHtml('Live') : can(viewer.role, 'watch') ? liveHtml(viewer) : noAccessHtml(viewer))
@@ -343,6 +349,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         return true
     }
     if (p.startsWith('/replays/admin')) return handleAdmin(req, res, url, viewer)
+    if (p === '/replays/system' || p.startsWith('/replays/system/')) return handleSystem(req, res, url, viewer)
     if (!can(viewer.role, 'watch')) {
         json(res, 403, { error: 'You do not have access to replay clips. Ask an admin.' })
         return true
@@ -592,7 +599,7 @@ export const PAGE_CSS = () => CSS
 
 export const APP_NAME = config.app.name
 export const APP_TAG = config.app.tag
-export type Section = 'Replay clips' | 'Live' | 'Admin'
+export type Section = 'Replay clips' | 'Live' | 'System' | 'Admin'
 
 /** The header on every page: the product name, the sections this person may open, and sign out. */
 export function headerHtml(v: Viewer | undefined, section: Section): string {
@@ -602,6 +609,7 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
         [
             ['Replay clips', '/replays', 'watch'],
             ['Live', '/replays/live', 'watch'],
+            ['System', '/replays/system', 'admin'],
             ['Admin', '/replays/admin', 'admin'],
         ] as const
     )
