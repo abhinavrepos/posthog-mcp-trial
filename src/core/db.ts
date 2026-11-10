@@ -214,6 +214,9 @@ function migrate() {
     const version = one<{ user_version: number }>('PRAGMA user_version')!.user_version
     for (let v = version; v < MIGRATIONS.length; v++) {
         tx(() => {
+            // Another process (the service, a script, a parallel test) may have run it meanwhile:
+            // check again now that this transaction holds the write lock.
+            if (one<{ user_version: number }>('PRAGMA user_version')!.user_version > v) return
             db.exec(MIGRATIONS[v])
             db.exec(`PRAGMA user_version = ${v + 1}`)
         })
