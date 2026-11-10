@@ -8,6 +8,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { config, ENV_FILE, ROOT } from '../src/core/config.ts'
+import { appEvents } from '../src/core/appevents.ts'
+import { clientSource, P } from '../src/core/props.ts'
 import { mcpClientConfig } from '../src/mcp/client-config.ts'
 
 type Level = 'ok' | 'warn' | 'fail'
@@ -86,18 +88,31 @@ else {
             return j.results?.[0] as unknown[]
         }
         const [events, withClient, withName, withVersion] = (await hog(
-            `SELECT count(), countIf(notEmpty(toString(properties.${p.client}))), countIf(notEmpty(toString(properties.${p.clientName}))), ${
+            `SELECT count(), countIf(notEmpty(toString(${P.client}))), ${p.clientName ? `countIf(notEmpty(toString(properties.${p.clientName})))` : '0'}, ${
                 p.version ? `countIf(notEmpty(toString(properties.${p.version})))` : '0'
             } FROM events WHERE timestamp > now() - INTERVAL 7 DAY`
         )) as number[]
         const share = (n: number) => (events ? `${Math.round((100 * n) / events)}% of ${events} events in 7 days` : 'no events in 7 days')
         // A wrong name is a setting to fix, not a broken install: Lens runs, but cannot tell which client a
         // session belongs to. So a warning, with the property names the events do carry.
+        const clientLabel = p.clientFromDistinctId ? `Client from the distinct id (CLIENT_FROM_DISTINCT_ID=${p.clientFromDistinctId})` : `Client property "${p.client}" (PROP_CLIENT_ID)`
         if (events && !withClient) {
             const names = await eventPropertyNames(ph.host, ph.projectId, auth)
-            say('warn', `Client property "${p.client}" (PROP_CLIENT_ID)`, `no event in 7 days has it (of ${events}). ${clientHint(names)}`)
-        } else say(!events ? 'warn' : 'ok', `Client property "${p.client}" (PROP_CLIENT_ID)`, share(withClient))
-        say(!events || withName ? 'ok' : 'warn', `Client name property "${p.clientName}" (PROP_CLIENT_NAME)`, share(withName))
+            say('warn', clientLabel, `no event in 7 days has it (of ${events}). ${p.clientFromDistinctId ? `Read as ${clientSource()}.` : clientHint(names)}`)
+        } else say(!events ? 'warn' : 'ok', clientLabel, share(withClient))
+        if (p.clientName) say(!events || withName ? 'ok' : 'warn', `Client name property "${p.clientName}" (PROP_CLIENT_NAME)`, share(withName))
+        else say('ok', 'Client name', 'none: the client id is shown')
+        try {
+            const a = appEvents()
+            if (a) {
+                const [n, withDialog] = (await hog(
+                    `SELECT count(), countIf(notEmpty(toString(properties.${a.properties.dialog!.name}))) FROM events WHERE timestamp > now() - INTERVAL 7 DAY AND event IN ('${a.events.screen.replace(/'/g, '')}', '${a.events.interaction.replace(/'/g, '')}')`
+                )) as number[]
+                say(!events || withDialog ? 'ok' : 'warn', `${a.app} events (APP_EVENTS_FILE)`, n ? `${Math.round((100 * withDialog) / n)}% of ${n} ${a.app} events in 7 days have a dialog` : `no "${a.events.screen}" or "${a.events.interaction}" events in 7 days`)
+            }
+        } catch (e) {
+            say('fail', 'APP_EVENTS_FILE', (e as Error).message)
+        }
         if (p.version) say(!events || withVersion ? 'ok' : 'warn', `Release property "${p.version}" (PROP_APP_VERSION)`, share(withVersion))
         else say('ok', 'Release property', 'none: releases are matched by date')
     } catch (e) {

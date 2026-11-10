@@ -1,0 +1,40 @@
+{
+    "app": "Reval",
+    "about": "Reval sends its own events next to PostHog's: one per dialog opened and one per click, field or button. A dialog is a Reval window (a trade, a report's parameters, a list); messages Reval shows (errors, confirmations) arrive as events of their own.",
+    "events": {
+        "screen": "PageView",
+        "interaction": "Event"
+    },
+    "properties": {
+        "dialog": { "name": "dialog_id", "meaning": "The Reval dialog (window) the event happened in, a stable code like DlgDetailIRSwap. Special values: messagebox (a message Reval showed), toast (a short notice), menuCmb (the menu and search bar)." },
+        "dialogName": { "name": "dialog_name", "meaning": "The dialog's title as the user sees it, e.g. \"IR Swap\". UNKNOWN on messages; use dialog for grouping." },
+        "tab": { "name": "tab_name", "meaning": "The tab inside the dialog, e.g. Terms, Cashflow, Parameters." },
+        "action": { "name": "action", "meaning": "On PageView: OPEN, FOCUS or CLOSE of the dialog. On Event: the field's label (\"Trade Date\"), DOUBLECLICK on a row, the text typed into the search bar, or a generated id like gridfloatedit-3404-inputEl for unlabelled grid cells." },
+        "control": { "name": "control_type", "meaning": "What kind of control: TEXTFIELD, DATEFIELD, DROPDOWN, CHECKBOX, SEARCH (search text), SEARCHTYPE (what is searched), MENU, ROW (a grid row), RIGHTCLICK." },
+        "button": { "name": "action_name", "meaning": "The button pressed (Save, Run, Apply, Export...) or a grid operation (applyFilter, loadGrid). On messagebox and toast events, a list whose first item is the message text." },
+        "version": { "name": "title", "meaning": "The window title with the release, e.g. \"REVAL 27.0.0\". Only on some PageView events." }
+    },
+    "dialogs": {
+        "messages": ["messagebox"],
+        "notices": ["toast"],
+        "menu": ["menuCmb"]
+    },
+    "screenActions": { "open": ["OPEN"], "focus": ["FOCUS"], "close": ["CLOSE"] },
+    "submitButtons": [
+        "Save", "Save Index", "Run", "Apply", "Export", "XLS Export", "XLSX Export", "CSV Export", "Import", "Create Hypothetical",
+        "Delete", "Add", "OK", "Ok", "Yes", "Login", "Recalc Cashflow", "Copy", "Submit", "Post", "Approve", "Process", "Calculate"
+    ],
+    "outcomeSeconds": 20,
+    "outcomes": [
+        { "match": "has been scheduled|is scheduled|has been queued", "outcome": "accepted", "note": "a job or report was queued; it finishes later" },
+        { "match": "^no .*(found|available)|^no entry selected", "outcome": "empty", "note": "nothing to show or nothing selected" }
+    ],
+    "messageOutcome": "error",
+    "noticeOutcome": "completed",
+    "generatedIds": ["^[a-z]+(-\\d+)+(-[A-Za-z]+)?$", "^id\\d+$", "^ext-[a-z0-9-]+$"],
+    "redact": [
+        "(search text:\\s*).*$",
+        "(User Updated\\s*:\\s*).*$"
+    ],
+    "aliases": {}
+}

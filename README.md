@@ -48,16 +48,59 @@ Two ticket types, set by the Jira issue type:
   client, the trend and a release comparison.
 
 MCP tools: `resolve_client`, `find_client_incidents`, `get_replay_link`, `screen_usage`, `error_blast_radius`,
-`find_silent_issues` and `triage_ticket`. For releases, see Release outcomes below.
+`find_silent_issues` and `triage_ticket`. For releases, see Release outcomes below; for Reval's own dialogs
+and buttons, see "Your app's own events" below.
 
 Claude never sees replay content. `get_replay_link` returns links for a person to open (the
 PostHog replay, which needs a PostHog login, and a signed MP4 clip). No tool returns frames,
 video or recording data, and the optional cause suggestion uses event and error data only.
 
 Optional: with `ANTHROPIC_API_KEY` set, Claude (`claude-opus-5-5`) reads messy tickets and
-suggests a likely cause from the error and replay frames. Structured Jira fields always win over
+suggests a likely cause from the event and error data (replay frames are never sent). Structured Jira fields always win over
 Claude's reading, and Claude's reading wins over the keyword matching. When Claude fails, triage
 still completes and the report notes it.
+
+## Your app's own events (Reval)
+
+Reval sends events of its own next to PostHog's: `PageView` when a dialog opens, gets focus or
+closes, and `Event` for each field, button, search and message. They carry `dialog_id`,
+`dialog_name`, `tab_name`, `action`, `control_type` and `action_name` (the button, or on
+`messagebox` and `toast` events the message text). The client is part 3 of the distinct id
+(`ENV|SITE|CLIENT|USER`). With these settings, the MCP server knows all of this:
+
+```
+APP_EVENTS_FILE=config/app-events.reval.json
+CLIENT_FROM_DISTINCT_ID=3
+PROP_CLIENT_NAME=none
+```
+
+| MCP tool | Answers |
+|---|---|
+| `describe_app_events` | What do the events and properties mean? How often is each filled, with real example values, the dialogs used most, the messages Reval showed, the clients, and how to query them in SQL. |
+| `top_pains` | What hurts most this week? The dialogs where clients fail most, ranked, with the main error, whether it is new or worse than the week before, an example session, and the clients with warning signs. |
+| `dialog_friction` | Where do clients fail? Per dialog: attempts (Save, Run, Export...) and what came of each (done, queued, failed, nothing found, no message), the errors with the sessions and clients they hit, retry loops (failed, then the same button again) and stuck sessions (an error and no success after). For all clients, one client or one dialog. |
+| `session_story` | What happened in this session? The session as a timeline the agent can read instead of watching the replay: dialogs, tabs, fields, buttons and their outcomes, and every message, with replay links at the errors for a person to open. |
+| `attempt_timings` | Is a button slow, or does a server call fail? From the network timing in recent recordings: the wait after each Save or Run, the slowest call (method and path only) and HTTP errors. |
+| `find_trade` | What happened to trade 4348? The sessions where someone searched for it or Reval named it in a message, with the client, user, attempts and errors from when they reached the trade. |
+| `client_signals` | Which clients need attention? This period against the one before: fewer sessions, days or dialogs, users gone quiet, more failed attempts, not seen lately. Warning signs, not a churn prediction. |
+
+The prompt `where_clients_struggle` puts them together into a short report for a product manager.
+
+How events are read (all in `config/app-events.reval.json`, so a new dialog or button needs no code):
+- **An attempt** is a press of a submit button (Save, Run, Apply, Export...). Its **outcome** is the
+  message or notice that follows within 20 s: a `messagebox` is an error, unless it says nothing was
+  found; a `toast` is done, or *queued* when it says a report or process was scheduled (it finishes
+  later). No message is "none", which is not always a problem.
+- **Messages carry no dialog** (`UNKNOWN`), so each is tied to the attempt before it, or else to the
+  last thing the person did.
+- **Trade and link ids stay** in messages ("Trade Id 4348 Updated"): support looks failures up by
+  trade. For grouping, ids are taken out ("Trade Id # Updated"), so the same error on different trades
+  is one problem, listed with its messages. Text typed into the search box is never shown (only menu
+  searches, which name a screen). Field labels are shown, never what was typed.
+- Generated control ids (`gridfloatedit-3404-inputEl`) are shown as "an unlabelled field".
+
+To try it without Reval: `pnpm tsx scripts/seed-reval.ts` sends made-up Reval-shaped events (four
+clients, two weeks) to the PostHog in `.secrets.env`.
 
 ## Replay clip page
 
