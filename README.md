@@ -308,7 +308,7 @@ The local `.mcp.json` server has the same tools.
 | `deploy/migrate/` | Upgrading an existing PostHog to the tested version, with backups |
 | `deploy/posthog/` | PostHog's installer (pinned), scaling, load tests |
 | `deploy/status/` | The status page |
-| `deploy/offline/` | `build-images.sh`: every image into your ECR, plus the kit; `ecr.sh`: the machine takes them from there; `no-internet.sh`: outside calls fail at once ([README](deploy/offline/README.md)) |
+| `deploy/offline/` | the three scripts for a machine without internet: `build-images.sh` (every image into your ECR), `fresh-install.sh`, `upgrade.sh`; `ecr.sh`: the machine takes images from there; `no-internet.sh`: outside calls fail at once ([README](deploy/offline/README.md)) |
 | `deploy/lens/` | PostHog Lens as a container: `Dockerfile`, `lens.sh` (serve, doctor, mcp-config, test), Chrome's seccomp profile |
 
 ## Install on a fresh machine
@@ -326,8 +326,9 @@ and Debian). The EC2 instance needs:
   when the instance stops.
 
 Nothing else: the script installs Docker and PostHog, and runs PostHog Lens as a container (built on
-the machine, or taken from your ECR). **Without internet**, push everything to ECR first and install
-from the kit instead of `git clone`: see [deploy/offline/README.md](deploy/offline/README.md).
+the machine, or taken from your ECR). **Without internet**, use the three scripts in
+[deploy/offline/README.md](deploy/offline/README.md): `build-images.sh` on a machine with internet, then
+`fresh-install.sh` or `upgrade.sh` on the machine itself (no `git clone` there).
 With internet, log in as `ec2-user`, then:
 
 ```bash
