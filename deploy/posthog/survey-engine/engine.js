@@ -1,4 +1,5 @@
-/* Lens survey chains. Readable ES2017; writes no storage (reads posthog-js's seenSurvey_ flags), no DOM observers or external requests. */
+/* Lens survey chains. Readable ES2017; reads posthog-js's survey flags and keeps one key of its own
+   (lensSurveyQuiet: surveys the user closed or ignored, and until when to stay quiet; and posthog-js's own seenSurvey_ mark for a survey ignored too often); no DOM observers or external requests. */
 (function (factory) {
     try {
         var api = factory();
@@ -125,7 +126,17 @@
             var max = raw.maxPerUser;
             if (max !== undefined && (raw.version < 3 || !finite(max) || max < 1 || max > 10 || Math.floor(max) !== max)) return null;
             var limit = max !== undefined ? max : raw.oneAtATime === true ? 1 : 0;
+            // Spacing: never two surveys within gapHours (at least 24) for a user; after the user closes a
+            // Lens survey with the cross, no Lens survey for quietDaysAfterClose days (default 7).
+            var gap = raw.gapHours === undefined ? 24 : raw.gapHours;
+            if (!finite(gap) || gap < 24 || gap > 8760) return null;
+            var quiet = raw.quietDaysAfterClose === undefined ? 7 : raw.quietDaysAfterClose;
+            if (!finite(quiet) || quiet < 0 || quiet > 90) return null;
+            // A survey shown this many times without an answer or a close stops coming back (default 2).
+            var shows = raw.maxShowsIgnored === undefined ? 2 : raw.maxShowsIgnored;
+            if (!finite(shows) || shows < 1 || shows > 10 || Math.floor(shows) !== shows) return null;
             return { id: raw.id, steps: steps, resetOn: resets, withinMs: within === undefined ? Infinity : within * 1000, audience: audience, limit: limit,
+                gapMs: gap * 3600000, quietMs: quiet * 86400000, maxShows: shows,
                 ready: { documentComplete: ready.documentComplete !== false, noVisibleMask: ready.noVisibleMask !== false, maxWaitMs: wait } };
         } catch (_) { return null; }
     }
@@ -185,6 +196,7 @@
                             // The survey launched first wins a user both want (one survey at a time).
                             state.surveyId = typeof survey.id === 'string' ? survey.id : '';
                             state.launched = Date.parse(survey.start_date) || 0;
+                            state.repeats = survey.schedule === 'always';
                             next.set(chain.id, state);
                         } catch (_) { /* Ignore only this malformed survey. */ }
                     }
@@ -217,6 +229,15 @@
                 } catch (_) { /* Ignore malformed captured events. */ }
                 return completed;
             },
+            // The chain and survey behind a chain id, or behind a survey id (for "survey dismissed").
+            info: function (id) {
+                try { var state = states.get(id); return state ? { chain: state.chain, surveyId: state.surveyId, repeats: state.repeats } : null; } catch (_) { return null; }
+            },
+            bySurvey: function (surveyId) {
+                var found = null;
+                try { states.forEach(function (state) { if (!found && surveyId && state.surveyId === surveyId) found = { chain: state.chain, surveyId: state.surveyId, repeats: state.repeats }; }); } catch (_) {}
+                return found;
+            },
             pending: function (id, token) {
                 try { var state = states.get(id); return !!state && state.pending === token; } catch (_) { return false; }
             },
@@ -229,6 +250,22 @@
                 } catch (_) { return false; }
             }
         };
+    }
+    // Why a completed chain must not show its survey now, or '' when it may. store: lastSeen (ms, any
+    // survey shown, from posthog-js), firedAt (ms, a Lens survey this page), quietUntil (ms), closed
+    // (survey ids the user closed with the cross), shown ({survey id: times shown with no reaction}),
+    // done (the user answered or closed it; a survey that does not repeat never shows again).
+    function quietReason(chain, surveyId, now, store, done, repeats) {
+        try {
+            if (store.closed && store.closed.indexOf(surveyId) !== -1) return 'closed';
+            if (done && !repeats) return 'already answered';
+            if (store.shown && store.shown[surveyId] >= (chain.maxShows || 2)) return 'ignored';
+            if (store.quietUntil && now < store.quietUntil) return 'quiet after a close';
+            var gap = chain.gapMs || 86400000;
+            if (store.lastSeen && now - store.lastSeen < gap) return 'another survey within the gap';
+            if (store.firedAt && now - store.firedAt < gap) return 'another survey on this page';
+            return '';
+        } catch (_) { return 'error'; }
     }
     function isReady(root, options) {
         try {
@@ -255,6 +292,37 @@
             // posthog-js writes seenSurvey_<id> when a user answers or dismisses a survey. Read only.
             function seen(surveyId) {
                 try { return !!surveyId && !!root.localStorage && root.localStorage.getItem('seenSurvey_' + surveyId) !== null; } catch (_) { return false; }
+            }
+            var QUIET_KEY = 'lensSurveyQuiet', firedAt = 0;
+            function store() {
+                var out = { lastSeen: 0, firedAt: firedAt, quietUntil: 0, closed: [], shown: {} };
+                try {
+                    var t = Date.parse(root.localStorage.getItem('lastSeenSurveyDate') || '');
+                    if (finite(t)) out.lastSeen = t;
+                    var q = JSON.parse(root.localStorage.getItem(QUIET_KEY) || 'null');
+                    if (object(q)) {
+                        if (finite(q.until)) out.quietUntil = q.until;
+                        if (Array.isArray(q.closed)) out.closed = q.closed.filter(function (x) { return typeof x === 'string'; }).slice(-100);
+                        if (object(q.shown)) Object.keys(q.shown).slice(-100).forEach(function (k) { if (finite(q.shown[k])) out.shown[k] = q.shown[k]; });
+                    }
+                } catch (_) { /* No storage: only the in-page gap applies. */ }
+                return out;
+            }
+            // The user closed a Lens survey with the cross: it never comes back, and Lens stays quiet a while.
+            function closed(surveyId, quietMs, now) {
+                try {
+                    var s = store();
+                    var list = s.closed.filter(function (x) { return x !== surveyId; }).concat([surveyId]).slice(-100);
+                    root.localStorage.setItem(QUIET_KEY, JSON.stringify({ until: Math.max(s.quietUntil, now + quietMs), closed: list, shown: s.shown }));
+                } catch (_) { /* Storage blocked: PostHog's own seen flag still stops this survey. */ }
+            }
+            // Count shows without a reaction; an answer or a close clears the count.
+            function counted(surveyId, delta) {
+                try {
+                    var s = store();
+                    if (delta) s.shown[surveyId] = (s.shown[surveyId] || 0) + 1; else delete s.shown[surveyId];
+                    root.localStorage.setItem(QUIET_KEY, JSON.stringify({ until: s.quietUntil, closed: s.closed, shown: s.shown }));
+                } catch (_) {}
             }
             function debug(instance, error) {
                 try { if (instance.config && instance.config.debug === true && root.console) root.console.debug('Lens survey engine', error); } catch (_) {}
@@ -289,7 +357,12 @@
                                 if (elapsed > completion.ready.maxWaitMs) { machine.finish(completion.id, completion.token); return; }
                                 if (isReady(root, completion.ready)) {
                                     // Finish before capture: it can synchronously invoke eventCaptured again.
-                                    if (machine.finish(completion.id, completion.token)) instance.capture('lens_chain:' + completion.id, { $lens_chain_id: completion.id });
+                                    if (!machine.finish(completion.id, completion.token)) return;
+                                    var info = machine.info(completion.id), now = Date.now();
+                                    var why = info ? quietReason(info.chain, info.surveyId, now, store(), seen(info.surveyId), info.repeats) : 'gone';
+                                    if (why) { debug(instance, 'survey held back: ' + why); return; }
+                                    firedAt = now;
+                                    instance.capture('lens_chain:' + completion.id, { $lens_chain_id: completion.id });
                                 } else if (elapsed >= completion.ready.maxWaitMs) machine.finish(completion.id, completion.token);
                                 else root.setTimeout(poll, 100);
                             } catch (error) { machine.finish(completion.id, completion.token); debug(instance, error); }
@@ -300,7 +373,26 @@
                     instance.on('eventCaptured', function (event) {
                         var who;
                         try { who = instance.get_distinct_id(); } catch (_) { who = undefined; }
-                        try { machine.consume(event, Date.now(), who, seen).forEach(wait); } catch (error) { debug(instance, error); }
+                        try {
+                            if (event && object(event.properties) && /^survey (shown|sent|dismissed)$/.test(event.event)) {
+                                var hit = machine.bySurvey(event.properties.$survey_id);
+                                if (hit && event.event === 'survey shown') {
+                                    counted(hit.surveyId, 1);
+                                    // Shown this often with no answer or close: mark it seen the way posthog-js does
+                                    // after an answer, so PostHog does not bring it back either.
+                                    try { if ((store().shown[hit.surveyId] || 0) >= hit.chain.maxShows) root.localStorage.setItem('seenSurvey_' + hit.surveyId, 'true'); } catch (_) {}
+                                }
+                                if (hit && event.event === 'survey sent') counted(hit.surveyId, 0);
+                                if (hit && event.event === 'survey dismissed') { counted(hit.surveyId, 0); closed(hit.surveyId, hit.chain.quietMs, Date.now()); }
+                            }
+                        } catch (error) { debug(instance, error); }
+                        // Finished, for the per-user limit: answered, closed, or shown too often with no reaction.
+                        var finished = function (surveyId) {
+                            if (seen(surveyId)) return true;
+                            var st = store(), hit = machine.bySurvey(surveyId);
+                            return st.closed.indexOf(surveyId) !== -1 || (!!hit && (st.shown[surveyId] || 0) >= hit.chain.maxShows);
+                        };
+                        try { machine.consume(event, Date.now(), who, finished).forEach(wait); } catch (error) { debug(instance, error); }
                     });
                     refresh();
                 } catch (error) { debug(instance, error); }
@@ -313,5 +405,5 @@
             extensions.generateSurveys = wrapped;
         } catch (_) { /* Preserve the original renderer if the hook is unavailable. */ }
     }
-    return { normalizeChain: normalizeChain, createMachine: createMachine, isReady: isReady, install: install };
+    return { normalizeChain: normalizeChain, createMachine: createMachine, isReady: isReady, quietReason: quietReason, install: install };
 }));

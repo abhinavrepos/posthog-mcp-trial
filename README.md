@@ -319,13 +319,22 @@ A survey is described in the app's own words:
   of their users), `url_contains`. `show` is `once` per user or `every_time`;
   `days_between_surveys` (14) keeps a user from seeing two surveys close together; `max_responses`
   stops it.
+- **Protecting users from survey fatigue** (enforced per user in the browser):
+  - at least **24 hours** between any two surveys (`SURVEYS_MIN_GAP_HOURS`, never less;
+    `days_between_surveys` is at least 1), and only one survey per visit;
+  - the **×** closes a survey at once; that survey never returns, and the user gets no survey for
+    **7 days** (`SURVEYS_QUIET_DAYS_AFTER_CLOSE`);
+  - a survey shown **twice with no answer or close** stops coming back;
+  - a survey the user already answered never takes another survey's turn.
 - **At most two running surveys per user** (`SURVEYS_PER_USER`, 2). A user already in two
   earlier-launched running surveys they have not answered or dismissed is **queued** for a new
   one: not dropped, they get it later, the next time they do its steps after finishing one of
   those. The browser engine enforces it per user (clients and sample included). The person making
   the survey gets a ⚠ alert first in the `design_survey`, `save_survey` and `launch_survey` replies
   and on the Surveys page: which clients are queued, behind which surveys, and that stopping one of
-  those frees them sooner.
+  those frees them sooner. Whenever a survey's users are already in another running survey, even
+  under the limit, the person setting it up gets a formal survey-fatigue notice with advice
+  (narrow the clients, use a sample, or launch after the other one ends).
 - **Questions**: `rating` (3, 5, 7 or 10 numbers, or emoji with 3 or 5), `nps` (0-10), `yes_no`
   (labels can change), `thumbs` (up or down), `open`, `single`, `multiple` (optional "Other").
 - **Look**: `theme` `light` (white, ION blue) or `dark` (navy, amber), then any part: background,

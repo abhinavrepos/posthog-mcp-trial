@@ -104,6 +104,8 @@ describe('types, look and one survey at a time', () => {
         assert.equal(n.limit, 2)
         assert.equal(n.audience.sample, 33)
         assert.ok(errors(compileSurvey({ ...base, sample_percent: 0 }, { reg })).length)
+        assert.deepEqual(errors(compileSurvey({ ...base, days_between_surveys: 0 }, { reg })).map((p) => p.where), ['days_between_surveys'])
+        assert.deepEqual([c.chain.gapHours, c.chain.quietDaysAfterClose, n.gapMs, n.quietMs], [24, 7, 24 * 3600000, 7 * 86400000])
     })
     test('queue alert: users already in two running surveys wait, and are told to come back later', async () => {
         const { conflictsFor, queueAlert } = await import('../src/core/surveys.ts')
@@ -118,17 +120,18 @@ describe('types, look and one survey at a time', () => {
         const q = queueAlert(mine, cs)
         assert.equal(q.level, 'queued')
         assert.deepEqual([q.queued, q.some_wait], [['acme'], ['beta']])
-        assert.match(q.alert, /⚠ Queued for ACME: their users already have 2 running surveys.*"a", "b".*later/)
-        assert.match(q.alert, /Some users of BETA may wait/)
+        assert.match(q.alert, /⚠ Queued for ACME: their users are already taking part in 2 running surveys \("a", "b"\).*later/)
+        assert.match(q.alert, /Some users of BETA may have to wait/)
+        assert.match(q.alert, /at least 24 hours between any two surveys.*7 days/)
         const acmeOnly = compileSurvey(base, { reg, chainId: 'n2', clientIds: ['ACME'] }).chain
         assert.equal(queueAlert(acmeOnly, conflictsFor(acmeOnly, {}, list)).level, 'all_queued')
         const gamma = compileSurvey(base, { reg, chainId: 'n3', clientIds: ['GAMMA'] }).chain
         assert.equal(queueAlert(gamma, conflictsFor(gamma, {}, list)).level, 'clear')
-        // One other survey is under the limit of two: fine.
+        // One other survey is under the limit of two, but still a formal survey-fatigue notice.
         const zed = compileSurvey(base, { reg, chainId: 'n4', clientIds: ['ZED'] }).chain
         const qz = queueAlert(zed, conflictsFor(zed, {}, list))
-        assert.equal(qz.level, 'clear')
-        assert.match(qz.alert, /under the limit of 2/)
+        assert.equal(qz.level, 'overlap')
+        assert.match(qz.alert, /^⚠ Survey fatigue: users of ZED are already taking part in another running survey \("z"\)\. Asking the same people/)
         // b was launched after a: only a counts for b.
         assert.deepEqual(conflictsFor(list[1].conditions!.lensChain!, list[1], list).map((c) => c.survey_id), ['a'])
     })

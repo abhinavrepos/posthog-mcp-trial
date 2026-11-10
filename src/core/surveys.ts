@@ -143,6 +143,8 @@ export interface LensChain {
     resetLabels?: string[]
     audience?: Audience
     maxPerUser: number // a user is in at most this many running surveys at once; later ones wait until they finish one
+    gapHours: number // never two surveys within this many hours for a user (24 at least)
+    quietDaysAfterClose: number // after the user closes a Lens survey with the cross: none for this many days
     ready: { documentComplete: boolean; noVisibleMask: boolean; maxWaitMs: number }
 }
 
@@ -338,6 +340,8 @@ export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: 
         ...(resets.length ? { resetOn: resets.map((c) => c?.step).filter((x): x is ChainStep => !!x), resetLabels: resets.map((c) => c?.label).filter((x): x is string => !!x) } : {}),
         ...(Object.keys(audience).length ? { audience } : {}),
         maxPerUser: opts.maxPerUser ?? config.surveys.perUser,
+        gapHours: config.surveys.gapHours,
+        quietDaysAfterClose: config.surveys.quietDaysAfterClose,
         ready: { documentComplete: spec.wait_for_page !== false, noVisibleMask: spec.wait_for_page !== false, maxWaitMs: Math.round(maxWait * 1000) },
     }
     if (!/^[a-z0-9-]{1,40}$/.test(chain.id)) e('chain', `chain id "${chain.id}" must be 1-40 characters of a-z, 0-9 and -`)
@@ -348,7 +352,7 @@ export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: 
     const show = spec.show ?? 'once'
     if (!['once', 'every_time'].includes(show)) e('show', 'show must be once or every_time')
     const gap = spec.days_between_surveys ?? 14
-    if (!(Number.isInteger(gap) && gap >= 0 && gap <= 365)) e('days_between_surveys', 'give 0 to 365 days')
+    if (!(Number.isInteger(gap) && gap >= 1 && gap <= 365)) e('days_between_surveys', 'give 1 to 365 days: a user always gets at least 24 hours between surveys')
     if (spec.max_responses !== undefined && !(Number.isInteger(spec.max_responses) && spec.max_responses > 0 && spec.max_responses <= 1_000_000)) e('max_responses', 'give a whole number above 0, or leave it out')
     if (spec.url_contains !== undefined && (typeof spec.url_contains !== 'string' || spec.url_contains.length > 500)) e('url_contains', 'give text of up to 500 characters')
 
@@ -383,7 +387,7 @@ export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: 
         schedule: show === 'every_time' ? 'always' : 'once',
         conditions: {
             events: { repeatedActivation: show === 'every_time', values: [{ name: `lens_chain:${chain.id}` }] },
-            ...(gap ? { seenSurveyWaitPeriodInDays: gap } : {}),
+            seenSurveyWaitPeriodInDays: gap,
             ...(spec.url_contains ? { url: spec.url_contains, urlMatchType: 'icontains' } : {}),
             lensChain: chain,
         },
@@ -529,6 +533,7 @@ export interface SurveyView {
     within_minutes?: number
     clients: string[] | 'all'
     sample_percent: number
+    pacing?: { per_user: number; gap_hours: number; quiet_days_after_close: number }
     url_contains?: string
     waits_for_page: boolean
     show: 'once' | 'every_time'
@@ -583,6 +588,7 @@ export function viewOf(s: PostHogSurvey): SurveyView {
         ...(lens && c!.withinSeconds ? { within_minutes: Math.round(c!.withinSeconds / 6) / 10 } : {}),
         clients: lens && c!.audience?.clients ? c!.audience.clients : 'all',
         sample_percent: lens ? c!.audience?.sample ?? 100 : 100,
+        ...(lens && c!.maxPerUser ? { pacing: { per_user: c!.maxPerUser, gap_hours: c!.gapHours ?? 24, quiet_days_after_close: c!.quietDaysAfterClose ?? 7 } } : {}),
         ...(s.conditions?.url ? { url_contains: s.conditions.url } : {}),
         waits_for_page: lens ? c!.ready.documentComplete : false,
         show: s.schedule === 'always' ? 'every_time' : 'once',
@@ -691,40 +697,53 @@ export function conflictsFor(chain: LensChain, self: { id?: string; start_date?:
 }
 
 export interface QueueAlert {
-    level: 'clear' | 'some_wait' | 'queued' | 'all_queued'
+    level: 'clear' | 'overlap' | 'some_wait' | 'queued' | 'all_queued'
     alert: string // for the person making the survey
     queued: string[] // clients whose users all wait ("*" = every client not named)
     some_wait: string[] // clients where some users wait (samples)
+    overlap: string[] // clients whose users are in other running surveys
     limit: number
 }
 
-/** The alert for the person making the survey: who is full, who waits, and that they get it later. */
+/**
+ * The notice for the person setting up a survey. Any overlap with another running survey gets a
+ * survey-fatigue warning, even under the limit; users at the limit are queued and told to come later.
+ */
 export function queueAlert(chain: LensChain, conflicts: Conflict[]): QueueAlert {
     const limit = chain.maxPerUser ?? 1
+    const gap = chain.gapHours ?? 24
+    const quiet = chain.quietDaysAfterClose ?? 7
     const surveys = (n: number) => `${n} running survey${n === 1 ? '' : 's'}`
     const mine = chain.audience?.clients?.map((c) => c.toLowerCase())
     const keys = mine ?? [...new Set([...conflicts.flatMap((c) => (c.clients === 'all' ? [] : c.clients)), '*'])]
     const queued: string[] = []
     const some: string[] = []
+    const overlap: string[] = []
     const names = new Map<string, string[]>()
     for (const k of keys) {
         const hold = conflicts.filter((c) => c.clients === 'all' || (k !== '*' && c.clients.includes(k)))
         names.set(k, hold.map((c) => `"${c.name}"`))
         if (hold.filter((c) => c.share === 100).length >= limit) queued.push(k)
         else if (hold.length >= limit) some.push(k)
+        else if (hold.length) overlap.push(k)
     }
     const label = (k: string) => (k === '*' ? 'every other client' : k.toUpperCase())
-    const later = 'They are not dropped: each gets this survey later, the next time they do its steps after answering or dismissing one of those. Stop one of those surveys to free them sooner.'
+    const listOf = (ks: string[]) => [...new Set(ks.flatMap((k) => names.get(k)!))].join(', ')
+    const pacing = `Lens keeps at least ${gap} hours between any two surveys for a user, never shows more than ${limit} at a time, after a user closes a survey with the cross it leaves them alone for ${quiet} days, and a survey they ignore twice stops coming back.`
+    const fatigue = 'Asking the same people for feedback repeatedly can feel intrusive and tends to lower both the response rate and the quality of the answers.'
+    const advice = 'Please consider narrowing the clients, using a sample, or launching once the other survey has ended.'
     const all = queued.length === keys.length && keys.length > 0
     const parts: string[] = []
-    if (all) parts.push(`⚠ Queued: every user this survey targets already has ${surveys(limit)}, the most a user can have at once (${[...new Set(queued.flatMap((k) => names.get(k)!))].join(', ')}). Nobody sees it yet. ${later}`)
+    if (all) parts.push(`⚠ Queued: every user this survey targets is already taking part in ${surveys(limit)} (${listOf(queued)}), the maximum per user. Nobody will see it for now. They are not dropped: each will receive it later, once they have answered or closed one of those surveys and at least ${gap} hours after their last one. Ending one of those surveys frees them sooner.`)
     else {
-        if (queued.length) parts.push(`⚠ Queued for ${queued.map(label).join(', ')}: their users already have ${surveys(limit)}, the most a user can have at once (${[...new Set(queued.flatMap((k) => names.get(k)!))].join(', ')}). ${later}`)
-        if (some.length) parts.push(`Some users of ${some.map(label).join(', ')} may wait: part of them are in ${surveys(limit)} already (samples). They get it later too.`)
+        if (queued.length) parts.push(`⚠ Queued for ${queued.map(label).join(', ')}: their users are already taking part in ${surveys(limit)} (${listOf(queued)}), the maximum per user. They will receive this survey later, once they have answered or closed one of those and at least ${gap} hours after their last survey.`)
+        if (some.length) parts.push(`⚠ Some users of ${some.map(label).join(', ')} may have to wait: part of them are already in ${surveys(limit)} (${listOf(some)}).`)
+        if (overlap.length) parts.push(`⚠ Survey fatigue: users of ${overlap.map(label).join(', ')} are already taking part in another running survey (${listOf(overlap)}).`)
     }
-    const level: QueueAlert['level'] = all ? 'all_queued' : queued.length ? 'queued' : some.length ? 'some_wait' : 'clear'
-    if (level === 'clear') parts.push(conflicts.length ? `Fine: some users are in another running survey, but under the limit of ${surveys(limit)} per user, so they can get this one too.` : 'Fine: none of its users is in another running survey.')
-    return { level, alert: parts.join(' '), queued, some_wait: some, limit }
+    const level: QueueAlert['level'] = all ? 'all_queued' : queued.length ? 'queued' : some.length ? 'some_wait' : overlap.length ? 'overlap' : 'clear'
+    if (level === 'clear') parts.push(`No overlap: none of this survey's users is taking part in another running survey. ${pacing}`)
+    else parts.push(`${fatigue} ${pacing} ${advice}`)
+    return { level, alert: parts.join(' '), queued, some_wait: some, overlap, limit }
 }
 
 /** The alert as one line (MCP replies, the page). */
