@@ -25,6 +25,24 @@ const get = async (url: string, headers: Record<string, string> = {}) => {
     } catch {}
     return { status: res.status, body, text }
 }
+// The event property names PostHog knows (names only, never values). Undefined when the key may not list them.
+async function eventPropertyNames(host: string, projectId: string, headers: Record<string, string>): Promise<string[] | undefined> {
+    try {
+        const r = await get(`${host}/api/projects/${projectId}/property_definitions/?type=event&limit=1000`, headers)
+        if (r.status !== 200) return undefined
+        return ((r.body?.results || []) as { name: string }[]).map((x) => x.name).filter((n) => !n.startsWith('$'))
+    } catch {
+        return undefined
+    }
+}
+function clientHint(names: string[] | undefined): string {
+    if (!names) return 'Set PROP_CLIENT_ID in .secrets.env to the event property your app puts the client id in (add the property_definition:read scope to the key to list the candidates here).'
+    const likely = names.filter((n) => /client|tenant|customer|account|company|org/i.test(n))
+    const shown = (likely.length ? likely : names).slice(0, 12)
+    return shown.length
+        ? `Set PROP_CLIENT_ID in .secrets.env to one of the properties your events carry${likely.length ? ' that look like a client id' : ''}: ${shown.join(', ')}.`
+        : 'Your events carry no custom properties: the app has to send the client id with each event.'
+}
 const isLocal = (u: string) => /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(u)
 
 console.log(`Settings file: ${ENV_FILE}${existsSync(ENV_FILE) ? '' : ' (not found: using the environment only)'}\n`)
@@ -73,7 +91,12 @@ else {
             } FROM events WHERE timestamp > now() - INTERVAL 7 DAY`
         )) as number[]
         const share = (n: number) => (events ? `${Math.round((100 * n) / events)}% of ${events} events in 7 days` : 'no events in 7 days')
-        say(!events ? 'warn' : withClient ? 'ok' : 'fail', `Client property "${p.client}" (PROP_CLIENT_ID)`, share(withClient))
+        // A wrong name is a setting to fix, not a broken install: Lens runs, but cannot tell which client a
+        // session belongs to. So a warning, with the property names the events do carry.
+        if (events && !withClient) {
+            const names = await eventPropertyNames(ph.host, ph.projectId, auth)
+            say('warn', `Client property "${p.client}" (PROP_CLIENT_ID)`, `no event in 7 days has it (of ${events}). ${clientHint(names)}`)
+        } else say(!events ? 'warn' : 'ok', `Client property "${p.client}" (PROP_CLIENT_ID)`, share(withClient))
         say(!events || withName ? 'ok' : 'warn', `Client name property "${p.clientName}" (PROP_CLIENT_NAME)`, share(withName))
         if (p.version) say(!events || withVersion ? 'ok' : 'warn', `Release property "${p.version}" (PROP_APP_VERSION)`, share(withVersion))
         else say('ok', 'Release property', 'none: releases are matched by date')
