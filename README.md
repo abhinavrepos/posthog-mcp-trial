@@ -106,6 +106,28 @@ Reval screen still goes there. The routing rules are repeated on both servers th
 To try it without Reval: `pnpm tsx scripts/seed-reval.ts` sends made-up Reval-shaped events (four
 clients, two weeks) to the PostHog in `.secrets.env`.
 
+### Workflows
+
+`discover_workflows` answers which tasks people do in Reval and whether they finish them.
+It finds chains of 2–4 dialogs opened in order, ending in a submit, in at least two sessions.
+Search/menu navigation or 10 minutes idle starts a new episode. Consecutive opens of the same
+dialog collapse; menu and message dialogs stay out. Chains rank by sessions × clients. A shorter
+chain drops out when a containing chain has at least 80% of its session support.
+
+After agreeing a name with the person, `save_workflow` keeps its ordered dialog codes and done
+rule in SQLite settings. Discovery also lists saved workflows. `workflow_completion` takes a
+saved name or dialog codes/names. It counts starts, ordered funnel steps, failures, retries and
+abandonment per client and overall, with times, dropout errors, example replay links and a
+comparison with the previous window of equal length. A retry repeats the same button in the
+same dialog within five minutes after an error. Other dialogs may appear between funnel steps.
+
+A start belongs to the window where the episode first opened the starting dialog. Done must
+follow all steps in that episode. Its time ends at the answering message. Queued (`accepted`)
+and `completed` are reported separately; saved rules can require either or both. Ad hoc dialogs
+require completed. No observed done before the episode ends counts as abandoned; active sessions
+can change. Reads cover at most 2,000 relevant sessions and 50,000 events per batch of 50 sessions.
+The output flags partial results when a limit is reached.
+
 ## Replay clip page
 
 `http://<host>:8080/replays` turns any session replay into an MP4. PostHog's own "export to
