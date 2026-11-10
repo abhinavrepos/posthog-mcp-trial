@@ -12,16 +12,17 @@ import { join } from 'node:path'
 
 import { renderClip } from '../core/clip.ts'
 import { addComment, captionedFile, checkComment, commentCounts, cues, DEFAULT_DURATION, deleteComment, DURATIONS, getComment, listComments, MAX_TEXT, removeVariants, toVtt, updateComment, variantOf } from '../core/comments.ts'
-import { config } from '../core/config.ts'
+import { config, surveysActive } from '../core/config.ts'
 import { all, db, one, run, tx } from '../core/db.ts'
 import { clipUrl } from '../core/links.ts'
 import { replayUrl } from '../core/posthog.ts'
 import { recordingInfo, type RecordingInfo } from '../core/recording-info.ts'
 import { downloadName, formatClock, HourlyLimit, parseReplayInput, parseStartTime } from '../core/replay-input.ts'
-import { audit, can, canSeeSystem, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
+import { audit, can, canSeeSystem, canUseSurveys, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
 import { handleAdmin } from './admin.ts'
 import { handleLive, liveHtml } from './live.ts'
 import { handleSystem } from './system.ts'
+import { handleSurveys } from './surveyspage.ts'
 
 const RETENTION_DAYS = Number(process.env.CLIP_RETENTION_DAYS || 14)
 const AUDIT_RETENTION_DAYS = Number(process.env.AUDIT_RETENTION_DAYS || 365)
@@ -339,6 +340,11 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         res.end(loginHtml('System'))
         return true
     }
+    if (!viewer && (p === '/replays/surveys' || p === '/replays/surveys/')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
+        res.end(loginHtml('Surveys'))
+        return true
+    }
     if (p === '/replays/live' || p === '/replays/live/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
         res.end(!viewer ? loginHtml('Live') : can(viewer.role, 'watch') ? liveHtml(viewer) : noAccessHtml(viewer))
@@ -350,6 +356,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
     }
     if (p.startsWith('/replays/admin')) return handleAdmin(req, res, url, viewer)
     if (p === '/replays/system' || p.startsWith('/replays/system/')) return handleSystem(req, res, url, viewer)
+    if (p === '/replays/surveys' || p.startsWith('/replays/surveys/')) return handleSurveys(req, res, url, viewer)
     if (!can(viewer.role, 'watch')) {
         json(res, 403, { error: 'You do not have access to replay clips. Ask an admin.' })
         return true
@@ -570,7 +577,7 @@ header{display:flex;align-items:center;gap:18px;padding:10px 20px;border-bottom:
 .brand .tag{font-weight:500;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 7px}
 nav{display:flex;gap:4px;flex:1}nav a{color:var(--muted);text-decoration:none;font-weight:600;padding:7px 11px;border-radius:7px}nav a:hover{color:var(--ink);background:var(--bg)}
 nav a[aria-current=page]{color:var(--accent);background:var(--chip)}.hdr{display:flex;gap:10px;align-items:center;flex-wrap:wrap}header button{padding:5px 10px}
-@media (max-width:700px){nav{order:3;flex-basis:100%}.who{display:none}}.muted{color:var(--muted)}.small{font-size:13px}main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
+@media (max-width:700px){nav{order:3;flex-basis:100%;flex-wrap:wrap;min-width:0}nav a{padding:6px 8px}.who{display:none}}.muted{color:var(--muted)}.small{font-size:13px}main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:16px}
 h2{font-size:17px;margin:0 0 12px}label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
 input,select{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:9px 11px}
@@ -599,7 +606,7 @@ export const PAGE_CSS = () => CSS
 
 export const APP_NAME = config.app.name
 export const APP_TAG = config.app.tag
-export type Section = 'Replay clips' | 'Live' | 'System' | 'Admin'
+export type Section = 'Replay clips' | 'Live' | 'Surveys' | 'System' | 'Admin'
 
 /** The header on every page: the product name, the sections this person may open, and sign out. */
 export function headerHtml(v: Viewer | undefined, section: Section): string {
@@ -609,11 +616,12 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
         [
             ['Replay clips', '/replays', 'watch'],
             ['Live', '/replays/live', 'watch'],
+            ['Surveys', '/replays/surveys', 'surveys'],
             ['System', '/replays/system', 'system'],
             ['Admin', '/replays/admin', 'admin'],
         ] as const
     )
-        .filter(([, , need]) => (need === 'system' ? canSeeSystem(v) : can(v.role, need)))
+        .filter(([, , need]) => (need === 'system' ? canSeeSystem(v) : need === 'surveys' ? surveysActive() && canUseSurveys(v) : can(v.role, need)))
         .map(([name, href]) => `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${name}</a>`)
         .join('')
     return `<header>${brand}<nav>${tabs}</nav><span class="hdr"><span class="muted small who">${esc(v.email)} · ${esc(ROLE_TEXT[v.role])}</span><button class="ghost small" id="signout" type="button">Sign out</button></span></header>

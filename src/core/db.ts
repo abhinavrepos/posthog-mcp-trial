@@ -7,6 +7,7 @@
 //   clip_holders  who has which clip: made it, and whether they saved it
 //   clip_comments comments pinned to a second of a clip, shown over the video and burned into downloads
 //   system_viewers who may see the System page besides admins
+//   survey_people  who may see the Surveys page, and launch and stop surveys there, besides admins
 //   audit         sign-ins, views, downloads, shares and access changes
 //   releases, release_tickets, release_snapshots, release_verdicts
 //                 release outcomes for the MCP tools: the last N Jira releases (default 12), their
@@ -153,6 +154,13 @@ const MIGRATIONS: string[] = [
     // People an admin let see the System page (machine and container status). Kept apart from the
     // clip roles, so a role change or reset never grants or removes it. Admins always see it.
     `CREATE TABLE system_viewers (
+        email TEXT PRIMARY KEY,
+        updated_by TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );`,
+
+    // People an admin let use the Surveys page (see answers, launch and stop surveys). Admins always can.
+    `CREATE TABLE survey_people (
         email TEXT PRIMARY KEY,
         updated_by TEXT NOT NULL,
         updated_at TEXT NOT NULL

@@ -4,7 +4,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config } from '../core/config.ts'
-import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSystemAccess, systemViewers, type Role, type Viewer } from './access.ts'
+import { getSetting, setSetting } from '../core/db.ts'
+import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSurveyAccess, setSystemAccess, surveyPeople, systemViewers, type Role, type Viewer } from './access.ts'
 import { APP_NAME, deleteClip, headerHtml, listClips, PAGE_CSS, setSaved, storage } from './replays.ts'
 
 interface Member {
@@ -72,7 +73,8 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         const space = storage()
         const held = new Map(space.per_person.map((x) => [x.email, x]))
         const sys = systemViewers()
-        const emails = new Set([...members.map((m) => m.email), ...Object.keys(access.people), ...sys.keys()])
+        const srv = surveyPeople()
+        const emails = new Set([...members.map((m) => m.email), ...Object.keys(access.people), ...sys.keys(), ...srv.keys()])
         const people = [...emails].sort().map((email) => {
             const ms = members.filter((m) => m.email === email)
             const inProject = ms.find((m) => m.org_id === org)
@@ -82,6 +84,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
                 // Admins always see the System page; for anyone else it is the tick on this page.
                 system: can(role, 'admin') || sys.has(email),
                 system_granted: sys.has(email),
+                surveys: can(role, 'admin') || srv.has(email),
                 email,
                 name: ms[0]?.name || '',
                 posthog: ms.length ? ms.map((m) => `${m.org} (${m.level >= 15 ? 'owner' : m.level >= 8 ? 'admin' : 'member'})`).join(', ') : 'No PostHog account in your organizations',
@@ -98,6 +101,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
             me: v.email,
             default_role: access.default_role,
             allow_share_links: access.allow_share_links,
+            surveys_mcp_launch: getSetting('surveys_mcp_launch', true),
             roles: ROLES.map((r) => ({ id: r, text: ROLE_TEXT[r] })),
             people,
             clips: listClips({ limit: 300 }),
@@ -115,6 +119,16 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         if (email === v.email && !can(role, 'admin') && !v.posthog_admin) return (json(res, 400, { error: 'You cannot remove your own admin role.' }), true)
         setPerson(email, role, v.email, String(body.note || '').slice(0, 200) || undefined)
         if (typeof body.system === 'boolean') setSystemAccess(email, body.system, v.email)
+        if (typeof body.surveys === 'boolean') setSurveyAccess(email, body.surveys, v.email)
+        return (json(res, 200, { ok: true }), true)
+    }
+
+    // Who may use the Surveys page besides admins. Separate from the clip role.
+    if (p === '/replays/admin/api/surveys' && req.method === 'POST') {
+        const body = await readJson(req)
+        const email = String(body.email || '').trim().toLowerCase()
+        if (!EMAIL.test(email) || typeof body.on !== 'boolean') return (json(res, 400, { error: 'Give an email and on: true or false.' }), true)
+        setSurveyAccess(email, body.on, v.email)
         return (json(res, 200, { ok: true }), true)
     }
 
@@ -143,6 +157,10 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
             change.default_role = r
         }
         if (body.allow_share_links !== undefined) change.allow_share_links = !!body.allow_share_links
+        if (typeof body.surveys_mcp_launch === 'boolean') {
+            setSetting('surveys_mcp_launch', body.surveys_mcp_launch)
+            audit(v.email, 'access.settings', { surveys_mcp_launch: body.surveys_mcp_launch })
+        }
         setAccessSettings(change, v.email)
         return (json(res, 200, { ok: true }), true)
     }
@@ -186,6 +204,7 @@ td select{min-width:190px}label.check{display:inline-flex;gap:6px;align-items:ce
 <li><b>Signing in is PostHog's job.</b> Everyone signs in with their PostHog account. Passwords, two-factor login and removing people all happen in PostHog. Removing someone from PostHog locks them out here within a minute.</li>
 <li><b>What they may do is set here.</b> <i>Watch clips</i> lets a person make and watch clips on this site. <i>Watch, download and share</i> adds MP4 downloads and share links. <i>Admin</i> adds this page.</li>
 <li><b>The System page</b> shows whether the server and every container are up, with machine, ClickHouse and Lens numbers. It never shows replay or event content. Admins always see it. Tick <i>System page</i> to let anyone else see it too, for example whoever looks after the server. It is separate from the role, so someone can see the System page with <i>No access</i> to clips.</li>
+<li><b>The Surveys page</b> shows every in-app survey, what makes it appear, and the answers, and has Launch and Stop buttons. Admins always see it. Tick <i>Surveys</i> for anyone else. Below, you can also stop chat (the MCP tools) from launching or stopping surveys, so only this page can.</li>
 <li><b>PostHog owners and admins</b> of the organization that owns the project are always admins here, so nobody can be locked out.</li>
 <li><b>Important:</b> on this PostHog plan, PostHog itself cannot limit replays per person. Anyone who is a member of the project's organization can watch every replay inside PostHog, whatever their role here. Those people are marked <span class="badge warn">sees all replays in PostHog</span>. To keep someone to clips only, give them a PostHog account in a separate organization (for example "Clip viewers") with no access to this project, then give them a role here.</li>
 <li><b>Storage.</b> A clip is stored once, however many people make the same part of the same recording. A clip nobody saved is deleted two weeks after it was last asked for. Saved clips stay until whoever saved them unsaves them, or you delete them here.</li>
@@ -193,13 +212,14 @@ td select{min-width:190px}label.check{display:inline-flex;gap:6px;align-items:ce
 
 <div class="card"><h2>People</h2>
 <div class="toolbar"><div><label for="new-email">Add a person (their PostHog email)</label><input id="new-email" type="email" placeholder="name@company.com"></div>
-<div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0"><button id="add">Add</button></div></div>
+<div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0;white-space:nowrap"><label class="check"><input id="new-surveys" type="checkbox"> Surveys</label></div><div style="flex:0"><button id="add">Add</button></div></div>
 <p id="people-msg" class="small"></p>
-<div class="table-wrap"><table><thead><tr><th>Person</th><th>In PostHog</th><th>Role here</th><th>System page</th><th>Clips</th><th>Last activity</th><th></th></tr></thead><tbody id="people"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table></div></div>
+<div class="table-wrap"><table><thead><tr><th>Person</th><th>In PostHog</th><th>Role here</th><th>System page</th><th>Surveys</th><th>Clips</th><th>Last activity</th><th></th></tr></thead><tbody id="people"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody></table></div></div>
 
 <div class="card"><h2>Settings</h2>
 <div class="toolbar"><div><label for="default-role">Role for other PostHog users</label><select id="default-role"></select></div>
-<div><label for="share">Share links</label><select id="share"><option value="1">Allowed (for people who can download)</option><option value="0">Turned off</option></select></div></div>
+<div><label for="share">Share links</label><select id="share"><option value="1">Allowed (for people who can download)</option><option value="0">Turned off</option></select></div>
+<div><label for="mcp-launch">Surveys from chat</label><select id="mcp-launch"><option value="1">Chat may launch and stop surveys</option><option value="0">Only the Surveys page may</option></select></div></div>
 <p class="small muted">The default applies to anyone who signs in with a PostHog account and is not listed above. "No access" is the safe choice.</p><p id="settings-msg" class="small"></p></div>
 
 <div class="card"><h2>Clips</h2><p class="small muted" id="space"></p>
@@ -219,13 +239,13 @@ const clock=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 const short=e=>(e||'').replace(/@.*/,'');
 const cell=(tr,t,cls)=>{const td=document.createElement('td');if(t instanceof Node)td.appendChild(t);else td.textContent=t??'';if(cls)td.className=cls;tr.appendChild(td);return td};
 const msg=(id,t,ok)=>{$(id).textContent=t;$(id).className='small '+(ok?'ok':'err')};
-const ACTIONS={'signin':'Signed in','signout':'Signed out','signin.failed':'Failed sign in','recording.inspected':'Looked up a recording','clip.requested':'Asked for a clip','clip.created':'Clip made','clip.viewed':'Watched a clip','clip.downloaded':'Downloaded a clip','clip.link_shared':'Created a share link','clip.deleted':'Deleted a clip','clip.saved':'Saved a clip','clip.unsaved':'Unsaved a clip','clip.comment_added':'Commented on a clip','clip.comment_edited':'Edited a clip comment','clip.comment_deleted':'Deleted a clip comment','clips.pruned':'Old clips deleted','access.role_set':'Changed a role','access.role_removed':'Removed a role','access.settings':'Changed settings','access.system_set':'Changed System page access'};
+const ACTIONS={'signin':'Signed in','signout':'Signed out','signin.failed':'Failed sign in','recording.inspected':'Looked up a recording','clip.requested':'Asked for a clip','clip.created':'Clip made','clip.viewed':'Watched a clip','clip.downloaded':'Downloaded a clip','clip.link_shared':'Created a share link','clip.deleted':'Deleted a clip','clip.saved':'Saved a clip','clip.unsaved':'Unsaved a clip','clip.comment_added':'Commented on a clip','clip.comment_edited':'Edited a clip comment','clip.comment_deleted':'Deleted a clip comment','clips.pruned':'Old clips deleted','access.role_set':'Changed a role','access.role_removed':'Removed a role','access.settings':'Changed settings','access.system_set':'Changed System page access','access.surveys_set':'Changed Surveys page access','survey.created':'Made a survey','survey.changed':'Changed a survey','survey.launched':'Launched a survey','survey.stopped':'Stopped a survey','survey.archived':'Archived a survey'};
 let S=null;
 function roleSelect(value,disabled){const s=document.createElement('select');S.roles.forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.text;if(r.id===value)o.selected=true;s.appendChild(o)});s.disabled=!!disabled;return s}
 async function load(){S=await api('/replays/admin/api/state');
  $('new-role').innerHTML='';S.roles.forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.text;if(r.id==='watch')o.selected=true;$('new-role').appendChild(o)});
  $('default-role').innerHTML='';S.roles.filter(r=>r.id!=='admin').forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.text;if(r.id===S.default_role)o.selected=true;$('default-role').appendChild(o)});
- $('share').value=S.allow_share_links?'1':'0';
+ $('share').value=S.allow_share_links?'1':'0';$('mcp-launch').value=S.surveys_mcp_launch?'1':'0';
  const tb=$('people');tb.innerHTML='';
  S.people.forEach(p=>{const tr=document.createElement('tr');
   const who=document.createElement('div');who.innerHTML='<b></b><div class="small muted"></div>';who.querySelector('b').textContent=p.email+(p.email===S.me?' (you)':'');who.querySelector('div').textContent=[p.name,p.note].filter(Boolean).join(' · ');cell(tr,who);
@@ -236,6 +256,10 @@ async function load(){S=await api('/replays/admin/api/state');
   if(p.role==='admin'){cb.disabled=true;sw.title='Admins always see the System page'}
   cb.onchange=async()=>{try{await api('/replays/admin/api/system',{method:'POST',body:JSON.stringify({email:p.email,on:cb.checked})});msg('people-msg',(cb.checked?'Saved: '+p.email+' can now see the System page.':'Saved: '+p.email+' can no longer see the System page.'),true);load()}catch(e){msg('people-msg',e.message);load()}};
   cell(tr,sw);
+  const sv=document.createElement('label');sv.className='check small';const cs=document.createElement('input');cs.type='checkbox';cs.checked=!!p.surveys;sv.append(cs,document.createTextNode(p.role==='admin'?' Always (admin)':' Can use it'));
+  if(p.role==='admin'){cs.disabled=true;sv.title='Admins can always use the Surveys page'}
+  cs.onchange=async()=>{try{await api('/replays/admin/api/surveys',{method:'POST',body:JSON.stringify({email:p.email,on:cs.checked})});msg('people-msg',(cs.checked?'Saved: '+p.email+' can now use the Surveys page.':'Saved: '+p.email+' can no longer use the Surveys page.'),true);load()}catch(e){msg('people-msg',e.message);load()}};
+  cell(tr,sv);
   cell(tr,p.clips.clips?n(p.clips.clips,'clip')+', '+p.clips.saved+' saved · '+mb(p.clips.bytes):'none','small');
   cell(tr,when(p.last_seen),'small');
   if(p.set_here&&!p.locked){const b=document.createElement('button');b.className='ghost';b.textContent='Reset';b.title='Remove the role set here, so the default applies';b.onclick=async()=>{try{await api('/replays/admin/api/person?email='+encodeURIComponent(p.email),{method:'DELETE'});msg('people-msg','Removed the role for '+p.email+'.',true);load()}catch(e){msg('people-msg',e.message)}};cell(tr,b)}else cell(tr,'');
@@ -260,9 +284,10 @@ function renderAudit(){const tb=$('audit');tb.innerHTML='';
  if(!S.audit.length)tb.innerHTML='<tr><td colspan="4" class="muted">Nothing found.</td></tr>';
  S.audit.forEach(e=>{const tr=document.createElement('tr');cell(tr,when(e.t),'small');cell(tr,e.who);cell(tr,ACTIONS[e.action]||e.action);const {t,who,action,...rest}=e;cell(tr,Object.entries(rest).map(([k,v])=>k+': '+(typeof v==='object'?JSON.stringify(v):v)).join(' · '),'small muted');tb.appendChild(tr)})}
 let searchTimer;$('filter').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(async()=>{const q=$('filter').value.trim();try{S.audit=(await api('/replays/admin/api/audit'+(q?'?q='+encodeURIComponent(q):''))).audit;renderAudit()}catch(e){}},250)};
-$('add').onclick=async()=>{const email=$('new-email').value.trim();if(!email)return;try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email,role:$('new-role').value,system:$('new-system').checked})});$('new-email').value='';$('new-system').checked=false;msg('people-msg','Added '+email+'.',true);load()}catch(e){msg('people-msg',e.message)}};
+$('add').onclick=async()=>{const email=$('new-email').value.trim();if(!email)return;try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email,role:$('new-role').value,system:$('new-system').checked,surveys:$('new-surveys').checked})});$('new-email').value='';$('new-system').checked=false;$('new-surveys').checked=false;msg('people-msg','Added '+email+'.',true);load()}catch(e){msg('people-msg',e.message)}};
 $('default-role').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({default_role:$('default-role').value})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
 $('share').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({allow_share_links:$('share').value==='1'})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
-load().catch(e=>{$('people').innerHTML='<tr><td colspan="7" class="err"></td></tr>';$('people').querySelector('td').textContent=e.message});
+$('mcp-launch').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({surveys_mcp_launch:$('mcp-launch').value==='1'})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
+load().catch(e=>{$('people').innerHTML='<tr><td colspan="8" class="err"></td></tr>';$('people').querySelector('td').textContent=e.message});
 </script></body></html>`
 }

@@ -82,6 +82,25 @@ export function hasSystemGrant(email: string): boolean {
 
 export const canSeeSystem = (v: Pick<Viewer, 'role' | 'system'>) => can(v.role, 'admin') || v.system === true
 
+// ------------------------------------------------------------------ the Surveys page
+// Admins always. Anyone else when an admin ticked "Surveys" for them. Separate from the clip role.
+export function surveyPeople(): Map<string, { updated_by: string; updated_at: string }> {
+    return new Map(all<{ email: string; updated_by: string; updated_at: string }>('SELECT * FROM survey_people').map((r) => [r.email, r]))
+}
+export function hasSurveyGrant(email: string): boolean {
+    return !!one('SELECT 1 FROM survey_people WHERE email = ?', email.toLowerCase())
+}
+export const canUseSurveys = (v: Pick<Viewer, 'role' | 'surveys'>) => can(v.role, 'admin') || v.surveys === true
+export function setSurveyAccess(email: string, on: boolean, by: string): void {
+    const e = email.toLowerCase()
+    tx(() => {
+        const before = hasSurveyGrant(e)
+        if (on) run('INSERT INTO survey_people (email, updated_by, updated_at) VALUES (?, ?, ?) ON CONFLICT (email) DO UPDATE SET updated_by = excluded.updated_by, updated_at = excluded.updated_at', e, by, new Date().toISOString())
+        else run('DELETE FROM survey_people WHERE email = ?', e)
+        if (before !== on) audit(by, 'access.surveys_set', { person: e, surveys: on })
+    })
+}
+
 /** Lets a person see the System page, or stops it, and records who did it. */
 export function setSystemAccess(email: string, on: boolean, by: string): void {
     const e = email.toLowerCase()
@@ -150,6 +169,7 @@ export interface Viewer {
     posthog_admin: boolean // owner or admin of the organization that owns the project
     in_replay_project: boolean // can open the project (and so every replay) in PostHog itself
     system?: boolean // an admin let this person see the System page (admins see it anyway)
+    surveys?: boolean // an admin let this person use the Surveys page (admins can anyway)
     session: string // PostHog session id, used to call PostHog on the admin's behalf
 }
 
@@ -224,7 +244,7 @@ export async function currentViewer(req: IncomingMessage): Promise<Viewer | unde
     if (!session || !/^[A-Za-z0-9:._-]{8,200}$/.test(session)) return undefined
     const id = await identity(session)
     if (!id) return undefined
-    return { ...id, role: roleOf(id.email, id.posthog_admin), system: hasSystemGrant(id.email), session }
+    return { ...id, role: roleOf(id.email, id.posthog_admin), system: hasSystemGrant(id.email), surveys: hasSurveyGrant(id.email), session }
 }
 
 // ------------------------------------------------------------------ sign in and out through PostHog

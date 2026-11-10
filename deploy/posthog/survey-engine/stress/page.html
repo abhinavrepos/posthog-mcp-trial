@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Reval stand-in</title><link rel="icon" href="data:,">
+<style>body{font-family:Arial;margin:0;background:#eef}.x-mask{position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:30000}.dlg{position:fixed;top:40px;left:40px;width:420px;height:240px;background:#fff;border:1px solid #888;z-index:19000}</style></head>
+<body><div class="dlg" id="dlg">Reval dialog</div><div class="x-mask" id="mask" style="display:none"></div>
+<script>
+(function(){
+  var q = new URLSearchParams(location.search);
+  window.__errors = [];
+  var core = q.get('core') === 'old' ? '/array-1.261.6.js' : (q.get('host') + '/static/array.js');
+  // An ExtJS-like load mask while the "app" starts.
+  var maskMs = +(q.get('mask') || 0);
+  if (maskMs > 0) { document.getElementById('mask').style.display = 'block'; setTimeout(function(){ document.getElementById('mask').style.display = 'none'; }, maskMs); }
+  var s = document.createElement('script'); s.src = core; s.onload = function () {
+    posthog.init(q.get('token'), { api_host: q.get('host'), autocapture: false, capture_pageview: false, disable_session_recording: true,
+      persistence: q.get('persist') || 'localStorage', opt_out_useragent_filter: true, debug: q.get('debug') === '1' });
+    posthog.identify(q.get('id'), { client: q.get('client') });
+    window.__ready = true;
+  }; s.onerror = function(){ window.__errors.push('core failed to load'); }; document.head.appendChild(s);
+})();
+</script></body></html>
