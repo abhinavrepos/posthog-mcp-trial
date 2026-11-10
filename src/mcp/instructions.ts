@@ -7,7 +7,9 @@
 //
 // The replay rule is always there: someone can connect PostHog's server by hand even when
 // FEATURE_POSTHOG_MCP is off. The parts that send Claude to PostHog's server are left out then.
+import { appEvents } from '../core/appevents.ts'
 import { config, posthogMcpActive } from '../core/config.ts'
+import { P } from '../core/props.ts'
 
 export const INSTRUCTIONS_LIMIT = 2048
 
@@ -21,7 +23,7 @@ Replays are private: never call PostHog's session-recording-*, query-session-rec
 ${withPosthog ? `\nTwo calling styles: this server's tools take their arguments directly (get_replay_link: {"session_id": "...", "start_s": 4}). PostHog's server has one tool, exec, that takes a command string. Never send this server's tool names to exec, or command strings to this server.\n` : ''}
 Use THIS server when the question names a Jira key, a client, a release or a screen:
 - ticket, RCI, MMT Risk, "what happened to <client>": triage_ticket, or find_client_incidents
-- which client a name, id or email means: resolve_client (a client is the event property "${p.client}", not a person, group or cohort)
+- which client a name, id or email means: resolve_client (a client is ${p.clientFromDistinctId ? `part ${p.clientFromDistinctId} of the distinct id` : `the event property "${p.client}"`}, not a person, group or cohort)${appPart()}
 - "is it just them?", who hit an error: error_blast_radius
 - struggle with no error: find_silent_issues
 - how a screen is used, by which clients: screen_usage
@@ -33,5 +35,12 @@ function posthogPart(p: typeof config.properties, version: string): string {
     return `
 Use PostHog's server for everything else: ad-hoc SQL (execute-sql), trends, funnels, retention, insights, dashboards, feature flags, experiments, creating or editing surveys, cohorts, annotations, event definitions, managing error tracking issues, PostHog docs.
 
-For a number this server lacks, use PostHog's execute-sql: client properties.${p.client}, name properties.${p.clientName}${version}, email person.properties.${p.personEmail}.`
+For a number this server lacks, use PostHog's execute-sql: client ${P.client}${p.clientName ? `, name properties.${p.clientName}` : ''}${version}, email person.properties.${p.personEmail}.`
+}
+
+function appPart(): string {
+    const a = appEvents()
+    if (!a) return ''
+    return `
+- ${a.app} dialogs, errors, slowness: describe_app_events (once), top_pains, dialog_friction, session_story, attempt_timings, find_trade; clients at risk: client_signals`
 }

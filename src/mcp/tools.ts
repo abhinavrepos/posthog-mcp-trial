@@ -3,6 +3,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
+import { appEvents, clientSignalsReport, describeAppEvents, dialogFriction, findTrade, sessionStory, slowAttempts, topPains } from '../core/appevents.ts'
 import { SCREENS } from '../core/catalog.ts'
 import { renderClip } from '../core/clip.ts'
 import { errorImpact } from '../core/impact.ts'
@@ -25,6 +26,7 @@ import {
     quarters,
 } from '../core/releases.ts'
 import { addComment } from '../jira/client.ts'
+import { clientSource } from '../core/props.ts'
 import { renderReport } from '../core/report.ts'
 import { resolveClient, resolveScreen } from '../core/resolve.ts'
 import { struggleSessions } from '../core/silent.ts'
@@ -362,6 +364,8 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         }
     )
 
+    if (appEvents()) registerAppEventTools(server)
+
     server.registerPrompt(
         'review_release',
         {
@@ -388,6 +392,160 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
    A ticket that shares a screen with others may not be the cause: say so.
 4. Reply with a short table (ticket, verdict, one-line reason with numbers), then the 2 or 3 things to act on first. Mention what went well (adopted, fixed) in one line.
 5. Ask me which verdicts to save. Only then call record_verdict, with decided_by set to who agreed. Do not invent numbers: use only what the tools returned.`,
+                    },
+                },
+            ],
+        })
+    )
+}
+
+// The app's own events (APP_EVENTS_FILE): what they are, one session as a story, where people fail.
+function registerAppEventTools(server: McpServer): void {
+    const app = appEvents()!.app
+    server.registerTool(
+        'describe_app_events',
+        {
+            title: `What ${app}'s events mean`,
+            description: `Explains ${app}'s own events and properties (dialogs, tabs, fields, buttons, messages), with how often each is filled, real example values, the dialogs used most, the messages ${app} showed, the clients, and how to query them in HogQL. Call it once before answering anything about ${app} screens, dialogs, buttons or errors, or before writing SQL over its events.`,
+            inputSchema: { days: z.number().int().min(1).max(90).default(7).describe('How many days of data to look at.') },
+            annotations: { readOnlyHint: true },
+        },
+        async ({ days }) => json(`${app} events (last ${days} days):`, await describeAppEvents(days, clientSource()))
+    )
+    server.registerTool(
+        'session_story',
+        {
+            title: 'What happened in a session',
+            description: `Tells one session as a timeline you can read like a replay: dialogs opened, tabs, fields, buttons pressed (Save, Run...) and what came of each, and every message ${app} showed (✘ errors), with replay links at the errors for the user. Use it to see what a client did and where they got stuck, e.g. on an example session from dialog_friction or find_client_incidents. Fields typed into are named, never their values.`,
+            inputSchema: {
+                session_id: z.string().describe('The session id or a PostHog replay link.'),
+                max_lines: z.number().int().min(20).max(1000).default(300),
+            },
+            annotations: { readOnlyHint: true },
+        },
+        async ({ session_id, max_lines }) => {
+            const r = await sessionStory(sessionIdOf(session_id), { maxLines: max_lines })
+            const head = [
+                `Session ${r.session_id}: client ${r.client || '?'}, user ${r.user || '?'}, ${r.start.slice(0, 16).replace('T', ' ')} UTC${r.version ? `, ${r.version}` : ''}.`,
+                r.summary,
+                r.replay_url ? `Replay for the user (PostHog login needed): ${r.replay_url}` : 'No replay recorded for this session.',
+                `Server calls: ${r.network}.`,
+            ]
+            const errs = r.errors.length ? ['', 'Errors:', ...r.errors.map((e) => `- ${e.at} ${e.dialog}: "${e.text}"${e.replay_url ? ` (watch: ${e.replay_url})` : ''}`)] : []
+            return text([...head, ...errs, '', 'Timeline (+m:ss from the start of the recording):', ...r.story, r.truncated ? '… (cut; raise max_lines for more)' : ''].join('\n'))
+        }
+    )
+    server.registerTool(
+        'dialog_friction',
+        {
+            title: 'Where clients fail',
+            description: `Ranks ${app} dialogs by how much they hurt: attempts (Save, Run, Export...) and their outcomes (done, queued, failed, nothing found, no message), error messages with how many sessions and which clients hit them, retry loops (failed, then the same button again) and stuck sessions (an error and no success after). Optionally for one client or one dialog. Each error has an example session for session_story. Use it for "what hurts most", "where do clients struggle", "what goes wrong for client X", "why does dialog Y fail".`,
+            inputSchema: {
+                client: z.string().optional().describe('A client (name, code or a user email). All clients if left out.'),
+                dialog: z.string().optional().describe('A dialog code (DlgDetailIRSwap) or part of its name (IR Swap).'),
+                when,
+                timezone: tz,
+                limit: z.number().int().min(1).max(50).default(15),
+            },
+            annotations: { readOnlyHint: true },
+        },
+        async ({ client, dialog, when: w, timezone, limit }) => {
+            const win = parseTimeWindow(w || 'last 7 days', new Date(), timezone)
+            const best = client ? (await pickClient(client)).best : undefined
+            const r = await dialogFriction({ from: win.from, to: win.to, clientId: best?.id, dialog, limit })
+            return json(`${app} friction${best ? ` for ${best.name}` : ''}${dialog ? `, dialog "${dialog}"` : ''} (${win.label}):`, r)
+        }
+    )
+    server.registerTool(
+        'attempt_timings',
+        {
+            title: 'Slow or failing server calls',
+            description: `How long ${app} attempts (Save, Run, Export...) wait on the server, and which fail with an HTTP error, per dialog and button: median, 90th percentile and longest wait, the slowest call (method and path only), the clients, and the worst example with a replay link for the user. Read from the network timing in recent recordings (downloaded on the server; slower than the other tools, so it reads a limited number of sessions). Use it for "is X slow", "why do people wait", or after dialog_friction shows attempts with no message.`,
+            inputSchema: {
+                client: z.string().optional().describe('One client (name, code or a user email). All clients if left out.'),
+                dialog: z.string().optional().describe('A dialog code or part of its name.'),
+                when,
+                timezone: tz,
+                sessions: z.number().int().min(1).max(40).default(12).describe('How many recent recorded sessions to read.'),
+            },
+            annotations: { readOnlyHint: true },
+        },
+        async ({ client, dialog, when: w, timezone, sessions }) => {
+            const win = parseTimeWindow(w || 'last 7 days', new Date(), timezone)
+            const best = client ? (await pickClient(client)).best : undefined
+            return json(`${app} attempts and their server calls${best ? ` for ${best.name}` : ''}${dialog ? `, dialog "${dialog}"` : ''} (${win.label}):`, await slowAttempts({ from: win.from, to: win.to, clientId: best?.id, dialog, sessions }))
+        }
+    )
+    server.registerTool(
+        'top_pains',
+        {
+            title: 'The week\'s top pains',
+            description: `The ${app} dialogs that hurt clients most in a period, as a short ranked list: what fails, how many clients and attempts, sessions that ended without success, retries, the main error, whether it is new or getting worse than the period before, and an example session with a replay link for the user. Also the clients with warning signs. Start here for "what should the product team fix", "weekly digest", "what hurts most".`,
+            inputSchema: { when: z.string().optional().describe('Default: last 7 days (compared with the 7 days before).'), timezone: tz, max: z.number().int().min(1).max(15).default(5) },
+            annotations: { readOnlyHint: true },
+        },
+        async ({ when: w, timezone, max }) => {
+            const win = parseTimeWindow(w || 'last 7 days', new Date(), timezone)
+            return json(`${app}: top pains (${win.label}):`, await topPains({ from: win.from, to: win.to, max }))
+        }
+    )
+    server.registerTool(
+        'find_trade',
+        {
+            title: 'What happened to a trade',
+            description: `Finds a ${app} trade or link id (a number like 4348): the sessions where someone searched for it or ${app} named it in a message ("Trade Id 4348 Updated"), who and which client, and the errors and attempts (Save, Run...) in those sessions from then on, with a replay link for the user. Use it when support says "trade 4348 failed for us".`,
+            inputSchema: {
+                id: z.string().describe('The trade or link id, digits only, e.g. 4348.'),
+                client: z.string().optional().describe('One client (name, code or a user email), to narrow it down.'),
+                when: z.string().optional().describe('Default: last 30 days.'),
+                timezone: tz,
+            },
+            annotations: { readOnlyHint: true },
+        },
+        async ({ id, client, when: w, timezone }) => {
+            const win = parseTimeWindow(w || 'last 30 days', new Date(), timezone)
+            const best = client ? (await pickClient(client)).best : undefined
+            return json(`${app}: id ${id}${best ? ` for ${best.name}` : ''} (${win.label}):`, await findTrade({ id, from: win.from, to: win.to, clientId: best?.id }))
+        }
+    )
+    server.registerTool(
+        'client_signals',
+        {
+            title: 'Which clients need attention',
+            description: `Lists ${app} clients with warning signs, this period against the one before: fewer sessions, active days or dialogs used, users who stopped coming (named), more failed attempts, not seen lately. Each client comes with its reasons and numbers. Use it for "which clients are at risk", "who is using us less", "how is client X doing". It is evidence to look at, not a churn prediction: say so, and follow up with dialog_friction for the client.`,
+            inputSchema: {
+                client: z.string().optional().describe('One client (name, code or a user email). All clients if left out.'),
+                when: z.string().optional().describe('The recent period, in plain words. Default: last 14 days (compared with the 14 days before).'),
+                timezone: tz,
+                limit: z.number().int().min(1).max(100).default(20),
+            },
+            annotations: { readOnlyHint: true },
+        },
+        async ({ client, when: w, timezone, limit }) => {
+            const win = parseTimeWindow(w || 'last 14 days', new Date(), timezone)
+            const best = client ? (await pickClient(client)).best : undefined
+            return json(`${app} clients, ${win.label} against the period before${best ? ` (${best.name})` : ''}:`, await clientSignalsReport({ from: win.from, to: win.to, clientId: best?.id, limit }))
+        }
+    )
+    server.registerPrompt(
+        'where_clients_struggle',
+        {
+            title: 'Where clients struggle',
+            description: `A short report for a product manager: the ${app} dialogs that hurt most, and what happens there.`,
+            argsSchema: { client: z.string().optional().describe('One client, or all'), when: z.string().optional().describe('e.g. last 14 days') },
+        },
+        ({ client, when: w }) => ({
+            messages: [
+                {
+                    role: 'user',
+                    content: {
+                        type: 'text',
+                        text: `Where do ${client ? `${client}'s users` : 'clients'} struggle in ${app}${w ? ` (${w})` : ' (last 14 days)'}?
+
+1. Call describe_app_events once, to know the dialogs and messages.
+2. Call ${client ? `client_signals with client "${client}", then dialog_friction` : 'top_pains, then dialog_friction'}${client ? ` with client "${client}"` : ''}, both with when "${w || 'last 14 days'}".
+3. For the top 3 dialogs, call session_story on one example session each and say in one or two sentences what the person was trying to do and where it went wrong.
+4. Reply with the clients that need attention and why (one line each), a table of the dialogs that hurt (dialog, clients hit, failed attempts / attempts, main error), and the 3 fixes or questions for the product team that would help most. Use only numbers the tools returned; say when numbers are small, and that client signals are not a churn prediction.`,
                     },
                 },
             ],

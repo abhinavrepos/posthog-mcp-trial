@@ -27,6 +27,7 @@ import { SCREENS } from './catalog.ts'
 import { config } from './config.ts'
 import { all, getSetting, one, run, setSetting, tx } from './db.ts'
 import { hogql, issueUrl } from './posthog.ts'
+import { P } from './props.ts'
 import { resolveScreen } from './resolve.ts'
 import { stem, tokens } from './text.ts'
 
@@ -205,7 +206,7 @@ async function loadErrors(since: string, cp: string): Promise<ErrorIssue[]> {
     const rows = await hogql(
         `SELECT coalesce(nullIf(toString(properties.$exception_issue_id), ''), concat(toString(properties.$exception_types), toString(properties.$exception_values))) AS id,
                 any(toString(properties.$exception_types)) AS types, any(toString(properties.$exception_values)) AS vals,
-                min(timestamp) AS first_seen, count() AS n, uniq(properties.${cp}) AS clients, topK(1)(toString(properties.$pathname)) AS paths
+                min(timestamp) AS first_seen, count() AS n, uniq(${cp}) AS clients, topK(1)(toString(properties.$pathname)) AS paths
          FROM events WHERE event = '$exception' AND timestamp > toDateTime({since})
          GROUP BY id ORDER BY n DESC LIMIT 500`,
         { since }
@@ -264,7 +265,7 @@ export interface SurveyAnswer {
 async function loadSurveys(since: string, cp: string): Promise<SurveyAnswer[]> {
     const rows = await hogql(
         `SELECT timestamp AS at, toString(properties.$pathname) AS path, toString(properties.$survey_response) AS r0,
-                toString(properties.$survey_response_1) AS r1, toString(properties.${cp}) AS client
+                toString(properties.$survey_response_1) AS r1, toString(${cp}) AS client
          FROM events WHERE event = 'survey sent' AND timestamp > toDateTime({since}) ORDER BY timestamp LIMIT 20000`,
         { since }
     )
@@ -368,11 +369,14 @@ export interface Snapshot {
 }
 
 const n = (v: unknown) => Number(v) || 0
+// The client as a HogQL expression: RELEASES_CLIENT_PROPERTY when it names another property, else the
+// client as the settings define it (which can be part of the distinct id).
+const clientOf = (s: ReleaseSettings) => (s.client_property === config.properties.client ? P.client : `properties.${s.client_property}`)
 const ts = (d: number) => new Date(d).toISOString().replace('T', ' ').slice(0, 19)
 
 async function computeSnapshot(rel: ReleaseRow, next: ReleaseRow | undefined, ctx: { s: ReleaseSettings; errors: ErrorIssue[]; support: SupportTicket[]; surveys: SurveyAnswer[] }): Promise<Snapshot> {
     const { s } = ctx
-    const cp = `properties.${s.client_property}`
+    const cp = clientOf(s)
     const start = Date.parse(rel.released_at + 'T00:00:00Z')
     const now = Date.now()
     const end = Math.min(start + s.window_days * DAY, next ? Date.parse(next.released_at + 'T00:00:00Z') : Infinity, now)
@@ -604,7 +608,7 @@ async function doSync(): Promise<SyncResult> {
     const fields = ['summary', 'description', 'issuetype', 'status', 'components', 'labels', 'fixVersions']
     const issues = await searchIssues(`project = ${s.jira_project} AND fixVersion in (${kept.map((v) => jqlString(v.name)).join(', ')})`, fields, 5000)
     const since = new Date(Date.parse(kept[0].releaseDate!) - (s.window_days + 7) * DAY).toISOString()
-    const cp = s.client_property
+    const cp = clientOf(s)
     const [areas, errors, support, surveys] = await Promise.all([
         loadAreas(since),
         loadErrors(since, cp),
@@ -669,9 +673,9 @@ export async function recompute(release: string): Promise<void> {
     if (i < 0) return
     const since = new Date(Date.parse(rels[0].released_at) - (s.window_days + 7) * DAY).toISOString()
     const [errors, support, surveys] = await Promise.all([
-        loadErrors(since, s.client_property),
+        loadErrors(since, clientOf(s)),
         loadSupport(s.support_jql, since).catch(() => [] as SupportTicket[]),
-        loadSurveys(since, s.client_property).catch(() => [] as SurveyAnswer[]),
+        loadSurveys(since, clientOf(s)).catch(() => [] as SurveyAnswer[]),
     ])
     const snap = await computeSnapshot(rels[i], rels[i + 1], { s, errors, support, surveys })
     run('INSERT INTO release_snapshots (release, computed_at, data) VALUES (?, ?, ?) ON CONFLICT (release) DO UPDATE SET computed_at = excluded.computed_at, data = excluded.data', release, snap.computed_at, JSON.stringify(snap))
