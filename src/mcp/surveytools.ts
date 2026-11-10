@@ -187,11 +187,11 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         'launch_survey',
         {
             title: 'Show a survey to users',
-            description: `Starts showing a survey to real ${app} users (or starts a stopped one again). Two steps, never one: first call it with only survey_id, which returns the four rules of how it works; show them to the person word for word, with any ⚠ notice, and ask for the Jira ticket this launch is for and for them to type that they acknowledge it launches a survey to real users. Only after they did, call again with jira_ticket, acknowledged: true and confirm: true. Never fill in a ticket or the acknowledgement yourself.`,
+            description: `Starts showing a survey to ${app} users (or starts a stopped one again). Two steps, never one: first call it with only survey_id, which returns the four rules of how it works; show them to the person word for word, with any ⚠ notice, and ask for the Jira ticket this launch is for and for them to type that they acknowledge it launches a survey to Reval users. Only after they did, call again with jira_ticket, acknowledged: true and confirm: true. Never fill in a ticket or the acknowledgement yourself.`,
             inputSchema: {
                 survey_id: z.string(),
                 jira_ticket: z.string().optional().describe('The Jira ticket the person gave for this launch, e.g. REVAL-1234'),
-                acknowledged: z.boolean().optional().describe('true only when the person typed that they acknowledge this launches a survey to real users'),
+                acknowledged: z.boolean().optional().describe('true only when the person typed that they acknowledge this launches a survey to Reval users'),
                 confirm: z.boolean().optional().describe('true only when the person said to launch it'),
             },
             annotations: { destructiveHint: false, openWorldHint: true },

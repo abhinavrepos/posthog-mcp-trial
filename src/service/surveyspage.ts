@@ -143,7 +143,7 @@ table{width:100%;table-layout:fixed}td,th{overflow-wrap:anywhere}td.n,th.n{text-
 <h2 id="l-title">Launch this survey?</h2><p class="small muted" id="l-name"></p>
 <div><b>Before you launch, the four rules of how it works:</b><ol id="l-rules"></ol></div>
 <div id="l-queue"></div>
-<div><label class="f" for="l-ticket">Jira ticket for this launch</label><input id="l-ticket" type="text" placeholder="e.g. REVAL-1234" autocomplete="off" spellcheck="false" maxlength="32" required><p class="small muted" id="l-jira"></p></div>
+<div><label class="f" for="l-ticket">Jira ticket for this launch</label><input id="l-ticket" type="text" placeholder="e.g. REVAL-1234" autocomplete="off" spellcheck="false" maxlength="32" required></div>
 <label class="ack"><input type="checkbox" id="l-ack"><span id="l-ack-text"></span></label>
 <p id="l-msg" class="small err" role="alert"></p>
 <div class="row"><button type="button" class="ghost" id="l-cancel">Cancel</button><button type="submit" id="l-go" disabled>Launch survey</button></div>
@@ -231,7 +231,7 @@ async function openLaunch(id){const d=$('ldlg');$('l-msg').textContent='';$('l-a
     $('l-title').textContent=(LAUNCH.survey.status==='stopped'?'Start again: ':'Launch: ')+LAUNCH.survey.name;$('l-name').textContent='Once launched, Reval users see it. Read these first.'
     $('l-rules').innerHTML=LAUNCH.rules.map(x=>'<li>'+esc(x)+'</li>').join('')
     $('l-queue').innerHTML=LAUNCH.queue&&LAUNCH.queue.level!=='clear'?'<div class="warnbox">'+esc(LAUNCH.queue.alert)+'</div>':''
-    $('l-ack-text').textContent=LAUNCH.acknowledgement;$('l-jira').textContent=LAUNCH.jira_checked?'Checked in Jira before launch.':'Recorded with the launch (Jira is not connected, so only its form is checked).';$('l-ticket').focus()}
+    $('l-ack-text').textContent=LAUNCH.acknowledgement;$('l-ticket').focus()}
   catch(e){$('l-msg').textContent=e.message}}
 const TICKET=/^[A-Z][A-Z0-9_]{0,19}-[0-9]{1,9}$/
 function launchReady(){$('l-go').disabled=!(LAUNCH&&$('l-ack').checked&&TICKET.test($('l-ticket').value.trim().toUpperCase()))}
