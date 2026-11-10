@@ -278,6 +278,9 @@ collect_answers() {
     # Only from the environment or --config: empty means PostHog records on every site that sends events.
     APP_URLS="${APP_URLS:-$(read_env_file "$CONFIG" APP_URLS)}"
     [ -z "$APP_URLS" ] || is_urls "$APP_URLS" || die "APP_URLS: \"$APP_URLS\" is not a list of http(s):// addresses."
+    # Only from the environment or --config: how long to wait for PostHog after a restart (default 20).
+    POSTHOG_WAIT_MINUTES="${POSTHOG_WAIT_MINUTES:-$(read_env_file "$CONFIG" POSTHOG_WAIT_MINUTES)}"
+    [[ "${POSTHOG_WAIT_MINUTES:-20}" =~ ^[1-9][0-9]*$ ]] || die "POSTHOG_WAIT_MINUTES: \"$POSTHOG_WAIT_MINUTES\" is not a number of minutes."
     setting PROP_CLIENT_ID client_id
     setting PROP_CLIENT_NAME client_name
     setting PROP_APP_VERSION app_version
@@ -378,6 +381,12 @@ find_posthog() {
         fi
         [ -n "$found" ] && d="$found"
     fi
+    # A PostHog an earlier run upgraded, and verified, and still on this kit's version: it is kept as it is
+    # (no upgrade, no scale step, which the upgrade already ran), not treated as one this script installed.
+    if [ -f "$d/.env" ] && done_step posthog && [ -f "$d/upgrade-state/done/verify" ] \
+        && [ "$(git -C "$d/posthog" rev-parse HEAD 2>/dev/null)" = "$TARGET_COMMIT" ]; then
+        POSTHOG_DIR="$d"; MODE=existing; return
+    fi
     if [ ! -f "$d/.env" ] || done_step posthog || posthog_started_here; then MODE=fresh; return; fi
     POSTHOG_DIR="$d"
     if [ "$(git -C "$d/posthog" rev-parse HEAD 2>/dev/null)" = "$TARGET_COMMIT" ] && { [ ! -d "$d/upgrade-state" ] || [ -f "$d/upgrade-state/done/verify" ]; }; then
@@ -406,6 +415,17 @@ existing_recordings() {
     (cd "$POSTHOG_DIR" && docker compose exec -T clickhouse clickhouse-client -q "SELECT uniqExact(session_id) FROM posthog.session_replay_events" 2>/dev/null </dev/null) || true
 }
 posthog_healthy() { [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$POSTHOG_URL/_health" || true)" = 200 ]; }
+# Waits for PostHog to answer after a restart, saying so every minute. A small machine (4 CPUs) takes longer
+# than the test rig, so the default is 20 minutes (POSTHOG_WAIT_MINUTES). Returns 1 when it did not answer.
+wait_posthog() {
+    local why="$1" max=$(( ${POSTHOG_WAIT_MINUTES:-20} * 4 )) i
+    for i in $(seq 1 "$max"); do
+        posthog_healthy && { [ "$i" -gt 1 ] && ok "PostHog answers again ($(( (i - 1) / 4 )) min)"; return 0; }
+        [ $(( (i - 1) % 4 )) = 0 ] && say "waiting for PostHog to answer $why ($(( (i - 1) / 4 )) of ${POSTHOG_WAIT_MINUTES:-20} min)"
+        sleep 15
+    done
+    posthog_healthy
+}
 # The command line of whatever listens on a TCP port (empty when the port is free).
 port_user() {
     local pid; pid="$(ss -Hltnp "sport = :$1" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)"
@@ -501,8 +521,7 @@ step_scale() {
     CURRENT=scale; step "Tuning PostHog for load (deploy/posthog/scale.sh)"
     . "$HERE/migrate/versions/versions.env"
     NODE_BASE_IMAGE="$NODE_BASE_IMAGE" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/posthog/scale.sh" </dev/null
-    local i; for i in $(seq 1 40); do posthog_healthy && break; sleep 15; done
-    posthog_healthy || die "PostHog is not healthy after scale.sh. Undo with: sudo deploy/posthog/scale.sh --undo"
+    wait_posthog "after scale.sh" || die "PostHog is not healthy after scale.sh. Undo with: sudo deploy/posthog/scale.sh --undo"
     finish scale
 }
 
@@ -523,8 +542,7 @@ step_addresses() {
         ok "PostHog answers on $POSTHOG_ADDRESS"
     else
         POSTHOG_INSTALL_DIR="$POSTHOG_DIR" bash "$HERE/posthog/install-posthog-hobby.sh" --addresses-only "$POSTHOG_ADDRESS" </dev/null
-        local i; for i in $(seq 1 40); do posthog_healthy && break; sleep 15; done
-        posthog_healthy || die "PostHog is not healthy after the address change. See: cd $POSTHOG_DIR && docker compose logs --tail 50 web"
+        wait_posthog "after the address change" || die "PostHog is not healthy after the address change. See: cd $POSTHOG_DIR && docker compose logs --tail 50 web"
     fi
     finish addresses
 }
@@ -590,7 +608,7 @@ step_offline() {
     local script="$HERE/offline/no-internet.sh"
     if [ "$OFFLINE" = yes ]; then
         ALLOW_CIDRS="$NO_INTERNET_ALLOW" POSTHOG_DIR="$POSTHOG_DIR" SERVICE_USER=triage bash "$script" apply
-        local i; for i in $(seq 1 40); do posthog_healthy && break; sleep 15; done   # apply restarts PostHog
+        wait_posthog "after the no-internet settings" || warn "PostHog is not answering yet; the checks below may fail"   # apply can restart PostHog
         ALLOW_CIDRS="$NO_INTERNET_ALLOW" POSTHOG_DIR="$POSTHOG_DIR" SERVICE_USER=triage bash "$script" check || warn "Some no-internet checks failed (above)."
         ok "outside calls are refused at once$([ "$NO_INTERNET" = auto ] && echo " (this machine cannot reach the internet)")"
     elif [ "$NO_INTERNET" = no ] && [ -f /etc/systemd/system/posthog-no-internet.service ]; then
@@ -748,8 +766,7 @@ step_mcp() {
 step_doctor() {
     CURRENT=doctor; step "Checking everything (deploy/lens/lens.sh doctor)"
     # Step offline restarts PostHog's containers; its web app takes a few minutes to answer again.
-    local i
-    for i in $(seq 1 40); do posthog_healthy && break; [ "$i" = 1 ] && say "waiting for PostHog to answer again (up to 10 minutes)"; sleep 15; done
+    wait_posthog "before the check" || warn "PostHog is still not answering; the check below will say so"
     if bash "$HERE/lens/lens.sh" doctor; then
         finish doctor
     else
