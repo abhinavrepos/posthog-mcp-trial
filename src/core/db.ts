@@ -7,7 +7,8 @@
 //   clip_holders  who has which clip: made it, and whether they saved it
 //   clip_comments comments pinned to a second of a clip, shown over the video and burned into downloads
 //   system_viewers who may see the System page besides admins
-//   survey_people  who may see the Surveys page, and launch and stop surveys there, besides admins
+//   survey_people  each person's survey role (view, edit, launch), besides admins (always launch)
+//   mcp_tokens     personal chat (MCP) tokens: who they belong to, stored as a hash, revocable
 //   audit         sign-ins, views, downloads, shares and access changes
 //   releases, release_tickets, release_snapshots, release_verdicts
 //                 release outcomes for the MCP tools: the last N Jira releases (default 12), their
@@ -165,6 +166,23 @@ const MIGRATIONS: string[] = [
         updated_by TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );`,
+
+    // Survey roles: rows ticked before roles existed had full use, so they become "launch".
+    `ALTER TABLE survey_people ADD COLUMN role TEXT NOT NULL DEFAULT 'launch';`,
+
+    // Personal chat tokens, so chat knows who is asking. Only a hash is kept; the token is shown once.
+    `CREATE TABLE mcp_tokens (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL,
+        hash TEXT NOT NULL UNIQUE,
+        label TEXT NOT NULL,
+        posthog_admin INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        last_used_at TEXT,
+        revoked_at TEXT,
+        revoked_by TEXT
+    );
+    CREATE INDEX mcp_tokens_email ON mcp_tokens (email);`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

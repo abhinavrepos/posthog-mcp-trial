@@ -4,7 +4,7 @@
 // deactivation all stay in PostHog), and PostHog owners and admins of the organization that owns
 // the project are always admins here. This service answers "what may they do?": each person
 // gets a role in the database (run/triage.db, see core/db.ts), set on the admin page.
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage } from 'node:http'
 import type { SQLInputValue } from 'node:sqlite'
 
@@ -82,23 +82,125 @@ export function hasSystemGrant(email: string): boolean {
 
 export const canSeeSystem = (v: Pick<Viewer, 'role' | 'system'>) => can(v.role, 'admin') || v.system === true
 
-// ------------------------------------------------------------------ the Surveys page
-// Admins always. Anyone else when an admin ticked "Surveys" for them. Separate from the clip role.
-export function surveyPeople(): Map<string, { updated_by: string; updated_at: string }> {
-    return new Map(all<{ email: string; updated_by: string; updated_at: string }>('SELECT * FROM survey_people').map((r) => [r.email, r]))
+// ------------------------------------------------------------------ surveys
+// Survey roles are separate from the clip role. Each includes the ones before it:
+//   none    no Surveys page and no survey tools in chat
+//   view    the Surveys page and results; list_surveys and survey_results in chat
+//   edit    also design and save surveys (drafts, and changes to Lens surveys)
+//   launch  also launch, stop and archive: what reaches Reval users
+// Admins always have launch. People not listed get the default an admin sets (none unless changed).
+export type SurveyRole = 'none' | 'view' | 'edit' | 'launch'
+export const SURVEY_ROLES: SurveyRole[] = ['none', 'view', 'edit', 'launch']
+const SURVEY_RANK: Record<SurveyRole, number> = { none: 0, view: 1, edit: 2, launch: 3 }
+export const canSurvey = (role: SurveyRole | undefined, needed: SurveyRole) => SURVEY_RANK[role || 'none'] >= SURVEY_RANK[needed]
+export const SURVEY_ROLE_TEXT: Record<SurveyRole, string> = {
+    none: 'No access',
+    view: 'See surveys and results',
+    edit: 'Also make and change surveys',
+    launch: 'Also launch and stop surveys',
 }
-export function hasSurveyGrant(email: string): boolean {
-    return !!one('SELECT 1 FROM survey_people WHERE email = ?', email.toLowerCase())
+const isSurveyRole = (r: unknown): r is SurveyRole => SURVEY_ROLES.includes(r as SurveyRole)
+
+export function surveyPeople(): Map<string, { role: SurveyRole; updated_by: string; updated_at: string }> {
+    return new Map(all<{ email: string; role: SurveyRole; updated_by: string; updated_at: string }>('SELECT * FROM survey_people').map((r) => [r.email, r]))
 }
-export const canUseSurveys = (v: Pick<Viewer, 'role' | 'surveys'>) => can(v.role, 'admin') || v.surveys === true
-export function setSurveyAccess(email: string, on: boolean, by: string): void {
+export const defaultSurveyRole = (): SurveyRole => {
+    const r = getSetting<string>('survey_default_role', 'none')
+    return isSurveyRole(r) && r !== 'launch' ? r : 'none'
+}
+/** The survey role chat gets with the shared team token (MCP_TOKEN), which says nothing about who asks. */
+export const sharedTokenSurveyRole = (): SurveyRole => {
+    const r = getSetting<string>('survey_shared_token_role', 'view')
+    return isSurveyRole(r) ? r : 'none'
+}
+export function surveyRoleOf(email: string, lensRole: Role): SurveyRole {
+    if (can(lensRole, 'admin')) return 'launch'
+    const row = one<{ role: string }>('SELECT role FROM survey_people WHERE email = ?', email.toLowerCase())
+    return row && isSurveyRole(row.role) ? row.role : defaultSurveyRole()
+}
+export const canUseSurveys = (v: Pick<Viewer, 'role' | 'surveys'>) => can(v.role, 'admin') || canSurvey(v.surveys, 'view')
+
+/** Sets a person's survey role (none removes the row, so the default applies... unless the default is higher). */
+export function setSurveyRole(email: string, role: SurveyRole, by: string): void {
+    const e = email.toLowerCase()
+    if (!isSurveyRole(role)) throw new Error('unknown survey role')
+    tx(() => {
+        const before = one<{ role: string }>('SELECT role FROM survey_people WHERE email = ?', e)?.role ?? null
+        run('INSERT INTO survey_people (email, role, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (email) DO UPDATE SET role = excluded.role, updated_by = excluded.updated_by, updated_at = excluded.updated_at', e, role, by, new Date().toISOString())
+        if (before !== role) audit(by, 'access.survey_role_set', { person: e, survey_role: role, before })
+    })
+}
+export function resetSurveyRole(email: string, by: string): void {
     const e = email.toLowerCase()
     tx(() => {
-        const before = hasSurveyGrant(e)
-        if (on) run('INSERT INTO survey_people (email, updated_by, updated_at) VALUES (?, ?, ?) ON CONFLICT (email) DO UPDATE SET updated_by = excluded.updated_by, updated_at = excluded.updated_at', e, by, new Date().toISOString())
-        else run('DELETE FROM survey_people WHERE email = ?', e)
-        if (before !== on) audit(by, 'access.surveys_set', { person: e, surveys: on })
+        const before = one<{ role: string }>('SELECT role FROM survey_people WHERE email = ?', e)?.role
+        run('DELETE FROM survey_people WHERE email = ?', e)
+        if (before) audit(by, 'access.survey_role_reset', { person: e, before })
     })
+}
+export function setSurveySettings(change: { default_role?: SurveyRole; shared_token_role?: SurveyRole }, by: string): void {
+    tx(() => {
+        if (change.default_role !== undefined) {
+            if (!isSurveyRole(change.default_role) || change.default_role === 'launch') throw new Error('The default survey role cannot be launch.')
+            setSetting('survey_default_role', change.default_role)
+        }
+        if (change.shared_token_role !== undefined) {
+            if (!isSurveyRole(change.shared_token_role)) throw new Error('unknown survey role')
+            setSetting('survey_shared_token_role', change.shared_token_role)
+        }
+        audit(by, 'access.survey_settings', { default_role: defaultSurveyRole(), shared_token_role: sharedTokenSurveyRole() })
+    })
+}
+
+// ------------------------------------------------------------------ personal chat tokens
+// A person makes their own token on the Connect page; chat sends it instead of the shared MCP_TOKEN,
+// so Lens knows who asks and applies their survey role. Only a SHA-256 of the token is stored.
+export interface McpToken { id: string; email: string; label: string; posthog_admin: boolean; created_at: string; last_used_at: string | null; revoked_at: string | null; revoked_by: string | null }
+const tokenHash = (t: string) => createHash('sha256').update(t).digest('hex')
+const tokenRow = (r: Record<string, unknown>): McpToken => ({ id: String(r.id), email: String(r.email), label: String(r.label), posthog_admin: !!r.posthog_admin, created_at: String(r.created_at), last_used_at: (r.last_used_at as string) ?? null, revoked_at: (r.revoked_at as string) ?? null, revoked_by: (r.revoked_by as string) ?? null })
+
+export function createMcpToken(v: Pick<Viewer, 'email' | 'posthog_admin'>, label: string): { token: string; id: string } {
+    const token = `lens_${randomBytes(24).toString('base64url')}`
+    const id = randomBytes(6).toString('hex')
+    const name = label.trim().slice(0, 60) || 'Chat'
+    tx(() => {
+        if ((one<{ n: number }>('SELECT COUNT(*) AS n FROM mcp_tokens WHERE email = ? AND revoked_at IS NULL', v.email)?.n ?? 0) >= 10) throw new Error('At most 10 active tokens per person. Revoke one first.')
+        run('INSERT INTO mcp_tokens (id, email, hash, label, posthog_admin, created_at) VALUES (?, ?, ?, ?, ?, ?)', id, v.email.toLowerCase(), tokenHash(token), name, v.posthog_admin ? 1 : 0, new Date().toISOString())
+        audit(v.email, 'chat.token_created', { token: id, label: name })
+    })
+    return { token, id }
+}
+export function listMcpTokens(email?: string): McpToken[] {
+    const rows = email ? all<Record<string, unknown>>('SELECT * FROM mcp_tokens WHERE email = ? ORDER BY created_at DESC', email.toLowerCase()) : all<Record<string, unknown>>('SELECT * FROM mcp_tokens ORDER BY created_at DESC LIMIT 1000')
+    return rows.map(tokenRow)
+}
+export function revokeMcpToken(id: string, by: string, onlyFor?: string): boolean {
+    return tx(() => {
+        const row = one<Record<string, unknown>>('SELECT * FROM mcp_tokens WHERE id = ?', id)
+        if (!row || row.revoked_at || (onlyFor && row.email !== onlyFor.toLowerCase())) return false
+        run('UPDATE mcp_tokens SET revoked_at = ?, revoked_by = ? WHERE id = ?', new Date().toISOString(), by, id)
+        audit(by, 'chat.token_revoked', { token: id, person: row.email })
+        return true
+    })
+}
+
+/** Who a chat request is from: the shared token, or a person's own token. Undefined: refuse. */
+export interface ChatCaller { who: string; email?: string; shared: boolean; surveyRole: SurveyRole }
+export function chatCaller(bearer: string | undefined, sharedToken: string): ChatCaller | undefined {
+    if (!bearer) return undefined
+    if (sharedToken) {
+        const a = Buffer.from(bearer), b = Buffer.from(sharedToken)
+        if (a.length === b.length && timingSafeEqual(a, b)) return { who: 'mcp (shared token)', shared: true, surveyRole: sharedTokenSurveyRole() }
+    }
+    if (!/^lens_[A-Za-z0-9_-]{20,64}$/.test(bearer)) return undefined
+    const row = one<Record<string, unknown>>('SELECT * FROM mcp_tokens WHERE hash = ? AND revoked_at IS NULL', tokenHash(bearer))
+    if (!row) return undefined
+    const t = tokenRow(row)
+    // Removed from Lens (role none, no survey role) still works for other tools; an admin revokes the token to stop it.
+    const lensRole: Role = t.posthog_admin ? 'admin' : roleOf(t.email, false)
+    const now = new Date().toISOString()
+    if (!t.last_used_at || Date.parse(now) - Date.parse(t.last_used_at) > 60_000) run('UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?', now, t.id)
+    return { who: t.email, email: t.email, shared: false, surveyRole: surveyRoleOf(t.email, lensRole) }
 }
 
 /** Lets a person see the System page, or stops it, and records who did it. */
@@ -169,7 +271,7 @@ export interface Viewer {
     posthog_admin: boolean // owner or admin of the organization that owns the project
     in_replay_project: boolean // can open the project (and so every replay) in PostHog itself
     system?: boolean // an admin let this person see the System page (admins see it anyway)
-    surveys?: boolean // an admin let this person use the Surveys page (admins can anyway)
+    surveys?: SurveyRole // this person's survey role (admins: launch)
     session: string // PostHog session id, used to call PostHog on the admin's behalf
 }
 
@@ -244,7 +346,7 @@ export async function currentViewer(req: IncomingMessage): Promise<Viewer | unde
     if (!session || !/^[A-Za-z0-9:._-]{8,200}$/.test(session)) return undefined
     const id = await identity(session)
     if (!id) return undefined
-    return { ...id, role: roleOf(id.email, id.posthog_admin), system: hasSystemGrant(id.email), surveys: hasSurveyGrant(id.email), session }
+    return { ...id, role: roleOf(id.email, id.posthog_admin), system: hasSystemGrant(id.email), surveys: surveyRoleOf(id.email, roleOf(id.email, id.posthog_admin)), session }
 }
 
 // ------------------------------------------------------------------ sign in and out through PostHog

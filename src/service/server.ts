@@ -24,7 +24,7 @@ import { lensServerInfo } from '../mcp/server-info.ts'
 import { serverInstructions } from '../mcp/instructions.ts'
 import { lensToolNames, registerTools } from '../mcp/tools.ts'
 import { appEvents } from '../core/appevents.ts'
-import { audit } from './access.ts'
+import { audit, chatCaller } from './access.ts'
 import { keptReleases, syncReleases, syncStatus } from '../core/releases.ts'
 import { captionedFile } from '../core/comments.ts'
 import { getClip, handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
@@ -145,13 +145,16 @@ function featureState() {
 function bearerOk(req: IncomingMessage): boolean {
     return bearerAuthorized(req, config.service.mcpToken)
 }
+/** The shared token, or a person's own token (Connect chat page): who asks, and their survey role. */
+const callerOf = (req: IncomingMessage) => chatCaller(/^Bearer (.+)$/.exec(String(req.headers.authorization || ''))?.[1], config.service.mcpToken)
 
 async function handleMcp(req: IncomingMessage, res: ServerResponse) {
     if (!config.features.lensMcp) return send(res, 503, { error: `${config.app.name}'s MCP tools are switched off (FEATURE_LENS_MCP=off).` })
-    if (!bearerOk(req)) return send(res, 401, { error: 'MCP needs Authorization: Bearer <MCP_TOKEN>' })
-    // Stateless: a fresh server and transport per request.
-    const server = new McpServer(lensServerInfo, { instructions: serverInstructions() })
-    registerTools(server, ai)
+    const caller = callerOf(req)
+    if (!caller) return send(res, 401, { error: 'MCP needs Authorization: Bearer <MCP_TOKEN or your personal token from the Connect chat page>' })
+    // Stateless: a fresh server and transport per request, with the tools this caller may use.
+    const server = new McpServer(lensServerInfo, { instructions: serverInstructions(undefined, caller.surveyRole) })
+    registerTools(server, ai, caller)
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     res.on('close', () => {
         void transport.close()
@@ -183,6 +186,7 @@ const server = createServer(async (req, res) => {
             url: config.posthog.mcpUrl, apiKey: config.posthog.mcpApiKey,
             token: config.service.mcpToken, name: config.mcp.name,
             enabled: config.posthog.mcpViaLens && posthogMcpActive(),
+            authorize: (r) => !!callerOf(r),
             info: { app: appEvents()?.app || 'the app', tools: lensToolNames() },
         })
         if (url.pathname === '/mcp') return await handleMcp(req, res)

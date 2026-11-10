@@ -40,6 +40,7 @@ import { triage, type TriageAi } from '../core/triage.ts'
 import { screenUsage } from '../core/usage.ts'
 import { recordClip } from '../service/replays.ts'
 import { registerSurveyTools, surveyToolNames } from './surveytools.ts'
+import type { ChatCaller } from '../service/access.ts'
 
 type Content = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }
 const text = (t: string): { content: Content[] } => ({ content: [{ type: 'text', text: t }] })
@@ -82,7 +83,7 @@ export const CORE_TOOLS = ['resolve_client', 'find_client_incidents', 'get_repla
 export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor']
 export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(appEvents() ? APP_EVENT_TOOLS : []), ...surveyToolNames()]
 
-export function registerTools(server: McpServer, ai?: TriageAi): void {
+export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'>): void {
     const register = server.registerTool.bind(server)
     server.registerTool = ((name: string, cfg: { description?: string }, cb: unknown) =>
         register(name, { ...cfg, description: `${cfg.description ?? ''} ${DIRECT_CALL}`.trim() } as never, cb as never)) as typeof server.registerTool
@@ -410,6 +411,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
             ],
         })
     )
+    registerSurveyTools(server, caller)
 }
 
 // The app's own events (APP_EVENTS_FILE): what they are, one session as a story, where people fail.
@@ -644,5 +646,4 @@ Relay the returned brief, including its evidence and limits. Add nothing invente
         title: 'Check after a release', description: 'What needs attention after a release?',
         argsSchema: { release: z.string().optional().describe('Release name or version, if known') },
     }, ({ release }) => briefPrompt({ question: `What should I worry about after release ${release || 'the latest release'}?`, when: 'last 14 days' }))
-    registerSurveyTools(server)
 }

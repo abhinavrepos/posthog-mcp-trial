@@ -7,8 +7,8 @@
 #   MCP_BIND=0.0.0.0 MCP_NETWORK_URL=http://10.0.1.25:8787/mcp deploy/posthog-mcp/up.sh
 #                                        # reachable from the network too, not only this machine
 #
-# The key is read-only and can never reach session replays: it has every read scope except the ones
-# for recordings, things made from recordings (replay AI analysis, signals), exports (they can hold
+# The key is read-only and can never reach session replays or surveys (Lens manages surveys): it has
+# every read scope except surveys and the ones for recordings, things made from recordings (replay AI analysis, signals), exports (they can hold
 # recording videos) and sharing links (they can open recordings). It is limited to the Lens project.
 # It writes POSTHOG_MCP_URL and POSTHOG_MCP_API_KEY into .secrets.env; Claude gets them through .mcp.json.
 #
@@ -62,7 +62,7 @@ from posthog.scopes import GRANTABLE_API_SCOPE_OBJECTS
 
 # Anything that holds or opens a recording, or is made from one.
 NEVER = {"session_recording", "session_recording_playlist", "replay_scanner", "vision_action", "vision_alert",
-         "signal_scout", "export", "sharing_configuration"}
+         "signal_scout", "export", "sharing_configuration", "survey"}
 user = User.objects.get(email=os.environ["ADMIN_EMAIL"])
 PersonalAPIKey.objects.filter(user=user, label="posthog-mcp").delete()
 token = generate_random_token_personal()
@@ -82,6 +82,17 @@ PY
     put POSTHOG_MCP_API_KEY "$key"
     echo "Made a read-only API key for the MCP server (no session replay scopes), label posthog-mcp."
 fi
+# In-app surveys are managed only in Lens: a key made before that rule loses its survey scopes.
+(cd "$POSTHOG_DIR" && docker compose exec -T web python manage.py shell 2>/dev/null <<'PY'
+from posthog.models.personal_api_key import PersonalAPIKey
+for k in PersonalAPIKey.objects.filter(label="posthog-mcp"):
+    kept = [s for s in (k.scopes or []) if not s.startswith("survey:")]
+    if kept != k.scopes:
+        k.scopes = kept
+        k.save(update_fields=["scopes"])
+        print("Took the survey scopes off PostHog's MCP key: surveys are managed in Lens.")
+PY
+) || true
 # The address this machine reaches it on: 127.0.0.1 unless it listens on one other address only.
 local_host="$MCP_BIND"; [ "$local_host" = 0.0.0.0 ] && local_host=127.0.0.1
 put POSTHOG_MCP_URL "http://$local_host:$MCP_PORT/mcp"

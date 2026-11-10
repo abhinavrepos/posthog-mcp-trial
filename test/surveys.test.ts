@@ -164,16 +164,24 @@ describe('views', () => {
 })
 
 describe('the Surveys page', () => {
-    test('only admins and people ticked for it, and its script parses', async () => {
+    test('survey roles decide who sees and who launches, and the script parses', async () => {
         const { handleSurveys, surveysHtml } = await import('../src/service/surveyspage.ts')
         const { canUseSurveys } = await import('../src/service/access.ts')
         assert.equal(canUseSurveys({ role: 'admin' }), true)
-        assert.equal(canUseSurveys({ role: 'download', surveys: false }), false)
-        assert.equal(canUseSurveys({ role: 'none', surveys: true }), true)
-        const sent: { status?: number; body?: string } = {}
-        const res = { writeHead: (s: number) => (sent.status = s), end: (b: string) => (sent.body = b) } as never
-        await handleSurveys({ method: 'GET' } as never, res, new URL('http://x/replays/surveys/api/list'), { email: 'a@b.c', role: 'watch', surveys: false } as never)
-        assert.equal(sent.status, 403)
+        assert.equal(canUseSurveys({ role: 'download', surveys: 'none' }), false)
+        assert.equal(canUseSurveys({ role: 'none', surveys: 'view' }), true)
+        const call = async (method: string, path: string, surveys: string) => {
+            const sent: { status?: number; body?: string } = {}
+            const res = { writeHead: (s: number) => (sent.status = s), end: (b: string) => (sent.body = b) } as never
+            await handleSurveys({ method } as never, res, new URL('http://x' + path), { email: 'a@b.c', role: 'watch', surveys } as never)
+            return sent
+        }
+        assert.equal((await call('GET', '/replays/surveys/api/list', 'none')).status, 403)
+        // Seeing results is not launching: a view or edit role cannot launch, stop or archive.
+        for (const role of ['view', 'edit']) {
+            const r = await call('POST', '/replays/surveys/api/survey/01a1c6d6-8086-0000-b54b-4feed4e4f2b0/launch', role)
+            if (r.status !== 503) assert.match(String(r.body), /launch and stop surveys/)
+        }
         const html = surveysHtml({ email: 'a@b.c', name: 'A', role: 'admin', posthog_admin: true, in_replay_project: true, session: 's' })
         const script = html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>'))
         assert.doesNotThrow(() => new Function(script))

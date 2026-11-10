@@ -6,7 +6,6 @@ import { z } from 'zod'
 
 import { appEvents } from '../core/appevents.ts'
 import { config, surveysActive } from '../core/config.ts'
-import { getSetting } from '../core/db.ts'
 import { resolveClient } from '../core/resolve.ts'
 import {
     archiveSurvey,
@@ -25,13 +24,17 @@ import {
     viewOf,
     type SurveySpec,
 } from '../core/surveys.ts'
-import { audit } from '../service/access.ts'
+import { audit, type ChatCaller, type SurveyRole } from '../service/access.ts'
 
 export const SURVEY_TOOLS = ['design_survey', 'save_survey', 'launch_survey', 'stop_survey', 'list_surveys', 'survey_results']
-export const surveyToolNames = (): string[] => (surveysActive() && appEvents() ? SURVEY_TOOLS : [])
-
-/** Admins can stop chat from launching or stopping surveys (Admin page, Surveys). On by default. */
-export const mcpMayLaunch = (): boolean => getSetting('surveys_mcp_launch', true)
+// Which tools each survey role gets in chat (the same roles as the Surveys page, set on the admin page).
+const TOOLS_FOR: Record<SurveyRole, string[]> = {
+    none: [],
+    view: ['list_surveys', 'survey_results'],
+    edit: ['list_surveys', 'survey_results', 'design_survey', 'save_survey'],
+    launch: SURVEY_TOOLS,
+}
+export const surveyToolNames = (role: SurveyRole = 'launch'): string[] => (surveysActive() && appEvents() ? SURVEY_TOOLS.filter((t) => TOOLS_FOR[role].includes(t)) : [])
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] })
 const json = (label: string, value: unknown) => text(`${label}\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``)
@@ -118,11 +121,15 @@ async function clientIds(names: string[] = []): Promise<{ ids: string[]; unclear
     return { ids: [...new Set(ids)], unclear }
 }
 
-export function registerSurveyTools(server: McpServer): void {
-    if (!surveyToolNames().length) return
+export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 'who' | 'surveyRole'> = { who: 'mcp', surveyRole: 'launch' }): void {
+    const allowed = new Set(surveyToolNames(caller.surveyRole))
+    if (!allowed.size) return
+    // Only the tools this caller's survey role allows exist for them at all.
+    const reg = ((name: string, ...rest: unknown[]) => (allowed.has(name) ? (server.registerTool as (...a: unknown[]) => unknown)(name, ...rest) : undefined)) as typeof server.registerTool
+    const who = caller.who
     const app = appEvents()!.app
 
-    server.registerTool(
+    reg(
         'design_survey',
         {
             title: 'Check a survey before saving it',
@@ -151,7 +158,7 @@ export function registerSurveyTools(server: McpServer): void {
         }
     )
 
-    server.registerTool(
+    reg(
         'save_survey',
         {
             title: 'Save a survey as a draft, or change one',
@@ -164,7 +171,7 @@ export function registerSurveyTools(server: McpServer): void {
             if (unclear.length) return json('Which clients? Nothing was saved:', unclear)
             const out = await saveSurvey(spec as SurveySpec, { id: survey_id, clientIds: ids })
             if (!out.survey) return json('Nothing was saved. Fix these first:', out.compiled.problems)
-            audit('mcp', survey_id ? 'survey.changed' : 'survey.created', { survey: out.survey.id, name: out.survey.name })
+            audit(who, survey_id ? 'survey.changed' : 'survey.created', { survey: out.survey.id, name: out.survey.name })
             const v = viewOf(out.survey)
             const conflicts = conflictsFor(out.compiled.chain, out.survey, await listSurveys())
             return json(
@@ -174,7 +181,7 @@ export function registerSurveyTools(server: McpServer): void {
         }
     )
 
-    server.registerTool(
+    reg(
         'launch_survey',
         {
             title: 'Show a survey to users',
@@ -183,7 +190,6 @@ export function registerSurveyTools(server: McpServer): void {
             annotations: { destructiveHint: false, openWorldHint: true },
         },
         async ({ survey_id, confirm }) => {
-            if (!mcpMayLaunch()) return text(`An admin switched off launching surveys from chat. Launch it on the Surveys page: ${pageUrl(survey_id)}`)
             if (confirm !== true) {
                 const sv = await getSurvey(survey_id)
                 const v = viewOf(sv)
@@ -193,14 +199,14 @@ export function registerSurveyTools(server: McpServer): void {
             }
             const launched = await launchSurvey(survey_id)
             const v = viewOf(launched)
-            audit('mcp', 'survey.launched', { survey: v.id, name: v.name })
+            audit(who, 'survey.launched', { survey: v.id, name: v.name })
             const chain = launched.conditions?.lensChain
             const conflicts = chain ? conflictsFor(chain, launched, await listSurveys()) : []
             return json(`${chain ? queueAlert(chain, conflicts).alert + '\n\n' : ''}Running: "${v.name}". It shows as soon as a user does the steps. Answers: survey_results, or ${pageUrl(v.id)}`, { steps: v.steps, clients: v.clients, sample_percent: v.sample_percent, ...(chain ? { queue: queueAlert(chain, conflicts) } : {}), already_in: conflicts.map((x) => x.text) })
         }
     )
 
-    server.registerTool(
+    reg(
         'stop_survey',
         {
             title: 'Stop a survey',
@@ -208,14 +214,13 @@ export function registerSurveyTools(server: McpServer): void {
             inputSchema: { survey_id: z.string(), archive: z.boolean().default(false) },
         },
         async ({ survey_id, archive }) => {
-            if (!mcpMayLaunch()) return text(`An admin switched off stopping surveys from chat. Use the Surveys page: ${pageUrl(survey_id)}`)
             const s = archive ? await archiveSurvey(survey_id) : await stopSurvey(survey_id)
-            audit('mcp', archive ? 'survey.archived' : 'survey.stopped', { survey: s.id, name: s.name })
+            audit(who, archive ? 'survey.archived' : 'survey.stopped', { survey: s.id, name: s.name })
             return text(`${archive ? 'Archived' : 'Stopped'}: "${s.name}". Users no longer see it.`)
         }
     )
 
-    server.registerTool(
+    reg(
         'list_surveys',
         {
             title: 'Which surveys are there?',
@@ -229,7 +234,7 @@ export function registerSurveyTools(server: McpServer): void {
         }
     )
 
-    server.registerTool(
+    reg(
         'survey_results',
         {
             title: 'What did users answer?',

@@ -54,8 +54,12 @@ export function rewriteSseLine(line: string, name = 'lens', info: LensInfo = DEF
 export function replayRefusal(value: unknown, name = 'lens'): Rpc | undefined {
     if (!object(value) || value.method !== 'tools/call' || value.params?.name !== 'exec') return
     const command = value.params.arguments?.command
-    if (typeof command !== 'string' || !/\b(?:session-recording[\w-]*|query-session-recordings-list|vision-[\w-]+)\b/i.test(command)) return
-    return { jsonrpc: '2.0', id: value.id ?? null, error: { code: -32602, message: `Replays are private. Use the ${name} server's get_replay_link and give the person the link. PostHog replay and vision commands are refused.` } }
+    if (typeof command !== 'string') return
+    if (/\b(?:session-recording[\w-]*|query-session-recordings-list|vision-[\w-]+)\b/i.test(command))
+        return { jsonrpc: '2.0', id: value.id ?? null, error: { code: -32602, message: `Replays are private. Use the ${name} server's get_replay_link and give the person the link. PostHog replay and vision commands are refused.` } }
+    // In-app surveys are made, launched and read only in Lens, under its survey roles.
+    if (/\bsurvey[\w-]*/i.test(command) && /\bcall\b/i.test(command))
+        return { jsonrpc: '2.0', id: value.id ?? null, error: { code: -32602, message: `In-app surveys are managed only in Lens: use the ${name} server's survey tools (list_surveys, survey_results, design_survey, save_survey, launch_survey, stop_survey), which follow each person's survey role. PostHog survey commands are refused.` } }
 }
 
 export function bearerAuthorized(req: IncomingMessage, token: string): boolean {
@@ -71,6 +75,7 @@ export interface ProxyOptions {
     token: string
     name: string
     enabled: boolean
+    authorize?: (req: IncomingMessage) => boolean // instead of the shared token alone (personal tokens too)
     info?: LensInfo
     timeoutMs?: number
     maxBodyBytes?: number
@@ -95,7 +100,7 @@ function send(res: ServerResponse, status: number, value: unknown) {
 }
 
 export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse, options: ProxyOptions): Promise<void> {
-    if (!bearerAuthorized(req, options.token)) return send(res, 401, { error: 'MCP needs Authorization: Bearer <MCP_TOKEN>' })
+    if (!(options.authorize ? options.authorize(req) : bearerAuthorized(req, options.token))) return send(res, 401, { error: 'MCP needs Authorization: Bearer <MCP_TOKEN or your personal token>' })
     if (!options.enabled || !options.url || !options.apiKey) return send(res, 503, { error: 'PostHog MCP proxy is off or not configured' })
     if (!['POST', 'GET', 'DELETE'].includes(req.method || '')) {
         res.setHeader('allow', 'POST, GET, DELETE')
