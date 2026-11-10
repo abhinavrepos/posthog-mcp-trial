@@ -60,11 +60,20 @@ const HTTP_CHECKS = env('STATUS_HTTP', DEFAULT_HTTP)
 // ------------------------------------------------------------------ helpers
 const OK = 'ok', WARN = 'warn', DOWN = 'down', INFO = 'info'
 const since = new Map() // check key -> when it last changed level
+const changes = [] // newest first, transitions only
+const containerHistory = new Map()
 const restartsSeen = new Map() // container -> [{at, count}]
 
-function track(key, level) {
+function track(key, level, row) {
     const prev = since.get(key)
-    if (!prev || prev.level !== level) since.set(key, { level, at: Date.now() })
+    if (!prev || prev.level !== level) {
+        const at = Date.now()
+        since.set(key, { level, at })
+        if (prev) {
+            changes.unshift({ at, group: row.group, name: row.name, from: prev.level, level })
+            changes.length = Math.min(changes.length, 100)
+        }
+    }
     return since.get(key).at
 }
 
@@ -72,9 +81,12 @@ function docker(path) {
     return new Promise((resolve, reject) => {
         const req = http.request({ socketPath: DOCKER_SOCKET, path, method: 'GET', timeout: 10_000 }, (res) => {
             let body = ''
+            res.on('error', reject)
             res.on('data', (c) => (body += c))
-            res.on('end', () => (res.statusCode === 200 ? resolve(JSON.parse(body)) : reject(new Error(`Docker answered ${res.statusCode}`))))
+            res.on('end', () => { try { if (res.statusCode !== 200) throw new Error(`Docker answered ${res.statusCode}`); resolve(JSON.parse(body)) } catch (e) { reject(e) } })
         })
+        const deadline = setTimeout(() => req.destroy(new Error('Docker did not answer in 10 s')), 10_000)
+        req.on('close', () => clearTimeout(deadline))
         req.on('timeout', () => req.destroy(new Error('Docker did not answer in 10 s')))
         req.on('error', reject)
         req.end()
@@ -85,7 +97,7 @@ async function clickhouse(sql) {
     const res = await fetch(`${CLICKHOUSE}/?readonly=1&default_format=JSONCompact&output_format_json_quote_64bit_integers=0`, {
         method: 'POST',
         body: sql,
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.timeout(8000),
     })
     if (!res.ok) throw new Error(`ClickHouse answered ${res.status}`)
     return (await res.json()).data
@@ -114,10 +126,30 @@ async function containerUsage(id) {
         const cpu = prev && system > prev.system ? Math.max(0, ((total - prev.total) / (system - prev.system)) * 100) : null
         const m = s.memory_stats || {}
         const cache = m.stats?.inactive_file ?? m.stats?.total_inactive_file ?? 0
-        return { cpu_pct: cpu, mem_bytes: m.usage ? Math.max(0, m.usage - cache) : null }
+        const net = Object.values(s.networks || {})
+        const io = s.blkio_stats?.io_service_bytes_recursive
+        const sumIO = op => io ? io.filter(x => x.op.toLowerCase() === op).reduce((n, x) => n + Number(x.value), 0) : null
+        return { cpu_pct: cpu, mem_bytes: m.usage == null ? null : Math.max(0, m.usage - cache),
+            network_rx_bytes: s.networks ? net.reduce((n, x) => n + x.rx_bytes, 0) : null,
+            network_tx_bytes: s.networks ? net.reduce((n, x) => n + x.tx_bytes, 0) : null,
+            block_read_bytes: sumIO('read'), block_write_bytes: sumIO('write'), pids: s.pids_stats?.current ?? null }
     } catch {
         return {}
     }
+}
+
+// Runs fn over items, at most `limit` at a time, so ~40 containers don't hit Docker all at once.
+async function eachLimited(items, limit, fn) {
+    let i = 0
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while (i < items.length) await fn(items[i++])
+    }))
+}
+
+function shortImage(image = '') {
+    if (image.includes('@sha256:')) return image.split('/').at(-1).split('@')[0] + '@sha256:' + image.split('@sha256:')[1].slice(0, 12)
+    if (image.startsWith('sha256:')) return image.slice(0, 19)
+    return image.split('/').at(-1)
 }
 
 // ------------------------------------------------------------------ checks
@@ -129,20 +161,20 @@ async function checkContainers() {
     } catch (e) {
         return [{ group: 'Containers', name: 'Docker', level: DOWN, detail: `cannot read the container list: ${e.message}` }]
     }
-    for (const project of PROJECTS) {
+    await Promise.all(PROJECTS.map(async project => {
         const mine = list.filter((c) => c.Labels?.['com.docker.compose.project'] === project && c.Labels?.['com.docker.compose.oneoff'] !== 'True')
         if (!mine.length) {
             rows.push({ group: `Containers: ${project}`, name: project, level: DOWN, detail: 'no containers of this compose project' })
-            continue
+            return
         }
-        for (const c of mine) {
+        await eachLimited(mine, 6, async (c) => {
             const name = (c.Names?.[0] || c.Id).replace(/^\//, '').replace(new RegExp(`^${project}[-_]`), '')
             let info
             try {
                 info = await docker(`/containers/${c.Id}/json`)
             } catch (e) {
-                rows.push({ group: `Containers: ${project}`, name, level: WARN, detail: e.message })
-                continue
+                rows.push({ group: `Containers: ${project}`, name, level: WARN, detail: e.message, state: c.State, image: shortImage(c.Image) })
+                return
             }
             const st = info.State || {}
             const health = st.Health?.Status
@@ -175,9 +207,18 @@ async function checkContainers() {
                 detail = `${st.Status}${st.Status === 'exited' ? `, exit code ${st.ExitCode}` : ''} since ${ago(Date.now() - Date.parse(st.FinishedAt || st.StartedAt))}`
             }
             const usage = st.Status === 'running' ? await containerUsage(c.Id) : {}
-            rows.push({ group: `Containers: ${project}`, name, level, detail, state: st.Status, health: health || null, restarts, ...usage })
-        }
-    }
+            const samples = (containerHistory.get(c.Id) || []).filter(h => Date.now() - h[0] < 3600_000)
+            samples.push([Date.now(), usage.cpu_pct ?? null, usage.mem_bytes ?? null])
+            containerHistory.set(c.Id, samples)
+            const limit = info.HostConfig?.Memory || null
+            rows.push({ group: `Containers: ${project}`, name, level, detail, state: st.Status, health: health || null, restarts, ...usage,
+                image: shortImage(info.Config?.Image || c.Image), started_at: st.StartedAt || null, oom_killed: st.OOMKilled ?? null,
+                exit_code: st.Status === 'running' ? null : st.ExitCode ?? null, mem_limit_bytes: limit,
+                mem_limit_pct: limit && usage.mem_bytes != null ? usage.mem_bytes / limit * 100 : null,
+                health_output: health === 'unhealthy' ? String(st.Health?.Log?.at(-1)?.Output || '').trim().slice(0, 300) : null,
+                history: samples, compose_service: c.Labels?.['com.docker.compose.service'] || null })
+        })
+    }))
     return rows
 }
 
@@ -206,36 +247,41 @@ async function checkHttp() {
     )
 }
 
+let newestCache = { at: 0, value: null }
 async function checkData() {
     const G = 'Data arriving'
-    try {
-        const [[e5, e60, newest]] = await clickhouse(
-            `SELECT countIf(_timestamp > now() - INTERVAL 5 MINUTE), count(), toUnixTimestamp(max(_timestamp)) FROM posthog.events WHERE _timestamp > now() - INTERVAL 1 HOUR`,
-        )
-        let newestAt = Number(newest) * 1000
-        if (!e60) {
-            const [[n]] = await clickhouse(`SELECT toUnixTimestamp(max(_timestamp)) FROM posthog.events WHERE _timestamp > now() - INTERVAL 30 DAY`)
-            newestAt = Number(n) * 1000
-        }
-        const age = newestAt ? Date.now() - newestAt : Infinity
-        const stale = MAX_EVENT_AGE_MIN > 0 && age > MAX_EVENT_AGE_MIN * 60_000
-        const [[r60]] = await clickhouse(`SELECT count() FROM posthog.session_replay_events WHERE _timestamp > now() - INTERVAL 1 HOUR`)
-        return [
-            {
-                group: G,
-                name: 'Events',
-                level: stale ? DOWN : INFO,
-                detail: `${num(e5)} in the last 5 min, ${num(e60)} in the last hour; newest ${newestAt ? `${ago(age)} ago` : 'more than 30 days ago'}${stale ? ` (more than ${MAX_EVENT_AGE_MIN} min)` : ''}`,
-            },
-            { group: G, name: 'Session replays', level: INFO, detail: `${num(r60)} replay updates in the last hour (counted, never opened)` },
-        ]
-    } catch (e) {
-        return [{ group: G, name: 'ClickHouse', level: DOWN, detail: `cannot count: ${e.message}` }]
-    }
+    // Replay availability must not hide event counts, or vice versa.
+    return Promise.all([
+        (async () => {
+            try {
+                const [[e5, e60, newest]] = await clickhouse(`SELECT countIf(_timestamp > now() - INTERVAL 5 MINUTE), count(), toUnixTimestamp(max(_timestamp)) FROM posthog.events WHERE _timestamp > now() - INTERVAL 1 HOUR`)
+                let newestAt = Number(newest) * 1000
+                if (!e60) {
+                    if (Date.now() - newestCache.at >= 300_000) {
+                        newestCache.at = Date.now()
+                        try { newestCache.value = Number((await clickhouse('SELECT toUnixTimestamp(max(_timestamp)) FROM posthog.events WHERE _timestamp > now() - INTERVAL 30 DAY'))[0][0]) * 1000 } catch { newestCache.value = null }
+                    }
+                    newestAt = newestCache.value
+                }
+                const age = newestAt ? Date.now() - newestAt : Infinity
+                const stale = MAX_EVENT_AGE_MIN > 0 && newestAt !== null && age > MAX_EVENT_AGE_MIN * 60_000
+                return { group: G, name: 'Events', level: stale ? DOWN : INFO,
+                    detail: `${num(e5)} in the last 5 min, ${num(e60)} in the last hour; newest ${newestAt === null ? 'unavailable' : newestAt ? `${ago(age)} ago` : 'more than 30 days ago'}${stale ? ` (more than ${MAX_EVENT_AGE_MIN} min)` : ''}` }
+            } catch (e) { return { group: G, name: 'Events', level: DOWN, detail: `cannot count: ${e.message}` } }
+        })(),
+        (async () => {
+            try {
+                const [[n]] = await clickhouse('SELECT count() FROM posthog.session_replay_events WHERE _timestamp > now() - INTERVAL 1 HOUR')
+                return { group: G, name: 'Session replays', level: INFO, detail: `${num(n)} replay updates in the last hour (counted, never opened)` }
+            } catch (e) { return { group: G, name: 'Session replays', level: DOWN, detail: `cannot count: ${e.message}` } }
+        })(),
+    ])
 }
 
 // Slower numbers, once a minute. Each stands alone, so one missing table costs only its own number.
 const EXTRAS_EVERY = 60_000
+// Scans of every ClickHouse part, every five minutes.
+const PARTS_EVERY = 300_000
 let extras = { at: 0, data: {} }
 async function collectExtras() {
     if (Date.now() - extras.at < EXTRAS_EVERY) return
@@ -246,24 +292,61 @@ async function collectExtras() {
             return null
         }
     }
-    const [hours, people, sessions, warnings, size] = await Promise.all([
+    const [hours, people, sessions, warnings, size, minutes] = await Promise.all([
         one(`SELECT toUnixTimestamp(toStartOfHour(_timestamp)) AS h, count() FROM posthog.events WHERE _timestamp > now() - INTERVAL 24 HOUR GROUP BY h ORDER BY h`),
         one(`SELECT uniq(distinct_id) FROM posthog.events WHERE _timestamp > now() - INTERVAL 24 HOUR`),
         one(`SELECT uniq(session_id) FROM posthog.session_replay_events WHERE _timestamp > now() - INTERVAL 24 HOUR`),
         one(`SELECT count() FROM posthog.ingestion_warnings WHERE timestamp > now() - INTERVAL 24 HOUR`),
         one(`SELECT sum(bytes_on_disk) FROM system.parts WHERE active`),
+        one(`SELECT toUnixTimestamp(toStartOfMinute(_timestamp)) AS m, count() FROM posthog.events WHERE _timestamp >= toStartOfMinute(now()) - INTERVAL 59 MINUTE GROUP BY m ORDER BY m`),
     ])
     const first = (r) => (r?.[0]?.[0] === undefined ? null : Number(r[0][0]))
     extras = {
         at: Date.now(),
         data: {
             events_by_hour: hours ? hours.map(([h, n]) => [Number(h) * 1000, Number(n)]) : null,
+            events_by_minute: minutes ? minutes.map(([t, n]) => [Number(t) * 1000, Number(n)]) : null,
             people_24h: first(people),
             recordings_24h: first(sessions),
             ingestion_warnings_24h: first(warnings),
             clickhouse_bytes: first(size),
         },
     }
+}
+
+// Independent metadata queries; big system.parts scans are cached for five minutes.
+const safeCH = async sql => { try { return await clickhouse(sql) } catch { return null } }
+let ch = {}, chPartsAt = 0, dockerDiskAt = 0, dockerDisk = null, dockerVersion = null
+async function collectHealth() {
+    const first = r => r?.[0]?.[0] ?? null
+    await Promise.all([
+        ...[['version', 'SELECT version()'], ['uptime_s', 'SELECT uptime()'],
+            ['running_queries', 'SELECT count() FROM system.processes WHERE query_id != currentQueryID()'],
+            ['merges', 'SELECT count() FROM system.merges'],
+            ['pending_mutations', 'SELECT count() FROM system.mutations WHERE NOT is_done']].map(async ([key, sql]) => { ch[key] = first(await safeCH(sql)) }),
+        (async () => {
+            if (Date.now() - chPartsAt < PARTS_EVERY) return
+            chPartsAt = Date.now()
+            await Promise.all([
+                (async () => { ch.max_partition_parts = first(await safeCH('SELECT max(n) FROM (SELECT count() AS n FROM system.parts WHERE active GROUP BY database, table, partition_id)')) })(),
+                (async () => { const r = await safeCH('SELECT database, table, sum(bytes_on_disk), sum(rows) FROM system.parts WHERE active GROUP BY database, table ORDER BY sum(bytes_on_disk) DESC LIMIT 8'); ch.tables = r?.map(([database, table, bytes, rows]) => ({ database, table, bytes: Number(bytes), rows: Number(rows) })) ?? null })(),
+            ])
+        })(),
+        (async () => { try { dockerVersion = (await docker('/version')).Version } catch { dockerVersion = null } })(),
+        (async () => {
+            if (Date.now() - dockerDiskAt < 600_000) return
+            dockerDiskAt = Date.now()
+            try {
+                const d = await docker('/system/df')
+                dockerDisk = { at: dockerDiskAt, images_bytes: d.LayersSize ?? null,
+                    containers_bytes: d.Containers?.reduce((n, x) => n + (x.SizeRw || 0), 0) ?? null,
+                    volumes_bytes: d.Volumes?.some(x => x.UsageData?.Size == null || x.UsageData.Size < 0) ? null : d.Volumes?.reduce((n, x) => n + (x.UsageData?.Size || 0), 0) ?? null,
+                    build_cache_bytes: d.BuildCache?.reduce((n, x) => n + (x.Size || 0), 0) ?? null }
+            } catch { dockerDisk = null }
+        })(),
+    ])
+    const n = ch.max_partition_parts
+    return n == null ? [] : [{ group: 'ClickHouse', name: 'Active parts per partition', level: n > 1000 ? DOWN : n > 300 ? WARN : OK, detail: `${n} maximum (warning above 300, problem above 1000)` }]
 }
 
 // The whole machine's CPU between two checks, from /proc/stat, which a container sees for the host.
@@ -281,8 +364,8 @@ function machineCpu() {
     }
 }
 
-const HISTORY = 240 // an hour at one check every 15 seconds
-const history = [] // [time, CPU %, memory %]
+const HISTORY = Math.ceil(3600_000 / EVERY) + 1 // an hour at one check every 15 seconds
+const history = [] // [time, CPU %, memory %, disk-used %, load]
 let machine = {}
 
 function checkMachine() {
@@ -297,6 +380,7 @@ function checkMachine() {
         const pct = (free / total) * 100
         machine.disk_total = total
         machine.disk_free = free
+        machine.disk_used_pct = 100 - pct
         rows.push({ group: G, name: 'Disk', level: pct < 10 ? DOWN : pct < 20 ? WARN : OK, detail: `${gb(free)} free of ${gb(total)} (${pct.toFixed(0)}%)` })
     } catch {
         rows.push({ group: G, name: 'Disk', level: WARN, detail: `cannot read (mount a host folder at ${DISK})` })
@@ -310,6 +394,8 @@ function checkMachine() {
                 .map(([k, v]) => [k, parseInt(v, 10) * 1024]),
         )
         const pct = (m.MemAvailable / m.MemTotal) * 100
+        machine.swap_total = m.SwapTotal
+        machine.swap_used = m.SwapTotal - m.SwapFree
         machine.mem_total = m.MemTotal
         machine.mem_available = m.MemAvailable
         rows.push({ group: G, name: 'Memory', level: pct < 5 ? DOWN : pct < 10 ? WARN : OK, detail: `${gb(m.MemAvailable)} available of ${gb(m.MemTotal)} (${pct.toFixed(0)}%)` })
@@ -318,10 +404,10 @@ function checkMachine() {
     const cpus = os.cpus().length || 1
     machine.load_1 = l1
     machine.load_5 = l5
-    if (cpuPct !== null) {
+    {
         const memPct = machine.mem_total ? (1 - machine.mem_available / machine.mem_total) * 100 : null
-        history.push([Date.now(), cpuPct, memPct])
-        if (history.length > HISTORY) history.shift()
+        history.push([Date.now(), cpuPct, memPct, machine.disk_total ? (1 - machine.disk_free / machine.disk_total) * 100 : null, l1])
+        while (history.length > HISTORY || history.length && Date.now() - history[0][0] > 3600_000) history.shift()
     }
     rows.push({ group: G, name: 'Load', level: l5 > cpus * 2 ? WARN : OK, detail: `${l1.toFixed(1)} now, ${l5.toFixed(1)} over 5 min, ${cpus} cores` })
     rows.push({ group: G, name: 'Uptime', level: INFO, detail: ago(os.uptime() * 1000) })
@@ -332,9 +418,10 @@ function checkMachine() {
 let latest = { at: null, rows: [], took_ms: 0 }
 async function runChecks() {
     const t = Date.now()
-    const parts = await Promise.allSettled([checkHttp(), checkData(), checkContainers(), Promise.resolve(checkMachine()), collectExtras().then(() => [])])
+    const parts = await Promise.allSettled([checkHttp(), checkData(), checkContainers(), Promise.resolve(checkMachine()), collectExtras().then(() => []), collectHealth()])
     const rows = parts.flatMap((p) => (p.status === 'fulfilled' ? p.value : [{ group: 'Status page', name: 'a check', level: WARN, detail: String(p.reason) }]))
-    for (const r of rows) r.since = track(`${r.group}/${r.name}`, r.level)
+    for (const r of rows) r.since = track(`${r.group}/${r.name}`, r.level, r)
+    for (const [id, samples] of containerHistory) if (Date.now() - samples.at(-1)[0] > 3600_000) { containerHistory.delete(id); lastCpu.delete(id); restartsSeen.delete(id) }
     latest = { at: Date.now(), rows, took_ms: Date.now() - t }
 }
 async function loop() {
@@ -463,7 +550,7 @@ http
         if (!authorized(req)) return send(401, 'text/plain', 'password needed\n', { 'www-authenticate': `Basic realm="${TITLE}", charset="UTF-8"` })
         if (path === '/') return send(200, 'text/html; charset=utf-8', page(), { 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'" })
         if (path === '/fragment') return send(200, 'text/html; charset=utf-8', fragment())
-        if (path === '/api/status') return send(200, 'application/json', JSON.stringify({ ...summary(), checked_at: latest.at && new Date(latest.at).toISOString(), checks: latest.rows, metrics: { machine, history, ...extras.data } }, null, 2))
+        if (path === '/api/status') return send(200, 'application/json', JSON.stringify({ ...summary(), checked_at: latest.at && new Date(latest.at).toISOString(), checks: latest.rows, changes, about: { posthog_image: latest.rows.find(r => r.compose_service === 'web')?.image ?? null, clickhouse_version: ch.version ?? null, docker_version: dockerVersion, uptime_s: Math.round(process.uptime()), interval_s: EVERY / 1000, took_ms: latest.took_ms }, metrics: { machine, history, ...extras.data, extras_at: extras.at, clickhouse: ch, docker_disk: dockerDisk } }, null, 2))
         send(404, 'text/plain', 'not found\n')
     })
     .listen(PORT, '0.0.0.0', () => {

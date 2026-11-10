@@ -47,6 +47,33 @@ describe('database', () => {
         assert.throws(() => run("INSERT INTO people VALUES ('x@y.z', 'superuser', null, 'a', 'b')"), 'unknown roles are refused')
     })
 
+    test('System page: admins always, others only when ticked, apart from the clip role', () => {
+        const ops = 'ops@acme.example'
+        assert.equal(access.canSeeSystem({ role: 'admin', system: false }), true, 'admins always see it')
+        assert.equal(access.canSeeSystem({ role: 'download', system: false }), false)
+        assert.equal(access.hasSystemGrant(ops), false)
+
+        access.setSystemAccess('OPS@acme.example', true, 'admin@acme.example')
+        assert.equal(access.hasSystemGrant(ops), true)
+        assert.equal(access.canSeeSystem({ role: 'none', system: access.hasSystemGrant(ops) }), true, 'no clip access, but the System page')
+
+        // Changing or resetting the clip role leaves the System page as it was.
+        access.setPerson(ops, 'watch', 'admin@acme.example')
+        access.removePerson(ops, 'admin@acme.example')
+        assert.equal(access.hasSystemGrant(ops), true)
+
+        access.setSystemAccess(ops, true, 'admin@acme.example') // no change: not logged again
+        access.setSystemAccess(ops, false, 'admin@acme.example')
+        assert.equal(access.hasSystemGrant(ops), false)
+        assert.deepEqual(
+            access.readAudit({ action: 'access.system_set' }).map((e) => [e.person, e.system]),
+            [
+                [ops, false],
+                [ops, true],
+            ]
+        )
+    })
+
     test('settings persist', () => {
         access.setAccessSettings({ default_role: 'watch', allow_share_links: false }, 'admin@acme.example')
         assert.deepEqual([access.loadAccess().default_role, access.loadAccess().allow_share_links], ['watch', false])
