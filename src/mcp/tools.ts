@@ -5,6 +5,7 @@ import { z } from 'zod'
 
 import { appEvents, clientSignalsReport, describeAppEvents, dialogFriction, findTrade, sessionStory, slowAttempts, topPains } from '../core/appevents.ts'
 import { SCREENS } from '../core/catalog.ts'
+import { revalBrief } from '../core/brief.ts'
 import { renderClip } from '../core/clip.ts'
 import { errorImpact } from '../core/impact.ts'
 import { bestPerSession, findIncidents } from '../core/incidents.ts'
@@ -74,7 +75,7 @@ const A = appEvents()?.app || 'your app'
 
 // Every tool name, for PostHog's proxied exec description ("use the lens server's tools (...)").
 export const CORE_TOOLS = ['resolve_client', 'find_client_incidents', 'get_replay_link', 'screen_usage', 'error_blast_radius', 'find_silent_issues', 'triage_ticket', 'list_releases', 'release_outcomes', 'ticket_evidence', 'client_feedback', 'record_verdict', 'correct_ticket_link', 'refresh_releases']
-export const APP_EVENT_TOOLS = ['describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals']
+export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals']
 export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(appEvents() ? APP_EVENT_TOOLS : [])]
 
 export function registerTools(server: McpServer, ai?: TriageAi): void {
@@ -411,6 +412,23 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
 function registerAppEventTools(server: McpServer): void {
     const app = appEvents()!.app
     server.registerTool(
+        'reval_brief',
+        {
+            title: 'Brief me on Reval',
+            description: 'Start here for any question a product manager asks about Reval: what to worry about, how a client is doing, a dialog, a trade, or a weekly brief. The server investigates and returns a concise brief with comparisons, evidence links, limits and next questions. Relay it as returned; add no invented facts. No setup or other tool calls needed.',
+            inputSchema: {
+                question: z.string().optional().describe('The PM’s question in their own words. Omit for a general brief.'),
+                client: z.string().optional().describe('Client name, id or email, if already known.'),
+                dialog: z.string().optional().describe('Dialog name or code, if already known.'),
+                trade: z.string().regex(/^\d{1,15}$/).optional().describe('Trade/link id, if already known.'),
+                when: z.string().optional().describe('Plain-language window; default last 14 days, or 30 for a trade.'),
+                timezone: tz,
+            },
+            annotations: { readOnlyHint: true },
+        },
+        async (input) => text(await revalBrief(input))
+    )
+    server.registerTool(
         'describe_app_events',
         {
             title: `What ${app}'s events mean`,
@@ -550,13 +568,27 @@ function registerAppEventTools(server: McpServer): void {
                         type: 'text',
                         text: `Where do ${client ? `${client}'s users` : 'clients'} struggle in ${app}${w ? ` (${w})` : ' (last 14 days)'}?
 
-1. Call describe_app_events once, to know the dialogs and messages.
-2. Call ${client ? `client_signals with client "${client}", then dialog_friction` : 'top_pains, then dialog_friction'}${client ? ` with client "${client}"` : ''}, both with when "${w || 'last 14 days'}".
-3. For the top 3 dialogs, call session_story on one example session each and say in one or two sentences what the person was trying to do and where it went wrong.
-4. Reply with the clients that need attention and why (one line each), a table of the dialogs that hurt (dialog, clients hit, failed attempts / attempts, main error), and the 3 fixes or questions for the product team that would help most. Use only numbers the tools returned; say when numbers are small, and that client signals are not a churn prediction.`,
+Call reval_brief first with ${JSON.stringify({ question: 'Where do clients struggle?', ...(client ? { client } : {}), when: w || 'last 14 days' })}.
+Relay the returned brief, including its evidence and limits. Add nothing invented. Replays are links for the person only.`,
                     },
                 },
             ],
         })
     )
+    const briefPrompt = (args: Record<string, string>) => ({
+        messages: [{ role: 'user' as const, content: { type: 'text' as const,
+            text: `Call reval_brief first with ${JSON.stringify(args)}. Relay its brief, evidence and limits as returned. Add no invented facts or numbers. Replay links are for the person; never view replay content.`,
+        } }],
+    })
+    server.registerPrompt('weekly_review', {
+        title: 'Weekly Reval review', description: 'What should I worry about this week?',
+    }, () => briefPrompt({ question: 'Brief me on what needs attention this week', when: 'last 7 days' }))
+    server.registerPrompt('client_check', {
+        title: 'Check a Reval client', description: 'How is this client doing?',
+        argsSchema: { client: z.string().describe('Client name or id') },
+    }, ({ client }) => briefPrompt({ question: 'How is this client doing?', client }))
+    server.registerPrompt('release_check', {
+        title: 'Check after a release', description: 'What needs attention after a release?',
+        argsSchema: { release: z.string().optional().describe('Release name or version, if known') },
+    }, ({ release }) => briefPrompt({ question: `What should I worry about after release ${release || 'the latest release'}?`, when: 'last 14 days' }))
 }

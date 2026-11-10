@@ -529,14 +529,14 @@ function required(): AppEvents {
 
 const prop = (reg: AppEvents, role: Role) => (reg.properties[role] ? `toString(properties.${reg.properties[role]!.name})` : `''`)
 
-function columns(reg: AppEvents): string {
+export function columns(reg: AppEvents): string {
     return `toString(properties.$session_id) AS sid, timestamp AS ts, event, toString(${P.client}) AS client, toString(distinct_id) AS user,
             ${prop(reg, 'dialog')} AS dialog, ${prop(reg, 'dialogName')} AS dialogName, ${prop(reg, 'tab')} AS tab,
             ${prop(reg, 'action')} AS action, ${prop(reg, 'control')} AS control, ${prop(reg, 'button')} AS button, ${prop(reg, 'version')} AS version,
             toFloat(properties.$time) AS ctime`
 }
 
-const toRaw = (r: Record<string, unknown>): RawEvent => ({
+export const toRaw = (r: Record<string, unknown>): RawEvent => ({
     sid: String(r.sid ?? ''),
     ts: new Date(String(r.ts)).toISOString(),
     event: String(r.event ?? ''),

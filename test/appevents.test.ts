@@ -299,14 +299,36 @@ describe('the MCP server with app events', async () => {
     const client = new Client({ name: 'test', version: '0' })
     const [a, b] = InMemoryTransport.createLinkedPair()
     await Promise.all([server.connect(a), client.connect(b)])
-    test('offers the three tools and the prompt', async () => {
+    test('offers app tools with reval_brief first and the PM prompts', async () => {
         const names = (await client.listTools()).tools.map((t) => t.name)
-        for (const n of ['describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade']) assert.ok(names.includes(n), n)
-        assert.ok((await client.listPrompts()).prompts.some((p) => p.name === 'where_clients_struggle'))
+        for (const n of ['reval_brief', 'describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade']) assert.ok(names.includes(n), n)
+        assert.ok(names.indexOf('reval_brief') < names.indexOf('describe_app_events'))
+        const prompts = (await client.listPrompts()).prompts.map((p) => p.name)
+        for (const n of ['where_clients_struggle', 'weekly_review', 'client_check', 'release_check']) assert.ok(prompts.includes(n), n)
+    })
+    test('PM prompts call reval_brief first with explicit arguments and no invented additions', async () => {
+        const cases = [
+            { name: 'where_clients_struggle', arguments: { client: 'ACME', when: 'last 3 days' }, expected: { client: 'ACME', when: 'last 3 days' } },
+            { name: 'weekly_review', expected: { when: 'last 7 days' } },
+            { name: 'client_check', arguments: { client: 'ACME' }, expected: { client: 'ACME' } },
+            { name: 'release_check', arguments: { release: '26.10.0' }, expected: { when: 'last 14 days' } },
+            { name: 'release_check', expected: { when: 'last 14 days' } },
+        ]
+        for (const item of cases) {
+            const prompt = await client.getPrompt({ name: item.name, arguments: item.arguments as Record<string, string> | undefined })
+            const content = prompt.messages[0].content
+            assert.equal(content.type, 'text')
+            const text = content.type === 'text' ? content.text : ''
+            assert.match(text, /Call reval_brief first with /)
+            assert.match(text, /[Aa]dd (nothing invented|no invented facts)/)
+            const args = JSON.parse(text.match(/Call reval_brief first with (\{[^\n]+\})\./)![1])
+            for (const [key, value] of Object.entries(item.expected)) assert.equal(args[key], value)
+            if (item.name === 'release_check') assert.match(args.question, /release/)
+        }
     })
     test('the instructions name them, say where the client is, and still fit', () => {
         const text = client.getInstructions() || ''
-        for (const n of ['describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade']) assert.ok(text.includes(n), n)
+        for (const n of ['reval_brief', 'describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade']) assert.ok(text.includes(n), n)
         assert.match(text, /part 3 of the distinct id/)
         assert.ok(text.length + 100 < INSTRUCTIONS_LIMIT, `instructions are ${text.length} characters`)
     })
