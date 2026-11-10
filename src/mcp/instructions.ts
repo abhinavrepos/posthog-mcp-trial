@@ -1,20 +1,23 @@
-// Claude Code cuts instructions at 2,048 characters. Keep replay privacy first and routing next.
+// Claude Code cuts instructions at 2,048 characters. Keep privacy first.
 import { appEvents } from '../core/appevents.ts'
 import { config, posthogMcpActive } from '../core/config.ts'
 import { P } from '../core/props.ts'
 import { surveyToolNames } from './surveytools.ts'
-import type { SurveyRole } from '../service/access.ts'
+import { dashboardToolNames } from './dashboardtools.ts'
+import type { SurveyRole, DashboardRole } from '../service/access.ts'
 
 export const INSTRUCTIONS_LIMIT = 2048
 
-export function serverInstructions(withPosthog = posthogMcpActive(), surveyRole: SurveyRole = 'launch'): string {
+export function serverInstructions(withPosthog = posthogMcpActive(), surveyRole: SurveyRole = 'launch', dashboardRole: DashboardRole = 'share'): string {
     const p = config.properties
     const client = p.clientFromDistinctId ? `part ${p.clientFromDistinctId} of the distinct id` : `the event property ${p.client}`
     const app = appEvents()?.app || 'the app'
+    const surveys = surveyToolNames(surveyRole)
+    const dashboards = dashboardToolNames(dashboardRole)
     return `Replays are private: never call PostHog's session-recording-*, query-session-recordings-list or vision-* tools. Use get_replay_link; give the person the link, never view replay content.
 
-Lens (${config.mcp.name}) = ${app} clients/users, trades, dialogs/buttons, sessions, Jira tickets, releases, client risk and app errors.
-${withPosthog ? `Use PostHog's server (posthog) for generic analytics, trends, funnels, retention, insights, dashboards, flags, experiments, cohorts, annotations, actions, error issues, exports, SDK docs and raw SQL (execute-sql).
+Lens (${config.mcp.name}) = ${app} clients/users, tasks and flows, trades, dialogs/buttons, sessions, Jira tickets, releases, client risk and app errors.
+${withPosthog ? `Use PostHog's server (posthog) for generic analytics, trends, funnels, retention, insights, PostHog dashboards, flags, experiments, cohorts, annotations, actions, error issues, exports, SDK docs and raw SQL (execute-sql).
 PostHog's one tool, exec, takes a command string; call Lens tools directly with JSON, never via exec.
 In PostHog SQL the client is ${P.client}.
 ` : 'Call Lens tools directly with JSON arguments. For other questions, say this server does not cover them.\n'}
@@ -25,7 +28,9 @@ Lens tools:
 - Jira triage: triage_ticket
 - releases: list_releases, release_outcomes; one ticket: ticket_evidence; complaints after shipping: client_feedback
 - agreed verdict: record_verdict; ticket link: correct_ticket_link; sync: refresh_releases${appEvents() ? `
-- reval_brief first for PM questions; ${app}: describe_app_events vocabulary; top_pains; dialog_friction failures; message_doctor messages; session_story; attempt_timings waits; find_trade ids; client_signals risk; discover_workflows, workflow_completion` : ''}${surveyToolNames(surveyRole).length ? `
-- in-app surveys for ${app} users (only here, never PostHog): ${surveyToolNames(surveyRole).map((t) => (t === 'launch_survey' ? 'launch_survey (two calls: show its rules, get the Jira ticket and the person\'s acknowledgement)' : t)).join(', ')}${surveyRole === 'launch' ? '' : '. Other survey actions need a higher survey role from a Lens admin'}` : surveyToolNames().length ? `
+- reval_brief first for PM questions; ${app}: describe_app_events vocabulary; top_pains; dialog_friction failures; message_doctor messages; session_story; attempt_timings waits; find_trade ids; client_signals risk; discover_workflows, workflow_completion` : ''}${dashboards.length ? `
+- which clients stopped or slowed a task (missing work): task_map; how long a task takes and which path: flow_time; task by words: find_task; keep it as a Lens dashboard: ${dashboards.filter((t) => /pin|share|list/.test(t)).join(', ') || 'none'}` : appEvents() ? `
+- dashboards (task map, flow time): this person has no access; a Lens admin grants it` : ''}${surveys.length ? `
+- in-app surveys for ${app} users (only here, never PostHog): ${surveys.map((t) => (t === 'launch_survey' ? 'launch_survey (two calls: show its rules, get the Jira ticket and the person\'s acknowledgement)' : t)).join(', ')}${surveyRole === 'launch' ? '' : '. Other survey actions need a higher survey role from a Lens admin'}` : surveyToolNames().length ? `
 - in-app surveys: this person has no survey access in Lens; a Lens admin grants it (never use PostHog for surveys)` : ''}`
 }
