@@ -6,6 +6,7 @@
 //                 recording get the same file, so it is stored once.
 //   clip_holders  who has which clip: made it, and whether they saved it
 //   clip_comments comments pinned to a second of a clip, shown over the video and burned into downloads
+//   system_viewers who may see the System page besides admins
 //   audit         sign-ins, views, downloads, shares and access changes
 //   releases, release_tickets, release_snapshots, release_verdicts
 //                 release outcomes for the MCP tools: the last N Jira releases (default 12), their
@@ -148,6 +149,14 @@ const MIGRATIONS: string[] = [
         updated_at TEXT NOT NULL
     );
     CREATE INDEX clip_comments_clip ON clip_comments (clip_name, at_s);`,
+
+    // People an admin let see the System page (machine and container status). Kept apart from the
+    // clip roles, so a role change or reset never grants or removes it. Admins always see it.
+    `CREATE TABLE system_viewers (
+        email TEXT PRIMARY KEY,
+        updated_by TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */
