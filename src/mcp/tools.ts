@@ -40,7 +40,7 @@ import { triage, type TriageAi } from '../core/triage.ts'
 import { screenUsage } from '../core/usage.ts'
 import { recordClip } from '../service/replays.ts'
 import { registerSurveyTools, surveyToolNames } from './surveytools.ts'
-import { registerDashboardTools } from './dashboardtools.ts'
+import { registerDashboardTools, dashboardToolNames } from './dashboardtools.ts'
 import type { ChatCaller } from '../service/access.ts'
 
 type Content = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }
@@ -82,7 +82,7 @@ const A = appEvents()?.app || 'your app'
 // Every tool name, for PostHog's proxied exec description ("use the lens server's tools (...)").
 export const CORE_TOOLS = ['resolve_client', 'find_client_incidents', 'get_replay_link', 'screen_usage', 'error_blast_radius', 'find_silent_issues', 'triage_ticket', 'list_releases', 'release_outcomes', 'ticket_evidence', 'client_feedback', 'record_verdict', 'correct_ticket_link', 'refresh_releases']
 export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor']
-export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(appEvents() ? APP_EVENT_TOOLS : []), ...surveyToolNames()]
+export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(appEvents() ? APP_EVENT_TOOLS : []), ...surveyToolNames(), ...dashboardToolNames()]
 
 export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'dashboardRole' | 'admin'>>): void {
     const register = server.registerTool.bind(server)

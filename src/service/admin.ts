@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config } from '../core/config.ts'
 import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSurveyRole, resetSurveyRole, setSurveySettings, SURVEY_ROLES, SURVEY_ROLE_TEXT, defaultSurveyRole, sharedTokenSurveyRole, surveyRoleOf, listMcpTokens, revokeMcpToken, type SurveyRole, setSystemAccess, surveyPeople, systemViewers, type Role, type Viewer } from './access.ts'
+import { dashboardPeople, dashboardRoleOf, setDashboardRole, resetDashboardRole, setDashboardSettings, defaultDashboardRole, sharedTokenDashboardRole, DASHBOARD_ROLES, DASHBOARD_ROLE_TEXT, type DashboardRole } from './access.ts'
 import { APP_NAME, deleteClip, headerHtml, listClips, PAGE_CSS, setSaved, storage } from './replays.ts'
 
 interface Member {
@@ -73,7 +74,8 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         const held = new Map(space.per_person.map((x) => [x.email, x]))
         const sys = systemViewers()
         const srv = surveyPeople()
-        const emails = new Set([...members.map((m) => m.email), ...Object.keys(access.people), ...sys.keys(), ...srv.keys()])
+        const dash = dashboardPeople()
+        const emails = new Set([...members.map((m) => m.email), ...Object.keys(access.people), ...sys.keys(), ...srv.keys(), ...dash.keys()])
         const people = [...emails].sort().map((email) => {
             const ms = members.filter((m) => m.email === email)
             const inProject = ms.find((m) => m.org_id === org)
@@ -85,6 +87,8 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
                 system_granted: sys.has(email),
                 survey_role: surveyRoleOf(email, role),
                 survey_role_set_here: srv.get(email)?.role ?? null,
+                dashboard_role: dashboardRoleOf(email, role),
+                dashboard_role_set_here: dash.get(email)?.role ?? null,
                 email,
                 name: ms[0]?.name || '',
                 posthog: ms.length ? ms.map((m) => `${m.org} (${m.level >= 15 ? 'owner' : m.level >= 8 ? 'admin' : 'member'})`).join(', ') : 'No PostHog account in your organizations',
@@ -103,6 +107,9 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
             allow_share_links: access.allow_share_links,
             survey_roles: SURVEY_ROLES.map((r) => ({ id: r, text: SURVEY_ROLE_TEXT[r] })),
             survey_default_role: defaultSurveyRole(),
+            dashboard_roles: DASHBOARD_ROLES.map((r) => ({ id: r, text: DASHBOARD_ROLE_TEXT[r] })),
+            dashboard_default_role: defaultDashboardRole(),
+            dashboard_shared_token_role: sharedTokenDashboardRole(),
             survey_shared_token_role: sharedTokenSurveyRole(),
             chat_tokens: listMcpTokens(),
             roles: ROLES.map((r) => ({ id: r, text: ROLE_TEXT[r] })),
@@ -120,8 +127,10 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         const role = String(body.role || '') as Role
         if (!EMAIL.test(email) || !ROLES.includes(role)) return (json(res, 400, { error: 'Give an email and a role.' }), true)
         if (email === v.email && !can(role, 'admin') && !v.posthog_admin) return (json(res, 400, { error: 'You cannot remove your own admin role.' }), true)
+        if (body.dashboard_role && !DASHBOARD_ROLES.includes(body.dashboard_role as DashboardRole)) return (json(res, 400, { error: 'Give a dashboard role.' }), true)
         setPerson(email, role, v.email, String(body.note || '').slice(0, 200) || undefined)
         if (typeof body.system === 'boolean') setSystemAccess(email, body.system, v.email)
+        if (typeof body.dashboard_role === 'string' && body.dashboard_role) setDashboardRole(email, body.dashboard_role as DashboardRole, v.email)
         if (typeof body.survey_role === 'string' && body.survey_role) setSurveyRole(email, body.survey_role as SurveyRole, v.email)
         return (json(res, 200, { ok: true }), true)
     }
@@ -134,6 +143,17 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         if (!EMAIL.test(email) || !(role === 'default' || SURVEY_ROLES.includes(role as SurveyRole))) return (json(res, 400, { error: 'Give an email and a survey role.' }), true)
         if (role === 'default') resetSurveyRole(email, v.email)
         else setSurveyRole(email, role as SurveyRole, v.email)
+        return (json(res, 200, { ok: true }), true)
+    }
+
+    // A person's dashboard role (separate from the clip role); "default" removes it so the default applies.
+    if (p === '/replays/admin/api/dashboard-role' && req.method === 'POST') {
+        const body = await readJson(req)
+        const email = String(body.email || '').trim().toLowerCase()
+        const role = String(body.role || '')
+        if (!EMAIL.test(email) || !(role === 'default' || DASHBOARD_ROLES.includes(role as DashboardRole))) return (json(res, 400, { error: 'Give an email and a dashboard role.' }), true)
+        if (role === 'default') resetDashboardRole(email, v.email)
+        else setDashboardRole(email, role as DashboardRole, v.email)
         return (json(res, 200, { ok: true }), true)
     }
 
@@ -160,6 +180,13 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         if (body.survey_default_role !== undefined || body.survey_shared_token_role !== undefined) {
             try {
                 setSurveySettings({ default_role: body.survey_default_role as SurveyRole | undefined, shared_token_role: body.survey_shared_token_role as SurveyRole | undefined }, v.email)
+            } catch (e) {
+                return (json(res, 400, { error: (e as Error).message }), true)
+            }
+        }
+        if (body.dashboard_default_role !== undefined || body.dashboard_shared_token_role !== undefined) {
+            try {
+                setDashboardSettings({ default_role: body.dashboard_default_role as DashboardRole | undefined, shared_token_role: body.dashboard_shared_token_role as DashboardRole | undefined }, v.email)
             } catch (e) {
                 return (json(res, 400, { error: (e as Error).message }), true)
             }
@@ -198,7 +225,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
 function adminHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Admin · ${APP_NAME}</title><style>${PAGE_CSS()}
 .badge{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--chip);white-space:nowrap}.warn{background:#fef0c7;color:#7a2e0e}
-td select{min-width:0;width:100%;max-width:220px}label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;cursor:pointer}label.check input{width:auto;margin:0}.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px}
+.people-table{table-layout:fixed;width:100%}td select{min-width:0;width:100%;max-width:160px}#people td{overflow-wrap:anywhere}#people td:nth-child(3),#people td:nth-child(5),#people td:nth-child(6){width:13%;max-width:160px}.badge{white-space:normal}label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;cursor:pointer}label.check input{width:auto;margin:0}.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px}
 .toolbar>div{flex:1;min-width:160px}details summary{cursor:pointer;font-weight:600}ul.tight{margin:6px 0;padding-left:20px}ul.tight li{margin:3px 0}</style></head>
 <body>${headerHtml(v, 'Admin')}<main style="max-width:1100px">
 
@@ -208,6 +235,7 @@ td select{min-width:0;width:100%;max-width:220px}label.check{display:inline-flex
 <li><b>What they may do is set here.</b> <i>Watch clips</i> lets a person make and watch clips on this site. <i>Watch, download and share</i> adds MP4 downloads and share links. <i>Admin</i> adds this page.</li>
 <li><b>The System page</b> shows whether the server and every container are up, with machine, ClickHouse and Lens numbers. It never shows replay or event content. Admins always see it. Tick <i>System page</i> to let anyone else see it too, for example whoever looks after the server. It is separate from the role, so someone can see the System page with <i>No access</i> to clips.</li>
 <li><b>Surveys</b> are made, launched and read only in Lens: PostHog's own survey screens and API are closed (they send people here). Each person has a survey role, separate from the clip role: <i>See surveys and results</i>, <i>Also make and change surveys</i>, or <i>Also launch and stop surveys</i> (what reaches Reval users). Admins always have the last. It applies on the Surveys page and in chat.</li>
+<li><b>Dashboards</b> have a separate role on the Dashboards page and in chat: <i>See dashboards</i> or <i>Also pin and share</i>. Admins always pin and share. The shared team token gets at most viewing access; pinning and sharing need a personal token.</li>
 <li><b>Chat</b> knows who is asking only with a personal token, which each person makes on the <i>Chat</i> page (you can revoke any token below). The shared team token says nothing about who asks, so it gets the survey role you choose in Settings.</li>
 <li><b>PostHog owners and admins</b> of the organization that owns the project are always admins here, so nobody can be locked out.</li>
 <li><b>Important:</b> on this PostHog plan, PostHog itself cannot limit replays per person. Anyone who is a member of the project's organization can watch every replay inside PostHog, whatever their role here. Those people are marked <span class="badge warn">sees all replays in PostHog</span>. To keep someone to clips only, give them a PostHog account in a separate organization (for example "Clip viewers") with no access to this project, then give them a role here.</li>
@@ -216,15 +244,17 @@ td select{min-width:0;width:100%;max-width:220px}label.check{display:inline-flex
 
 <div class="card"><h2>People</h2>
 <div class="toolbar"><div><label for="new-email">Add a person (their PostHog email)</label><input id="new-email" type="email" placeholder="name@company.com"></div>
-<div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0"><label for="new-surveys">Surveys</label><select id="new-surveys"></select></div><div style="flex:0"><button id="add">Add</button></div></div>
+<div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0"><label for="new-surveys">Surveys</label><select id="new-surveys"></select></div><div style="flex:0"><label for="new-dashboards">Dashboards</label><select id="new-dashboards"></select></div><div style="flex:0"><button id="add">Add</button></div></div>
 <p id="people-msg" class="small"></p>
-<div class="table-wrap"><table><thead><tr><th>Person</th><th>In PostHog</th><th>Role here</th><th>System page</th><th>Surveys role</th><th>Clips</th><th>Last activity</th><th></th></tr></thead><tbody id="people"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody></table></div></div>
+<div class="table-wrap"><table class="people-table"><colgroup><col style="width:16%"><col style="width:14%"><col style="width:13%"><col style="width:10%"><col style="width:13%"><col style="width:13%"><col style="width:7%"><col style="width:9%"><col style="width:5%"></colgroup><thead><tr><th>Person</th><th>In PostHog</th><th>Role here</th><th>System page</th><th>Surveys role</th><th>Dashboards</th><th>Clips</th><th>Last activity</th><th></th></tr></thead><tbody id="people"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody></table></div></div>
 
 <div class="card"><h2>Settings</h2>
 <div class="toolbar"><div><label for="default-role">Role for other PostHog users</label><select id="default-role"></select></div>
 <div><label for="share">Share links</label><select id="share"><option value="1">Allowed (for people who can download)</option><option value="0">Turned off</option></select></div>
 <div><label for="survey-default">Survey role for other PostHog users</label><select id="survey-default"></select></div>
-<div><label for="survey-shared">Survey role for chat with the shared team token</label><select id="survey-shared"></select></div></div>
+<div><label for="survey-shared">Survey role for chat with the shared team token</label><select id="survey-shared"></select></div>
+<div><label for="dashboard-default">Dashboard role for other PostHog users</label><select id="dashboard-default"></select></div>
+<div><label for="dashboard-shared">Dashboard role for chat with the shared team token</label><select id="dashboard-shared"></select></div></div>
 <p class="small muted">The defaults apply to anyone who signs in with a PostHog account and is not listed above. "No access" is the safe choice. The shared team token cannot tell who asks: give it at most "See surveys and results", and give people personal tokens for more.</p><p id="settings-msg" class="small"></p></div>
 
 <div class="card"><h2>Chat tokens</h2><p class="small muted">Personal tokens people made on the Chat page. A revoked token stops working at once.</p>
@@ -247,7 +277,7 @@ const clock=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 const short=e=>(e||'').replace(/@.*/,'');
 const cell=(tr,t,cls)=>{const td=document.createElement('td');if(t instanceof Node)td.appendChild(t);else td.textContent=t??'';if(cls)td.className=cls;tr.appendChild(td);return td};
 const msg=(id,t,ok)=>{$(id).textContent=t;$(id).className='small '+(ok?'ok':'err')};
-const ACTIONS={'signin':'Signed in','signout':'Signed out','signin.failed':'Failed sign in','recording.inspected':'Looked up a recording','clip.requested':'Asked for a clip','clip.created':'Clip made','clip.viewed':'Watched a clip','clip.downloaded':'Downloaded a clip','clip.link_shared':'Created a share link','clip.deleted':'Deleted a clip','clip.saved':'Saved a clip','clip.unsaved':'Unsaved a clip','clip.comment_added':'Commented on a clip','clip.comment_edited':'Edited a clip comment','clip.comment_deleted':'Deleted a clip comment','clips.pruned':'Old clips deleted','access.role_set':'Changed a role','access.role_removed':'Removed a role','access.settings':'Changed settings','access.system_set':'Changed System page access','access.surveys_set':'Changed Surveys page access','access.survey_role_set':'Changed a survey role','access.survey_role_reset':'Reset a survey role','access.survey_settings':'Changed survey settings','chat.token_created':'Made a chat token','chat.token_revoked':'Revoked a chat token','survey.created':'Made a survey','survey.changed':'Changed a survey','survey.launched':'Launched a survey','survey.stopped':'Stopped a survey','survey.archived':'Archived a survey'};
+const ACTIONS={'signin':'Signed in','signout':'Signed out','signin.failed':'Failed sign in','recording.inspected':'Looked up a recording','clip.requested':'Asked for a clip','clip.created':'Clip made','clip.viewed':'Watched a clip','clip.downloaded':'Downloaded a clip','clip.link_shared':'Created a share link','clip.deleted':'Deleted a clip','clip.saved':'Saved a clip','clip.unsaved':'Unsaved a clip','clip.comment_added':'Commented on a clip','clip.comment_edited':'Edited a clip comment','clip.comment_deleted':'Deleted a clip comment','clips.pruned':'Old clips deleted','access.role_set':'Changed a role','access.role_removed':'Removed a role','access.settings':'Changed settings','access.system_set':'Changed System page access','access.surveys_set':'Changed Surveys page access','access.survey_role_set':'Changed a survey role','access.survey_role_reset':'Reset a survey role','access.survey_settings':'Changed survey settings','access.dashboard_role_set':'Changed a dashboard role','access.dashboard_role_reset':'Reset a dashboard role','access.dashboard_settings':'Changed dashboard settings','dashboard.pinned':'Pinned a dashboard','dashboard.changed':'Changed a dashboard','dashboard.deleted':'Deleted a dashboard','dashboard.shared':'Shared a dashboard','chat.token_created':'Made a chat token','chat.token_revoked':'Revoked a chat token','survey.created':'Made a survey','survey.changed':'Changed a survey','survey.launched':'Launched a survey','survey.stopped':'Stopped a survey','survey.archived':'Archived a survey'};
 let S=null;
 function roleSelect(value,disabled){const s=document.createElement('select');S.roles.forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.text;if(r.id===value)o.selected=true;s.appendChild(o)});s.disabled=!!disabled;return s}
 async function load(){S=await api('/replays/admin/api/state');
@@ -256,6 +286,7 @@ async function load(){S=await api('/replays/admin/api/state');
  $('share').value=S.allow_share_links?'1':'0';
  const opts=(sel,list,value)=>{sel.innerHTML='';list.forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.text;if(r.id===value)o.selected=true;sel.appendChild(o)})};
  opts($('survey-default'),S.survey_roles.filter(r=>r.id!=='launch'),S.survey_default_role);opts($('survey-shared'),S.survey_roles,S.survey_shared_token_role);opts($('new-surveys'),[{id:'default',text:'Default'}].concat(S.survey_roles),'default');
+ opts($('dashboard-default'),S.dashboard_roles.filter(r=>r.id!=='share'),S.dashboard_default_role);opts($('dashboard-shared'),S.dashboard_roles.filter(r=>r.id!=='share'),S.dashboard_shared_token_role);opts($('new-dashboards'),[{id:'default',text:'Default'}].concat(S.dashboard_roles),'default');
  const tt=$('tokens');tt.innerHTML='';if(!S.chat_tokens.length)tt.innerHTML='<tr><td colspan="5" class="muted">No personal tokens yet.</td></tr>';
  S.chat_tokens.forEach(t=>{const tr=document.createElement('tr');cell(tr,t.email);cell(tr,t.label);cell(tr,when(t.created_at),'small');cell(tr,t.revoked_at?'Revoked '+when(t.revoked_at)+' by '+t.revoked_by:when(t.last_used_at),'small');
   if(!t.revoked_at){const b=document.createElement('button');b.className='ghost';b.textContent='Revoke';b.onclick=async()=>{if(!confirm('Revoke the chat token '+t.label+' of '+t.email+'? Chat with it stops at once.'))return;try{await api('/replays/admin/api/chat-tokens/'+t.id,{method:'DELETE'});load()}catch(e){alert(e.message)}};cell(tr,b)}else cell(tr,'');tt.appendChild(tr)});
@@ -273,6 +304,10 @@ async function load(){S=await api('/replays/admin/api/state');
   ss.value=p.role==='admin'?'launch':(p.survey_role_set_here||'default');if(p.role==='admin'){ss.disabled=true;ss.title='Admins can always launch and stop surveys'}
   ss.onchange=async()=>{try{await api('/replays/admin/api/survey-role',{method:'POST',body:JSON.stringify({email:p.email,role:ss.value})});msg('people-msg','Saved: '+p.email+' survey role is now "'+ss.selectedOptions[0].textContent+'".',true);load()}catch(e){msg('people-msg',e.message);load()}};
   cell(tr,ss);
+  const ds=document.createElement('select');[{id:'default',text:'Default'}].concat(S.dashboard_roles).forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.id==='default'?'Default ('+(S.dashboard_roles.find(x=>x.id===S.dashboard_default_role)||{}).text+')':r.text;ds.appendChild(o)});
+  ds.value=p.role==='admin'?'share':(p.dashboard_role_set_here||'default');if(p.role==='admin'){ds.disabled=true;ds.title='Admins can always pin and share dashboards'}
+  ds.onchange=async()=>{try{await api('/replays/admin/api/dashboard-role',{method:'POST',body:JSON.stringify({email:p.email,role:ds.value})});msg('people-msg','Saved: '+p.email+' dashboard role is now "'+ds.selectedOptions[0].textContent+'".',true);load()}catch(e){msg('people-msg',e.message);load()}};
+  cell(tr,ds);
   cell(tr,p.clips.clips?n(p.clips.clips,'clip')+', '+p.clips.saved+' saved · '+mb(p.clips.bytes):'none','small');
   cell(tr,when(p.last_seen),'small');
   if(p.set_here&&!p.locked){const b=document.createElement('button');b.className='ghost';b.textContent='Reset';b.title='Remove the role set here, so the default applies';b.onclick=async()=>{try{await api('/replays/admin/api/person?email='+encodeURIComponent(p.email),{method:'DELETE'});msg('people-msg','Removed the role for '+p.email+'.',true);load()}catch(e){msg('people-msg',e.message)}};cell(tr,b)}else cell(tr,'');
@@ -297,11 +332,13 @@ function renderAudit(){const tb=$('audit');tb.innerHTML='';
  if(!S.audit.length)tb.innerHTML='<tr><td colspan="4" class="muted">Nothing found.</td></tr>';
  S.audit.forEach(e=>{const tr=document.createElement('tr');cell(tr,when(e.t),'small');cell(tr,e.who);cell(tr,ACTIONS[e.action]||e.action);const {t,who,action,...rest}=e;cell(tr,Object.entries(rest).map(([k,v])=>k+': '+(typeof v==='object'?JSON.stringify(v):v)).join(' · '),'small muted');tb.appendChild(tr)})}
 let searchTimer;$('filter').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(async()=>{const q=$('filter').value.trim();try{S.audit=(await api('/replays/admin/api/audit'+(q?'?q='+encodeURIComponent(q):''))).audit;renderAudit()}catch(e){}},250)};
-$('add').onclick=async()=>{const email=$('new-email').value.trim();if(!email)return;try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email,role:$('new-role').value,system:$('new-system').checked,survey_role:$('new-surveys').value==='default'?'':$('new-surveys').value})});$('new-email').value='';$('new-system').checked=false;$('new-surveys').value='default';msg('people-msg','Added '+email+'.',true);load()}catch(e){msg('people-msg',e.message)}};
+$('add').onclick=async()=>{const email=$('new-email').value.trim();if(!email)return;try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email,role:$('new-role').value,system:$('new-system').checked,dashboard_role:$('new-dashboards').value==='default'?'':$('new-dashboards').value,survey_role:$('new-surveys').value==='default'?'':$('new-surveys').value})});$('new-email').value='';$('new-system').checked=false;$('new-surveys').value='default';$('new-dashboards').value='default';msg('people-msg','Added '+email+'.',true);load()}catch(e){msg('people-msg',e.message)}};
 $('default-role').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({default_role:$('default-role').value})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
 $('share').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({allow_share_links:$('share').value==='1'})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
 $('survey-default').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({survey_default_role:$('survey-default').value})});msg('settings-msg','Saved.',true);load()}catch(e){msg('settings-msg',e.message)}};
 $('survey-shared').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({survey_shared_token_role:$('survey-shared').value})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
-load().catch(e=>{$('people').innerHTML='<tr><td colspan="8" class="err"></td></tr>';$('people').querySelector('td').textContent=e.message});
+$('dashboard-default').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({dashboard_default_role:$('dashboard-default').value})});msg('settings-msg','Saved.',true);load()}catch(e){msg('settings-msg',e.message)}};
+$('dashboard-shared').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({dashboard_shared_token_role:$('dashboard-shared').value})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
+load().catch(e=>{$('people').innerHTML='<tr><td colspan="9" class="err"></td></tr>';$('people').querySelector('td').textContent=e.message});
 </script></body></html>`
 }
