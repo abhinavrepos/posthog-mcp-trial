@@ -343,8 +343,8 @@ To connect Claude Code over HTTP:
 claude mcp add --transport http lens http://<host>:8080/mcp --header "Authorization: Bearer <MCP_TOKEN>"
 ```
 
-The local `.mcp.json` server has the same tools. It uses HTTP when Lens runs as a container
-(`LENS_CONTAINER=1`), and stdio otherwise. Restart the client after changing the config.
+The local `.mcp.json` server has the same tools, over stdio. Restart the client after changing the
+config.
 
 ## Layout
 
@@ -538,8 +538,8 @@ insights, dashboards, flags, experiments, surveys, cohorts, annotations, actions
 definitions, error issue management, warehouse and batch exports, docs, SDK help and raw SQL.
 Lens tools take JSON arguments directly. PostHog has one tool, `exec`, taking a command string.
 
-`POSTHOG_MCP_VIA_LENS=on` is the default. When the Lens service runs (`LENS_CONTAINER=1` or
-`MCP_TOKEN` set), `pnpm mcp:config` points `posthog` at
+`POSTHOG_MCP_VIA_LENS=on` is the default. When the Lens service runs (`MCP_TOKEN` set),
+`pnpm mcp:config` points `posthog` at
 `http://127.0.0.1:<SERVICE_PORT>/posthog-mcp` with `Bearer MCP_TOKEN`. The service forwards to
 `POSTHOG_MCP_URL` using `POSTHOG_MCP_API_KEY`; the client does not receive PostHog's key.
 The proxy prepends Lens routing rules to PostHog's instructions and `exec` description, and
