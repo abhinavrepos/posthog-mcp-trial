@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Puts everything PostHog Lens needs into your ECR, for a machine without internet. Run it on a machine
-# WITH internet (Ubuntu, x86_64, Docker and the AWS CLI), from a clone of the ticket-triage-amazon-linux
-# branch. The machine without internet then takes every image from ECR and every other file from the kit.
+# Script 1 of 3: makes the images. Puts everything PostHog Lens needs into your ECR, for a machine without
+# internet. Run it on a machine WITH internet (Ubuntu, x86_64, Docker and the AWS CLI), from a clone of the
+# ticket-triage-amazon-linux branch. The machine without internet then takes every image from ECR and every
+# other file from the kit, with script 2 (fresh-install.sh) or script 3 (upgrade.sh). See README.md.
 #
-#   deploy/offline/push-images.sh            # everything; later runs skip what ECR already has
-#   deploy/offline/push-images.sh --plan     # list what goes where; nothing is pulled, built or pushed
+#   deploy/offline/build-images.sh            # everything; later runs skip what ECR already has
+#   deploy/offline/build-images.sh --plan     # list what goes where; nothing is pulled, built or pushed
 #
 # What it does:
 #   1. PostHog's images (every service in deploy/migrate/versions/docker-compose.pinned.yml, the app image,
@@ -14,9 +15,8 @@
 #      posthog/services, one tag each (services:cymbal-<digest>...).
 #   2. Ours, built for linux/amd64 from this commit (git archive HEAD: uncommitted changes are left out):
 #        posthog/node     PostHog's Node image plus PLUGINS_DISABLED_CAPABILITIES (deploy/posthog/node-image)
-#        posthog/lens     PostHog Lens: the service, its MCP tools, Chrome, ffmpeg (deploy/lens/Dockerfile);
-#                         its tests run in it before it is pushed
-#        posthog/lens     the status page, tag status-... (deploy/status)
+#        posthog/lens     PostHog Lens: the service, its MCP tools, Chrome, ffmpeg (deploy/lens/Dockerfile),
+#                         and the status page (deploy/status); its tests run in it before it is pushed
 #        posthog/minio    MinIO for copying an old PostHog's files (deploy/migrate/minio-image)
 #   3. deploy/offline/ecr.env and images.lock: which ECR image replaces which (written here too).
 #   4. posthog/kit: this project (with those two files), PostHog's source at the pinned commit, the GeoIP
@@ -32,8 +32,8 @@
 #   SKIP_AWS=1   for a rehearsal against a local registry (REGISTRY=localhost:5000): no AWS calls or login
 #
 # Needs: docker (with buildx), aws CLI v2 signed in with push rights to the posthog/* repositories, git,
-# python3, curl. About 25 GB goes up the first time; images are streamed registry to registry, so the
-# local disk only holds the ones built here (about 6 GB).
+# python3, curl. About 25 GB goes up the first time, COPY_JOBS (4) images at a time; images are streamed
+# registry to registry, so the local disk only holds the ones built here (about 6 GB).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -119,15 +119,13 @@ PY
 # Our images: name, repository, tag (from the content), how to build.
 tree() { git -C "$ROOT" ls-tree -r HEAD -- "$@" | sha256sum | cut -c1-12; }
 NODE_TAG="${NODE_BASE_IMAGE##*sha256:}"; NODE_TAG="${NODE_TAG:0:12}-$(tree deploy/posthog/node-image)"
-LENS_TAG="$(tree src scripts vendor test config package.json pnpm-lock.yaml tsconfig.json deploy/lens)"
-STATUS_TAG="status-$(tree deploy/status)"
+LENS_TAG="$(tree src scripts vendor test config package.json pnpm-lock.yaml tsconfig.json deploy/lens deploy/status)"
 MINIO_TAG="$(tree deploy/migrate/minio-image)"
 
-step "Plan: $(wc -l <"$WORK/upstream.txt") PostHog images copied, 4 built, then the kit (commit ${COMMIT:0:12})"
+step "Plan: $(wc -l <"$WORK/upstream.txt") PostHog images copied, 3 built, then the kit (commit ${COMMIT:0:12})"
 while read -r src dst; do say "${D}copy${N}  $src"; say "      -> $REGISTRY/$dst"; done <"$WORK/upstream.txt"
 say "${D}build${N} posthog/node:$NODE_TAG  (from $NODE_BASE_IMAGE)"
-say "${D}build${N} posthog/lens:$LENS_TAG"
-say "${D}build${N} posthog/lens:$STATUS_TAG"
+say "${D}build${N} posthog/lens:$LENS_TAG  (also runs the status page)"
 say "${D}build${N} posthog/minio:$MINIO_TAG"
 say "${D}build${N} posthog/kit:${COMMIT:0:12}-<hash of the image list>"
 [ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] || say "${R}Uncommitted changes: they are NOT in the images (built from commit ${COMMIT:0:12}).${N}"
@@ -172,24 +170,46 @@ ok "Docker and crane logged in to $REGISTRY"
 ecr_digest() { crane digest "$REGISTRY/$1" 2>/dev/null || true; }
 
 # ------------------------------------------------------------------ 1. PostHog's images
-step "1. PostHog's images, copied for linux/amd64"
+JOBS="${COPY_JOBS:-4}"
+step "1. PostHog's images, copied for linux/amd64 ($JOBS at a time)"
 : >"$WORK/images.lock"
-n=0; total="$(wc -l <"$WORK/upstream.txt")"
+mkdir -p "$WORK/copied"
+total="$(wc -l <"$WORK/upstream.txt")"
+# One image: checks ECR, copies it unless it is there, checks the digest. Writes its result to copied/<n>:
+# "ok <verb> <digest>" or "fail <reason>". Runs in the background, so it never exits the script itself.
+copy_one() {
+    local n="$1" src="$2" dst="$3" want have verb=copied out="$WORK/copied/$1"
+    want="$(crane digest --platform linux/amd64 "$src" 2>/dev/null)" || { echo "fail cannot read $src upstream" >"$out"; return; }
+    have="$(ecr_digest "$dst")"
+    if [ -n "$have" ]; then
+        verb="already-there"
+    elif ! crane copy --platform linux/amd64 "$src" "$REGISTRY/$dst" >/dev/null 2>"$out.log"; then
+        echo "fail copying $src: $(tail -3 "$out.log" | tr '\n' ' ')" >"$out"; return
+    else
+        have="$(ecr_digest "$dst")"
+    fi
+    if [ "$have" != "$want" ]; then
+        echo "fail $REGISTRY/$dst is ${have:-missing}, but $src for linux/amd64 is $want. Tags are immutable: delete that tag in ECR, then run this again." >"$out"; return
+    fi
+    echo "ok $verb $have" >"$out"
+    echo "    ${G}✔${N} $verb  ${dst}  ${D}${have:7:12}${N}"
+}
+n=0
 while read -r src dst; do
     n=$((n + 1))
-    want="$(crane digest --platform linux/amd64 "$src")" || die "Cannot read $src upstream."
-    have="$(ecr_digest "$dst")"
-    if [ -z "$have" ]; then
-        crane copy --platform linux/amd64 "$src" "$REGISTRY/$dst" >/dev/null 2>"$WORK/copy.log" || { tail -5 "$WORK/copy.log"; die "Copying $src failed."; }
-        have="$(ecr_digest "$dst")"
-        verb=copied
-    else
-        verb="already there"
-    fi
-    [ "$have" = "$want" ] || die "$REGISTRY/$dst is $have, but $src for linux/amd64 is $want. Tags are immutable: delete that tag in ECR, then run this again."
-    echo "$src ${REGISTRY}/${dst%%:*}@$have" >>"$WORK/images.lock"
-    ok "[$n/$total] $verb  ${dst}  ${D}${have:7:12}${N}"
+    copy_one "$n" "$src" "$dst" </dev/null &
+    while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n || true; done
 done <"$WORK/upstream.txt"
+wait
+# The results, in the list's order, so images.lock is the same however the copies finished.
+n=0
+while read -r src dst; do
+    n=$((n + 1))
+    read -r result rest <"$WORK/copied/$n" 2>/dev/null || die "No result for $src (bug)."
+    [ "$result" = ok ] || die "${rest}"
+    echo "$src ${REGISTRY}/${dst%%:*}@${rest##* }" >>"$WORK/images.lock"
+done <"$WORK/upstream.txt"
+ok "all $total PostHog images are in $REGISTRY"
 lock_of() { awk -v s="$1" '$1==s {print $2}' "$WORK/images.lock"; }
 
 # ------------------------------------------------------------------ 2. ours
@@ -219,14 +239,15 @@ build_push() {
 }
 ECR_NODE="$(build_push "posthog/node:$NODE_TAG" "$WORK/src/deploy/posthog/node-image/Dockerfile" "$WORK/src/deploy/posthog/node-image" --build-arg "BASE=$NODE_BASE_IMAGE")"
 ECR_LENS="$(build_push "posthog/lens:$LENS_TAG" "$WORK/src/deploy/lens/Dockerfile" "$WORK/src")"
-ECR_STATUS="$(build_push "posthog/lens:$STATUS_TAG" "$WORK/src/deploy/status/Dockerfile" "$WORK/src/deploy/status")"
+# The status page runs from the PostHog Lens image (deploy/status/up.sh).
+ECR_STATUS="$ECR_LENS"
 ECR_MINIO="$(build_push "posthog/minio:$MINIO_TAG" "$WORK/src/deploy/migrate/minio-image/Dockerfile" "$WORK/src/deploy/migrate/minio-image")"
 
 # ------------------------------------------------------------------ 3. the list
 step "3. deploy/offline/ecr.env and images.lock"
 PUSHED="$(date -u +%Y-%m-%dT%H:%MZ)"
 cat >"$WORK/ecr.env" <<EOF
-# Written by deploy/offline/push-images.sh at $PUSHED from commit $COMMIT.
+# Written by deploy/offline/build-images.sh at $PUSHED from commit $COMMIT.
 # Every image comes from this registry (deploy/offline/ecr.sh); images.lock lists which replaces which.
 IMAGE_REGISTRY=$REGISTRY
 IMAGE_REGION=$REGION
@@ -241,7 +262,7 @@ ECR_LENS=$ECR_LENS
 ECR_STATUS=$ECR_STATUS
 ECR_MINIO=$ECR_MINIO
 EOF
-{ echo "# upstream image (as pinned)   its copy in $REGISTRY. Written by deploy/offline/push-images.sh at $PUSHED."; cat "$WORK/images.lock"; } >"$WORK/images.lock.out"
+{ echo "# upstream image (as pinned)   its copy in $REGISTRY. Written by deploy/offline/build-images.sh at $PUSHED."; cat "$WORK/images.lock"; } >"$WORK/images.lock.out"
 grep -qE '^ECR_[A-Z_]+=$' "$WORK/ecr.env" && die "An image is missing from the list (bug): $(grep -E '^ECR_[A-Z_]+=$' "$WORK/ecr.env")"
 cp "$WORK/ecr.env" "$HERE/ecr.env"; cp "$WORK/images.lock.out" "$HERE/images.lock"
 ok "$HERE/ecr.env and images.lock ($(grep -vc '^#' "$HERE/images.lock") images)"
@@ -286,14 +307,23 @@ fi
 step "Done"
 KIT="$REGISTRY/posthog/kit:$KIT_TAG"
 echo "$KIT" >"$HERE/last-kit.txt"
+# Scripts 2 and 3 with this registry and this kit filled in: the only file the other machine needs.
+mkdir -p "$HERE/out"
+for s in fresh-install.sh upgrade.sh; do
+    sed -e "s|^REGISTRY=.*# filled in by build-images.sh\$|REGISTRY=\"\${REGISTRY:-$REGISTRY}\"   # filled in by build-images.sh|" \
+        -e "s|^REGION=.*# filled in by build-images.sh\$|REGION=\"\${REGION:-$REGION}\"   # filled in by build-images.sh|" \
+        -e "s|^KIT_TAG=.*# filled in by build-images.sh\$|KIT_TAG=\"\${KIT_TAG:-$KIT_TAG}\"   # filled in by build-images.sh|" \
+        "$HERE/$s" >"$HERE/out/$s"
+    grep -qF "KIT_TAG=\"\${KIT_TAG:-$KIT_TAG}\"" "$HERE/out/$s" || die "Could not fill in $s (bug)."
+    chmod 755 "$HERE/out/$s"
+done
+ok "deploy/offline/out/fresh-install.sh and upgrade.sh, for this kit"
 cat <<EOF
     Everything is in $REGISTRY. The kit: ${B}$KIT${N}
 
-    On the machine without internet (its IAM role needs AmazonEC2ContainerRegistryReadOnly):
-      aws ecr get-login-password --region $REGION | sudo docker login -u AWS --password-stdin $REGISTRY
-      sudo docker run --rm -v ~/posthog-mcp-trial:/out $KIT
-      cd ~/posthog-mcp-trial && sudo deploy/install.sh
+    Copy ONE of these files to the machine. Nothing else is needed there (deploy/offline/README.md):
+      deploy/offline/out/fresh-install.sh   no PostHog there yet:      sudo bash fresh-install.sh
+      deploy/offline/out/upgrade.sh         PostHog runs there:        sudo bash upgrade.sh
 
-    The kit's command unpacks this project and its files into the folder you mount at /out (your settings
-    and data there are kept). deploy/install.sh then upgrades or installs PostHog and PostHog Lens from ECR.
+    Both use this kit ($KIT_TAG) unless you give another tag as the first argument.
 EOF

@@ -1,145 +1,169 @@
-# A machine without internet: everything from your ECR
+# PostHog + PostHog Lens from your ECR: three scripts
 
-The machine that runs PostHog and PostHog Lens downloads nothing from the internet. Every image comes
-from your ECR, and everything else (this project, PostHog's source, the GeoIP database, Docker Compose)
-comes in one more image, **the kit**. A machine that has internet puts it all there first.
+Everything a machine needs comes from your ECR as images. The machine itself downloads nothing from the
+internet and needs no copy of this project: one script file is enough.
+
+| # | Script | Where you run it | What it does |
+|---|---|---|---|
+| 1 | `build-images.sh` | a build machine **with internet**, in a clone of this branch | puts every image in ECR, and writes scripts 2 and 3 ready to copy |
+| 2 | `fresh-install.sh` | a machine with **no PostHog yet** | installs PostHog and PostHog Lens from those images |
+| 3 | `upgrade.sh` | a machine that **already runs PostHog** | upgrades it to those images, keeping all data |
 
 ```
-your Ubuntu machine (internet)                 ECR (ca-central-1)              EC2 (no internet)
-deploy/offline/push-images.sh   ─────────────▶  posthog/*  ─────────────────▶  docker run <kit>
-  copies PostHog's 26 images                                                    sudo deploy/install.sh
-  builds node, lens, status, minio, kit
+build machine (internet)                 ECR (ca-central-1)                    EC2 (no internet)
+1. build-images.sh  ───── images ─────▶  posthog/*  ──────── images ───────▶  2. fresh-install.sh
+       └── writes out/fresh-install.sh, out/upgrade.sh ── copy one file ──▶  or 3. upgrade.sh
 ```
 
-## 1. Push (on a machine with internet)
+## 1. `build-images.sh`: make the images
 
-You need **Ubuntu (x86_64) with Docker, buildx, git, python3, curl and the AWS CLI v2**, signed in to
-an identity that can push to the `posthog/*` repositories in 555011114032 / ca-central-1. You also
-need about 10 GB of free disk. Then, from a clone of this branch:
+**Needs:** Ubuntu x86_64 with Docker (and buildx), git, python3, curl and the AWS CLI v2, signed in to an
+identity that can push to the `posthog/*` repositories (list below). About 10 GB of free disk.
 
 ```bash
 git clone --branch ticket-triage-amazon-linux --single-branch https://github.com/abhinavrepos/posthog-mcp-trial lens
 cd lens
-deploy/offline/push-images.sh --plan     # what goes where; nothing is pushed
-deploy/offline/push-images.sh            # about 25 GB up the first time
+deploy/offline/build-images.sh --plan     # what goes where; nothing is pushed
+deploy/offline/build-images.sh            # about 25 GB the first time, much less after
 ```
 
-It ends by printing the kit's name and the three commands for the EC2 machine. It also writes the kit's
-name to `deploy/offline/last-kit.txt`. A second run skips everything ECR already has, so after a change
-only the changed images go up, and the kit is always rebuilt.
+Later runs: `git pull`, then `deploy/offline/build-images.sh` again.
 
-| What | ECR repository | How |
-|---|---|---|
-| PostHog web, workers, migrations (and the older version the upgrade needs first) | `posthog/posthog` | copied |
-| ClickHouse, Postgres, Redis, Redpanda, Zookeeper, Caddy, Elasticsearch, Temporal ×3, capture, feature flags, livestream, property-defs | their own `posthog/*` | copied |
-| Everything without a repository of its own: cymbal, hypercache, personhog ×2, capture-logs, SeaweedFS, Valkey, browserless, alpine | `posthog/services`, one tag each | copied |
-| PostHog's MCP server | `posthog/mcp` | copied |
-| PostHog's Node image + one setting (ingestion, replays, plugins) | `posthog/node` | built |
-| PostHog Lens (service, its MCP tools, Chrome, ffmpeg); the status page as `status-…` | `posthog/lens` | built, tests run in it first |
-| MinIO, to copy an old PostHog's files | `posthog/minio` | built |
-| The kit | `posthog/kit` | built |
+What it does:
 
-**Copied** means byte for byte, for linux/amd64, then checked by digest. Nothing of PostHog's is rebuilt.
-**Built** images come from the commit you have checked out (uncommitted changes are left out).
+1. **Copies PostHog's 26 images** (every service of the pinned PostHog version, the older version an
+   upgrade passes through, PostHog's MCP server, alpine) straight from their registries into ECR, 4 at a
+   time (`COPY_JOBS`), linux/amd64 only, byte for byte, checked by digest. Nothing of PostHog's is rebuilt,
+   and nothing is stored on the build machine.
+2. **Builds 3 images** from the checked-out commit (uncommitted changes are left out):
+   - `posthog/node`: PostHog's Node image with one setting added
+   - `posthog/lens`: PostHog Lens (service, MCP tools, Chrome, ffmpeg) and the status page. Its tests run
+     inside it first, and nothing is pushed if they fail.
+   - `posthog/minio`: used only when upgrading an older PostHog's stored files
+3. **Builds the kit** (`posthog/kit`): this project, PostHog's source at the pinned version, the GeoIP
+   database and Docker Compose. It is the only thing scripts 2 and 3 download before they start.
+4. **Writes `deploy/offline/out/fresh-install.sh` and `out/upgrade.sh`** with your registry and this kit
+   filled in, and prints the kit's tag, for example `685049943753-92fb46e1`.
 
-Tags are made from the content: digests for copies, git tree hashes for builds. They never change
-meaning, which fits your repositories' immutable tags.
+**Only what changed goes up.** Every tag comes from the content (a digest, or a hash of the files it was
+built from), so a run skips whatever ECR already has. A change to PostHog Lens rebuilds `posthog/lens` and
+the kit; PostHog's images are not copied again. Tags never change meaning, which fits ECR's immutable tags.
 
-## 2. What the EC2 machine and the admin need
+**ECR repositories** (the admin creates them once; immutable tags, AES-256): `posthog/posthog`,
+`posthog/node`, `posthog/services`, `posthog/lens`, `posthog/kit`, `posthog/mcp`, `posthog/minio`,
+`posthog/caddy`, `posthog/capture`, `posthog/clickhouse-server`, `posthog/elasticsearch`,
+`posthog/feature-flags`, `posthog/livestream`, `posthog/postgres`, `posthog/property-defs-rs`,
+`posthog/redis`, `posthog/redpanda`, `posthog/temporal-admin-tools`, `posthog/temporal-auto-setup`,
+`posthog/temporal-ui`, `posthog/zookeeper`. The script checks that they all exist before it pushes.
 
-- **IAM:** the instance role has `AmazonEC2ContainerRegistryReadOnly`.
-- **VPC endpoints:**
-  - `com.amazonaws.ca-central-1.ecr.api` and `com.amazonaws.ca-central-1.ecr.dkr` (interface)
-  - `com.amazonaws.ca-central-1.s3` (gateway). Image layers are stored in S3, and dnf reaches Amazon
-    Linux's repositories through it.
-- **Docker** on the machine (`sudo dnf install -y docker && sudo systemctl enable --now docker`) and the
-  AWS CLI (already on Amazon Linux 2023).
+## What the EC2 machine needs (scripts 2 and 3)
 
-## 3. Install or upgrade (on the EC2 machine)
+- **Docker:** `sudo dnf install -y docker && sudo systemctl enable --now docker`
+- **AWS CLI:** already on Amazon Linux 2023
+- **IAM:** the instance role has `AmazonEC2ContainerRegistryReadOnly`
+- **VPC endpoints:** `com.amazonaws.ca-central-1.ecr.api` and `...ecr.dkr` (interface), and
+  `com.amazonaws.ca-central-1.s3` (gateway). Image layers are stored in S3.
+- **Disk:** about 60 GB free for a fresh install. An upgrade also needs about as much again as
+  PostHog's data, for its backup.
+
+**Getting the script there:** copy the one file from `deploy/offline/out/` (scp, or paste it). Or,
+on the machine, take it from a kit:
 
 ```bash
 REG=555011114032.dkr.ecr.ca-central-1.amazonaws.com
 aws ecr get-login-password --region ca-central-1 | sudo docker login -u AWS --password-stdin $REG
-sudo docker run --rm -v ~/posthog-mcp-trial:/out $REG/posthog/kit:<tag from step 1>
-cd ~/posthog-mcp-trial && sudo deploy/install.sh
+sudo docker run --rm --entrypoint cat $REG/posthog/kit:<tag> /kit/repo/deploy/offline/upgrade.sh > upgrade.sh
 ```
 
-The kit writes this project into the folder you mount at `/out`. Your `.secrets.env`, the data in
-`run/` and `clips/`, and the logs are kept. Its files go to `deploy/offline/kit/`, and
-`deploy/offline/ecr.env` switches everything to ECR:
+A script copied from `out/` uses the kit it was made with. Without that, it uses the newest kit in ECR.
+A tag given as the first argument always wins.
 
-- **The installer** shows `Images  from 555011114032.dkr.ecr...` in its plan, and it checks the ECR
-  login before it changes anything.
-- **PostHog:** the install, or the upgrade of the PostHog already there (`deploy/migrate/`), takes its
-  source from the kit. Every service's image comes from ECR through `docker-compose.ecr.yml` in the
-  PostHog folder. It stops, listing them, if any image is not in ECR.
-- **PostHog Lens** runs as a container (`posthog-lens:current`, from `posthog/lens`) through
-  `deploy/lens/lens.sh`:
-  - it uses this machine's network, as the `triage` user, with its data in the project folder
-  - Chrome renders clips inside it, sandboxed (`deploy/lens/seccomp-chrome.json`)
-  - nothing is installed on the machine for it: no Node, no Chrome libraries
-- **The status page** and **PostHog's MCP server** come from ECR too.
-- **No internet:** `deploy/offline/no-internet.sh` makes outside calls fail at once, as before.
+## 2. `fresh-install.sh`: a new machine
 
-**A new version** works the same way: push again, run the new kit, then run `sudo deploy/install.sh`
-again.
+```bash
+sudo bash fresh-install.sh                 # asks for PostHog's address and the first login's email
+sudo bash fresh-install.sh <kit tag>       # a particular kit
+```
 
-| Command | What it does |
-|---|---|
-| `sudo deploy/lens/lens.sh doctor` | checks every setting against the running services |
-| `sudo deploy/lens/lens.sh mcp-config` | writes `.mcp.json`. Lens's tools are reached over HTTP at `/mcp` with `MCP_TOKEN`, since there is no Node on the machine |
-| `sudo deploy/lens/lens.sh test` | the test suite, inside the image |
-| `sudo deploy/lens/lens.sh run sh` | a shell in the image, with the same settings and folders |
-| `sudo systemctl restart ticket-triage` | restarts PostHog Lens. Logs go to `logs/service.log` |
+- **Asks two things:** the address(es) people open PostHog at, and the email for the first PostHog
+  login. For no questions, set them in front: `sudo POSTHOG_ADDRESS=10.0.1.5 ADMIN_EMAIL=me@x.com YES=1 bash fresh-install.sh`.
+- **Folders:** PostHog goes into `/opt/posthog`, PostHog Lens into `/opt/posthog-lens` (`POSTHOG_DIR`,
+  `LENS_DIR` to change them). Settings are in `/etc/posthog-lens/posthog-lens.env`. More answers (Jira,
+  Claude, ports...) can come from a file: `SETTINGS=my.env` (see `deploy/install.env.example`).
+- **Takes 30-60 minutes.** At the end it shows the status. The login, its password and the addresses
+  are in `sudo cat /var/lib/posthog-lens-install/summary.txt`.
+- **Refuses** when a PostHog already runs on the machine, so it can never install over one. Use
+  script 3 there.
+- **If it stops,** fix what it says and run the same command again: it continues where it stopped.
 
-## Updates on the machine: one command
+## 3. `upgrade.sh`: a machine that already runs PostHog
 
-The ops user should not need root for everything, so updates run through one root-owned command,
-`/usr/local/sbin/posthog-lens`. Its project folder is `/data04/posthog-lens`, also root-owned. The
-ops user gets sudo for that command only:
+```bash
+sudo bash upgrade.sh                       # shows what will happen, asks, then does it
+sudo bash upgrade.sh <kit tag>
+sudo YES=1 nohup bash upgrade.sh <kit tag> > upgrade.log 2>&1 < /dev/null &    # survives a dropped session
+```
+
+It first shows what will happen, then asks before it starts:
+
+- **The kit has a new PostHog version:** PostHog is backed up in full, then upgraded. **PostHog is
+  down for about 2-3 hours**, longer with many session replays. Then PostHog Lens is updated.
+- **Same PostHog version:** only PostHog Lens and its settings are updated. This takes minutes, and
+  PostHog keeps running.
+
+**The first time on a machine** whose PostHog was set up another way (by hand, by an older kit, or with
+an earlier PostHog Lens), it also sets up the `posthog-lens` command:
+
+- **Finds the running PostHog**, or takes `POSTHOG_DIR=<its folder>`.
+- **Puts PostHog Lens next to it** in `<parent>/posthog-lens` (`LENS_DIR` to change it), and copies an
+  earlier PostHog Lens's settings and data from `OLD_DIR` (default `/data04/ph_ops/posthog-mcp-trial`).
+- **Writes `/etc/posthog-lens/posthog-lens.env`.** On a machine with its own folder in `sites/` (prod,
+  `sastraph1p`), that folder's settings are added: its addresses, Global Accelerator, apps that keep
+  sending during the upgrade.
+
+**If it stops,** run the same command again: it continues. **Needs root** (an admin), or the ops user
+with these two lines added by an admin with `visudo`, after which the ops user runs
+`sudo posthog-lens update <kit tag>` for later updates:
 
 ```
 ph_ops ALL=(root) NOPASSWD: /usr/local/sbin/posthog-lens
 ph_ops ALL=(root) NOPASSWD: /usr/local/sbin/posthog-lens *
 ```
 
+**Before an upgrade to a new PostHog version:** take an EBS snapshot of the machine's disks. The
+upgrade makes its own backup, but a snapshot is the way back if everything else fails.
+
+## After scripts 2 and 3: `posthog-lens`
+
 | Command | What it does |
 |---|---|
-| `sudo posthog-lens update <kit tag>` | logs in to ECR, unpacks that kit into the project folder, then installs or upgrades with no questions. When the kit has a new PostHog version, PostHog is upgraded first (full backup, migrations) |
-| `sudo posthog-lens status` | what is installed, and whether PostHog and Lens answer |
-| `sudo posthog-lens doctor` | Lens's full check of its settings and services |
-| `sudo posthog-lens restart` | restarts Lens |
-| `sudo posthog-lens cleanup` | after an upgrade, deletes its backup (asks about each item) |
-| `sudo posthog-lens rollback` | after an upgrade, goes back to the PostHog from before it |
+| `sudo posthog-lens status` | what is installed, and whether PostHog and PostHog Lens answer |
+| `sudo posthog-lens doctor` | PostHog Lens's full check of its settings against the running services |
+| `sudo posthog-lens restart` | restarts PostHog Lens |
+| `sudo posthog-lens update <kit tag>` | what `upgrade.sh` does, once the machine is set up |
+| `sudo posthog-lens rollback` | after a PostHog upgrade: back to the PostHog from before it (about 6 minutes, then `cd <PostHog folder> && sudo docker compose up -d`) |
+| `sudo posthog-lens cleanup` | after a PostHog upgrade you are happy with: deletes its backup (asks about each item). The next PostHog upgrade needs this first |
 
-The kit tag is the end of the kit name `push-images.sh` prints, for example `685049943753-92fb46e1`.
-An update to a new PostHog version refuses to start while the last upgrade's backup is still there
-(`cleanup` first).
+**Checks after either script:**
+- `sudo posthog-lens doctor` ends with no ✘ (warnings are fine).
+- `sudo docker ps --format '{{.Names}} {{.Status}}' | grep -E 'unhealthy|Restarting'` prints nothing. A
+  worker can need up to 10 minutes after a start; if one is still listed after that,
+  `sudo docker restart <its name>`.
+- PostHog Lens opens at `http://<machine>:8080` with a PostHog login. Its System tab shows every
+  container and the machine (admins, plus anyone they tick on the Admin page).
 
-**Setup, once, by an admin.** First unpack a kit that has this command into any folder, as you did
-for the first install. Read the command, then:
+**After a reboot** everything comes back by itself, with nothing from ECR. PostHog answers 502 for
+several minutes while it starts.
+
+**Logs:** everything scripts 2 and 3 print is also in `/var/log/posthog-lens/`. The installer's own log
+is in `/var/lib/posthog-lens-install/install.log`, and PostHog Lens's in `<LENS_DIR>/logs/service.log`.
+
+## Trying it without AWS
 
 ```bash
-sudo bash <that folder>/deploy/offline/posthog-lens setup <kit tag>
+docker run -d -p 127.0.0.1:5000:5000 registry:2
+SKIP_AWS=1 REGISTRY=localhost:5000 deploy/offline/build-images.sh
+sudo bash deploy/offline/out/fresh-install.sh      # on the same machine: no login for a local registry
 ```
 
-It does 4 things:
-- installs itself as `/usr/local/sbin/posthog-lens`
-- writes its settings to `/etc/posthog-lens/posthog-lens.env` (project folder, PostHog folder,
-  registry, and `MIGRATE_REPLAYS=no`; the installer reads its answers from there too)
-- copies Lens's settings and data from the earlier project folder (`OLD_DIR`, default
-  `/data04/ph_ops/posthog-mcp-trial`)
-- runs `update`, which also moves Lens's startup service to the new folder
-
-The earlier folder is left as it was. Delete it once the new one works.
-
-## After a reboot
-
-Everything comes back by itself and needs nothing from ECR. PostHog answers 502 for several minutes
-while it starts (about 8 minutes on the test box, 24 CPUs), so wait before treating that as a problem.
-`sudo posthog-lens status` shows when it is answering.
-
-## Rehearsing without AWS
-
-`SKIP_AWS=1 REGISTRY=localhost:5000 deploy/offline/push-images.sh` pushes everything into a local
-registry (`docker run -d -p 127.0.0.1:5000:5000 registry:2`). This is how the script was tested.
+The three scripts were tested this way, end to end.

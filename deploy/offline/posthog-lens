@@ -14,7 +14,7 @@
 #   sudo posthog-lens cleanup            after an upgrade: delete its backup (asks about each item)
 #   sudo posthog-lens rollback           after an upgrade: go back to the PostHog from before it
 #
-# The kit tag is the part after "posthog/kit:" that deploy/offline/push-images.sh prints at the end
+# The kit tag is the part after "posthog/kit:" that deploy/offline/build-images.sh prints at the end
 # (for example 685049943753-92fb46e1); the full image name works too.
 #
 # One-time setup, by an admin, from a copy of this file (it copies itself into place):
@@ -55,12 +55,14 @@ load() {
 kit_image() {
     local t="${1:-}"
     t="${t#"$REGISTRY/posthog/kit:"}"
-    [[ "$t" =~ ^[0-9a-f]{12}-[0-9a-f]{8}$ ]] || die "\"${1:-}\" is not a kit tag. It looks like 685049943753-92fb46e1: the end of the kit name push-images.sh printed."
+    [[ "$t" =~ ^[0-9a-f]{12}-[0-9a-f]{8}$ ]] || die "\"${1:-}\" is not a kit tag. It looks like 685049943753-92fb46e1: the end of the kit name build-images.sh printed."
     echo "$REGISTRY/posthog/kit:$t"
 }
 
 ecr_login() {
     local pw
+    # A local registry (a rehearsal against localhost:5000) needs no login.
+    case "$REGISTRY" in localhost:* | 127.0.0.1:*) return 0 ;; esac
     pw="$(aws ecr get-login-password --region "$REGION" 2>&1)" || die "cannot log in to $REGISTRY: $pw"
     docker login --username AWS --password-stdin "$REGISTRY" <<<"$pw" >/dev/null 2>&1 || die "docker login to $REGISTRY failed."
 }
@@ -137,7 +139,7 @@ conf_of() { grep -E "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
 setup() {
     local tag="${1:-}" old="${OLD_DIR:-/data04/ph_ops/posthog-mcp-trial}" self
     [ -n "$tag" ] || die "usage: sudo bash posthog-lens setup <kit tag>"
-    [[ "${tag##*:}" =~ ^[0-9a-f]{12}-[0-9a-f]{8}$ ]] || die "\"$tag\" is not a kit tag. It looks like 685049943753-92fb46e1: the end of the kit name push-images.sh printed."
+    [[ "${tag##*:}" =~ ^[0-9a-f]{12}-[0-9a-f]{8}$ ]] || die "\"$tag\" is not a kit tag. It looks like 685049943753-92fb46e1: the end of the kit name build-images.sh printed."
     self="$(readlink -f "$0")"
     # Settings: kept when they exist; otherwise from the earlier install's answers where it has them.
     mkdir -p "$(dirname "$CONF")"; chmod 755 "$(dirname "$CONF")"
@@ -171,8 +173,9 @@ EOF
     mkdir -p "$LENS_DIR"; chown root:root "$LENS_DIR"; chmod 755 "$LENS_DIR"
     if [ -d "$old" ] && [ "$(readlink -f "$old")" != "$(readlink -f "$LENS_DIR")" ] && [ ! -f "$LENS_DIR/.secrets.env" ]; then
         local f
-        for f in .secrets.env .mcp.json run clips config logs; do
-            [ -e "$old/$f" ] && cp -a "$old/$f" "$LENS_DIR/"
+        # .secrets.env last: once it is there, the copy finished, so a setup that stopped copies again.
+        for f in .mcp.json run clips config logs .secrets.env; do
+            if [ -e "$old/$f" ]; then cp -a "$old/$f" "$LENS_DIR/"; fi
         done
         say "copied PostHog Lens's settings and data from $old (it stays there; delete it once the new folder works)"
     fi

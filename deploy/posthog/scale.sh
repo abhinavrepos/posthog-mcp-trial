@@ -94,7 +94,7 @@ else echo "COMPOSE_FILE=$FILES:docker-compose.scale.yml" >> .env; fi
 docker compose config -q
 
 if [ -n "$POSTHOG_NODE_PREBUILT" ]; then
-    echo "==> The Node image from $IMAGE_REGISTRY (PostHog's, plus PLUGINS_DISABLED_CAPABILITIES; built by push-images.sh)"
+    echo "==> The Node image from $IMAGE_REGISTRY (PostHog's, plus PLUGINS_DISABLED_CAPABILITIES; built by build-images.sh)"
     images_login
     ecr_pull_tag "$POSTHOG_NODE_PREBUILT" posthog-node-lens:latest
     ecr_check_images "$POSTHOG_DIR"
