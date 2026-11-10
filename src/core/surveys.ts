@@ -42,22 +42,36 @@ const OPERATORS: Operator[] = ['exact', 'is_not', 'icontains', 'not_icontains', 
 export type QuestionSpec =
     | { type: 'rating'; text: string; scale?: 3 | 5 | 7 | 10; low_label?: string; high_label?: string; emoji?: boolean; optional?: boolean; description?: string }
     | { type: 'nps'; text: string; optional?: boolean; description?: string }
+    | { type: 'yes_no'; text: string; yes_label?: string; no_label?: string; optional?: boolean; description?: string }
+    | { type: 'thumbs'; text: string; optional?: boolean; description?: string } // thumbs up / down
     | { type: 'open'; text: string; placeholder?: string; optional?: boolean; description?: string }
     | { type: 'single' | 'multiple'; text: string; choices: string[]; other?: boolean; optional?: boolean; description?: string }
 
 export interface LookSpec {
-    background?: string
+    theme?: 'light' | 'dark' // a finished look to start from; any field below overrides it
+    background?: string // solid colours as #rrggbb (PostHog works out contrast from them, so no gradients)
     text?: string
+    text_subtle?: string // descriptions and scale labels
     button?: string // submit button
     button_text?: string
-    rating?: string // rating buttons
+    rating?: string // rating and choice buttons
     rating_active?: string
+    input_background?: string // text boxes
+    input_text?: string
     border?: string
-    position?: 'left' | 'right' | 'center'
+    corner_radius?: number // pixels, 0-24
+    shadow?: 'none' | 'soft' | 'strong'
+    padding?: 'compact' | 'normal' | 'roomy'
+    font?: 'app' | 'system' // the app's own font, or the system font
+    position?: Position
+    max_width?: number // pixels, 280-600
     submit_label?: string
     thank_you?: string // shown after an answer; empty: none
-    max_width?: number // pixels
+    thank_you_text?: string // a line under it
+    placeholder?: string // in text boxes
 }
+export type Position = 'right' | 'left' | 'center' | 'top_right' | 'top_left' | 'top_center' | 'middle_right' | 'middle_left' | 'middle_center'
+const POSITIONS: Position[] = ['right', 'left', 'center', 'top_right', 'top_left', 'top_center', 'middle_right', 'middle_left', 'middle_center']
 
 export interface SurveySpec {
     name: string
@@ -67,6 +81,7 @@ export interface SurveySpec {
     within_minutes?: number // the whole chain must happen within this time, from its first step
     reset_on?: StepSpec[] // any of these starts the chain over (e.g. closing the first dialog)
     clients?: string[] // client ids; none: every client
+    sample_percent?: number // only this share of those clients' users (fixed per user), default 100
     url_contains?: string // only on pages whose address contains this
     wait_for_page?: boolean // wait for the page to load and loading masks to go (default true)
     max_wait_seconds?: number // give up if the page stays busy this long (default 30)
@@ -83,10 +98,22 @@ export interface Problem {
 }
 
 const COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/
-const DEFAULT_LOOK: Required<Omit<LookSpec, 'max_width'>> = {
-    background: '#ffffff', text: '#1d1f27', button: '#0b5cad', button_text: '#ffffff', rating: '#eef1f5', rating_active: '#0b5cad',
-    border: '#c9d1dc', position: 'right', submit_label: 'Submit', thank_you: 'Thank you for your feedback.',
+type Look = Required<Omit<LookSpec, 'theme'>>
+// Bottom right, rounded, a soft shadow and quiet colours: it should feel part of the app, not an ad.
+export const THEMES: Record<'light' | 'dark', Look> = {
+    light: {
+        background: '#ffffff', text: '#14213d', text_subtle: '#5b6577', button: '#0b5cad', button_text: '#ffffff', rating: '#f1f4f8', rating_active: '#0b5cad',
+        input_background: '#f7f9fc', input_text: '#14213d', border: '#d8dee8', corner_radius: 14, shadow: 'soft', padding: 'normal', font: 'app', position: 'right',
+        max_width: 340, submit_label: 'Submit', thank_you: 'Thank you!', thank_you_text: 'Your answer helps us improve.', placeholder: 'Type your answer…',
+    },
+    dark: {
+        background: '#0f1e33', text: '#f3f6fb', text_subtle: '#a9b4c6', button: '#f5a623', button_text: '#14213d', rating: '#1b2f4d', rating_active: '#f5a623',
+        input_background: '#16294a', input_text: '#f3f6fb', border: '#2b4366', corner_radius: 14, shadow: 'strong', padding: 'normal', font: 'app', position: 'right',
+        max_width: 340, submit_label: 'Submit', thank_you: 'Thank you!', thank_you_text: 'Your answer helps us improve.', placeholder: 'Type your answer…',
+    },
 }
+const SHADOWS = { none: 'none', soft: '0 10px 30px rgba(15, 23, 42, 0.16)', strong: '0 16px 44px rgba(0, 0, 0, 0.38)' }
+const PADDINGS = { compact: '14px 16px', normal: '20px 22px', roomy: '26px 28px' }
 
 // ------------------------------------------------------------------ the chain the browser follows
 
@@ -98,8 +125,15 @@ export interface ChainStep {
     event: string
     properties?: Record<string, ChainFilter>
 }
+export interface Audience {
+    clients?: string[]
+    distinctIdPart?: number
+    separator?: string
+    eventProperty?: string
+    sample?: number // percent of users (1-99), fixed per user
+}
 export interface LensChain {
-    version: 2 // 2: may carry an audience; engines from before audiences refuse it rather than show it to every client
+    version: 3 // 3: audience with sample, and one survey at a time; older engines refuse it rather than show it to everyone
     id: string
     managedBy: 'lens'
     steps: ChainStep[]
@@ -107,7 +141,8 @@ export interface LensChain {
     withinSeconds?: number
     resetOn?: ChainStep[]
     resetLabels?: string[]
-    audience?: { clients: string[]; distinctIdPart: number; separator: string } | { clients: string[]; eventProperty: string }
+    audience?: Audience
+    oneAtATime: true // a user in an earlier running survey's audience skips this one until they finish that one
     ready: { documentComplete: boolean; noVisibleMask: boolean; maxWaitMs: number }
 }
 
@@ -248,6 +283,13 @@ export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: 
             }
             case 'nps':
                 return { type: 'rating', ...base, scale: 10, display: 'number', lowerBoundLabel: 'Not likely', upperBoundLabel: 'Very likely' }
+            case 'yes_no': {
+                const yes = String(q.yes_label || 'Yes').trim(), no = String(q.no_label || 'No').trim()
+                if (!yes || !no || yes === no || yes.length > 60 || no.length > 60) e(where, 'yes_label and no_label must differ (1-60 characters)')
+                return { type: 'single_choice', ...base, choices: [yes, no] }
+            }
+            case 'thumbs':
+                return { type: 'rating', ...base, scale: 2, display: 'emoji', lowerBoundLabel: '', upperBoundLabel: '' }
             case 'open':
                 return { type: 'open', ...base }
             case 'single':
@@ -258,7 +300,7 @@ export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: 
                 return { type: q.type === 'single' ? 'single_choice' : 'multiple_choice', ...base, choices: q.other ? [...choices, 'Other'] : choices, ...(q.other ? { hasOpenChoice: true } : {}) }
             }
             default:
-                e(where, 'type must be rating, nps, open, single or multiple')
+                e(where, 'type must be rating, nps, yes_no, thumbs, open, single or multiple')
                 return { type: 'open', ...base }
         }
     })
@@ -278,22 +320,24 @@ export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: 
     const clientIds = opts.clientIds ?? (spec.clients || []).map((c) => String(c).trim()).filter(Boolean)
     if (clientIds.length > 500) e('clients', 'at most 500 clients')
     const p = config.properties
-    const audience: LensChain['audience'] = clientIds.length
-        ? p.clientFromDistinctId
-            ? { clients: clientIds, distinctIdPart: p.clientFromDistinctId, separator: p.distinctIdSeparator }
-            : { clients: clientIds, eventProperty: p.client }
-        : undefined
+    const sample = spec.sample_percent ?? 100
+    if (!(Number.isInteger(sample) && sample >= 1 && sample <= 100)) e('sample_percent', 'give a whole percent from 1 to 100')
+    const audience: Audience = {
+        ...(clientIds.length ? (p.clientFromDistinctId ? { clients: clientIds, distinctIdPart: p.clientFromDistinctId, separator: p.distinctIdSeparator } : { clients: clientIds, eventProperty: p.client }) : {}),
+        ...(sample < 100 ? { sample } : {}),
+    }
     if (!clientIds.length) w('clients', 'no clients given: every client can see it')
 
     const chain: LensChain = {
-        version: 2,
+        version: 3,
         id: opts.chainId ?? chainIdFor(name),
         managedBy: 'lens',
         steps: compiled.map((c) => c?.step).filter((x): x is ChainStep => !!x),
         labels: compiled.map((c) => c?.label).filter((x): x is string => !!x),
         ...(spec.within_minutes ? { withinSeconds: Math.round(spec.within_minutes * 60) } : {}),
         ...(resets.length ? { resetOn: resets.map((c) => c?.step).filter((x): x is ChainStep => !!x), resetLabels: resets.map((c) => c?.label).filter((x): x is string => !!x) } : {}),
-        ...(audience ? { audience } : {}),
+        ...(Object.keys(audience).length ? { audience } : {}),
+        oneAtATime: true,
         ready: { documentComplete: spec.wait_for_page !== false, noVisibleMask: spec.wait_for_page !== false, maxWaitMs: Math.round(maxWait * 1000) },
     }
     if (!/^[a-z0-9-]{1,40}$/.test(chain.id)) e('chain', `chain id "${chain.id}" must be 1-40 characters of a-z, 0-9 and -`)
@@ -309,16 +353,23 @@ export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: 
     if (spec.url_contains !== undefined && (typeof spec.url_contains !== 'string' || spec.url_contains.length > 500)) e('url_contains', 'give text of up to 500 characters')
 
     // Look
-    const look = { ...DEFAULT_LOOK, ...Object.fromEntries(Object.entries(spec.look || {}).filter(([, v]) => v !== undefined)) } as typeof DEFAULT_LOOK & { max_width?: number }
-    for (const k of ['background', 'text', 'button', 'button_text', 'rating', 'rating_active', 'border'] as const) {
-        if (!COLOR.test(look[k])) e(`look.${k}`, `"${look[k]}" is not a colour like #0b5cad`)
+    const { theme = 'light', ...given } = spec.look || {}
+    if (!(theme in THEMES)) e('look.theme', 'theme must be light or dark')
+    const look: Look = { ...(THEMES[theme as 'light'] || THEMES.light), ...(Object.fromEntries(Object.entries(given).filter(([, v]) => v !== undefined)) as Partial<Look>) }
+    for (const k of ['background', 'text', 'text_subtle', 'button', 'button_text', 'rating', 'rating_active', 'input_background', 'input_text', 'border'] as const) {
+        if (!COLOR.test(String(look[k]))) e(`look.${k}`, `"${look[k]}" is not a colour like #0b5cad (solid colours only)`)
     }
-    if (!['left', 'right', 'center'].includes(look.position)) e('look.position', 'position must be left, right or center')
-    if (look.max_width !== undefined && !(Number.isInteger(look.max_width) && look.max_width >= 240 && look.max_width <= 800)) e('look.max_width', 'give 240 to 800 pixels')
-    if (String(look.submit_label).length > 40) e('look.submit_label', 'at most 40 characters')
-    if (String(look.thank_you).length > 300) e('look.thank_you', 'at most 300 characters')
+    if (!POSITIONS.includes(look.position)) e('look.position', `position must be one of ${POSITIONS.join(', ')} (right = bottom right)`)
+    if (!(Number.isInteger(look.max_width) && look.max_width >= 280 && look.max_width <= 600)) e('look.max_width', 'give 280 to 600 pixels')
+    if (!(Number.isInteger(look.corner_radius) && look.corner_radius >= 0 && look.corner_radius <= 24)) e('look.corner_radius', 'give 0 to 24 pixels')
+    if (!(look.shadow in SHADOWS)) e('look.shadow', 'shadow must be none, soft or strong')
+    if (!(look.padding in PADDINGS)) e('look.padding', 'padding must be compact, normal or roomy')
+    if (!['app', 'system'].includes(look.font)) e('look.font', 'font must be app or system')
+    for (const [k, max] of [['submit_label', 40], ['thank_you', 120], ['thank_you_text', 300], ['placeholder', 120]] as const) {
+        if (String(look[k] ?? '').length > max) e(`look.${k}`, `at most ${max} characters`)
+    }
     if (!problems.some((x) => x.where.startsWith('look.'))) {
-        for (const [fg, bg, where] of [[look.text, look.background, 'text on background'], [look.button_text, look.button, 'button text on button']] as const) {
+        for (const [fg, bg, where] of [[look.text, look.background, 'text on background'], [look.button_text, look.button, 'button text on button'], [look.input_text, look.input_background, 'typed text on text boxes']] as const) {
             const r = contrast(fg, bg)
             if (r < 4.5) w(`look`, `${where} has contrast ${r.toFixed(1)}:1; under 4.5:1 is hard to read`)
         }
@@ -337,10 +388,12 @@ export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: 
             lensChain: chain,
         },
         appearance: {
-            backgroundColor: look.background, textColor: look.text, submitButtonColor: look.button, submitButtonTextColor: look.button_text,
-            ratingButtonColor: look.rating, ratingButtonActiveColor: look.rating_active, borderColor: look.border, position: look.position,
-            submitButtonText: look.submit_label, displayThankYouMessage: !!look.thank_you, thankYouMessageHeader: look.thank_you || undefined,
-            surveyPopupDelaySeconds: 0, ...(look.max_width ? { maxWidth: `${look.max_width}px` } : {}),
+            backgroundColor: look.background, textColor: look.text, textSubtleColor: look.text_subtle, submitButtonColor: look.button, submitButtonTextColor: look.button_text,
+            ratingButtonColor: look.rating, ratingButtonActiveColor: look.rating_active, inputBackground: look.input_background, inputTextColor: look.input_text,
+            borderColor: look.border, borderRadius: `${look.corner_radius}px`, boxShadow: SHADOWS[look.shadow], boxPadding: PADDINGS[look.padding],
+            fontFamily: look.font === 'app' ? 'inherit' : 'system-ui', position: look.position, maxWidth: `${look.max_width}px`,
+            submitButtonText: look.submit_label, placeholder: look.placeholder, displayThankYouMessage: !!look.thank_you,
+            thankYouMessageHeader: look.thank_you || undefined, thankYouMessageDescription: look.thank_you_text || undefined, surveyPopupDelaySeconds: 0,
         },
         ...(spec.max_responses ? { responses_limit: spec.max_responses } : {}),
     }
@@ -475,17 +528,43 @@ export interface SurveyView {
     reset_on: string[]
     within_minutes?: number
     clients: string[] | 'all'
+    sample_percent: number
     url_contains?: string
     waits_for_page: boolean
     show: 'once' | 'every_time'
     days_between_surveys: number
     max_responses?: number
     questions: { id?: string; type: string; text: string; choices?: string[]; scale?: number }[]
-    look: Record<string, unknown>
+    look: LookSpec
     started?: string
     stopped?: string
     created: string
     created_by?: string
+}
+
+/** A PostHog question as the Lens type: nps, thumbs and yes_no are ratings and choices underneath. */
+export function kindOf(q: PostHogSurvey['questions'][number]): string {
+    if (q.type === 'rating' && q.scale === 10 && q.lowerBoundLabel === 'Not likely') return 'nps'
+    if (q.type === 'rating' && q.scale === 2 && q.display === 'emoji') return 'thumbs'
+    if (q.type === 'rating') return q.display === 'emoji' ? 'emoji rating' : 'rating'
+    if (q.type === 'single_choice' && q.choices?.length === 2 && /^yes$/i.test(q.choices[0]) && /^no$/i.test(q.choices[1])) return 'yes_no'
+    return { single_choice: 'single', multiple_choice: 'multiple' }[q.type] || q.type
+}
+
+/** PostHog's appearance back as Lens look fields (only those set). */
+export function lookOf(a: Record<string, unknown>): LookSpec {
+    const key = <T extends string>(m: Record<T, string>, v: unknown) => (Object.entries(m) as [T, string][]).find(([, x]) => x === v)?.[0]
+    const px = (v: unknown) => (typeof v === 'string' && /^\d+px$/.test(v) ? parseInt(v) : undefined)
+    const out: LookSpec = {
+        background: a.backgroundColor as string, text: a.textColor as string, text_subtle: a.textSubtleColor as string, button: a.submitButtonColor as string,
+        button_text: a.submitButtonTextColor as string, rating: a.ratingButtonColor as string, rating_active: a.ratingButtonActiveColor as string,
+        input_background: (a.inputBackground ?? a.inputBackgroundColor) as string, input_text: a.inputTextColor as string, border: a.borderColor as string,
+        corner_radius: px(a.borderRadius), shadow: key(SHADOWS, a.boxShadow), padding: key(PADDINGS, a.boxPadding),
+        font: a.fontFamily === 'inherit' ? 'app' : a.fontFamily ? 'system' : undefined, position: a.position as Position, max_width: px(a.maxWidth),
+        submit_label: a.submitButtonText as string, thank_you: a.displayThankYouMessage ? (a.thankYouMessageHeader as string) : '',
+        thank_you_text: a.thankYouMessageDescription as string, placeholder: a.placeholder as string,
+    }
+    return Object.fromEntries(Object.entries(out).filter(([, v]) => v !== undefined && v !== null)) as LookSpec
 }
 
 export function viewOf(s: PostHogSurvey): SurveyView {
@@ -502,17 +581,15 @@ export function viewOf(s: PostHogSurvey): SurveyView {
         steps: lens ? c!.labels || [] : (s.conditions?.events?.values || []).map((v) => `Event ${v.name}`),
         reset_on: lens ? c!.resetLabels || [] : [],
         ...(lens && c!.withinSeconds ? { within_minutes: Math.round(c!.withinSeconds / 6) / 10 } : {}),
-        clients: lens && c!.audience ? c!.audience.clients : 'all',
+        clients: lens && c!.audience?.clients ? c!.audience.clients : 'all',
+        sample_percent: lens ? c!.audience?.sample ?? 100 : 100,
         ...(s.conditions?.url ? { url_contains: s.conditions.url } : {}),
         waits_for_page: lens ? c!.ready.documentComplete : false,
         show: s.schedule === 'always' ? 'every_time' : 'once',
         days_between_surveys: s.conditions?.seenSurveyWaitPeriodInDays ?? 0,
         ...(s.responses_limit ? { max_responses: s.responses_limit } : {}),
-        questions: (s.questions || []).map((q) => ({ id: q.id, type: q.type === 'rating' && q.scale === 10 && q.lowerBoundLabel === 'Not likely' ? 'nps' : q.type, text: q.question, ...(q.choices ? { choices: q.choices } : {}), ...(q.scale ? { scale: q.scale } : {}) })),
-        look: {
-            background: a.backgroundColor, text: a.textColor, button: a.submitButtonColor, button_text: a.submitButtonTextColor, rating: a.ratingButtonColor,
-            rating_active: a.ratingButtonActiveColor, border: a.borderColor, position: a.position, submit_label: a.submitButtonText, thank_you: a.displayThankYouMessage ? a.thankYouMessageHeader : '',
-        },
+        questions: (s.questions || []).map((q) => ({ id: q.id, type: kindOf(q), text: q.question, ...(q.choices ? { choices: q.choices } : {}), ...(q.scale ? { scale: q.scale } : {}) })),
+        look: lookOf(a),
         ...(s.start_date ? { started: s.start_date } : {}),
         ...(s.end_date ? { stopped: s.end_date } : {}),
         created: s.created_at,
@@ -563,6 +640,7 @@ export function specOf(s: PostHogSurvey): Partial<SurveySpec> {
         ...(c?.resetOn ? { reset_on: c.resetOn.map(raw) } : {}),
         ...(v.within_minutes ? { within_minutes: v.within_minutes } : {}),
         ...(v.clients !== 'all' ? { clients: v.clients } : {}),
+        ...(v.sample_percent < 100 ? { sample_percent: v.sample_percent } : {}),
         ...(v.url_contains ? { url_contains: v.url_contains } : {}),
         wait_for_page: v.waits_for_page,
         ...(c ? { max_wait_seconds: c.ready.maxWaitMs / 1000 } : {}),
@@ -571,6 +649,54 @@ export function specOf(s: PostHogSurvey): Partial<SurveySpec> {
         ...(v.max_responses ? { max_responses: v.max_responses } : {}),
         look: Object.fromEntries(Object.entries(v.look).filter(([, x]) => x !== undefined && x !== null)) as LookSpec,
     }
+}
+
+// ------------------------------------------------------------------ one survey at a time
+
+export interface Conflict {
+    survey_id: string
+    name: string
+    since: string
+    clients: string[] | 'all' // the clients both surveys want
+    share: number // percent of those clients' users that the other survey holds
+    text: string
+}
+
+/**
+ * Running Lens surveys launched before this one that want some of the same users. Those users skip
+ * this survey until they answer or dismiss the other one (the browser engine enforces it). For a
+ * draft, every running survey counts, since it would launch after them.
+ */
+export function conflictsFor(chain: LensChain, self: { id?: string; start_date?: string | null }, surveys: PostHogSurvey[]): Conflict[] {
+    const mine = chain.audience?.clients?.map((c) => c.toLowerCase())
+    const myStart = self.start_date ? Date.parse(self.start_date) : Infinity
+    const out: Conflict[] = []
+    for (const y of surveys) {
+        const c = y.conditions?.lensChain
+        if (y.id === self.id || statusOf(y) !== 'running' || c?.managedBy !== 'lens' || !(c as { oneAtATime?: boolean }).oneAtATime) continue
+        const yStart = Date.parse(y.start_date || '') || 0
+        if (!(yStart < myStart || (yStart === myStart && y.id < (self.id || '')))) continue
+        const theirs = c.audience?.clients?.map((x) => x.toLowerCase())
+        const both: string[] | 'all' = !mine && !theirs ? 'all' : !mine ? theirs! : !theirs ? mine : mine.filter((x) => theirs.includes(x))
+        if (both !== 'all' && !both.length) continue
+        const share = c.audience?.sample ?? 100
+        const who = both === 'all' ? 'Every client' : both.map((x) => x.toUpperCase()).join(', ')
+        out.push({
+            survey_id: y.id, name: y.name, since: y.start_date!, clients: both, share,
+            text: `${who}: ${share === 100 ? 'all' : `${share}% of`} their users are in "${y.name}" (running since ${y.start_date!.slice(0, 10)}). They skip this survey until they answer or dismiss that one.`,
+        })
+    }
+    return out
+}
+
+/** One line for the PM: how much of the audience is free now. */
+export function conflictSummary(chain: LensChain, conflicts: Conflict[]): string {
+    if (!conflicts.length) return 'No user of this survey is in another running survey.'
+    const mine = chain.audience?.clients?.map((c) => c.toLowerCase())
+    const blocked = conflicts.some((c) => c.share === 100 && (c.clients === 'all' || (mine && mine.every((m) => (c.clients as string[]).includes(m)))))
+    return blocked
+        ? 'Nobody can see this survey yet: all its users are in an earlier running survey. Stop that one, or wait until its users have answered it.'
+        : 'Some users are in another running survey and will skip this one until they finish that one (one survey per user at a time).'
 }
 
 // ------------------------------------------------------------------ reach and results (HogQL, read key)
@@ -618,7 +744,7 @@ export async function estimateReach(chain: LensChain, days = 14): Promise<Reach>
     const window = chain.withinSeconds ?? 86_400
     const client = clientExpr()
     let who = ''
-    if (chain.audience) {
+    if (chain.audience?.clients) {
         values.clients = chain.audience.clients.map((c) => c.toLowerCase())
         who = `AND lower(toString(${client})) IN {clients}`
     }
@@ -650,14 +776,15 @@ export async function estimateReach(chain: LensChain, days = 14): Promise<Reach>
         )
         top = tops.map((r) => ({ client: String(r.client), sessions: Number(r.sessions) }))
     }
+    const share = (chain.audience?.sample ?? 100) / 100
     return {
         days,
-        sessions: Number(full?.sessions || 0),
-        users: Number(full?.users || 0),
+        sessions: Math.round(Number(full?.sessions || 0) * share),
+        users: Math.round(Number(full?.users || 0) * share),
         clients: Number(full?.clients || 0),
         by_step: chain.labels.map((label, i) => ({ step: label, sessions: at(i + 1) })),
         top_clients: top,
-        note: `Sessions in the last ${days} days where the steps happened in this order${chain.withinSeconds ? ` within ${Math.round(chain.withinSeconds / 60)} minutes` : ''}. An upper bound: the browser starts a chain over on a page reload, and "once per user" and the days between surveys lower it further.`,
+        note: `Sessions in the last ${days} days where the steps happened in this order${chain.withinSeconds ? ` within ${Math.round(chain.withinSeconds / 60)} minutes` : ''}${share < 1 ? `, times the ${share * 100}% sample (steps per step are not scaled)` : ''}. An upper bound: the browser starts a chain over on a page reload, and "once per user" and the days between surveys lower it further.`,
     }
 }
 
@@ -681,6 +808,8 @@ export interface Results {
     }[]
     by_client: { client: string; shown: number; answered: number; dismissed: number }[]
     by_day: { day: string; shown: number; answered: number }[]
+    conflicts: Conflict[] // users this survey shares with earlier running surveys
+    conflict_summary?: string
 }
 
 const RECENT_TEXT = 30
@@ -692,6 +821,8 @@ const ANSWERED = `uniqIf(${SUBMISSION}, event = 'survey sent')`
 export async function surveyResults(id: string, days = 90): Promise<Results> {
     const s = await getSurvey(id)
     const view = viewOf(s)
+    const chain = s.conditions?.lensChain?.managedBy === 'lens' ? s.conditions.lensChain : undefined
+    const conflicts = chain && view.status !== 'archived' && view.status !== 'stopped' ? conflictsFor(chain, view.status === 'running' ? s : { id: s.id }, await listSurveys()) : []
     const client = clientExpr()
     const values = { id: s.id, days, chain: view.chain_id ? `lens_chain:${view.chain_id}` : '' }
     const [counts, perClient, perDay, sent] = await Promise.all([
@@ -736,7 +867,11 @@ export async function surveyResults(id: string, days = 90): Promise<Results> {
         }
         const got = answers.map((a) => ({ ...a, v: pick(a.props) })).filter((a) => has(a.v))
         const out: Results['questions'][number] = { id: q.id, text: q.question, type: q.type, answers: got.length }
-        if (q.type === 'rating') {
+        if (kindOf(q) === 'thumbs') {
+            // PostHog's thumbs: 1 is up, 2 is down.
+            const nums = got.map((a) => Number(a.v))
+            out.distribution = { 'Thumbs up': nums.filter((x) => x === 1).length, 'Thumbs down': nums.filter((x) => x === 2).length }
+        } else if (q.type === 'rating') {
             const nums = got.map((a) => Number(a.v)).filter(Number.isFinite)
             out.distribution = Object.fromEntries(Array.from({ length: (q.scale ?? 5) + (q.scale === 10 ? 1 : 0) }, (_, k) => q.scale === 10 ? k : k + 1).map((k) => [String(k), nums.filter((x) => x === k).length]))
             if (nums.length) out.average = Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 100) / 100
@@ -766,6 +901,8 @@ export async function surveyResults(id: string, days = 90): Promise<Results> {
         questions,
         by_client: perClient.map((r) => ({ client: String(r.client), shown: Number(r.shown), answered: Number(r.answered), dismissed: Number(r.dismissed) })),
         by_day: perDay.map((r) => ({ day: String(r.day), shown: Number(r.shown), answered: Number(r.answered) })),
+        conflicts,
+        ...(chain ? { conflict_summary: conflictSummary(chain, conflicts) } : {}),
     }
 }
 

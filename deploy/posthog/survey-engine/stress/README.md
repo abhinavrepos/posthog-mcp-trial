@@ -20,6 +20,7 @@ CORE=new npx tsx stress.mts config.json 1000 100 result.json
 `CORE=old` loads `/array-1.261.6.js` from the page server (put Reval's posthog-js build there) to
 test the older library; unset, pages alternate. Stop the test surveys afterwards.
 
-Last run (2026-11-10, PostHog c08ecdbe, posthog-js 1.443.0): 1000 of 1000 pages correct, 0 browser
+Last run (2026-11-10, PostHog c08ecdbe, posthog-js 1.443.0, chains v3 with one survey at a time):
+1000 of 1000 pages correct, 0 browser
 errors, 100 at a time. With posthog-js 1.261.6, 6-21% of pages never loaded surveys at all: that
 version aborts its first `/flags` request when the user is identified, then skips surveys.

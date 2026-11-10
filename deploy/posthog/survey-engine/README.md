@@ -35,6 +35,13 @@ curl -s http://<posthog>/static/surveys.js | grep -c "Lens survey chains"   # 1 
 
 Settings: `SURVEY_ENGINE` (on), `SURVEY_BRAND` ("Survey by ION"), `FEATURE_SURVEYS` (on).
 
+## Rules worth knowing first
+
+- **One survey per user at a time**: the survey launched first keeps its users until they answer or
+  dismiss it; later surveys skip them. Lens tells the PM who is taken when they design, save or launch.
+- Question types: rating, nps, yes_no, thumbs, open, single, multiple. Look: theme light/dark plus
+  every colour, corners, shadow, padding, font, position (bottom right by default), width.
+
 ## Things to know
 
 - Reval should move to posthog-js 1.268 or later; 1.261.6 sometimes never loads surveys.

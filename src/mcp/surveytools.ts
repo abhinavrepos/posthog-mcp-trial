@@ -11,7 +11,10 @@ import { resolveClient } from '../core/resolve.ts'
 import {
     archiveSurvey,
     compileSurvey,
+    conflictsFor,
+    conflictSummary,
     estimateReach,
+    listSurveys,
     getSurvey,
     launchSurvey,
     saveSurvey,
@@ -53,7 +56,7 @@ const step = z
     })
     .describe('One thing the user does. Exactly one of opens, closes, button, field, message, message_pattern, event.')
 const question = z.object({
-    type: z.enum(['rating', 'nps', 'open', 'single', 'multiple']),
+    type: z.enum(['rating', 'nps', 'yes_no', 'thumbs', 'open', 'single', 'multiple']).describe('rating: 1-N numbers (or emoji); nps: 0-10; yes_no: two buttons; thumbs: up/down; open: text box; single/multiple: choices'),
     text: z.string().describe('The question as the user reads it'),
     description: z.string().optional(),
     scale: z.union([z.literal(3), z.literal(5), z.literal(7), z.literal(10)]).optional().describe('rating only, default 5'),
@@ -61,25 +64,30 @@ const question = z.object({
     high_label: z.string().optional(),
     emoji: z.boolean().optional(),
     choices: z.array(z.string()).optional().describe('single/multiple only'),
+    yes_label: z.string().optional().describe('yes_no: default Yes'),
+    no_label: z.string().optional().describe('yes_no: default No'),
     other: z.boolean().optional().describe('single/multiple: add an "Other" choice with a text box'),
     placeholder: z.string().optional(),
     optional: z.boolean().optional(),
 })
+const color = z.string().optional()
 const look = z
     .object({
-        background: z.string().optional(),
-        text: z.string().optional(),
-        button: z.string().optional(),
-        button_text: z.string().optional(),
-        rating: z.string().optional(),
-        rating_active: z.string().optional(),
-        border: z.string().optional(),
-        position: z.enum(['left', 'right', 'center']).optional(),
+        theme: z.enum(['light', 'dark']).optional().describe('A finished look (light: white, ION blue; dark: navy, amber). Fields below override it.'),
+        background: color, text: color, text_subtle: color.describe('descriptions and scale labels'), button: color.describe('submit button'), button_text: color,
+        rating: color.describe('rating and choice buttons'), rating_active: color, input_background: color, input_text: color, border: color,
+        corner_radius: z.number().int().optional().describe('0-24 px, default 14'),
+        shadow: z.enum(['none', 'soft', 'strong']).optional(),
+        padding: z.enum(['compact', 'normal', 'roomy']).optional(),
+        font: z.enum(['app', 'system']).optional().describe("app: Reval's own font (default)"),
+        position: z.enum(['right', 'left', 'center', 'top_right', 'top_left', 'top_center', 'middle_right', 'middle_left', 'middle_center']).optional().describe('right = bottom right (default)'),
+        max_width: z.number().int().optional().describe('280-600 px, default 340'),
         submit_label: z.string().optional(),
-        thank_you: z.string().optional().describe('Shown after an answer; "" for none'),
-        max_width: z.number().int().optional(),
+        thank_you: z.string().optional().describe('Heading after an answer; "" for none'),
+        thank_you_text: z.string().optional(),
+        placeholder: z.string().optional().describe('In text boxes'),
     })
-    .describe('Colours as #rrggbb. The footer always reads the brand set at install ("Survey by ION").')
+    .describe('Colours as #rrggbb, solid only. The footer always reads the brand set at install ("Survey by ION").')
 export const specShape = {
     name: z.string().describe('Name for the team (users do not see it)'),
     description: z.string().optional(),
@@ -88,6 +96,7 @@ export const specShape = {
     within_minutes: z.number().optional().describe('All steps within this many minutes of the first'),
     reset_on: z.array(step).max(20).optional().describe('Any of these starts the chain over, e.g. closing the first dialog'),
     clients: z.array(z.string()).max(500).optional().describe('Client names or ids. Leave out for every client.'),
+    sample_percent: z.number().int().optional().describe('Only this % of those users (fixed per user), default 100'),
     url_contains: z.string().optional(),
     wait_for_page: z.boolean().optional().describe('Wait until the page has loaded and loading masks are gone (default true)'),
     max_wait_seconds: z.number().optional().describe('Skip if the page stays busy this long (default 30)'),
@@ -117,7 +126,7 @@ export function registerSurveyTools(server: McpServer): void {
         'design_survey',
         {
             title: 'Check a survey before saving it',
-            description: `Checks an in-app ${app} survey described in ${app}'s words (dialogs, buttons, messages, clients, colours) and estimates how many sessions would have seen it in the last 14 days. Saves nothing. Use describe_app_events for dialog ids and button names. Then show the person the plan and problems, and save_survey when they agree.`,
+            description: `Checks an in-app ${app} survey described in ${app}'s words (dialogs, buttons, messages, clients, colours) and estimates how many sessions would have seen it in the last 14 days. A user is in one survey at a time: it also says which clients' users are already in a running survey (they skip this one until they finish that one); tell the person. Saves nothing. Use describe_app_events for dialog ids and button names. Then show the person the plan and problems, and save_survey when they agree.`,
             inputSchema: { ...specShape, estimate: z.boolean().default(true).describe('Count past sessions that went through the steps') },
             annotations: { readOnlyHint: true },
         },
@@ -127,6 +136,7 @@ export function registerSurveyTools(server: McpServer): void {
             const c = compileSurvey(spec as SurveySpec, { clientIds: ids })
             const errors = c.problems.filter((p) => p.level === 'error')
             const reach = estimate && !errors.length ? await estimateReach(c.chain).catch((e) => ({ error: (e as Error).message })) : undefined
+            const conflicts = conflictsFor(c.chain, {}, await listSurveys())
             return json(errors.length || unclear.length ? 'This survey cannot be saved yet:' : 'The survey checks out. Show the person this plan, then save_survey.', {
                 steps: c.chain.labels,
                 reset_on: c.chain.resetLabels || [],
@@ -134,6 +144,7 @@ export function registerSurveyTools(server: McpServer): void {
                 unclear_clients: unclear,
                 shows: `${spec.show === 'every_time' ? 'every time' : 'once per user'}, as soon as the last step happens${spec.wait_for_page === false ? '' : ' and the page has loaded'}`,
                 problems: c.problems,
+                one_survey_at_a_time: { summary: conflictSummary(c.chain, conflicts), conflicts: conflicts.map((x) => x.text) },
                 reach_last_14_days: reach,
             })
         }
@@ -154,9 +165,10 @@ export function registerSurveyTools(server: McpServer): void {
             if (!out.survey) return json('Nothing was saved. Fix these first:', out.compiled.problems)
             audit('mcp', survey_id ? 'survey.changed' : 'survey.created', { survey: out.survey.id, name: out.survey.name })
             const v = viewOf(out.survey)
+            const conflicts = conflictsFor(out.compiled.chain, out.survey, await listSurveys())
             return json(
-                `${survey_id ? 'Changed' : 'Saved as a draft'}: "${v.name}" (${v.status}). ${v.status === 'draft' ? 'Users see nothing yet. Ask the person before launch_survey.' : ''} Page: ${pageUrl(v.id)}`,
-                { survey: v, warnings: out.compiled.problems }
+                `${survey_id ? 'Changed' : 'Saved as a draft'}: "${v.name}" (${v.status}). ${v.status === 'draft' ? 'Users see nothing yet. Ask the person before launch_survey.' : ''} ${conflictSummary(out.compiled.chain, conflicts)} Page: ${pageUrl(v.id)}`,
+                { survey: v, warnings: out.compiled.problems, users_in_other_surveys: conflicts.map((x) => x.text) }
             )
         }
     )
@@ -172,12 +184,18 @@ export function registerSurveyTools(server: McpServer): void {
         async ({ survey_id, confirm }) => {
             if (!mcpMayLaunch()) return text(`An admin switched off launching surveys from chat. Launch it on the Surveys page: ${pageUrl(survey_id)}`)
             if (confirm !== true) {
-                const v = viewOf(await getSurvey(survey_id))
-                return json('Not launched. Show the person this and ask; call again with confirm: true when they agree.', v)
+                const sv = await getSurvey(survey_id)
+                const v = viewOf(sv)
+                const chain = sv.conditions?.lensChain
+                const conflicts = chain ? conflictsFor(chain, { id: sv.id }, await listSurveys()) : []
+                return json(`Not launched. Show the person this and ask; call again with confirm: true when they agree.${chain ? ' ' + conflictSummary(chain, conflicts) : ''}`, { ...v, users_in_other_surveys: conflicts.map((x) => x.text) })
             }
-            const v = viewOf(await launchSurvey(survey_id))
+            const launched = await launchSurvey(survey_id)
+            const v = viewOf(launched)
             audit('mcp', 'survey.launched', { survey: v.id, name: v.name })
-            return json(`Running: "${v.name}". It shows as soon as a user does the steps. Answers: survey_results, or ${pageUrl(v.id)}`, { steps: v.steps, clients: v.clients })
+            const chain = launched.conditions?.lensChain
+            const conflicts = chain ? conflictsFor(chain, launched, await listSurveys()) : []
+            return json(`Running: "${v.name}". It shows as soon as a user does the steps. ${chain ? conflictSummary(chain, conflicts) : ''} Answers: survey_results, or ${pageUrl(v.id)}`, { steps: v.steps, clients: v.clients, sample_percent: v.sample_percent, users_in_other_surveys: conflicts.map((x) => x.text) })
         }
     )
 

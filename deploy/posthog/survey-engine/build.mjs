@@ -40,11 +40,18 @@ for (const gone of ['posthog.com/surveys', '"Survey by ",']) {
     }
 }
 
+// A larger, clearer footer: PostHog's is 11px at 60% opacity. Optional: if PostHog changes this rule,
+// the footer keeps PostHog's size and the build goes on.
+const FOOTER_CSS = /\.footer-branding\{opacity:\.6;([^{}]*?)font-size:11px;font-weight:500;/g
+const css = patched.match(FOOTER_CSS) || []
+if (css.length === 1) patched = patched.replace(FOOTER_CSS, '.footer-branding{opacity:.8;$1font-size:13px;font-weight:600;letter-spacing:.02em;padding-top:4px;')
+else console.error(`Footer size rule found ${css.length} times (need 1): keeping PostHog's footer size.`)
+
 const engine = readFileSync(join(here, 'engine.js'), 'utf8')
 const header = `/*! Survey renderer from posthog-js (Copyright PostHog Inc., Apache License 2.0 with MIT-licensed parts;
  * full licence: https://github.com/PostHog/posthog-js/blob/main/LICENSE).
- * Modified by ION for Reval (Lens survey engine): the footer shows ${JSON.stringify(brand).slice(1, -1).replace(/\*\//g, '* /')} as plain text
- * instead of the PostHog logo and link, and Lens condition chains (conditions.lensChain) are added after it.
+ * Modified by ION for Reval (Lens survey engine): the footer shows ${JSON.stringify(brand).slice(1, -1).replace(/\*\//g, '* /')} as plain text,
+ * slightly larger, instead of the PostHog logo and link, and Lens condition chains (conditions.lensChain) are added after it.
  * Original sha256 ${sha(original)}. */\n`
 const out = `${header}${patched}\n;\n${engine}\n`
 
@@ -53,4 +60,4 @@ writeFileSync(join(outDir, 'surveys.js'), out)
 writeFileSync(join(outDir, 'surveys.js.gz'), gzipSync(out, { level: 9 }))
 writeFileSync(join(outDir, 'surveys.js.br'), brotliCompressSync(out, { params: { [constants.BROTLI_PARAM_QUALITY]: 11, [constants.BROTLI_PARAM_SIZE_HINT]: out.length } }))
 writeFileSync(join(outDir, 'manifest.json'), JSON.stringify({ built: new Date().toISOString(), brand, original_sha256: sha(original), output_sha256: sha(out), bytes: out.length }, null, 2) + '\n')
-console.log(`Built ${join(outDir, 'surveys.js')} (${out.length} bytes, footer: "${brand}", chains: on)`)
+console.log(`Built ${join(outDir, 'surveys.js')} (${out.length} bytes, footer: "${brand}"${css.length === 1 ? ' at 13px' : ''}, chains: on)`)

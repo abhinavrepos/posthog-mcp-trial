@@ -74,6 +74,56 @@ describe('compile', () => {
     })
 })
 
+describe('types, look and one survey at a time', () => {
+    test('yes/no and thumbs compile to PostHog choices and ratings, and read back', async () => {
+        const { kindOf } = await import('../src/core/surveys.ts')
+        const c = compileSurvey({ ...base, questions: [{ type: 'yes_no', text: 'Did it work?' }, { type: 'thumbs', text: 'Good?' }, { type: 'yes_no', text: 'x', yes_label: 'Same', no_label: 'Same' }] }, { reg })
+        const qs = c.body.questions as any[]
+        assert.deepEqual([qs[0].type, qs[0].choices], ['single_choice', ['Yes', 'No']])
+        assert.deepEqual([qs[1].type, qs[1].scale, qs[1].display], ['rating', 2, 'emoji'])
+        assert.deepEqual(qs.slice(0, 2).map(kindOf), ['yes_no', 'thumbs'])
+        assert.deepEqual(errors(c).map((p) => p.where), ['questions[2]'])
+    })
+    test('every look setting reaches PostHog, from a theme, and reads back', async () => {
+        const { lookOf, THEMES } = await import('../src/core/surveys.ts')
+        const c = compileSurvey({ ...base, look: { theme: 'dark', corner_radius: 8, shadow: 'none', padding: 'roomy', position: 'top_right', max_width: 400 } }, { reg })
+        assert.deepEqual(errors(c), [])
+        const a = c.body.appearance as Record<string, unknown>
+        assert.equal(a.backgroundColor, THEMES.dark.background)
+        assert.deepEqual([a.borderRadius, a.boxShadow, a.boxPadding, a.position, a.maxWidth, a.fontFamily], ['8px', 'none', '26px 28px', 'top_right', '400px', 'inherit'])
+        assert.deepEqual(lookOf(a), { ...THEMES.dark, corner_radius: 8, shadow: 'none', padding: 'roomy', position: 'top_right', max_width: 400 })
+        const bad = compileSurvey({ ...base, look: { background: 'linear-gradient(red, blue)', position: 'bottom' as any, corner_radius: 40 } }, { reg })
+        assert.deepEqual(errors(bad).map((p) => p.where).sort(), ['look.background', 'look.corner_radius', 'look.position'])
+    })
+    test('chains are version 3, one at a time, with the sample the engine accepts', () => {
+        const c = compileSurvey({ ...base, sample_percent: 33 }, { reg, clientIds: ['ACME'] })
+        assert.equal(c.chain.version, 3)
+        assert.equal(c.chain.oneAtATime, true)
+        assert.equal(c.chain.audience?.sample, 33)
+        const n = engine.normalizeChain(c.chain)
+        assert.equal(n.oneAtATime, true)
+        assert.equal(n.audience.sample, 33)
+        assert.ok(errors(compileSurvey({ ...base, sample_percent: 0 }, { reg })).length)
+    })
+    test('conflicts: earlier running surveys that want the same users', async () => {
+        const { conflictsFor, conflictSummary } = await import('../src/core/surveys.ts')
+        const running = (id: string, start: string, clients?: string[], sample?: number) => {
+            const ch = compileSurvey({ ...base, name: id, ...(sample ? { sample_percent: sample } : {}) }, { reg, chainId: id, clientIds: clients ?? [] }).chain
+            return { id, name: id, start_date: start, end_date: null, conditions: { lensChain: ch } } as unknown as PostHogSurvey
+        }
+        const list = [running('a', '2026-11-01T00:00:00Z', ['ACME'], 33), running('b', '2026-11-02T00:00:00Z', ['BETA']), running('c', '2026-11-03T00:00:00Z', ['ZED'])]
+        const mine = compileSurvey(base, { reg, chainId: 'new', clientIds: ['ACME', 'BETA'] }).chain
+        const cs = conflictsFor(mine, {}, list)
+        assert.deepEqual(cs.map((c) => [c.survey_id, c.clients, c.share]), [['a', ['acme'], 33], ['b', ['beta'], 100]])
+        assert.match(cs[0].text, /ACME: 33% of their users are in "a"/)
+        assert.match(conflictSummary(mine, cs), /Some users/)
+        // A running survey launched before b does not conflict with b's later ones; b only with earlier ones.
+        assert.deepEqual(conflictsFor(list[1].conditions!.lensChain!, list[1], list).map((c) => c.survey_id), [])
+        const blocked = conflictsFor(compileSurvey(base, { reg, chainId: 'n2', clientIds: ['BETA'] }).chain, {}, list)
+        assert.match(conflictSummary(compileSurvey(base, { reg, chainId: 'n2', clientIds: ['BETA'] }).chain, blocked), /Nobody can see/)
+    })
+})
+
 describe('views', () => {
     test('a saved survey reads back in words, and as a spec that compiles to the same chain', () => {
         const c = compileSurvey({ ...base, within_minutes: 5 }, { reg, chainId: 'hedge-2', clientIds: ['ACME'] })

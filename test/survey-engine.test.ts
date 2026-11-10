@@ -81,7 +81,7 @@ describe('chains', () => {
             survey(chain('draft', [save('DlgC')]), { start_date: null }),
             survey(chain('BAD ID', [save('DlgC')])),
             survey(chain('nosteps', [])),
-            survey({ version: 3, id: 'v3', steps: [save('DlgC')] }),
+            survey({ version: 4, id: 'v4', steps: [save('DlgC')] }),
             survey(chain('badop', [{ event: 'Event', properties: { dialog_id: { operator: 'gt', values: ['1'] } } }]))
         )
         assert.deepEqual(ids(m.consume(ev('Event', { dialog_id: 'DlgC', action_name: 'Save' }), 1)), [])
@@ -129,6 +129,30 @@ describe('matching', () => {
     test('an invalid audience refuses the chain', () => {
         for (const audience of [{}, { clients: [] }, { clients: ['A'] }, { clients: ['A'], distinctIdPart: 0 }, { clients: ['A'], distinctIdPart: 3, separator: '||' }, { clients: [{}], eventProperty: 'x' }])
             assert.equal(engine.normalizeChain(chain('x', [save('DlgC')], { audience })), null, JSON.stringify(audience))
+    })
+    test('sample: a fixed share of users, the same users every time', () => {
+        const m = machine(survey(chain('third', [save('DlgC')], { version: 3, audience: { sample: 33 } })))
+        const e = ev('Event', { dialog_id: 'DlgC', action_name: 'Save' })
+        const ids_ = Array.from({ length: 3000 }, (_, i) => `C1|01|ACME|u${i}`)
+        const fire = (mm: typeof m, u: string, i: number) => { const d = mm.consume(e, i, u); d.forEach((x: { id: string; token: number }) => mm.finish(x.id, x.token)); return d.length > 0 }
+        const hit = ids_.filter((u, i) => fire(m, u, i))
+        assert.ok(hit.length > 850 && hit.length < 1150, `${hit.length} of 3000`)
+        const again = engine.createMachine()
+        again.setSurveys([survey(chain('third', [save('DlgC')], { version: 3, audience: { sample: 33 } }))])
+        assert.deepEqual(ids_.filter((u, i) => fire(again, u, i)), hit, 'stable per user')
+        assert.equal(engine.normalizeChain(chain('x', [save('DlgC')], { audience: { sample: 33 } })), null, 'sample needs version 3')
+    })
+    test('one survey at a time: the earlier launched survey keeps its users until they finish it', () => {
+        const one = (id: string, start: string, audience?: unknown) => survey(chain(id, [save('DlgC')], { version: 3, oneAtATime: true, ...(audience ? { audience } : {}) }), { id: `s-${id}`, start_date: start })
+        const m = machine(one('first', '2026-11-01T00:00:00Z', { clients: ['ACME'], distinctIdPart: 3 }), one('second', '2026-11-05T00:00:00Z'))
+        const e = ev('Event', { dialog_id: 'DlgC', action_name: 'Save' })
+        const done = (d: { id: string; token: number }[]) => (d.forEach((x) => m.finish(x.id, x.token)), ids(d))
+        // ACME users belong to "first": "second" skips them; BETA users get "second".
+        assert.deepEqual(done(m.consume(e, 1, 'C1|01|ACME|ann', () => false)), ['first'])
+        assert.deepEqual(done(m.consume(e, 2, 'C1|01|BETA|bob', () => false)), ['second'])
+        // Once ann answered or dismissed "first", she is free for "second".
+        // ("first" completes too, but PostHog does not show a survey she has already seen.)
+        assert.deepEqual(done(m.consume(e, 3, 'C1|01|ACME|ann', (id: string) => id === 's-first')).sort(), ['first', 'second'])
     })
     test('its own events and PostHog events are ignored', () => {
         const m = machine(survey(chain('own', [{ event: 'lens_chain:own' }])))
