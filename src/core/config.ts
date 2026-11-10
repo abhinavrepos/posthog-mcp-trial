@@ -60,6 +60,13 @@ export function flag(key: string, fallback: boolean): boolean {
     throw new Error(`${key} must be on or off, got "${env(key)}"`)
 }
 
+/** MCP client keys and serverInfo use the same plain name. */
+export function mcpName(value: string): string {
+    if (!/^[a-z0-9-]{1,64}$/.test(value) || value === 'posthog')
+        throw new Error('LENS_MCP_NAME must be a plain lowercase name (1-64 characters: a-z, 0-9, hyphens), other than posthog')
+    return value
+}
+
 export interface Screen {
     path: string
     name: string
@@ -77,6 +84,7 @@ function loadScreens(): Screen[] | undefined {
 }
 
 export const config = {
+    mcp: { name: mcpName(env('LENS_MCP_NAME', 'lens')) },
     posthog: {
         // Where this service reaches the PostHog API (same machine, through Caddy).
         host: stripSlash(env('POSTHOG_HOST', 'http://localhost')),
@@ -91,6 +99,7 @@ export const config = {
         // PostHog's own MCP server, if Claude should have it too (pnpm mcp:config writes .mcp.json).
         // https://mcp.posthog.com/mcp for PostHog Cloud, or your own copy for a self-hosted PostHog.
         mcpUrl: env('POSTHOG_MCP_URL'),
+        mcpViaLens: flag('POSTHOG_MCP_VIA_LENS', true),
         mcpApiKey: env('POSTHOG_MCP_API_KEY'), // a separate personal key, without session_recording:read
     },
     // Which MCP servers Claude gets. Each can be switched off on its own; both are on by default.

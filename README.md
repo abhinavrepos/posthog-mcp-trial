@@ -99,6 +99,10 @@ How events are read (all in `config/app-events.reval.json`, so a new dialog or b
   searches, which name a screen). Field labels are shown, never what was typed.
 - Generated control ids (`gridfloatedit-3404-inputEl`) are shown as "an unlabelled field".
 
+These questions belong to `lens`, including trade ids, one session and client risk. Generic
+analytics and PostHog objects belong to `posthog`; a funnel about trades or a survey about a
+Reval screen still goes there. The routing rules are repeated on both servers through the proxy.
+
 To try it without Reval: `pnpm tsx scripts/seed-reval.ts` sends made-up Reval-shaped events (four
 clients, two weeks) to the PostHog in `.secrets.env`.
 
@@ -289,7 +293,7 @@ returned.
 
 **Prompt `review_release`:** it walks Claude through a review (outcomes, feedback, then the
 evidence for anything that looks wrong) and ends with a verdict table that you confirm before
-anything is saved. In Claude Code it is `/mcp__ticket-triage__review_release 26.10.0`.
+anything is saved. In Claude Code it is `/mcp__lens__review_release 26.10.0`.
 
 **Scopes** are a release (`26.10.0`), a quarter (`Q3 2026`, or `FY27 Q1` with a fiscal year),
 `last 3`, a range (`26.5.0..26.8.0`) or `all`.
@@ -309,6 +313,11 @@ anything is saved. In Claude Code it is `/mcp__ticket-triage__review_release 26.
 
 ### Switching the MCP servers on and off
 
+The client sees `lens` for this project's tools and `posthog` for PostHog's own server.
+`LENS_MCP_NAME` changes the Lens name in `.mcp.json`, server metadata and routing text. It accepts
+1–64 lowercase letters, digits or hyphens; `posthog` is reserved. The old `ticket-triage` entry is
+outdated. Run `pnpm mcp:config` to replace it.
+
 Two switches in `.secrets.env`, each `on` or `off` (both `on` by default):
 
 | Switch | What it controls | When off |
@@ -320,7 +329,7 @@ After changing either:
 
 ```bash
 pnpm mcp:config                      # rewrites .mcp.json (git-ignored: it can hold PostHog's key)
-scripts/stack.sh restart service     # for /mcp over HTTP
+scripts/stack.sh restart service     # for /mcp and /posthog-mcp over HTTP
 pnpm doctor                          # shows both switches and whether .mcp.json matches them
 ```
 
@@ -331,10 +340,11 @@ to their own Claude by hand, these switches cannot stop that; use a PostHog key 
 To connect Claude Code over HTTP:
 
 ```bash
-claude mcp add --transport http posthog-lens http://<host>:8080/mcp --header "Authorization: Bearer <MCP_TOKEN>"
+claude mcp add --transport http lens http://<host>:8080/mcp --header "Authorization: Bearer <MCP_TOKEN>"
 ```
 
-The local `.mcp.json` server has the same tools.
+The local `.mcp.json` server has the same tools. It uses HTTP when Lens runs as a container
+(`LENS_CONTAINER=1`), and stdio otherwise. Restart the client after changing the config.
 
 ## Layout
 
@@ -518,12 +528,41 @@ kept unchanged.
 
 ### Using PostHog's MCP server next to this one
 
-Both can be connected at once. This server tells Claude, when it connects, which questions belong
-to which server: tickets, clients, releases and screens here; ad-hoc SQL, insights, flags,
-experiments and survey setup in PostHog's. It also tells Claude never to use PostHog's replay or
-Replay Vision tools. Give PostHog's server its own personal key without `session_recording`
-scopes (`POSTHOG_MCP_API_KEY`); `pnpm doctor` fails if that key can read replays. The key is
-what actually keeps replays private.
+Claude Code and GitHub Copilot can connect both servers at once. Routing rules lead the Lens
+instructions and each tool description starts with the business question it answers.
+
+Use `lens` for a named Reval client, trade or link id, dialog, screen, button, error message,
+one session, Jira ticket, release outcome, where clients struggle or who is at risk. Use
+`posthog` for generic product analytics and PostHog objects: trends, funnels, retention,
+insights, dashboards, flags, experiments, surveys, cohorts, annotations, actions and event
+definitions, error issue management, warehouse and batch exports, docs, SDK help and raw SQL.
+Lens tools take JSON arguments directly. PostHog has one tool, `exec`, taking a command string.
+
+`POSTHOG_MCP_VIA_LENS=on` is the default. When the Lens service runs (`LENS_CONTAINER=1` or
+`MCP_TOKEN` set), `pnpm mcp:config` points `posthog` at
+`http://127.0.0.1:<SERVICE_PORT>/posthog-mcp` with `Bearer MCP_TOKEN`. The service forwards to
+`POSTHOG_MCP_URL` using `POSTHOG_MCP_API_KEY`; the client does not receive PostHog's key.
+The proxy prepends Lens routing rules to PostHog's instructions and `exec` description, and
+refuses `exec` commands that would open replays (`session-recording-*`, `vision-*`). It
+supports JSON, SSE, batches and MCP sessions, limits bodies to 5 MB and times out after 30 seconds.
+It refuses replay and Vision commands. Replay links always come from Lens's `get_replay_link`;
+the agent never sees replay content. `pnpm doctor` checks that the proxy answers with these rules.
+
+With `POSTHOG_MCP_VIA_LENS=off`, or with local stdio and no HTTP token, the client connects to
+PostHog directly with its key. PostHog then has no Lens routing additions or proxy refusal.
+Give PostHog its own personal key without `session_recording` scopes (`POSTHOG_MCP_API_KEY`);
+`pnpm doctor` fails if that key can read replays. Keep that restriction in either mode.
+
+To inspect the text an LLM sees from both servers:
+
+```bash
+pnpm tsx scripts/routing-catalog.ts /tmp/routing-catalog.json
+```
+
+The script lists server names, instructions and tool names/descriptions. It uses an in-memory
+Lens client and applies the proxy rewrite to PostHog's captured fixture. If `POSTHOG_MCP_URL`
+is set, it reads PostHog live instead. Set `APP_EVENTS_FILE=config/app-events.reval.json` to
+include the Reval tools. Omit the output path to print JSON.
 
 `deploy/install.sh` sets this up on its own: `deploy/posthog-mcp/up.sh` runs PostHog's MCP server
 (PostHog's image, pinned by digest) on `127.0.0.1:8787` and makes its key. The key is read-only and
@@ -557,7 +596,7 @@ plugin fails or any container restarts.
   rejected. Jira redelivers webhooks, so each triage comment carries a marker. A second delivery
   for the same issue does nothing.
 - Clip links are signed with `CLIP_LINK_SECRET` and expire after `CLIP_LINK_TTL_HOURS` (default
-  7 days). `/mcp` and `/status` need `MCP_TOKEN`.
+  7 days). `/mcp`, `/posthog-mcp` and `/status` need `MCP_TOKEN`.
 - Recordings are untrusted content. The renderer's Chrome can only resolve the hosts in
   `CLIP_ALLOWED_HOSTS`, and every other hostname fails to resolve. This replaces PostHog's
   production egress proxy. Two gaps remain: it does not stop a URL with a literal IP, and
