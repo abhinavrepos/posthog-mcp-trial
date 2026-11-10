@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, test } from 'node:test'
@@ -10,17 +10,21 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
 const dir = mkdtempSync(join(tmpdir(), 'triage-instr-'))
 process.env.TRIAGE_DB = join(dir, 'test.db')
+process.env.APP_EVENTS_FILE = 'config/app-events.reval.json'
 const { db } = await import('../src/core/db.ts')
 const { registerTools } = await import('../src/mcp/tools.ts')
 const { serverInstructions, INSTRUCTIONS_LIMIT } = await import('../src/mcp/instructions.ts')
+const { lensServerInfo } = await import('../src/mcp/server-info.ts')
 const { config } = await import('../src/core/config.ts')
-after(() => {
+after(async () => {
+    await client.close()
+    await server.close()
     db.close()
     rmSync(dir, { recursive: true, force: true })
 })
 
 // As Claude sees them with PostHog's MCP server on (FEATURE_POSTHOG_MCP and POSTHOG_MCP_URL set).
-const server = new McpServer({ name: 'ticket-triage', version: '0' }, { instructions: serverInstructions(true) })
+const server = new McpServer(lensServerInfo, { instructions: serverInstructions(true) })
 registerTools(server)
 const client = new Client({ name: 'test', version: '0' })
 const [a, b] = InMemoryTransport.createLinkedPair()
@@ -30,13 +34,33 @@ describe('instructions for using this server next to PostHog MCP', () => {
     test("are sent on connect and fit Claude Code's 2,048-character limit, with room for longer names", () => {
         const text = client.getInstructions() || ''
         assert.ok(text.length > 500)
-        // Four property names of up to 50 characters, and a longer app name.
+        // Preserve the existing 240-character margin for longer settings and server names.
         assert.ok(text.length + 4 * 50 + 40 < INSTRUCTIONS_LIMIT, `instructions are ${text.length} characters`)
+    })
+    test('serverInfo uses the configured name and describes the business scope', () => {
+        assert.equal(client.getServerVersion()?.name, config.mcp.name)
+        assert.equal(client.getServerVersion()?.title, 'PostHog Lens')
+        assert.match(client.getServerVersion()?.description || '', /Reval clients/)
+    })
+    test('all tool descriptions lead with a short business sentence', async () => {
+        for (const tool of (await client.listTools()).tools) {
+            const first = tool.description?.split(/[.!?](?:\s|$)/)[0] || ''
+            assert.ok(first.length > 10 && first.length + 1 <= 200, `${tool.name}: ${first.length + 1}`)
+        }
+    })
+    test('routing fixture Lens targets are available, with a short first sentence for each', async () => {
+        const cases = JSON.parse(readFileSync(new URL('./fixtures/routing-cases.json', import.meta.url), 'utf8')) as { q: string; server: string; tool: string }[]
+        const tools = new Map((await client.listTools()).tools.map((tool) => [tool.name, tool]))
+        for (const item of cases.filter((item) => item.server === 'lens')) {
+            const tool = tools.get(item.tool)
+            assert.ok(tool, item.q)
+            assert.ok((tool.description || '').split(/[.!?](?:\s|$)/)[0].length + 1 <= 200, item.tool)
+        }
     })
     test('the replay rule comes first, before anything could be cut', () => {
         const text = client.getInstructions() || ''
         const rule = text.indexOf('Replays are private')
-        assert.ok(rule > 0 && rule < 500)
+        assert.equal(rule, 0)
         for (const t of ['session-recording-*', 'query-session-recordings-list', 'vision-*', 'get_replay_link']) assert.ok(text.includes(t), t)
     })
     test('every tool they name exists, and every question-answering tool is named', async () => {
@@ -52,13 +76,11 @@ describe('instructions for using this server next to PostHog MCP', () => {
     test('the overlapping tools say which PostHog tools not to use instead', async () => {
         const tools = Object.fromEntries((await client.listTools()).tools.map((t) => [t.name, t.description || '']))
         assert.match(tools.get_replay_link, /never use PostHog's session recording or Replay Vision tools/)
-        assert.match(tools.find_client_incidents, /not PostHog's session recording tools/)
-        assert.match(tools.error_blast_radius, /rather than PostHog's error tracking queries/)
-        assert.match(tools.screen_usage, /rather than a PostHog trends query/)
-        assert.match(tools.client_feedback, /use PostHog's survey tools instead/)
+        for (const name of ['find_client_incidents', 'error_blast_radius', 'screen_usage', 'client_feedback', 'describe_app_events'])
+            assert.match(tools[name], /Use PostHog's exec instead for/, name)
     })
     test("every tool says it is called directly, not through PostHog's exec tool", async () => {
         for (const t of (await client.listTools()).tools) assert.match(t.description || '', /never through PostHog's exec tool/, t.name)
-        assert.match(client.getInstructions() || '', /PostHog's server has one tool, exec/)
+        assert.match(client.getInstructions() || '', /PostHog's one tool, exec, takes a command string/)
     })
 })

@@ -6,7 +6,7 @@ import { after, describe, test } from 'node:test'
 
 const dir = mkdtempSync(join(tmpdir(), 'triage-switches-'))
 process.env.TRIAGE_DB = join(dir, 'test.db')
-const { flag } = await import('../src/core/config.ts')
+const { flag, mcpName } = await import('../src/core/config.ts')
 const { serverInstructions, INSTRUCTIONS_LIMIT } = await import('../src/mcp/instructions.ts')
 const { mcpClientConfig, LENS_SERVER, POSTHOG_SERVER } = await import('../src/mcp/client-config.ts')
 after(() => rmSync(dir, { recursive: true, force: true }))
@@ -33,6 +33,29 @@ describe('the two MCP switches', () => {
         assert.deepEqual(Object.keys(file.mcpServers).sort(), [LENS_SERVER, POSTHOG_SERVER].sort())
         assert.deepEqual(file.mcpServers[POSTHOG_SERVER], { type: 'http', url: posthog.mcpUrl, headers: { Authorization: 'Bearer phx_test' } })
     })
+    test('MCP names are plain and cannot overwrite the posthog entry', () => {
+        assert.equal(mcpName('lens'), 'lens')
+        assert.equal(mcpName('reval-lens2'), 'reval-lens2')
+        for (const value of ['', 'Lens', 'lens server', 'lens/x', 'posthog', 'lens_2', 'x'.repeat(65)]) assert.throws(() => mcpName(value), /LENS_MCP_NAME/)
+    })
+    test('HTTP service proxies PostHog with the Lens token by default', () => {
+        for (const container of [false, true]) {
+            const file = mcpClientConfig({ lensMcp: true, posthogMcp: true }, { ...posthog, mcpViaLens: true }, { container, port: 8099, token: 'lens-token' }).file
+            // Lens itself: stdio with node on this machine, HTTP only in the container (no node outside it).
+            assert.deepEqual(file.mcpServers[LENS_SERVER], container ? { type: 'http', url: 'http://127.0.0.1:8099/mcp', headers: { Authorization: 'Bearer lens-token' } } : { command: 'node', args: ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'src/mcp/stdio.ts'] })
+            assert.deepEqual(file.mcpServers[POSTHOG_SERVER], { type: 'http', url: 'http://127.0.0.1:8099/posthog-mcp', headers: { Authorization: 'Bearer lens-token' } })
+            assert.ok(!JSON.stringify(file).includes(posthog.mcpApiKey))
+        }
+    })
+    test('proxy can be off and works with Lens tools disabled', () => {
+        const lens = { container: true, port: 8080, token: 'tok' }
+        const direct = mcpClientConfig({ lensMcp: true, posthogMcp: true }, { ...posthog, mcpViaLens: false }, lens).file
+        assert.equal(direct.mcpServers[POSTHOG_SERVER].url, posthog.mcpUrl)
+        const proxy = mcpClientConfig({ lensMcp: false, posthogMcp: true }, { ...posthog, mcpViaLens: true }, lens).file
+        assert.deepEqual(Object.keys(proxy.mcpServers), [POSTHOG_SERVER])
+        assert.match(String(proxy.mcpServers[POSTHOG_SERVER].url), /posthog-mcp$/)
+        assert.deepEqual(mcpClientConfig({ lensMcp: false, posthogMcp: true }, { ...posthog, mcpViaLens: true }, { ...lens, token: '' }).file.mcpServers, {})
+    })
     test('each switch removes only its own server', () => {
         assert.deepEqual(Object.keys(mcpClientConfig({ lensMcp: false, posthogMcp: true }, posthog, host).file.mcpServers), [POSTHOG_SERVER])
         assert.deepEqual(Object.keys(mcpClientConfig({ lensMcp: true, posthogMcp: false }, posthog, host).file.mcpServers), [LENS_SERVER])
@@ -52,7 +75,7 @@ describe('the two MCP switches', () => {
     })
     test("with PostHog's server off, the instructions keep the replay rule and stop sending Claude there", () => {
         const text = serverInstructions(false)
-        assert.ok(text.indexOf('Replays are private') > 0 && text.indexOf('Replays are private') < 500)
+        assert.ok(text.indexOf('Replays are private') === 0)
         for (const t of ['session-recording-*', 'query-session-recordings-list', 'vision-*', 'get_replay_link']) assert.ok(text.includes(t), t)
         assert.ok(!text.includes('execute-sql') && !text.includes("Use PostHog's server") && !text.includes('may be connected too'))
         assert.ok(text.length < INSTRUCTIONS_LIMIT)

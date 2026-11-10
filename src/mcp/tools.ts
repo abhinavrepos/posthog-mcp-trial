@@ -69,6 +69,14 @@ export function sessionIdOf(value: string): string {
     return (m ? m[1] : value).trim()
 }
 
+// The tracked app's name in descriptions (from APP_EVENTS_FILE): "which Reval client".
+const A = appEvents()?.app || 'your app'
+
+// Every tool name, for PostHog's proxied exec description ("use the lens server's tools (...)").
+export const CORE_TOOLS = ['resolve_client', 'find_client_incidents', 'get_replay_link', 'screen_usage', 'error_blast_radius', 'find_silent_issues', 'triage_ticket', 'list_releases', 'release_outcomes', 'ticket_evidence', 'client_feedback', 'record_verdict', 'correct_ticket_link', 'refresh_releases']
+export const APP_EVENT_TOOLS = ['describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals']
+export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(appEvents() ? APP_EVENT_TOOLS : [])]
+
 export function registerTools(server: McpServer, ai?: TriageAi): void {
     const register = server.registerTool.bind(server)
     server.registerTool = ((name: string, cfg: { description?: string }, cb: unknown) =>
@@ -77,7 +85,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         'resolve_client',
         {
             title: 'Identify a client',
-            description: 'Works out which client a name, id or user email refers to, from PostHog data. Use it when a ticket names a client loosely.',
+            description: `Identifies which ${A} client a name, client code or user email belongs to. Use it when a ticket names a client loosely.`,
             inputSchema: { query: z.string().describe('Client name, id, or a user email') },
             annotations: { readOnlyHint: true },
         },
@@ -89,7 +97,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         {
             title: 'When did this client hit a problem?',
             description:
-                'Lists the moments a client hit trouble (errors, rage clicks, dead clicks), newest first, each with the user, screen, release and a replay link at the right second. Use this, not PostHog\'s session recording tools, to find a client\'s sessions.',
+                `Finds the sessions where a ${A} client, or one of its users, hit errors, rage clicks or dead clicks, with screens, releases and replay links. Use PostHog's exec instead for generic session recording lists via metadata SQL; never retrieve replay content there.`,
             inputSchema: {
                 client: z.string().describe('Client name, id or a user email'),
                 when,
@@ -118,7 +126,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         {
             title: 'Link to a session replay',
             description:
-                'Returns links a person can open to watch a session at the right moment: the PostHog replay (needs a PostHog login) and, when rendering works, a short MP4 clip. You cannot see the replay yourself; pass the links on to the user. This is the only allowed way to share a replay: never use PostHog\'s session recording or Replay Vision tools.',
+                `Gives a person links to watch one ${A} session at the right moment, including a replay and, when available, an MP4 clip. You cannot see the replay yourself; pass the links to the user. This is the only allowed way to share a replay: never use PostHog's session recording or Replay Vision tools.`,
             inputSchema: {
                 session_id: z
                     .string({ error: 'session_id is missing. Call get_replay_link directly with arguments like {"session_id": "01a19b90-8c82-7185-ba5a-8333dd59c200", "start_s": 4}, not through PostHog\'s exec tool.' })
@@ -150,7 +158,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         'screen_usage',
         {
             title: 'How is a screen used?',
-            description: 'How many clients and users use a screen of the app, the busiest weekdays and days, and the heaviest clients. Optionally where one client ranks. Use this rather than a PostHog trends query when the question is about a screen and clients.',
+            description: `Shows how a ${A} screen is used, by which clients and users, on which days, and where one client ranks. Use PostHog's exec instead for generic trends, insights or product analytics.`,
             inputSchema: {
                 screen: z.string().describe('Screen name or path'),
                 client: z.string().optional(),
@@ -170,7 +178,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         {
             title: 'Is it just them?',
             description:
-                'For one error, which clients and users hit it, how often, since when, on which releases, the daily trend, and (with a screen) the failure rate per release. Use this rather than PostHog\'s error tracking queries when the question is who is affected; use those only to manage the issue.',
+                `Shows which ${A} clients and users hit an error message, how often, since when and on which releases. With a screen, includes failure rates per release. Use PostHog's exec instead for error tracking issue management, such as listing, assigning or resolving issues.`,
             inputSchema: {
                 issue_id: z.string().optional().describe('PostHog error tracking issue id, from find_client_incidents'),
                 error_type: z.string().optional(),
@@ -190,7 +198,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         'find_silent_issues',
         {
             title: 'Problems without errors',
-            description: 'Sessions where a client struggled without any error: rage clicks, dead clicks, the same action repeated, long stays. Use it when a ticket describes wrong data or confusion rather than a crash.',
+            description: `Finds sessions where a ${A} client struggled without errors: rage clicks, dead clicks, repeated actions or long stays. Use it for wrong data or confusion reported in a ticket.`,
             inputSchema: { client: z.string(), screen: z.string().optional(), when, timezone: tz },
             annotations: { readOnlyHint: true },
         },
@@ -206,7 +214,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         {
             title: 'Triage a ticket',
             description:
-                'Runs the full triage the Jira automation runs: identifies the client, screen and time, finds the session, clips the replay, adds blast radius and usage, and suggests a priority. Returns the report as markdown.',
+                `Triages a ${A} Jira ticket by identifying its client, screen and time, finding the session, and adding replay links, impact, usage and a suggested priority. Returns the report as markdown.`,
             inputSchema: {
                 summary: z.string(),
                 description: z.string().default(''),
@@ -234,7 +242,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         'list_releases',
         {
             title: 'List releases',
-            description: 'The kept Jira releases with their dates and headline facts (clients on the release, errors and rage clicks per 1,000 sessions before and after, support tickets, survey rating), and the quarters you can ask for.',
+            description: `Lists ${A} Jira releases, dates, available quarters and headline outcomes. Includes clients, errors and rage clicks per 1,000 sessions before and after, support tickets and survey ratings.`,
             inputSchema: {},
             annotations: { readOnlyHint: true },
         },
@@ -246,7 +254,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         {
             title: 'Tickets by outcome',
             description:
-                'Every ticket shipped in a release, quarter or range, sorted into groups by what happened afterwards in PostHog: more errors, more rage clicks, clients complained, fixed something, adopted, low uptake, too new, no clear change, cannot measure. Each ticket comes with its numbers and any saved verdict. Facts only: deciding what is risky is up to you. Start here.',
+                `Shows what happened after ${A} tickets shipped in a release, quarter or range, grouped by outcome. Includes errors, rage clicks, complaints, adoption, improvements and saved verdicts. Facts only: deciding what is risky is up to you. Start here for release reviews.`,
             inputSchema: { scope: scopeArg },
             annotations: { readOnlyHint: true },
         },
@@ -261,7 +269,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         'ticket_evidence',
         {
             title: 'One ticket in full',
-            description: 'All evidence for one Jira ticket: what it is linked to in PostHog and why, use before and after week by week, errors and rage clicks on its screen, new error types, the support tickets and survey comments that followed (in the clients\' words), and earlier verdicts.',
+            description: `Explains the evidence for one ${A} Jira ticket and its release outcome. Includes its screen/event link, use before and after, errors, rage clicks, support tickets, survey comments in clients' words and earlier verdicts.`,
             inputSchema: { key: z.string().describe('Jira key, e.g. ACP-230') },
             annotations: { readOnlyHint: true },
         },
@@ -272,7 +280,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         'client_feedback',
         {
             title: 'What clients said',
-            description: 'Support tickets (RCI, MMT Risk) and in-product survey answers from the days after each release, grouped by screen, with ratings before and after. Use it to judge how much a problem hurt. To create, launch or edit a survey, use PostHog\'s survey tools instead.',
+            description: `Shows what ${A} clients complained about after a release, grouped by screen, from support tickets and survey answers with ratings before and after. Use PostHog's exec instead for surveys as PostHog objects: creating, launching, editing or listing them.`,
             inputSchema: { scope: scopeArg, screen: z.string().optional().describe('A screen path like /invoices, to narrow it down') },
             annotations: { readOnlyHint: true },
         },
@@ -288,7 +296,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         {
             title: 'Save a verdict',
             description:
-                'Saves a verdict on a ticket: risky, watch or fine, with the reason. Future calls show it next to the ticket, so later reviews build on it. Only call this after the person agreed with the verdict, and pass their name in decided_by. Optionally posts it as a comment on the Jira ticket.',
+                `Saves an agreed verdict on a ${A} Jira ticket: risky, watch or fine, with the reason. Future calls show it next to the ticket. Only call this after the person agreed, and pass their name in decided_by. Optionally posts a comment to Jira.`,
             inputSchema: {
                 key: z.string(),
                 verdict: z.enum(['risky', 'watch', 'fine']),
@@ -324,7 +332,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         {
             title: 'Fix how a ticket is linked',
             description:
-                'When a ticket is linked to the wrong screen or event (or none), set the right one, then its numbers are recounted. screen_problems says whether errors, rage clicks and complaints on the screen count for this ticket ("auto" lets the rules decide). reset=true goes back to the automatic link.',
+                `Fixes a ${A} Jira ticket's link to a screen or event, then recounts its release evidence. screen_problems controls whether screen errors, rage clicks and complaints count (auto lets the rules decide). reset=true restores the automatic link.`,
             inputSchema: {
                 key: z.string(),
                 screen: z.string().optional().describe('Screen path, e.g. /settings'),
@@ -354,7 +362,7 @@ export function registerTools(server: McpServer, ai?: TriageAi): void {
         'refresh_releases',
         {
             title: 'Refresh from Jira and PostHog',
-            description: 'Reads the releases and tickets from Jira again and recounts everything in PostHog (about 15 seconds). The service also does this every 6 hours.',
+            description: `Refreshes ${A} releases and tickets from Jira and recounts their PostHog evidence (about 15 seconds). The service also does this every 6 hours.`,
             inputSchema: {},
             annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
         },
@@ -406,7 +414,7 @@ function registerAppEventTools(server: McpServer): void {
         'describe_app_events',
         {
             title: `What ${app}'s events mean`,
-            description: `Explains ${app}'s own events and properties (dialogs, tabs, fields, buttons, messages), with how often each is filled, real example values, the dialogs used most, the messages ${app} showed, the clients, and how to query them in HogQL. Call it once before answering anything about ${app} screens, dialogs, buttons or errors, or before writing SQL over its events.`,
+            description: `Explains ${app} dialogs, screens, buttons, fields and error messages using the app's event vocabulary. Includes coverage, real example values, common dialogs and messages, clients and HogQL guidance. Call once before investigating ${app} events. Use PostHog's exec instead for managing event definitions or ad-hoc SQL.`,
             inputSchema: { days: z.number().int().min(1).max(90).default(7).describe('How many days of data to look at.') },
             annotations: { readOnlyHint: true },
         },
@@ -416,7 +424,7 @@ function registerAppEventTools(server: McpServer): void {
         'session_story',
         {
             title: 'What happened in a session',
-            description: `Tells one session as a timeline you can read like a replay: dialogs opened, tabs, fields, buttons pressed (Save, Run...) and what came of each, and every message ${app} showed (✘ errors), with replay links at the errors for the user. Use it to see what a client did and where they got stuck, e.g. on an example session from dialog_friction or find_client_incidents. Fields typed into are named, never their values.`,
+            description: `Explains what happened in one ${app} session: dialogs, tabs, fields, button presses, outcomes and error messages in time order. Uses events, with replay links for the person to open. Field names are shown, never typed values. Follow up on sessions from dialog_friction or find_client_incidents.`,
             inputSchema: {
                 session_id: z.string().describe('The session id or a PostHog replay link.'),
                 max_lines: z.number().int().min(20).max(1000).default(300),
@@ -439,7 +447,7 @@ function registerAppEventTools(server: McpServer): void {
         'dialog_friction',
         {
             title: 'Where clients fail',
-            description: `Ranks ${app} dialogs by how much they hurt: attempts (Save, Run, Export...) and their outcomes (done, queued, failed, nothing found, no message), error messages with how many sessions and which clients hit them, retry loops (failed, then the same button again) and stuck sessions (an error and no success after). Optionally for one client or one dialog. Each error has an example session for session_story. Use it for "what hurts most", "where do clients struggle", "what goes wrong for client X", "why does dialog Y fail".`,
+            description: `Explains why a ${app} dialog fails: button attempts, outcomes, error messages, affected clients, retry loops and stuck sessions. Optionally narrow to one client or dialog. Each error has an example session for session_story.`,
             inputSchema: {
                 client: z.string().optional().describe('A client (name, code or a user email). All clients if left out.'),
                 dialog: z.string().optional().describe('A dialog code (DlgDetailIRSwap) or part of its name (IR Swap).'),
@@ -460,7 +468,7 @@ function registerAppEventTools(server: McpServer): void {
         'attempt_timings',
         {
             title: 'Slow or failing server calls',
-            description: `How long ${app} attempts (Save, Run, Export...) wait on the server, and which fail with an HTTP error, per dialog and button: median, 90th percentile and longest wait, the slowest call (method and path only), the clients, and the worst example with a replay link for the user. Read from the network timing in recent recordings (downloaded on the server; slower than the other tools, so it reads a limited number of sessions). Use it for "is X slow", "why do people wait", or after dialog_friction shows attempts with no message.`,
+            description: `Shows whether ${app} buttons such as Save, Run or Export are slow, and which server calls fail with HTTP errors. Includes median, 90th percentile and longest waits by dialog/button, method/path, clients and example replay links. Reads network timing on the server from a limited number of recent recordings.`,
             inputSchema: {
                 client: z.string().optional().describe('One client (name, code or a user email). All clients if left out.'),
                 dialog: z.string().optional().describe('A dialog code or part of its name.'),
@@ -480,7 +488,7 @@ function registerAppEventTools(server: McpServer): void {
         'top_pains',
         {
             title: 'The week\'s top pains',
-            description: `The ${app} dialogs that hurt clients most in a period, as a short ranked list: what fails, how many clients and attempts, sessions that ended without success, retries, the main error, whether it is new or getting worse than the period before, and an example session with a replay link for the user. Also the clients with warning signs. Start here for "what should the product team fix", "weekly digest", "what hurts most".`,
+            description: `Ranks where ${app} clients struggle most: failing dialogs, retries, unfinished attempts, error messages and clients at risk. Gives counts, changes against the previous period and example session links. Start here for a weekly product summary or what to fix first.`,
             inputSchema: { when: z.string().optional().describe('Default: last 7 days (compared with the 7 days before).'), timezone: tz, max: z.number().int().min(1).max(15).default(5) },
             annotations: { readOnlyHint: true },
         },
@@ -493,7 +501,7 @@ function registerAppEventTools(server: McpServer): void {
         'find_trade',
         {
             title: 'What happened to a trade',
-            description: `Finds a ${app} trade or link id (a number like 4348): the sessions where someone searched for it or ${app} named it in a message ("Trade Id 4348 Updated"), who and which client, and the errors and attempts (Save, Run...) in those sessions from then on, with a replay link for the user. Use it when support says "trade 4348 failed for us".`,
+            description: `Finds what happened to a ${app} trade or link id, such as 4348, including clients, sessions, errors and button attempts. Matches searches and messages that name the id, with replay links for the person.`,
             inputSchema: {
                 id: z.string().describe('The trade or link id, digits only, e.g. 4348.'),
                 client: z.string().optional().describe('One client (name, code or a user email), to narrow it down.'),
@@ -512,7 +520,7 @@ function registerAppEventTools(server: McpServer): void {
         'client_signals',
         {
             title: 'Which clients need attention',
-            description: `Lists ${app} clients with warning signs, this period against the one before: fewer sessions, active days or dialogs used, users who stopped coming (named), more failed attempts, not seen lately. Each client comes with its reasons and numbers. Use it for "which clients are at risk", "who is using us less", "how is client X doing". It is evidence to look at, not a churn prediction: say so, and follow up with dialog_friction for the client.`,
+            description: `Shows which ${app} clients are at risk or using the app less: fewer sessions, active days or dialogs, absent users and more failed attempts. Compares periods with reasons and numbers. These are warning signs, not a churn prediction; say so and follow up with dialog_friction for the client.`,
             inputSchema: {
                 client: z.string().optional().describe('One client (name, code or a user email). All clients if left out.'),
                 when: z.string().optional().describe('The recent period, in plain words. Default: last 14 days (compared with the 14 days before).'),

@@ -5,6 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { makeAi } from '../core/ai.ts'
 import { shutdownClips } from '../core/clip.ts'
 import { config } from '../core/config.ts'
+import { lensServerInfo } from './server-info.ts'
 import { serverInstructions } from './instructions.ts'
 import { registerTools } from './tools.ts'
 
@@ -16,7 +17,7 @@ if (!config.features.lensMcp) {
     process.exit(1)
 }
 
-const server = new McpServer({ name: 'ticket-triage', version: '0.1.0' }, { instructions: serverInstructions() })
+const server = new McpServer(lensServerInfo, { instructions: serverInstructions() })
 registerTools(server, makeAi())
 await server.connect(new StdioServerTransport())
 

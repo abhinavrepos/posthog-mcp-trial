@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { config, ENV_FILE, ROOT } from '../src/core/config.ts'
 import { appEvents } from '../src/core/appevents.ts'
 import { clientSource, P } from '../src/core/props.ts'
-import { mcpClientConfig } from '../src/mcp/client-config.ts'
+import { mcpClientConfig, POSTHOG_SERVER } from '../src/mcp/client-config.ts'
 
 type Level = 'ok' | 'warn' | 'fail'
 const results: { level: Level; what: string; detail: string }[] = []
@@ -135,6 +135,7 @@ else say('ok', 'FEATURE_POSTHOG_MCP: on', ph.mcpUrl)
         have = JSON.stringify(JSON.parse(readFileSync(path, 'utf8')))
     } catch {}
     if (!have) say('warn', '.mcp.json missing', 'run pnpm mcp:config so Claude Code in this folder gets the servers that are on')
+    else if (have !== want && config.mcp.name !== 'ticket-triage' && JSON.parse(have)?.mcpServers?.['ticket-triage']) say('warn', '.mcp.json uses the outdated ticket-triage server name', 'run pnpm mcp:config')
     else if (have !== want) say('warn', '.mcp.json does not match the switches', 'run pnpm mcp:config')
     else say('ok', '.mcp.json matches the switches')
 }
@@ -149,6 +150,25 @@ if (ph.mcpUrl && f.posthogMcp) {
         else if (scopes.includes('*') || scopes.includes('session_recording:read') || scopes.includes('session_recording:write'))
             say('fail', 'PostHog MCP key can read replays', 'make a key without session_recording scopes: Claude must never see replays')
         else say('ok', 'PostHog MCP key has no replay access', scopes.join(', '))
+    }
+}
+
+// Check the same proxy endpoint the client will use, including upstream initialize.
+const posthogEntry = mcpClientConfig().file.mcpServers[POSTHOG_SERVER]
+if (ph.mcpViaLens && posthogEntry?.url === `http://127.0.0.1:${config.service.port}/posthog-mcp`) {
+    try {
+        const r = await fetch(String(posthogEntry.url), {
+            method: 'POST',
+            headers: { authorization: `Bearer ${config.service.mcpToken}`, accept: 'application/json, text/event-stream', 'content-type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'lens-doctor', version: '0' } } }),
+            signal: AbortSignal.timeout(15_000),
+        })
+        const text = await r.text()
+        say(r.ok && text.includes('Replays are private') ? 'ok' : 'fail', 'PostHog MCP proxy', r.ok ? (text.includes('Replays are private') ? 'answers with Lens routing instructions' : 'missing routing instructions') : `→ ${r.status}`)
+        const session = r.headers.get('mcp-session-id')
+        if (session) await fetch(String(posthogEntry.url), { method: 'DELETE', headers: { authorization: `Bearer ${config.service.mcpToken}`, 'mcp-session-id': session, 'mcp-protocol-version': '2025-06-18' }, signal: AbortSignal.timeout(3000) }).then((r) => r.body?.cancel()).catch(() => {})
+    } catch {
+        say('fail', 'PostHog MCP proxy', 'not answering; start the Lens service and check POSTHOG_MCP_URL')
     }
 }
 

@@ -3,11 +3,11 @@
 //                        Lens runs as a container (LENS_CONTAINER=1, deploy/lens), its /mcp address over
 //                        HTTP with MCP_TOKEN, since there is no node outside the container
 //   FEATURE_POSTHOG_MCP  PostHog's own MCP server (HTTP), on by default, used only when POSTHOG_MCP_URL
-//                        and POSTHOG_MCP_API_KEY are set
+//                        and POSTHOG_MCP_API_KEY are set; proxied when POSTHOG_MCP_VIA_LENS is on
 // scripts/mcp-config.ts writes the result; scripts/doctor.ts compares it with .mcp.json.
 import { config } from '../core/config.ts'
 
-export const LENS_SERVER = 'ticket-triage'
+export const LENS_SERVER = config.mcp.name
 export const POSTHOG_SERVER = 'posthog'
 
 export interface McpClientConfig {
@@ -16,7 +16,7 @@ export interface McpClientConfig {
 
 export function mcpClientConfig(
     features = config.features,
-    ph: { mcpUrl: string; mcpApiKey: string } = config.posthog,
+    ph: { mcpUrl: string; mcpApiKey: string; mcpViaLens?: boolean } = config.posthog,
     lens: { container: boolean; port: number; token: string } = { container: process.env.LENS_CONTAINER === '1', port: config.service.port, token: config.service.mcpToken },
 ): { file: McpClientConfig; notes: string[] } {
     const servers: McpClientConfig['mcpServers'] = {}
@@ -35,8 +35,13 @@ export function mcpClientConfig(
     if (!features.posthogMcp) notes.push(`${POSTHOG_SERVER}: off (FEATURE_POSTHOG_MCP=off)`)
     else if (!ph.mcpUrl || !ph.mcpApiKey) notes.push(`${POSTHOG_SERVER}: off (set POSTHOG_MCP_URL and POSTHOG_MCP_API_KEY to add it)`)
     else {
-        servers[POSTHOG_SERVER] = { type: 'http', url: ph.mcpUrl, headers: { Authorization: `Bearer ${ph.mcpApiKey}` } }
-        notes.push(`${POSTHOG_SERVER}: on (${ph.mcpUrl})`)
+        const viaLens = (ph.mcpViaLens ?? config.posthog.mcpViaLens) && (lens.container || !!lens.token)
+        if (viaLens && !lens.token) notes.push(`${POSTHOG_SERVER}: off (set MCP_TOKEN for /posthog-mcp)`)
+        else {
+            const url = viaLens ? `http://127.0.0.1:${lens.port}/posthog-mcp` : ph.mcpUrl
+            servers[POSTHOG_SERVER] = { type: 'http', url, headers: { Authorization: `Bearer ${viaLens ? lens.token : ph.mcpApiKey}` } }
+            notes.push(`${POSTHOG_SERVER}: on (${url}${viaLens ? ', via Lens' : ''})`)
+        }
     }
     return { file: { mcpServers: servers }, notes }
 }
