@@ -36,6 +36,21 @@ function propName(key: string, fallback: string, optional = false): string {
     return v
 }
 
+function intSetting(key: string, fallback: number, min: number, max: number): number {
+    const v = env(key).trim()
+    if (v === '') return fallback
+    const n = Number(v)
+    if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${key} must be a whole number from ${min} to ${max}, got "${v}"`)
+    return n
+}
+
+// A one-character separator; it goes into HogQL as a string literal, so quotes and backslashes are refused.
+function separator(key: string, fallback: string): string {
+    const v = env(key, fallback)
+    if (v.length !== 1 || /['"\\\s]/.test(v)) throw new Error(`${key} must be one character (not a quote, backslash or space), got "${v}"`)
+    return v
+}
+
 /** An on/off switch: on, off, true, false, yes, no, 1 or 0. Anything else stops the service at start. */
 export function flag(key: string, fallback: boolean): boolean {
     const v = env(key).trim().toLowerCase()
@@ -90,10 +105,16 @@ export const config = {
     // How your events name things. The defaults match the demo app.
     properties: {
         client: propName('PROP_CLIENT_ID', process.env.RELEASES_CLIENT_PROPERTY || 'client_id'), // event property: client id
-        clientName: propName('PROP_CLIENT_NAME', 'client_name'), // event property: client display name
+        clientName: propName('PROP_CLIENT_NAME', 'client_name', true), // event property: client display name, '' if none (the id is shown)
         version: propName('PROP_APP_VERSION', process.env.RELEASES_VERSION_PROPERTY ?? 'app_version', true), // event property: release, '' if none
         personEmail: propName('PROP_PERSON_EMAIL', 'email'), // person property: the user's email
+        // When the client is part of the user id instead of a property, e.g. Reval's
+        // ENV|SITE|CLIENT|USER: the part number (1 = first) and the separator. 0 = use PROP_CLIENT_ID.
+        clientFromDistinctId: intSetting('CLIENT_FROM_DISTINCT_ID', 0, 0, 9),
+        distinctIdSeparator: separator('DISTINCT_ID_SEPARATOR', '|'),
     },
+    // The app's own events (dialogs, buttons, messages): a JSON file, see config/app-events.reval.json.
+    appEventsFile: env('APP_EVENTS_FILE'),
     screens: loadScreens(),
     app: {
         name: env('APP_NAME', 'PostHog Lens'),

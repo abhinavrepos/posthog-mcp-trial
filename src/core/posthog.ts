@@ -49,6 +49,12 @@ export async function hogql(query: string, values: Record<string, unknown> = {})
     return out.results.map((r) => Object.fromEntries(out.columns.map((c, i) => [c, r[i]])))
 }
 
+/** The event property names PostHog has seen (needs the property_definition:read scope). */
+export async function propertyDefinitions(): Promise<string[]> {
+    const out = await api<{ results: { name: string }[] }>(projectPath('/property_definitions/?type=event&limit=1000'))
+    return out.results.map((r) => r.name)
+}
+
 export interface RecordingMeta {
     id: string
     start_time: string
