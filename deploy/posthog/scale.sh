@@ -64,6 +64,11 @@ status() {
     rpk topic list | awk -v keep="$(printf '%s|' "${!TOPICS[@]}")" 'NR==1 || $1 ~ "^(" keep "x)$"'
     echo "== Node services"
     docker compose ps --format '{{.Service}}\t{{.Image}}\t{{.Status}}' | grep -E "ingestion|plugins|recording" | sort
+    # Partitions of clickhouse_events_json that ClickHouse does not read (no offset, events waiting).
+    local unread
+    unread=$(rpk group describe group1 2>/dev/null | awk '$1=="clickhouse_events_json" && $3=="-" && $6+0>0 {print $2}' | paste -sd, -)
+    if [ -n "$unread" ]; then echo "== ClickHouse does NOT read partition(s) $unread of clickhouse_events_json: those events are missing. Fix: docker compose restart clickhouse"
+    else echo "== ClickHouse reads every partition of clickhouse_events_json"; fi
 }
 
 if [ "${1:-}" = "--status" ]; then status; exit 0; fi
@@ -127,15 +132,27 @@ rpk cluster config set retention_bytes $(( RETENTION_GB * 1024 * 1024 * 1024 )) 
 
 echo "==> Partitions"
 current="$(rpk topic list)"
+added=0
 for t in "${!TOPICS[@]}"; do
     want=${TOPICS[$t]}
     have=$(awk -v t="$t" '$1==t {print $2}' <<<"$current")
     if [ -z "$have" ]; then
-        rpk topic create "$t" -p "$want" >/dev/null && echo "    $t: created with $want"
+        rpk topic create "$t" -p "$want" >/dev/null && echo "    $t: created with $want" && added=1
     elif [ "$have" -lt "$want" ]; then
-        rpk topic add-partitions "$t" --num $(( want - have )) >/dev/null && echo "    $t: $have → $want"
+        rpk topic add-partitions "$t" --num $(( want - have )) >/dev/null && echo "    $t: $have → $want" && added=1
     fi
 done
+# ClickHouse's Kafka tables share one consumer group and do not pick up partitions added while they
+# run: the events in the new partitions would reach Kafka but never the events table (queries would
+# miss most events). A restart makes them join again and read the new partitions from the start.
+if [ "$added" = 1 ]; then
+    echo "==> Restarting ClickHouse so it reads the new partitions"
+    docker compose restart clickhouse >/dev/null
+    for i in $(seq 1 60); do
+        docker compose exec -T clickhouse clickhouse-client -q "SELECT 1" >/dev/null 2>&1 && break
+        sleep 5
+    done
+fi
 
 echo "==> Waiting for the Node services to report healthy"
 for i in $(seq 1 60); do
