@@ -25,6 +25,8 @@ import {
     type SurveySpec,
 } from '../core/surveys.ts'
 import { audit, type ChatCaller, type SurveyRole } from '../service/access.ts'
+import { checkTicket, recordLaunch } from '../core/launches.ts'
+import { launchCheck } from '../service/surveyspage.ts'
 
 export const SURVEY_TOOLS = ['design_survey', 'save_survey', 'launch_survey', 'stop_survey', 'list_surveys', 'survey_results']
 // Which tools each survey role gets in chat (the same roles as the Surveys page, set on the admin page).
@@ -185,24 +187,30 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         'launch_survey',
         {
             title: 'Show a survey to users',
-            description: `Starts showing a survey to real ${app} users (or starts a stopped one again). Only after the person has seen the plan and said yes in this conversation: pass confirm: true then.`,
-            inputSchema: { survey_id: z.string(), confirm: z.boolean().describe('true only when the person said to launch it') },
+            description: `Starts showing a survey to real ${app} users (or starts a stopped one again). Two steps, never one: first call it with only survey_id, which returns the four rules of how it works; show them to the person word for word, with any ⚠ notice, and ask for the Jira ticket this launch is for and for them to type that they acknowledge it launches a survey to real users. Only after they did, call again with jira_ticket, acknowledged: true and confirm: true. Never fill in a ticket or the acknowledgement yourself.`,
+            inputSchema: {
+                survey_id: z.string(),
+                jira_ticket: z.string().optional().describe('The Jira ticket the person gave for this launch, e.g. REVAL-1234'),
+                acknowledged: z.boolean().optional().describe('true only when the person typed that they acknowledge this launches a survey to real users'),
+                confirm: z.boolean().optional().describe('true only when the person said to launch it'),
+            },
             annotations: { destructiveHint: false, openWorldHint: true },
         },
-        async ({ survey_id, confirm }) => {
-            if (confirm !== true) {
-                const sv = await getSurvey(survey_id)
-                const v = viewOf(sv)
-                const chain = sv.conditions?.lensChain
-                const conflicts = chain ? conflictsFor(chain, { id: sv.id }, await listSurveys()) : []
-                return json(`${chain ? queueAlert(chain, conflicts).alert + '\n\n' : ''}Not launched. Show the person this (the alert first) and ask; call again with confirm: true when they agree.`, { ...v, ...(chain ? { queue: queueAlert(chain, conflicts) } : {}), already_in: conflicts.map((x) => x.text) })
+        async ({ survey_id, jira_ticket, acknowledged, confirm }) => {
+            const check = await launchCheck(survey_id)
+            const rules = check.rules.map((r, i) => `${i + 1}. ${r}`).join('\n')
+            if (confirm !== true || acknowledged !== true || !jira_ticket) {
+                return text(`Not launched yet. Show the person this, word for word:\n\n${check.queue && check.queue.level !== 'clear' ? check.queue.alert + '\n\n' : ''}Before "${check.survey.name}" goes live, the four rules of how it works:\n${rules}\n\nTo launch, they give the Jira ticket for this launch and confirm: "${check.acknowledgement}"\nThen call launch_survey again with jira_ticket, acknowledged: true and confirm: true.`)
             }
+            const ticket = await checkTicket(jira_ticket)
+            if (!ticket.ok) return text(`Not launched: ${ticket.error} Ask the person for the right ticket.`)
             const launched = await launchSurvey(survey_id)
             const v = viewOf(launched)
-            audit(who, 'survey.launched', { survey: v.id, name: v.name })
+            recordLaunch({ survey_id: v.id, survey_name: v.name, ticket: ticket.key, ticket_summary: ticket.summary ?? null, launched_by: who, via: 'chat', rules: check.rules })
+            audit(who, 'survey.launched', { survey: v.id, name: v.name, ticket: ticket.key })
             const chain = launched.conditions?.lensChain
             const conflicts = chain ? conflictsFor(chain, launched, await listSurveys()) : []
-            return json(`${chain ? queueAlert(chain, conflicts).alert + '\n\n' : ''}Running: "${v.name}". It shows as soon as a user does the steps. Answers: survey_results, or ${pageUrl(v.id)}`, { steps: v.steps, clients: v.clients, sample_percent: v.sample_percent, ...(chain ? { queue: queueAlert(chain, conflicts) } : {}), already_in: conflicts.map((x) => x.text) })
+            return json(`${chain ? queueAlert(chain, conflicts).alert + '\n\n' : ''}Running: "${v.name}", launched under ${ticket.key}${ticket.summary ? ` (${ticket.summary})` : ''}. It shows as soon as a user does the steps. Answers: survey_results, or ${pageUrl(v.id)}`, { steps: v.steps, clients: v.clients, sample_percent: v.sample_percent, ticket: ticket.key, ...(chain ? { queue: queueAlert(chain, conflicts) } : {}), already_in: conflicts.map((x) => x.text) })
         }
     )
 

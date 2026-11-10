@@ -4,13 +4,36 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config, surveysActive } from '../core/config.ts'
-import { archiveSurvey, estimateReach, getSurvey, launchSurvey, stopSurvey, surveyOverview, surveyResults } from '../core/surveys.ts'
+import { archiveSurvey, conflictsFor, estimateReach, getSurvey, launchSurvey, listSurveys, queueAlert, stopSurvey, surveyOverview, surveyResults, viewOf } from '../core/surveys.ts'
+import { ACKNOWLEDGEMENT, checkTicket, jiraTicketUrl, launchesOf, launchRules, recordLaunch } from '../core/launches.ts'
+import { jiraConfigured } from '../core/config.ts'
 import { audit, canSurvey, canUseSurveys, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
 import { APP_NAME, headerHtml, PAGE_CSS } from './replays.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
     res.end(JSON.stringify(body))
+}
+async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+    let raw = ''
+    for await (const c of req) {
+        raw += c
+        if (raw.length > 20_000) throw new Error('body too large')
+    }
+    try {
+        return JSON.parse(raw || '{}')
+    } catch {
+        return {}
+    }
+}
+
+/** What the person must read and confirm before this survey reaches users. */
+export async function launchCheck(id: string) {
+    const s = await getSurvey(id)
+    const v = viewOf(s)
+    const chain = s.conditions?.lensChain
+    const queue = chain ? queueAlert(chain, conflictsFor(chain, { id: s.id }, await listSurveys())) : undefined
+    return { survey: { id: v.id, name: v.name, status: v.status }, rules: launchRules(v, queue), queue, acknowledgement: ACKNOWLEDGEMENT, jira_checked: jiraConfigured() }
 }
 const days = (url: URL, fallback: number) => Math.min(365, Math.max(1, Number(url.searchParams.get('days')) || fallback))
 
@@ -32,8 +55,12 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
     if (!surveysActive()) return (json(res, 503, { error: config.surveys.enabled ? 'Surveys need POSTHOG_SURVEY_API_KEY. Run the installer again; it makes the key.' : 'Surveys are switched off (FEATURE_SURVEYS=off).' }), true)
     try {
         if (p === '/replays/surveys/api/list' && req.method === 'GET') return (json(res, 200, { surveys: await surveyOverview(days(url, 30)) }), true)
-        const m = /^\/replays\/surveys\/api\/survey\/([0-9a-f-]{8,64})(?:\/(launch|stop|archive|reach))?$/i.exec(p)
-        if (m && !m[2] && req.method === 'GET') return (json(res, 200, await surveyResults(m[1], days(url, 90))), true)
+        const m = /^\/replays\/surveys\/api\/survey\/([0-9a-f-]{8,64})(?:\/(launch|stop|archive|reach|launch-check))?$/i.exec(p)
+        if (m && !m[2] && req.method === 'GET') {
+            const r = await surveyResults(m[1], days(url, 90))
+            return (json(res, 200, { ...r, launches: launchesOf(m[1]).map((l) => ({ ...l, ticket_url: jiraTicketUrl(l.ticket) })) }), true)
+        }
+        if (m && m[2] === 'launch-check' && req.method === 'GET') return (json(res, 200, await launchCheck(m[1])), true)
         if (m && m[2] === 'reach' && req.method === 'GET') {
             const s = await getSurvey(m[1])
             const chain = s.conditions?.lensChain
@@ -42,8 +69,20 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
         }
         if (m && m[2] && req.method === 'POST') {
             if (!canSurvey(v.role === 'admin' ? 'launch' : v.surveys, 'launch')) return (json(res, 403, { error: 'Launching, stopping and archiving surveys needs the "Also launch and stop surveys" survey role. Ask an admin.' }), true)
-            const s = m[2] === 'launch' ? await launchSurvey(m[1]) : m[2] === 'stop' ? await stopSurvey(m[1]) : await archiveSurvey(m[1])
-            audit(v.email, `survey.${m[2] === 'launch' ? 'launched' : m[2] === 'stop' ? 'stopped' : 'archived'}`, { survey: s.id, name: s.name })
+            if (m[2] === 'launch') {
+                // The safeguard: the acknowledgement, word for word, and the Jira ticket this launch is for.
+                const body = await readJson(req)
+                if (body.acknowledgement !== ACKNOWLEDGEMENT) return (json(res, 400, { error: 'Tick the acknowledgement before launching.' }), true)
+                const ticket = await checkTicket(body.ticket)
+                if (!ticket.ok) return (json(res, 400, { error: ticket.error }), true)
+                const check = await launchCheck(m[1])
+                const s = await launchSurvey(m[1])
+                recordLaunch({ survey_id: s.id, survey_name: s.name, ticket: ticket.key, ticket_summary: ticket.summary ?? null, launched_by: v.email, via: 'Surveys page', rules: check.rules })
+                audit(v.email, 'survey.launched', { survey: s.id, name: s.name, ticket: ticket.key })
+                return (json(res, 200, { ok: true, ticket: ticket.key }), true)
+            }
+            const s = m[2] === 'stop' ? await stopSurvey(m[1]) : await archiveSurvey(m[1])
+            audit(v.email, `survey.${m[2] === 'stop' ? 'stopped' : 'archived'}`, { survey: s.id, name: s.name })
             return (json(res, 200, { ok: true }), true)
         }
     } catch (e) {
@@ -86,14 +125,29 @@ table{width:100%;table-layout:fixed}td,th{overflow-wrap:anywhere}td.n,th.n{text-
 .days svg{display:block;max-width:100%}
 .empty{color:var(--muted);padding:24px 0;text-align:center}
 .toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap}.toolbar select{padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)}
+.ldlg{border:0;border-radius:14px;padding:0;width:min(560px,calc(100% - 32px));max-height:calc(100% - 32px);background:var(--card);color:var(--ink);box-shadow:0 24px 60px rgba(0,0,0,.35)}
+.ldlg::backdrop{background:rgba(15,23,42,.55)}.ldlg form{padding:20px 22px;display:flex;flex-direction:column;gap:12px}.ldlg h2{margin:0;font-size:19px}
+.ldlg ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px;font-size:14px;line-height:1.45}.ldlg ol li::marker{font-weight:700;color:var(--accent)}
+.ldlg .ack{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1.5px solid var(--line);border-radius:10px;font-size:14px;cursor:pointer}.ldlg .ack input{width:18px;height:18px;margin-top:2px;flex:none}
+.ldlg .row{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}.ldlg .warnbox{border-left:4px solid var(--warn);background:var(--warn-bg);padding:8px 12px;border-radius:6px;font-size:13.5px}
+.ldlg label.f{font-weight:600;font-size:14px}.ldlg input[type=text]{text-transform:uppercase}
 </style></head>
 <body>${headerHtml(v, 'Surveys')}<main class="wide">
 <div class="layout">
 <section><div class="toolbar"><h2 style="margin:0">Surveys</h2><select id="days" aria-label="Counts over"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></div>
 <div class="list" id="list"><p class="empty">Loading…</p></div>
-<p class="small muted">Your survey role: ${SURVEY_ROLE_TEXT[v.role === 'admin' ? 'launch' : v.surveys || 'none']}. Make or change a survey in chat (<a href="/replays/connect">connect chat</a>): describe which dialog, button or message should show it, for which clients, and how it should look. Lens checks it and saves a draft; it reaches users only after you launch it.</p></section>
+<p class="small muted">Your survey role: ${SURVEY_ROLE_TEXT[v.role === 'admin' ? 'launch' : v.surveys || 'none']}. Make or change a survey in chat (<a href="/replays/connect">set up chat</a>): describe which dialog, button or message should show it, for which clients, and how it should look. Lens checks it and saves a draft; it reaches users only after you launch it.</p></section>
 <section id="detail"><div class="card"><p class="empty">Pick a survey.</p></div></section>
 </div></main>
+<dialog class="ldlg" id="ldlg" aria-labelledby="l-title"><form method="dialog" id="l-form">
+<h2 id="l-title">Launch this survey?</h2><p class="small muted" id="l-name"></p>
+<div><b>Before you launch, the four rules of how it works:</b><ol id="l-rules"></ol></div>
+<div id="l-queue"></div>
+<div><label class="f" for="l-ticket">Jira ticket for this launch</label><input id="l-ticket" type="text" placeholder="e.g. REVAL-1234" autocomplete="off" spellcheck="false" maxlength="32" required><p class="small muted" id="l-jira"></p></div>
+<label class="ack"><input type="checkbox" id="l-ack"><span id="l-ack-text"></span></label>
+<p id="l-msg" class="small err" role="alert"></p>
+<div class="row"><button type="button" class="ghost" id="l-cancel">Cancel</button><button type="submit" id="l-go" disabled>Launch survey</button></div>
+</form></dialog>
 <script>${CLIENT.replace('__BRAND__', JSON.stringify(config.surveys.brand)).replace('__CAN_LAUNCH__', JSON.stringify(v.role === 'admin' || canSurvey(v.surveys, 'launch')))}</script></body></html>`
 }
 
@@ -150,9 +204,10 @@ async function show(id){current=id;drawList();$('detail').innerHTML='<div class=
   if(current!==id)return
   const s=r.survey
   const acts=!CAN_LAUNCH?'<span class="small muted">Launching and stopping needs the launch survey role.</span>':(s.status==='draft'||s.status==='stopped'?'<button id="a-launch">'+(s.status==='draft'?'Launch':'Start again')+'</button>':'')+(s.status==='running'?'<button id="a-stop" class="ghost">Stop</button>':'')+'<button id="a-archive" class="ghost">Archive</button>'
+  const launched=(r.launches||[])[0]
   const facts=[['Clients',(s.clients==='all'?'Every client':s.clients.join(', '))+(s.sample_percent<100?' · '+s.sample_percent+'% of their users':'')],['Shows',s.show==='every_time'?'Every time the steps happen':'Once per user'],['Steps must happen within',s.within_minutes?s.within_minutes+' minutes':'No limit (same page)'],
     ['Starts over when',s.reset_on.length?s.reset_on.join('; '):'Never (a page reload starts over)'],['Days between any two surveys',s.days_between_surveys||'None'],['Protecting users',s.pacing?'At most '+s.pacing.per_user+' running at once · '+s.pacing.gap_hours+' h apart at least · '+s.pacing.quiet_days_after_close+' quiet days after a close':'PostHog rules only'],['Only on pages containing',s.url_contains||'Any page'],['Stops after',s.max_responses?num(s.max_responses)+' answers':'No limit'],
-    ['Made',new Date(s.created).toLocaleString()+(s.created_by?' by '+s.created_by:'')+(s.made_by_lens?' (Lens)':' (in PostHog)')],['Running since',s.started?new Date(s.started).toLocaleString():'Not launched'+(s.stopped?'':'')]].concat(s.stopped?[['Stopped',new Date(s.stopped).toLocaleString()]]:[])
+    ['Made',new Date(s.created).toLocaleString()+(s.created_by?' by '+s.created_by:'')+(s.made_by_lens?' (Lens)':' (in PostHog)')],['Running since',s.started?new Date(s.started).toLocaleString():'Not launched'+(s.stopped?'':'')]].concat(s.stopped?[['Stopped',new Date(s.stopped).toLocaleString()]]:[]).concat(launched?[['Launched under',launched.ticket+(launched.ticket_summary?' · '+launched.ticket_summary:'')+' · by '+launched.launched_by+' ('+launched.via+'), '+new Date(launched.at).toLocaleString()]]:[])
   const qs=r.questions.map(q=>'<div class="q"><h3>'+esc(q.text)+'</h3><p class="small muted">'+num(q.answers)+' answers'+(q.average!=null?' · average '+q.average:'')+(q.nps?' · NPS '+q.nps.score+' ('+q.nps.promoters+' promoters, '+q.nps.passives+' passives, '+q.nps.detractors+' detractors)':'')+'</p>'+(q.distribution?bars(q.distribution):'')+(q.recent?(q.recent.length?q.recent.map(a=>'<div class="ans">'+esc(a.text)+'<small>'+esc(a.client)+' · '+esc(new Date(a.at).toLocaleString())+'</small></div>').join(''):'<p class="small muted">No written answers yet.</p>'):'')+'</div>').join('')
   $('detail').innerHTML='<div class="card"><div class="head"><h1><span class="chip '+esc(s.status)+'">'+esc(STATUS[s.status])+'</span>'+esc(s.name)+'</h1><div class="acts">'+acts+'</div></div>'+(s.description?'<p class="muted">'+esc(s.description)+'</p>':'')+'<p id="a-msg" class="small"></p>'
     +'<h2>When it shows</h2>'+chain(s)+(r.queue?'<div class="conf'+(r.queue.level==='clear'?' ok':'')+'" role="'+(r.queue.level==='clear'?'status':'alert')+'"><b>'+(r.queue.level==='clear'?'No overlap with other surveys.':'Notice for whoever runs this survey')+'</b> '+esc(r.queue.alert)+(r.conflicts.length?'<ul>'+r.conflicts.map(c=>'<li><a href="#'+esc(c.survey_id)+'">'+esc(c.name)+'</a>: '+esc(c.text.replace(/^[^:]*: /,''))+' ('+esc(c.clients==='all'?'every client':c.clients.join(', '))+')</li>').join('')+'</ul>':'')+'</div>':'')+'<div class="facts">'+facts.map(([k,x])=>'<div><span>'+esc(k)+'</span>'+esc(x)+'</div>').join('')+'</div>'
@@ -164,10 +219,25 @@ async function show(id){current=id;drawList();$('detail').innerHTML='<div class=
     +'<div class="card"><h2>Answers</h2>'+(qs||'<p class="muted">No questions.</p>')+'</div>'
     +'<div class="card"><h2>By client</h2>'+(r.by_client.length?'<table><thead><tr><th>Client</th><th class="n">Shown</th><th class="n">Answered</th><th class="n">Dismissed</th></tr></thead><tbody>'+r.by_client.map(c=>'<tr><td>'+esc(c.client)+'</td><td class="n">'+num(c.shown)+'</td><td class="n">'+num(c.answered)+'</td><td class="n">'+num(c.dismissed)+'</td></tr>').join('')+'</tbody></table>':'<p class="small muted">Not shown to anyone yet.</p>')+'</div>'
   const act=(name,ask)=>async()=>{if(ask&&!confirm(ask))return;try{await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'/'+name,{method:'POST'});if(name==='archive')location.hash='';current=null;await loadList()}catch(e){$('a-msg').textContent=e.message;$('a-msg').className='small err'}}
-  if($('a-launch'))$('a-launch').onclick=act('launch','Show "'+s.name+'" to '+(s.clients==='all'?'every client':s.clients.join(', '))+(s.sample_percent<100?' ('+s.sample_percent+'% of users)':'')+' from now on?'+(r.queue&&r.queue.level!=='clear'?'\n\n'+r.queue.alert:''))
+  if($('a-launch'))$('a-launch').onclick=()=>openLaunch(id)
   if($('a-stop'))$('a-stop').onclick=act('stop','Stop showing "'+s.name+'"? Its answers stay.')
   if($('a-archive'))$('a-archive').onclick=act('archive','Archive "'+s.name+'"? It stops and leaves this list. Its answers stay in PostHog.')
   if($('a-reach'))$('a-reach').onclick=async()=>{$('reach').innerHTML='<p class="small muted">Counting…</p>';try{const x=await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'/reach');$('reach').innerHTML='<p><b>'+num(x.sessions)+'</b> sessions, '+num(x.users)+' users at '+num(x.clients)+' clients.</p>'+bars(Object.fromEntries(x.by_step.map((b,i)=>['Step '+(i+1)+': '+b.step,b.sessions])))+(x.top_clients.length?'<p class="small muted">Most: '+x.top_clients.map(c=>esc(c.client)+' ('+num(c.sessions)+')').join(', ')+'</p>':'')+'<p class="small muted">'+esc(x.note)+'</p>'}catch(e){$('reach').innerHTML='<p class="err">'+esc(e.message)+'</p>'}}
 }
+// The safeguard: read the rules, give the Jira ticket, acknowledge; the server checks the same.
+let LAUNCH=null
+async function openLaunch(id){const d=$('ldlg');$('l-msg').textContent='';$('l-ack').checked=false;$('l-ticket').value='';$('l-go').disabled=true;$('l-rules').innerHTML='<li>Loading…</li>';$('l-queue').innerHTML='';d.showModal()
+  try{LAUNCH=await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'/launch-check');LAUNCH.id=id
+    $('l-title').textContent=(LAUNCH.survey.status==='stopped'?'Start again: ':'Launch: ')+LAUNCH.survey.name;$('l-name').textContent='Once launched, Reval users see it. Read these first.'
+    $('l-rules').innerHTML=LAUNCH.rules.map(x=>'<li>'+esc(x)+'</li>').join('')
+    $('l-queue').innerHTML=LAUNCH.queue&&LAUNCH.queue.level!=='clear'?'<div class="warnbox">'+esc(LAUNCH.queue.alert)+'</div>':''
+    $('l-ack-text').textContent=LAUNCH.acknowledgement;$('l-jira').textContent=LAUNCH.jira_checked?'Checked in Jira before launch.':'Recorded with the launch (Jira is not connected, so only its form is checked).';$('l-ticket').focus()}
+  catch(e){$('l-msg').textContent=e.message}}
+const TICKET=/^[A-Z][A-Z0-9_]{0,19}-[0-9]{1,9}$/
+function launchReady(){$('l-go').disabled=!(LAUNCH&&$('l-ack').checked&&TICKET.test($('l-ticket').value.trim().toUpperCase()))}
+$('l-ack').onchange=launchReady;$('l-ticket').oninput=launchReady;$('l-cancel').onclick=()=>$('ldlg').close()
+$('l-form').onsubmit=async ev=>{ev.preventDefault();if($('l-go').disabled)return;$('l-go').disabled=true;$('l-go').textContent='Launching…';$('l-msg').textContent=''
+  try{await api('/replays/surveys/api/survey/'+encodeURIComponent(LAUNCH.id)+'/launch',{method:'POST',body:JSON.stringify({ticket:$('l-ticket').value.trim().toUpperCase(),acknowledgement:LAUNCH.acknowledgement})});$('ldlg').close();current=null;await loadList()}
+  catch(e){$('l-msg').textContent=e.message;launchReady()}finally{$('l-go').textContent='Launch survey'}}
 loadList();setInterval(()=>{if(document.visibilityState==='visible')loadList()},60000)
 `

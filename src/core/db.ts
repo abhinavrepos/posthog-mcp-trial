@@ -9,6 +9,7 @@
 //   system_viewers who may see the System page besides admins
 //   survey_people  each person's survey role (view, edit, launch), besides admins (always launch)
 //   mcp_tokens     personal chat (MCP) tokens: who they belong to, stored as a hash, revocable
+//   survey_launches every survey launch: who, the Jira ticket, the rules they acknowledged
 //   audit         sign-ins, views, downloads, shares and access changes
 //   releases, release_tickets, release_snapshots, release_verdicts
 //                 release outcomes for the MCP tools: the last N Jira releases (default 12), their
@@ -183,6 +184,20 @@ const MIGRATIONS: string[] = [
         revoked_by TEXT
     );
     CREATE INDEX mcp_tokens_email ON mcp_tokens (email);`,
+
+    // Every launch of a survey: who, under which Jira ticket, after acknowledging which rules, from where.
+    `CREATE TABLE survey_launches (
+        id INTEGER PRIMARY KEY,
+        survey_id TEXT NOT NULL,
+        survey_name TEXT NOT NULL,
+        ticket TEXT NOT NULL,
+        ticket_summary TEXT,
+        launched_by TEXT NOT NULL,
+        via TEXT NOT NULL,
+        rules TEXT NOT NULL,
+        at TEXT NOT NULL
+    );
+    CREATE INDEX survey_launches_survey ON survey_launches (survey_id, at);`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

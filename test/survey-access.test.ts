@@ -75,3 +75,29 @@ test('the admin and Connect chat pages render, and their scripts parse', async (
         for (const s of scripts) assert.doesNotThrow(() => new Function(s), path)
     }
 })
+
+test('launch safeguard: four rules, a Jira ticket, the acknowledgement word for word; recorded', async () => {
+    const { launchRules, checkTicket, recordLaunch, launchesOf, ACKNOWLEDGEMENT } = await import('../src/core/launches.ts')
+    const rules = launchRules({ clients: ['ACME'], sample_percent: 33, steps: ['Opens DlgA', 'Presses Save'], show: 'once', pacing: { per_user: 2, gap_hours: 24, quiet_days_after_close: 7 } }, { level: 'queued', alert: '⚠ Queued for ACME: their users are already in 2. More text.' })
+    assert.equal(rules.length, 4)
+    assert.match(rules[0], /33% of the users of ACME see it in Reval, bottom right.*Opens DlgA → Presses Save/)
+    assert.match(rules[1], /never more than 2 running surveys.*24 hours.*Right now: Queued for ACME/)
+    assert.match(rules[2], /×.*7 days/)
+    assert.match(rules[3], /stopping keeps the answers/)
+    assert.deepEqual(await checkTicket(' reval-1234 '), { ok: true, key: 'REVAL-1234' })
+    for (const bad of ['', '1234', 'REVAL 12', 'REVAL-', 'http://x/REVAL-1']) assert.equal((await checkTicket(bad)).ok, false, bad)
+    recordLaunch({ survey_id: 's1', survey_name: 'n', ticket: 'REVAL-1', ticket_summary: null, launched_by: 'pm@x.com', via: 'Surveys page', rules })
+    assert.deepEqual(launchesOf('s1').map((l) => [l.ticket, l.launched_by, l.rules.length]), [['REVAL-1', 'pm@x.com', 4]])
+    assert.match(ACKNOWLEDGEMENT, /^I acknowledge that this launches a survey that real Reval users will see/)
+    // The page refuses a launch without the acknowledgement or with a bad ticket, before calling PostHog.
+    const { handleSurveys } = await import('../src/service/surveyspage.ts')
+    const post = async (body: object) => {
+        const sent: { status?: number; body?: string } = {}
+        const req = Object.assign((async function* () { yield JSON.stringify(body) })(), { method: 'POST', headers: {} })
+        const res = { writeHead: (s: number) => (sent.status = s), end: (b: string) => (sent.body = b) } as never
+        await handleSurveys(req as never, res, new URL('http://x/replays/surveys/api/survey/01a1c6d6-8086-0000-b54b-4feed4e4f2b0/launch'), { email: 'a@b.c', role: 'admin', surveys: 'launch' } as never)
+        return sent
+    }
+    assert.match(String((await post({ ticket: 'REVAL-1' })).body), /acknowledgement/)
+    assert.match(String((await post({ ticket: 'nope', acknowledgement: ACKNOWLEDGEMENT })).body), /Jira ticket ID/)
+})

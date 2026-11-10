@@ -198,7 +198,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
 function adminHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Admin · ${APP_NAME}</title><style>${PAGE_CSS()}
 .badge{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--chip);white-space:nowrap}.warn{background:#fef0c7;color:#7a2e0e}
-td select{min-width:190px}label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;cursor:pointer}label.check input{width:auto;margin:0}.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px}
+td select{min-width:0;width:100%;max-width:220px}label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;cursor:pointer}label.check input{width:auto;margin:0}.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px}
 .toolbar>div{flex:1;min-width:160px}details summary{cursor:pointer;font-weight:600}ul.tight{margin:6px 0;padding-left:20px}ul.tight li{margin:3px 0}</style></head>
 <body>${headerHtml(v, 'Admin')}<main style="max-width:1100px">
 
@@ -208,7 +208,7 @@ td select{min-width:190px}label.check{display:inline-flex;gap:6px;align-items:ce
 <li><b>What they may do is set here.</b> <i>Watch clips</i> lets a person make and watch clips on this site. <i>Watch, download and share</i> adds MP4 downloads and share links. <i>Admin</i> adds this page.</li>
 <li><b>The System page</b> shows whether the server and every container are up, with machine, ClickHouse and Lens numbers. It never shows replay or event content. Admins always see it. Tick <i>System page</i> to let anyone else see it too, for example whoever looks after the server. It is separate from the role, so someone can see the System page with <i>No access</i> to clips.</li>
 <li><b>Surveys</b> are made, launched and read only in Lens: PostHog's own survey screens and API are closed (they send people here). Each person has a survey role, separate from the clip role: <i>See surveys and results</i>, <i>Also make and change surveys</i>, or <i>Also launch and stop surveys</i> (what reaches Reval users). Admins always have the last. It applies on the Surveys page and in chat.</li>
-<li><b>Chat</b> knows who is asking only with a personal token, which each person makes on the <i>Connect chat</i> page (you can revoke any token below). The shared team token says nothing about who asks, so it gets the survey role you choose in Settings.</li>
+<li><b>Chat</b> knows who is asking only with a personal token, which each person makes on the <i>Chat</i> page (you can revoke any token below). The shared team token says nothing about who asks, so it gets the survey role you choose in Settings.</li>
 <li><b>PostHog owners and admins</b> of the organization that owns the project are always admins here, so nobody can be locked out.</li>
 <li><b>Important:</b> on this PostHog plan, PostHog itself cannot limit replays per person. Anyone who is a member of the project's organization can watch every replay inside PostHog, whatever their role here. Those people are marked <span class="badge warn">sees all replays in PostHog</span>. To keep someone to clips only, give them a PostHog account in a separate organization (for example "Clip viewers") with no access to this project, then give them a role here.</li>
 <li><b>Storage.</b> A clip is stored once, however many people make the same part of the same recording. A clip nobody saved is deleted two weeks after it was last asked for. Saved clips stay until whoever saved them unsaves them, or you delete them here.</li>
@@ -227,7 +227,7 @@ td select{min-width:190px}label.check{display:inline-flex;gap:6px;align-items:ce
 <div><label for="survey-shared">Survey role for chat with the shared team token</label><select id="survey-shared"></select></div></div>
 <p class="small muted">The defaults apply to anyone who signs in with a PostHog account and is not listed above. "No access" is the safe choice. The shared team token cannot tell who asks: give it at most "See surveys and results", and give people personal tokens for more.</p><p id="settings-msg" class="small"></p></div>
 
-<div class="card"><h2>Chat tokens</h2><p class="small muted">Personal tokens people made on the Connect chat page. A revoked token stops working at once.</p>
+<div class="card"><h2>Chat tokens</h2><p class="small muted">Personal tokens people made on the Chat page. A revoked token stops working at once.</p>
 <div class="table-wrap"><table><thead><tr><th>Person</th><th>Name</th><th>Made</th><th>Last used</th><th></th></tr></thead><tbody id="tokens"></tbody></table></div></div>
 
 <div class="card"><h2>Clips</h2><p class="small muted" id="space"></p>

@@ -343,7 +343,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
     }
     if (!viewer && (p === '/replays/connect' || p === '/replays/connect/')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
-        res.end(loginHtml('Connect chat'))
+        res.end(loginHtml('Chat'))
         return true
     }
     if (!viewer && (p === '/replays/surveys' || p === '/replays/surveys/')) {
@@ -582,7 +582,7 @@ header{display:flex;align-items:center;gap:18px;padding:10px 20px;border-bottom:
 .brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px;color:var(--ink);text-decoration:none;letter-spacing:.01em}
 .brand .mark{width:18px;height:18px;border-radius:50%;background:conic-gradient(from 210deg,var(--accent),#1baf7a,var(--accent));box-shadow:inset 0 0 0 4px var(--card)}
 .brand .tag{font-weight:500;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 7px}
-nav{display:flex;gap:4px;flex:1}nav a{color:var(--muted);text-decoration:none;font-weight:600;padding:7px 11px;border-radius:7px}nav a:hover{color:var(--ink);background:var(--bg)}
+nav{display:flex;gap:4px;flex:1}nav a{color:var(--muted);text-decoration:none;font-weight:600;padding:7px 11px;border-radius:7px;white-space:nowrap}nav a:hover{color:var(--ink);background:var(--bg)}
 nav a[aria-current=page]{color:var(--accent);background:var(--chip)}.hdr{display:flex;gap:10px;align-items:center;flex-wrap:wrap}header button{padding:5px 10px}
 @media (max-width:700px){nav{order:3;flex-basis:100%;flex-wrap:wrap;min-width:0}nav a{padding:6px 8px}.who{display:none}}.muted{color:var(--muted)}.small{font-size:13px}main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:16px}
@@ -613,7 +613,7 @@ export const PAGE_CSS = () => CSS
 
 export const APP_NAME = config.app.name
 export const APP_TAG = config.app.tag
-export type Section = 'Replay clips' | 'Live' | 'Surveys' | 'Connect chat' | 'System' | 'Admin'
+export type Section = 'Replay clips' | 'Live' | 'Surveys' | 'Chat' | 'System' | 'Admin'
 
 /** The header on every page: the product name, the sections this person may open, and sign out. */
 export function headerHtml(v: Viewer | undefined, section: Section): string {
@@ -624,7 +624,7 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
             ['Replay clips', '/replays', 'watch'],
             ['Live', '/replays/live', 'watch'],
             ['Surveys', '/replays/surveys', 'surveys'],
-            ['Connect chat', '/replays/connect', 'connect'],
+            ['Chat', '/replays/connect', 'connect'],
             ['System', '/replays/system', 'system'],
             ['Admin', '/replays/admin', 'admin'],
         ] as const
