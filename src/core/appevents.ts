@@ -527,7 +527,7 @@ export function required(): AppEvents {
     return reg
 }
 
-const prop = (reg: AppEvents, role: Role) => (reg.properties[role] ? `toString(properties.${reg.properties[role]!.name})` : `''`)
+export const prop = (reg: AppEvents, role: Role) => (reg.properties[role] ? `toString(properties.${reg.properties[role]!.name})` : `''`)
 
 export function columns(reg: AppEvents): string {
     return `toString(properties.$session_id) AS sid, timestamp AS ts, event, toString(${P.client}) AS client, toString(distinct_id) AS user,
