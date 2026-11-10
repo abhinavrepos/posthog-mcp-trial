@@ -11,8 +11,8 @@ export function serverInstructions(withPosthog = posthogMcpActive()): string {
     const app = appEvents()?.app || 'the app'
     return `Replays are private: never call PostHog's session-recording-*, query-session-recordings-list or vision-* tools. Use get_replay_link; give the person the link, never view replay content.
 
-Lens (${config.mcp.name}) = a named ${app} client or user, trade/link id, dialog/screen/button, one session, Jira ticket, release outcome, "where do clients struggle", "who is at risk", ${app}'s error messages and which clients any error hit.
-${withPosthog ? `Use PostHog's server (posthog) for generic product analytics and PostHog objects: trends, funnels, retention, insights, dashboards, feature flags, experiments, surveys, cohorts, annotations, actions/event definitions, managing error-tracking issues, batch exports, docs/SDK help, raw SQL (execute-sql).
+Lens (${config.mcp.name}) = ${app} clients/users, trades, dialogs/buttons, sessions, Jira tickets, releases, client risk and app errors.
+${withPosthog ? `Use PostHog's server (posthog) for generic analytics, trends, funnels, retention, insights, dashboards, flags, experiments, surveys, cohorts, annotations, actions, error issues, exports, SDK docs and raw SQL (execute-sql).
 PostHog's one tool, exec, takes a command string; call Lens tools directly with JSON, never via exec.
 In PostHog SQL the client is ${P.client}.
 ` : 'Call Lens tools directly with JSON arguments. For other questions, say this server does not cover them.\n'}
@@ -23,5 +23,5 @@ Lens tools:
 - Jira triage: triage_ticket
 - releases: list_releases, release_outcomes; one ticket: ticket_evidence; complaints after shipping: client_feedback
 - save an agreed verdict: record_verdict; fix a ticket link: correct_ticket_link; sync: refresh_releases${appEvents() ? `
-- ${app} vocabulary: describe_app_events (once first); worst pains: top_pains; dialog failures/messages: dialog_friction; one session timeline: session_story; slow buttons/HTTP failures: attempt_timings; trade/link id: find_trade; clients at risk: client_signals` : ''}`
+- reval_brief first for any PM question; ${app} vocabulary: describe_app_events; top_pains for pains; dialog_friction for failures; session_story for timelines; attempt_timings for waits; find_trade for ids; client_signals for risk` : ''}`
 }
