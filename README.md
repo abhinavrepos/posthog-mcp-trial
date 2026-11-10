@@ -319,11 +319,13 @@ A survey is described in the app's own words:
   of their users), `url_contains`. `show` is `once` per user or `every_time`;
   `days_between_surveys` (14) keeps a user from seeing two surveys close together; `max_responses`
   stops it.
-- **One survey per user at a time.** A user in the audience of a running survey that was launched
-  earlier skips any later one until they answer or dismiss the earlier one. The browser engine
-  enforces it per user (clients and sample included). `design_survey`, `save_survey`,
-  `launch_survey` and the page tell the PM which clients' users (and what share) are already taken,
-  and say so plainly when nobody could see the new survey yet.
+- **At most two running surveys per user** (`SURVEYS_PER_USER`, 2). A user already in two
+  earlier-launched running surveys they have not answered or dismissed is **queued** for a new
+  one: not dropped, they get it later, the next time they do its steps after finishing one of
+  those. The browser engine enforces it per user (clients and sample included). The person making
+  the survey gets a ⚠ alert first in the `design_survey`, `save_survey` and `launch_survey` replies
+  and on the Surveys page: which clients are queued, behind which surveys, and that stopping one of
+  those frees them sooner.
 - **Questions**: `rating` (3, 5, 7 or 10 numbers, or emoji with 3 or 5), `nps` (0-10), `yes_no`
   (labels can change), `thumbs` (up or down), `open`, `single`, `multiple` (optional "Other").
 - **Look**: `theme` `light` (white, ION blue) or `dark` (navy, amber), then any part: background,

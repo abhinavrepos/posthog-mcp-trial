@@ -142,7 +142,7 @@ export interface LensChain {
     resetOn?: ChainStep[]
     resetLabels?: string[]
     audience?: Audience
-    oneAtATime: true // a user in an earlier running survey's audience skips this one until they finish that one
+    maxPerUser: number // a user is in at most this many running surveys at once; later ones wait until they finish one
     ready: { documentComplete: boolean; noVisibleMask: boolean; maxWaitMs: number }
 }
 
@@ -255,7 +255,7 @@ export interface Compiled {
 }
 
 /** Checks a spec and turns it into a PostHog survey. Errors mean nothing may be saved. */
-export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: AppEvents; clientIds?: string[] } = {}): Compiled {
+export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: AppEvents; clientIds?: string[]; maxPerUser?: number } = {}): Compiled {
     const reg = opts.reg ?? vocab()
     const problems: Problem[] = []
     const e = (where: string, text: string) => problems.push({ level: 'error', where, text })
@@ -337,7 +337,7 @@ export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: 
         ...(spec.within_minutes ? { withinSeconds: Math.round(spec.within_minutes * 60) } : {}),
         ...(resets.length ? { resetOn: resets.map((c) => c?.step).filter((x): x is ChainStep => !!x), resetLabels: resets.map((c) => c?.label).filter((x): x is string => !!x) } : {}),
         ...(Object.keys(audience).length ? { audience } : {}),
-        oneAtATime: true,
+        maxPerUser: opts.maxPerUser ?? config.surveys.perUser,
         ready: { documentComplete: spec.wait_for_page !== false, noVisibleMask: spec.wait_for_page !== false, maxWaitMs: Math.round(maxWait * 1000) },
     }
     if (!/^[a-z0-9-]{1,40}$/.test(chain.id)) e('chain', `chain id "${chain.id}" must be 1-40 characters of a-z, 0-9 and -`)
@@ -663,17 +663,18 @@ export interface Conflict {
 }
 
 /**
- * Running Lens surveys launched before this one that want some of the same users. Those users skip
- * this survey until they answer or dismiss the other one (the browser engine enforces it). For a
- * draft, every running survey counts, since it would launch after them.
+ * Running Lens surveys launched before this one that want some of the same users. Users already in as
+ * many unfinished surveys as the limit allows wait for this one (the browser engine enforces it) and
+ * get it later, after they answer or dismiss one of those. For a draft, every running survey counts,
+ * since it would launch after them.
  */
 export function conflictsFor(chain: LensChain, self: { id?: string; start_date?: string | null }, surveys: PostHogSurvey[]): Conflict[] {
     const mine = chain.audience?.clients?.map((c) => c.toLowerCase())
     const myStart = self.start_date ? Date.parse(self.start_date) : Infinity
     const out: Conflict[] = []
     for (const y of surveys) {
-        const c = y.conditions?.lensChain
-        if (y.id === self.id || statusOf(y) !== 'running' || c?.managedBy !== 'lens' || !(c as { oneAtATime?: boolean }).oneAtATime) continue
+        const c = y.conditions?.lensChain as (LensChain & { oneAtATime?: boolean }) | undefined
+        if (y.id === self.id || statusOf(y) !== 'running' || c?.managedBy !== 'lens' || !(c.maxPerUser || c.oneAtATime)) continue
         const yStart = Date.parse(y.start_date || '') || 0
         if (!(yStart < myStart || (yStart === myStart && y.id < (self.id || '')))) continue
         const theirs = c.audience?.clients?.map((x) => x.toLowerCase())
@@ -683,21 +684,51 @@ export function conflictsFor(chain: LensChain, self: { id?: string; start_date?:
         const who = both === 'all' ? 'Every client' : both.map((x) => x.toUpperCase()).join(', ')
         out.push({
             survey_id: y.id, name: y.name, since: y.start_date!, clients: both, share,
-            text: `${who}: ${share === 100 ? 'all' : `${share}% of`} their users are in "${y.name}" (running since ${y.start_date!.slice(0, 10)}). They skip this survey until they answer or dismiss that one.`,
+            text: `${who}: ${share === 100 ? 'all' : `${share}% of`} their users are in "${y.name}" (running since ${y.start_date!.slice(0, 10)}).`,
         })
     }
     return out
 }
 
-/** One line for the PM: how much of the audience is free now. */
-export function conflictSummary(chain: LensChain, conflicts: Conflict[]): string {
-    if (!conflicts.length) return 'No user of this survey is in another running survey.'
-    const mine = chain.audience?.clients?.map((c) => c.toLowerCase())
-    const blocked = conflicts.some((c) => c.share === 100 && (c.clients === 'all' || (mine && mine.every((m) => (c.clients as string[]).includes(m)))))
-    return blocked
-        ? 'Nobody can see this survey yet: all its users are in an earlier running survey. Stop that one, or wait until its users have answered it.'
-        : 'Some users are in another running survey and will skip this one until they finish that one (one survey per user at a time).'
+export interface QueueAlert {
+    level: 'clear' | 'some_wait' | 'queued' | 'all_queued'
+    alert: string // for the person making the survey
+    queued: string[] // clients whose users all wait ("*" = every client not named)
+    some_wait: string[] // clients where some users wait (samples)
+    limit: number
 }
+
+/** The alert for the person making the survey: who is full, who waits, and that they get it later. */
+export function queueAlert(chain: LensChain, conflicts: Conflict[]): QueueAlert {
+    const limit = chain.maxPerUser ?? 1
+    const surveys = (n: number) => `${n} running survey${n === 1 ? '' : 's'}`
+    const mine = chain.audience?.clients?.map((c) => c.toLowerCase())
+    const keys = mine ?? [...new Set([...conflicts.flatMap((c) => (c.clients === 'all' ? [] : c.clients)), '*'])]
+    const queued: string[] = []
+    const some: string[] = []
+    const names = new Map<string, string[]>()
+    for (const k of keys) {
+        const hold = conflicts.filter((c) => c.clients === 'all' || (k !== '*' && c.clients.includes(k)))
+        names.set(k, hold.map((c) => `"${c.name}"`))
+        if (hold.filter((c) => c.share === 100).length >= limit) queued.push(k)
+        else if (hold.length >= limit) some.push(k)
+    }
+    const label = (k: string) => (k === '*' ? 'every other client' : k.toUpperCase())
+    const later = 'They are not dropped: each gets this survey later, the next time they do its steps after answering or dismissing one of those. Stop one of those surveys to free them sooner.'
+    const all = queued.length === keys.length && keys.length > 0
+    const parts: string[] = []
+    if (all) parts.push(`⚠ Queued: every user this survey targets already has ${surveys(limit)}, the most a user can have at once (${[...new Set(queued.flatMap((k) => names.get(k)!))].join(', ')}). Nobody sees it yet. ${later}`)
+    else {
+        if (queued.length) parts.push(`⚠ Queued for ${queued.map(label).join(', ')}: their users already have ${surveys(limit)}, the most a user can have at once (${[...new Set(queued.flatMap((k) => names.get(k)!))].join(', ')}). ${later}`)
+        if (some.length) parts.push(`Some users of ${some.map(label).join(', ')} may wait: part of them are in ${surveys(limit)} already (samples). They get it later too.`)
+    }
+    const level: QueueAlert['level'] = all ? 'all_queued' : queued.length ? 'queued' : some.length ? 'some_wait' : 'clear'
+    if (level === 'clear') parts.push(conflicts.length ? `Fine: some users are in another running survey, but under the limit of ${surveys(limit)} per user, so they can get this one too.` : 'Fine: none of its users is in another running survey.')
+    return { level, alert: parts.join(' '), queued, some_wait: some, limit }
+}
+
+/** The alert as one line (MCP replies, the page). */
+export const conflictSummary = (chain: LensChain, conflicts: Conflict[]) => queueAlert(chain, conflicts).alert
 
 // ------------------------------------------------------------------ reach and results (HogQL, read key)
 
@@ -810,6 +841,7 @@ export interface Results {
     by_day: { day: string; shown: number; answered: number }[]
     conflicts: Conflict[] // users this survey shares with earlier running surveys
     conflict_summary?: string
+    queue?: QueueAlert
 }
 
 const RECENT_TEXT = 30
@@ -902,7 +934,7 @@ export async function surveyResults(id: string, days = 90): Promise<Results> {
         by_client: perClient.map((r) => ({ client: String(r.client), shown: Number(r.shown), answered: Number(r.answered), dismissed: Number(r.dismissed) })),
         by_day: perDay.map((r) => ({ day: String(r.day), shown: Number(r.shown), answered: Number(r.answered) })),
         conflicts,
-        ...(chain ? { conflict_summary: conflictSummary(chain, conflicts) } : {}),
+        ...(chain ? { conflict_summary: conflictSummary(chain, conflicts), queue: queueAlert(chain, conflicts) } : {}),
     }
 }
 

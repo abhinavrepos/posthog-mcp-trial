@@ -37,8 +37,9 @@ Settings: `SURVEY_ENGINE` (on), `SURVEY_BRAND` ("Survey by ION"), `FEATURE_SURVE
 
 ## Rules worth knowing first
 
-- **One survey per user at a time**: the survey launched first keeps its users until they answer or
-  dismiss it; later surveys skip them. Lens tells the PM who is taken when they design, save or launch.
+- **At most two running surveys per user** (`SURVEYS_PER_USER`): a user already in two unfinished
+  ones is queued for a newer survey and gets it later, after answering or dismissing one. The person
+  making the survey gets a ⚠ alert (design, save, launch, Surveys page) naming who is queued and why.
 - Question types: rating, nps, yes_no, thumbs, open, single, multiple. Look: theme light/dark plus
   every colour, corners, shadow, padding, font, position (bottom right by default), width.
 
