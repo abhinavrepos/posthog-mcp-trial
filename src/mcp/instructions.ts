@@ -22,6 +22,6 @@ Lens tools:
 - screen use by clients: screen_usage; who hit an error: error_blast_radius; struggle without errors: find_silent_issues
 - Jira triage: triage_ticket
 - releases: list_releases, release_outcomes; one ticket: ticket_evidence; complaints after shipping: client_feedback
-- save an agreed verdict: record_verdict; fix a ticket link: correct_ticket_link; sync: refresh_releases${appEvents() ? `
-- reval_brief first for PM questions; ${app} vocabulary: describe_app_events (once first); worst pains: top_pains; dialog failures: dialog_friction; misleading messages: message_doctor; one session timeline: session_story; slow buttons/HTTP failures: attempt_timings; trade/link id: find_trade; clients at risk: client_signals; workflows: discover_workflows, workflow_completion, save_workflow` : ''}`
+- agreed verdict: record_verdict; ticket link: correct_ticket_link; sync: refresh_releases${appEvents() ? `
+- reval_brief first for PM questions; ${app}: describe_app_events vocabulary; top_pains; dialog_friction failures; message_doctor messages; session_story; attempt_timings waits; find_trade ids; client_signals risk; discover_workflows, workflow_completion` : ''}`
 }

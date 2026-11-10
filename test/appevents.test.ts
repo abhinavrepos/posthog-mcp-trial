@@ -19,7 +19,7 @@ process.env.POSTHOG_PROJECT_ID = '123456'
 const { db } = await import('../src/core/db.ts')
 const ae = await import('../src/core/appevents.ts')
 const { clientExpr, P } = await import('../src/core/props.ts')
-const { registerTools } = await import('../src/mcp/tools.ts')
+const { registerTools, APP_EVENT_TOOLS, CORE_TOOLS } = await import('../src/mcp/tools.ts')
 const { serverInstructions, INSTRUCTIONS_LIMIT } = await import('../src/mcp/instructions.ts')
 after(() => {
     db.close()
@@ -301,7 +301,7 @@ describe('the MCP server with app events', async () => {
     await Promise.all([server.connect(a), client.connect(b)])
     test('offers app tools with reval_brief first and the PM prompts', async () => {
         const names = (await client.listTools()).tools.map((t) => t.name)
-        for (const n of ['discover_workflows', 'workflow_completion', 'save_workflow', 'message_doctor', 'reval_brief', 'describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade']) assert.ok(names.includes(n), n)
+        for (const n of ['discover_workflows', 'workflow_completion', 'message_doctor', 'reval_brief', 'describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade']) assert.ok(names.includes(n), n)
         assert.ok(names.indexOf('reval_brief') < names.indexOf('describe_app_events'))
         const prompts = (await client.listPrompts()).prompts.map((p) => p.name)
         for (const n of ['where_clients_struggle', 'weekly_review', 'client_check', 'release_check']) assert.ok(prompts.includes(n), n)
@@ -326,24 +326,29 @@ describe('the MCP server with app events', async () => {
             if (item.name === 'release_check') assert.match(args.question, /release/)
         }
     })
-    test('workflow tools describe the question and keep saving explicit and writable', async () => {
+    test('lists every app tool exactly once, with reval_brief first', async () => {
+        const names = (await client.listTools()).tools.map((t) => t.name)
+        const appNames = names.filter((name) => !CORE_TOOLS.includes(name))
+        assert.equal(APP_EVENT_TOOLS[0], 'reval_brief')
+        assert.equal(appNames[0], 'reval_brief')
+        assert.equal(new Set(APP_EVENT_TOOLS).size, APP_EVENT_TOOLS.length)
+        assert.deepEqual([...appNames].sort(), [...APP_EVENT_TOOLS].sort())
+    })
+    test('workflow tools describe automatic discovery and accept ids, names or dialogs', async () => {
         const tools = new Map((await client.listTools()).tools.map((tool) => [tool.name, tool]))
-        for (const name of ['discover_workflows', 'workflow_completion', 'save_workflow'])
+        for (const name of ['discover_workflows', 'workflow_completion']) {
             assert.ok(tools.get(name)?.description?.startsWith('Which tasks do people do in Reval, and do they finish them?'), name)
-        assert.equal(tools.get('save_workflow')?.annotations?.readOnlyHint, false)
-        assert.equal(tools.get('discover_workflows')?.annotations?.readOnlyHint, true)
-        assert.equal(tools.get('workflow_completion')?.annotations?.readOnlyHint, true)
-        assert.match(tools.get('save_workflow')?.description || '', /only after the person agreed the name/)
-        const result = await client.callTool({ name: 'save_workflow', arguments: { name: 'Import a swap', dialogs: ['DlgImport', 'DlgSwap'], saved_by: 'PM' } })
-        const output = JSON.parse((result.content as { text: string }[])[0].text.split('```json\n')[1].split('\n```')[0])
-        assert.deepEqual(output.done, { dialog: 'DlgSwap', outcome: 'completed' })
-        assert.equal(output.saved_by, 'PM')
-        const bad = await client.callTool({ name: 'save_workflow', arguments: { name: 'Bad', dialogs: ['IR Swap'], saved_by: 'PM' } })
-        assert.equal(bad.isError, true)
+            assert.equal(tools.get(name)?.annotations?.readOnlyHint, true)
+        }
+        assert.match(tools.get('discover_workflows')?.description || '', /Lens supplies names/)
+        assert.match(tools.get('workflow_completion')?.description || '', /discovered workflow id\/name/)
     })
     test('the instructions name them, say where the client is, and still fit', () => {
         const text = client.getInstructions() || ''
-        for (const n of ['reval_brief', 'describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade', 'discover_workflows', 'workflow_completion', 'save_workflow', 'message_doctor']) assert.ok(text.includes(n), n)
+        for (const n of ['reval_brief', 'describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade', 'discover_workflows', 'workflow_completion', 'message_doctor']) assert.ok(text.includes(n), n)
+        const appLine = text.split('\n').filter((line) => line.includes('reval_brief'))
+        assert.equal(appLine.length, 1)
+        assert.ok(appLine[0].startsWith('- reval_brief'))
         assert.match(text, /part 3 of the distinct id/)
         assert.ok(text.length + 100 < INSTRUCTIONS_LIMIT, `instructions are ${text.length} characters`)
     })
