@@ -101,6 +101,8 @@ export const config = {
         mcpUrl: env('POSTHOG_MCP_URL'),
         mcpViaLens: flag('POSTHOG_MCP_VIA_LENS', true),
         mcpApiKey: env('POSTHOG_MCP_API_KEY'), // a separate personal key, without session_recording:read
+        // Lens surveys: a key with survey read and write only (deploy/posthog/survey-engine/key.sh).
+        surveyApiKey: env('POSTHOG_SURVEY_API_KEY'),
     },
     // Which MCP servers Claude gets. Each can be switched off on its own; both are on by default.
     features: {
@@ -111,6 +113,8 @@ export const config = {
         // effect only with POSTHOG_MCP_URL and POSTHOG_MCP_API_KEY set.
         posthogMcp: flag('FEATURE_POSTHOG_MCP', true),
     },
+    // Surveys made from Lens (MCP tools and the Surveys page). Takes effect only with POSTHOG_SURVEY_API_KEY.
+    surveys: { enabled: flag('FEATURE_SURVEYS', true), brand: env('SURVEY_BRAND', 'Survey by ION') },
     // How your events name things. The defaults match the demo app.
     properties: {
         client: propName('PROP_CLIENT_ID', process.env.RELEASES_CLIENT_PROPERTY || 'client_id'), // event property: client id
@@ -168,6 +172,8 @@ export const config = {
 /** PostHog's MCP server is in use: switched on and configured. */
 /** Jira is connected: a site and a login. Without it, webhooks answer 503 and release outcomes keep the numbers they have. */
 export const jiraConfigured = () => !!config.jira.baseUrl && !!config.jira.email && !!config.jira.apiToken
+
+export const surveysActive = (): boolean => config.surveys.enabled && !!config.posthog.surveyApiKey && !!config.posthog.projectId
 
 export const posthogMcpActive = (): boolean => config.features.posthogMcp && !!config.posthog.mcpUrl && !!config.posthog.mcpApiKey
 

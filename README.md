@@ -277,6 +277,88 @@ four people active for 10 minutes (`--minutes 30` for longer). `pnpm live-demo -
 one session with known timings to check the counting: with the default limit, the "Lens
 self-test" client on 2025-10-01 shows 410 s in the app, 160 s active and 250 s idle.
 
+## Surveys
+
+In-app surveys for the app's users, made in chat and watched on the **Surveys** page. They are
+PostHog surveys shown by the survey script PostHog already serves, so nothing is added to the app.
+
+**In chat** (MCP tools; the PM never opens PostHog):
+
+| Tool | What it does |
+|---|---|
+| `design_survey` | Checks a survey described in the app's words and counts the sessions in the last 14 days that went through its steps. Saves nothing. |
+| `save_survey` | Saves it as a draft, or changes one Lens made (`survey_id`). |
+| `launch_survey` | Starts showing it. Needs `confirm: true`, which Claude passes only after the person says yes. |
+| `stop_survey` | Stops it (`archive: true` also hides it). Answers stay. |
+| `list_surveys` | Every survey, with its steps, clients and counts. |
+| `survey_results` | Shown, answered, dismissed, each question's answers, per client and per day, and the survey's current fields for a change. |
+
+A survey is described in the app's own words:
+
+```json
+{
+  "name": "Hedge booking ease",
+  "steps": [{ "opens": "DlgHedgeDesignation" }, { "button": "Save", "dialog": "DlgHedgeDesignation" }, { "message": "has been saved" }],
+  "reset_on": [{ "closes": "DlgHedgeDesignation" }],
+  "within_minutes": 15,
+  "clients": ["ACME"],
+  "questions": [{ "type": "rating", "text": "How easy was booking this hedge?" }, { "type": "open", "text": "What slowed you down?", "optional": true }],
+  "show": "once",
+  "look": { "background": "#0b2a4a", "text": "#ffffff", "button": "#f5a623", "button_text": "#0b2a4a", "position": "right" }
+}
+```
+
+- **Steps** happen in order; other events in between are fine. A step is `opens` or `closes` a
+  dialog, a `button` or `field` (optionally in a `dialog`), a `message` the app shows (text it
+  contains) or `message_pattern` (a simple regular expression), or any `event` with property
+  filters. `reset_on` starts the chain over; `within_minutes` limits the whole chain.
+- **When**: as soon as the last step happens and the page has loaded (no ExtJS loading mask), with
+  no fixed delay. `wait_for_page: false` skips the wait; `max_wait_seconds` (30) gives up on a page
+  that stays busy.
+- **Who**: `clients` (names or ids; unclear names stop the save), `url_contains`. `show` is `once`
+  per user or `every_time`; `days_between_surveys` (14) keeps a user from seeing two surveys close
+  together; `max_responses` stops it.
+- **Questions**: `rating` (3, 5, 7 or 10, numbers or emoji), `nps`, `open`, `single`, `multiple`.
+- **Look**: colours, position, the submit label and thank-you text. The footer reads
+  `SURVEY_BRAND` ("Survey by ION").
+- Mistakes (a step with two kinds, an unsafe pattern, a colour that is not a colour) stop the save.
+  Warnings (every client, more than 3 questions, poor colour contrast, a step that will fire very
+  often) are shown to the person.
+
+**The Surveys page** (`/replays/surveys`): every survey, made in Lens or in PostHog, with its status;
+for each, the steps as a diagram, who sees it and how often, a likeness of how it looks, and the
+results: steps completed, shown, answered, dismissed, answer rate, a chart per day, each question's
+answers (rating spread, NPS, choices, recent written answers) and a table per client. **Launch**,
+**Stop** and **Archive** are on the page, and **How many would have seen it?** counts past sessions.
+Admins always see it; tick **Surveys** for anyone else on the admin page. The admin page can also
+stop chat from launching or stopping surveys, so only the page can. Every save, launch and stop is
+in the activity log.
+
+**How it works.** Lens saves a PostHog survey whose `conditions.lensChain` holds the steps, the
+clients and the readiness rule, and whose trigger is the event `lens_chain:<id>`. The installer's
+`surveys` step (`deploy/posthog/survey-engine/apply.sh`) serves PostHog's own `surveys.js` with two
+changes: the footer reads `SURVEY_BRAND` instead of linking to PostHog, and the Lens chain engine
+(`engine.js`) is appended. In the browser, the engine follows each running survey's chain from the
+events the app already sends; when the last step happens and the page is ready it sends
+`lens_chain:<id>`, and PostHog shows the survey at once. Clients are read from the user id
+(`CLIENT_FROM_DISTINCT_ID`) or the client property. The engine keeps no storage, adds no requests,
+refuses risky regular expressions and never stops PostHog's own surveys from working. Chains are
+version 2; a renderer from before client limits refuses them rather than show them to everyone.
+
+- **Keys.** `POSTHOG_SURVEY_API_KEY` (made by `deploy/posthog/survey-engine/key.sh`, label
+  `lens-surveys`) has survey read and write only, for the Lens project. Answers and counts are read
+  with the normal read-only key.
+- **Switches.** `SURVEY_ENGINE=off` at install serves PostHog's original renderer and turns
+  `FEATURE_SURVEYS` off. `FEATURE_SURVEYS=off` removes the tools and the page.
+- **Upgrades.** The step rebuilds from the new PostHog's original file every install. If the footer
+  has changed shape, the build refuses, the original renderer is served and surveys keep working
+  without Lens chains. It recreates PostHog's web container only when the served file changed.
+- **The app's posthog-js** should be 1.268 or later. Older versions (Reval's 1.261.6) can abort
+  their first `/flags` request and then never load surveys on that page.
+- **Licence.** `surveys.js` is from posthog-js (Apache 2.0). The served file starts with the
+  licence notice, says it was modified, and records the original's hash. PostHog's white-label
+  setting needs an Enterprise licence and is not used.
+
 ## Release outcomes
 
 Claude reads these through MCP tools; there is no web page. The service gathers facts, and the

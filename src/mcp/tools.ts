@@ -39,6 +39,7 @@ import { parseTimeWindow } from '../core/timewindow.ts'
 import { triage, type TriageAi } from '../core/triage.ts'
 import { screenUsage } from '../core/usage.ts'
 import { recordClip } from '../service/replays.ts'
+import { registerSurveyTools, surveyToolNames } from './surveytools.ts'
 
 type Content = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }
 const text = (t: string): { content: Content[] } => ({ content: [{ type: 'text', text: t }] })
@@ -79,7 +80,7 @@ const A = appEvents()?.app || 'your app'
 // Every tool name, for PostHog's proxied exec description ("use the lens server's tools (...)").
 export const CORE_TOOLS = ['resolve_client', 'find_client_incidents', 'get_replay_link', 'screen_usage', 'error_blast_radius', 'find_silent_issues', 'triage_ticket', 'list_releases', 'release_outcomes', 'ticket_evidence', 'client_feedback', 'record_verdict', 'correct_ticket_link', 'refresh_releases']
 export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor']
-export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(appEvents() ? APP_EVENT_TOOLS : [])]
+export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(appEvents() ? APP_EVENT_TOOLS : []), ...surveyToolNames()]
 
 export function registerTools(server: McpServer, ai?: TriageAi): void {
     const register = server.registerTool.bind(server)
@@ -643,4 +644,5 @@ Relay the returned brief, including its evidence and limits. Add nothing invente
         title: 'Check after a release', description: 'What needs attention after a release?',
         argsSchema: { release: z.string().optional().describe('Release name or version, if known') },
     }, ({ release }) => briefPrompt({ question: `What should I worry about after release ${release || 'the latest release'}?`, when: 'last 14 days' }))
+    registerSurveyTools(server)
 }

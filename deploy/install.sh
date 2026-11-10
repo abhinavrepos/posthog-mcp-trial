@@ -97,9 +97,9 @@ chmod 700 "$STATE_DIR"
 
 done_step() { [ -f "$STATE_DIR/done/$1" ]; }
 finish() { date -u +%Y-%m-%dT%H:%M:%SZ >"$STATE_DIR/done/$1"; ok "step $1 done"; }
-STEPS=(check packages posthog scale addresses user app account posthog_mcp offline settings service status mcp doctor)
+STEPS=(check packages posthog scale addresses user app account posthog_mcp surveys offline settings service status mcp doctor)
 # Cheap and safe to repeat, so they run every time and changed answers take effect.
-ALWAYS=" check addresses app posthog_mcp offline settings service status mcp doctor "
+ALWAYS=" check addresses app posthog_mcp surveys offline settings service status mcp doctor "
 # Where the images come from (deploy/offline/ecr.sh: IMAGES_FROM=ecr when deploy/offline/ecr.env is here).
 . "$HERE/migrate/versions/versions.env"
 
@@ -298,6 +298,8 @@ collect_answers() {
     fi
     setting ANTHROPIC_API_KEY ""
     setting FEATURE_LENS_MCP on is_onoff
+    setting SURVEY_ENGINE on is_onoff
+    setting SURVEY_BRAND "Survey by ION"
     setting FEATURE_POSTHOG_MCP on is_onoff
     # Empty, or the address of the one this installer runs: PostHog's MCP server on this machine.
     setting POSTHOG_MCP_URL "" is_url
@@ -642,6 +644,20 @@ step_posthog_mcp() {
     finish posthog_mcp
 }
 
+# PostHog's survey renderer with "Survey by ION" and Lens condition chains (deploy/posthog/survey-engine).
+# Runs every time: after a PostHog upgrade it rebuilds from the new original; unchanged, it restarts nothing.
+step_surveys() {
+    CURRENT=surveys; step "Survey renderer (Survey by ION, condition chains)"
+    SURVEY_ENGINE="$SURVEY_ENGINE" SURVEY_BRAND="$SURVEY_BRAND" bash "$HERE/posthog/survey-engine/apply.sh" "$POSTHOG_DIR"
+    # Lens's own key for making and launching surveys (survey read and write, this project only).
+    FEATURE_SURVEYS="$SURVEY_ENGINE"
+    if [ "$SURVEY_ENGINE" = on ]; then
+        SECRETS="$SECRETS" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/posthog/survey-engine/key.sh" || warn "no survey key: the Surveys page and survey tools stay off until this step runs again"
+    fi
+    POSTHOG_SURVEY_API_KEY="$(read_env_file "$SECRETS" POSTHOG_SURVEY_API_KEY)"
+    finish surveys
+}
+
 set_secret() { # key value: writes it into .secrets.env, replacing the old line
     python3 - "$SECRETS" "$1" "$2" <<'PY'
 import sys
@@ -659,7 +675,8 @@ PY
 
 APP_KEYS=(PROP_CLIENT_ID PROP_CLIENT_NAME PROP_APP_VERSION PROP_PERSON_EMAIL SCREENS_FILE JIRA_BASE_URL JIRA_EMAIL JIRA_API_TOKEN
     JIRA_RCI_ISSUE_TYPE JIRA_RISK_ISSUE_TYPE RELEASES_JIRA_PROJECT RELEASES_SUPPORT_JQL ANTHROPIC_API_KEY FEATURE_LENS_MCP
-    FEATURE_POSTHOG_MCP POSTHOG_MCP_URL POSTHOG_MCP_API_KEY SERVICE_PUBLIC_URL CLIP_ALLOWED_HOSTS STATUS_PASSWORD)
+    FEATURE_POSTHOG_MCP POSTHOG_MCP_URL POSTHOG_MCP_API_KEY SERVICE_PUBLIC_URL CLIP_ALLOWED_HOSTS STATUS_PASSWORD
+    FEATURE_SURVEYS POSTHOG_SURVEY_API_KEY SURVEY_BRAND)
 step_settings() {
     CURRENT=settings; step "Writing .secrets.env"
     local k v n=0

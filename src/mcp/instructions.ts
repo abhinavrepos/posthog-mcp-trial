@@ -2,6 +2,7 @@
 import { appEvents } from '../core/appevents.ts'
 import { config, posthogMcpActive } from '../core/config.ts'
 import { P } from '../core/props.ts'
+import { surveyToolNames } from './surveytools.ts'
 
 export const INSTRUCTIONS_LIMIT = 2048
 
@@ -12,7 +13,7 @@ export function serverInstructions(withPosthog = posthogMcpActive()): string {
     return `Replays are private: never call PostHog's session-recording-*, query-session-recordings-list or vision-* tools. Use get_replay_link; give the person the link, never view replay content.
 
 Lens (${config.mcp.name}) = ${app} clients/users, trades, dialogs/buttons, sessions, Jira tickets, releases, client risk and app errors.
-${withPosthog ? `Use PostHog's server (posthog) for generic analytics, trends, funnels, retention, insights, dashboards, flags, experiments, surveys, cohorts, annotations, actions, error issues, exports, SDK docs and raw SQL (execute-sql).
+${withPosthog ? `Use PostHog's server (posthog) for generic analytics, trends, funnels, retention, insights, dashboards, flags, experiments, cohorts, annotations, actions, error issues, exports, SDK docs and raw SQL (execute-sql).
 PostHog's one tool, exec, takes a command string; call Lens tools directly with JSON, never via exec.
 In PostHog SQL the client is ${P.client}.
 ` : 'Call Lens tools directly with JSON arguments. For other questions, say this server does not cover them.\n'}
@@ -23,5 +24,6 @@ Lens tools:
 - Jira triage: triage_ticket
 - releases: list_releases, release_outcomes; one ticket: ticket_evidence; complaints after shipping: client_feedback
 - agreed verdict: record_verdict; ticket link: correct_ticket_link; sync: refresh_releases${appEvents() ? `
-- reval_brief first for PM questions; ${app}: describe_app_events vocabulary; top_pains; dialog_friction failures; message_doctor messages; session_story; attempt_timings waits; find_trade ids; client_signals risk; discover_workflows, workflow_completion` : ''}`
+- reval_brief first for PM questions; ${app}: describe_app_events vocabulary; top_pains; dialog_friction failures; message_doctor messages; session_story; attempt_timings waits; find_trade ids; client_signals risk; discover_workflows, workflow_completion` : ''}${surveyToolNames().length ? `
+- in-app surveys for ${app} users (which dialog/button/message, clients, colours): design_survey, save_survey, launch_survey (only after the person says yes), stop_survey, list_surveys, survey_results` : ''}`
 }

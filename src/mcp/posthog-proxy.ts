@@ -15,12 +15,12 @@ const DEFAULT_INFO: LensInfo = { app: 'the app', tools: ['get_replay_link'] }
 export function routingBlock(name: string, info: LensInfo = DEFAULT_INFO): string {
     const app = info.app
     return `Replays are private: use ${name}'s get_replay_link and give the person the link; never call session-recording-*, query-session-recordings-list or vision-* tools.
-Use the Lens server (${name}) instead for a named ${app} client or user, trade/link id, ${app} dialog/screen/button, errors ${app} showed users, which clients or users an error hit, one session, Jira ticket, release outcome, "where do clients struggle" or "who is at risk". Call its tools directly with JSON arguments, never through exec.
-Use PostHog exec for generic product analytics and PostHog objects: trends, funnels, retention, insights, dashboards, feature flags, experiments, surveys, cohorts, annotations, actions/event definitions, error-tracking issue management, data warehouse/batch exports, docs/SDK help and raw SQL.`
+Use the Lens server (${name}) instead for a named ${app} client or user, trade/link id, ${app} dialog/screen/button, errors ${app} showed users, which clients or users an error hit, one session, Jira ticket, release outcome, "where do clients struggle" or "who is at risk"${info.tools.includes('design_survey') ? `, and in-app surveys for ${app} users (making, launching, stopping, answers)` : ''}. Call its tools directly with JSON arguments, never through exec.
+Use PostHog exec for generic product analytics and PostHog objects: trends, funnels, retention, insights, dashboards, feature flags, experiments, ${info.tools.includes('design_survey') ? '' : 'surveys, '}cohorts, annotations, actions/event definitions, error-tracking issue management, data warehouse/batch exports, docs/SDK help and raw SQL.`
 }
 
 export function execRoutingLine(name: string, info: LensInfo = DEFAULT_INFO): string {
-    return `Not for ${info.app} clients or users, trade ids, ${info.app} screens or the errors it shows users, single sessions, replays, Jira tickets or release outcomes: use the ${name} server's tools (${info.tools.join(', ')}) for those.`
+    return `Not for ${info.app} clients or users, trade ids, ${info.app} screens or the errors it shows users, single sessions, replays, Jira tickets${info.tools.includes('design_survey') ? ', release outcomes or in-app surveys' : ' or release outcomes'}: use the ${name} server's tools (${info.tools.join(', ')}) for those.`
 }
 
 type Rpc = Record<string, any>
