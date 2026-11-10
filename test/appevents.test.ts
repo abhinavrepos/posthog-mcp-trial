@@ -299,14 +299,14 @@ describe('the MCP server with app events', async () => {
     const client = new Client({ name: 'test', version: '0' })
     const [a, b] = InMemoryTransport.createLinkedPair()
     await Promise.all([server.connect(a), client.connect(b)])
-    test('offers the three tools and the prompt', async () => {
+    test('offers the app event tools and the prompt', async () => {
         const names = (await client.listTools()).tools.map((t) => t.name)
-        for (const n of ['describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade']) assert.ok(names.includes(n), n)
+        for (const n of ['describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade', 'message_doctor']) assert.ok(names.includes(n), n)
         assert.ok((await client.listPrompts()).prompts.some((p) => p.name === 'where_clients_struggle'))
     })
     test('the instructions name them, say where the client is, and still fit', () => {
         const text = client.getInstructions() || ''
-        for (const n of ['describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade']) assert.ok(text.includes(n), n)
+        for (const n of ['describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade', 'message_doctor']) assert.ok(text.includes(n), n)
         assert.match(text, /part 3 of the distinct id/)
         assert.ok(text.length + 100 < INSTRUCTIONS_LIMIT, `instructions are ${text.length} characters`)
     })
