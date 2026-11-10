@@ -300,6 +300,8 @@ collect_answers() {
     setting FEATURE_LENS_MCP on is_onoff
     setting SURVEY_ENGINE on is_onoff
     setting SURVEY_BRAND "Survey by ION"
+    # on: PostHog's own survey screens and API answer only Lens (surveys are managed in Lens).
+    setting SURVEY_UI_LOCK on is_onoff
     setting FEATURE_POSTHOG_MCP on is_onoff
     # Empty, or the address of the one this installer runs: PostHog's MCP server on this machine.
     setting POSTHOG_MCP_URL "" is_url
@@ -647,14 +649,17 @@ step_posthog_mcp() {
 # PostHog's survey renderer with "Survey by ION" and Lens condition chains (deploy/posthog/survey-engine).
 # Runs every time: after a PostHog upgrade it rebuilds from the new original; unchanged, it restarts nothing.
 step_surveys() {
-    CURRENT=surveys; step "Survey renderer (Survey by ION, condition chains)"
-    SURVEY_ENGINE="$SURVEY_ENGINE" SURVEY_BRAND="$SURVEY_BRAND" bash "$HERE/posthog/survey-engine/apply.sh" "$POSTHOG_DIR"
-    # Lens's own key for making and launching surveys (survey read and write, this project only).
+    CURRENT=surveys; step "Surveys (Survey by ION, condition chains, Lens-only access)"
+    # Lens's own key for making and launching surveys (survey read and write, this project only), and the
+    # gate secret PostHog's proxy wants on survey calls.
     FEATURE_SURVEYS="$SURVEY_ENGINE"
     if [ "$SURVEY_ENGINE" = on ]; then
         SECRETS="$SECRETS" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/posthog/survey-engine/key.sh" || warn "no survey key: the Surveys page and survey tools stay off until this step runs again"
     fi
     POSTHOG_SURVEY_API_KEY="$(read_env_file "$SECRETS" POSTHOG_SURVEY_API_KEY)"
+    POSTHOG_SURVEY_GATE="$(read_env_file "$SECRETS" POSTHOG_SURVEY_GATE)"
+    SURVEY_ENGINE="$SURVEY_ENGINE" SURVEY_BRAND="$SURVEY_BRAND" SURVEY_UI_LOCK="$SURVEY_UI_LOCK" SURVEY_GATE="$POSTHOG_SURVEY_GATE" LENS_URL="$SERVICE_PUBLIC_URL" \
+        bash "$HERE/posthog/survey-engine/apply.sh" "$POSTHOG_DIR"
     finish surveys
 }
 
@@ -676,7 +681,7 @@ PY
 APP_KEYS=(PROP_CLIENT_ID PROP_CLIENT_NAME PROP_APP_VERSION PROP_PERSON_EMAIL SCREENS_FILE JIRA_BASE_URL JIRA_EMAIL JIRA_API_TOKEN
     JIRA_RCI_ISSUE_TYPE JIRA_RISK_ISSUE_TYPE RELEASES_JIRA_PROJECT RELEASES_SUPPORT_JQL ANTHROPIC_API_KEY FEATURE_LENS_MCP
     FEATURE_POSTHOG_MCP POSTHOG_MCP_URL POSTHOG_MCP_API_KEY SERVICE_PUBLIC_URL CLIP_ALLOWED_HOSTS STATUS_PASSWORD
-    FEATURE_SURVEYS POSTHOG_SURVEY_API_KEY SURVEY_BRAND)
+    FEATURE_SURVEYS POSTHOG_SURVEY_API_KEY POSTHOG_SURVEY_GATE SURVEY_BRAND)
 step_settings() {
     CURRENT=settings; step "Writing .secrets.env"
     local k v n=0

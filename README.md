@@ -347,14 +347,33 @@ A survey is described in the app's own words:
   Warnings (every client, more than 3 questions, poor colour contrast, a step that will fire very
   often) are shown to the person.
 
+**Who may do what (Lens only).** Surveys are made, launched and read only in Lens:
+
+- **PostHog's own survey screens and API are closed** (`SURVEY_UI_LOCK`, on). PostHog's proxy
+  answers survey API calls only when they carry Lens's secret header (`POSTHOG_SURVEY_GATE`), so
+  PostHog users, their personal API keys and PostHog's MCP server get "Surveys are managed in Lens";
+  PostHog's Surveys screen sends people to the Lens Surveys page. PostHog's MCP key has no survey
+  scopes, and the Lens proxy in front of it refuses survey commands. Reval's browsers are unaffected
+  (they use PostHog's public survey endpoint). The installer checks the new proxy config with Caddy
+  first and undoes it if the proxy does not answer with it.
+- **Survey roles**, per person on the admin page, separate from the clip role: *See surveys and
+  results*, *Also make and change surveys*, *Also launch and stop surveys*. Admins always have the
+  last; a default applies to everyone else (*No access* unless changed). They apply on the Surveys
+  page and in chat: a person sees only the survey tools their role allows.
+- **Chat knows who asks** with a personal token from the **Connect chat** page (`/replays/connect`,
+  shown once, stored as a hash, revocable there and on the admin page). The shared team token
+  (`MCP_TOKEN`) cannot tell who asks, so it gets the survey role an admin picks (default *See
+  surveys and results*).
+- Not covered: survey answers are also PostHog events, so someone who can write SQL or browse events
+  in PostHog can still read them. Only PostHog's Enterprise permissions could close that.
+
 **The Surveys page** (`/replays/surveys`): every survey, made in Lens or in PostHog, with its status;
 for each, the steps as a diagram, who sees it and how often, a likeness of how it looks, and the
 results: steps completed, shown, answered, dismissed, answer rate, a chart per day, each question's
 answers (rating spread, NPS, choices, recent written answers) and a table per client. **Launch**,
 **Stop** and **Archive** are on the page, and **How many would have seen it?** counts past sessions.
-Admins always see it; tick **Surveys** for anyone else on the admin page. The admin page can also
-stop chat from launching or stopping surveys, so only the page can. Every save, launch and stop is
-in the activity log.
+Who sees it and who may press Launch and Stop follows the survey roles above. Every save, launch,
+stop, role change and chat token is in the activity log.
 
 **How it works.** Lens saves a PostHog survey whose `conditions.lensChain` holds the steps, the
 clients, sample, one-at-a-time rule and the readiness rule, and whose trigger is the event `lens_chain:<id>`. The installer's

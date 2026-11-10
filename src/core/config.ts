@@ -103,6 +103,9 @@ export const config = {
         mcpApiKey: env('POSTHOG_MCP_API_KEY'), // a separate personal key, without session_recording:read
         // Lens surveys: a key with survey read and write only (deploy/posthog/survey-engine/key.sh).
         surveyApiKey: env('POSTHOG_SURVEY_API_KEY'),
+        // Sent with every survey API call; PostHog's proxy refuses survey calls without it, which closes
+        // PostHog's own survey screens and API to everyone but Lens (deploy/posthog/survey-engine/apply.sh).
+        surveyGate: env('POSTHOG_SURVEY_GATE'),
     },
     // Which MCP servers Claude gets. Each can be switched off on its own; both are on by default.
     features: {

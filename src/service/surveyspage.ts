@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config, surveysActive } from '../core/config.ts'
 import { archiveSurvey, estimateReach, getSurvey, launchSurvey, stopSurvey, surveyOverview, surveyResults } from '../core/surveys.ts'
-import { audit, canUseSurveys, type Viewer } from './access.ts'
+import { audit, canSurvey, canUseSurveys, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
 import { APP_NAME, headerHtml, PAGE_CSS } from './replays.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -41,6 +41,7 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
             return (json(res, 200, await estimateReach(chain, days(url, 14))), true)
         }
         if (m && m[2] && req.method === 'POST') {
+            if (!canSurvey(v.role === 'admin' ? 'launch' : v.surveys, 'launch')) return (json(res, 403, { error: 'Launching, stopping and archiving surveys needs the "Also launch and stop surveys" survey role. Ask an admin.' }), true)
             const s = m[2] === 'launch' ? await launchSurvey(m[1]) : m[2] === 'stop' ? await stopSurvey(m[1]) : await archiveSurvey(m[1])
             audit(v.email, `survey.${m[2] === 'launch' ? 'launched' : m[2] === 'stop' ? 'stopped' : 'archived'}`, { survey: s.id, name: s.name })
             return (json(res, 200, { ok: true }), true)
@@ -90,15 +91,16 @@ table{width:100%;table-layout:fixed}td,th{overflow-wrap:anywhere}td.n,th.n{text-
 <div class="layout">
 <section><div class="toolbar"><h2 style="margin:0">Surveys</h2><select id="days" aria-label="Counts over"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></div>
 <div class="list" id="list"><p class="empty">Loading…</p></div>
-<p class="small muted">Make or change a survey in chat: describe which dialog, button or message should show it, for which clients, and how it should look. Lens checks it and saves a draft; it reaches users only after you launch it.</p></section>
+<p class="small muted">Your survey role: ${SURVEY_ROLE_TEXT[v.role === 'admin' ? 'launch' : v.surveys || 'none']}. Make or change a survey in chat (<a href="/replays/connect">connect chat</a>): describe which dialog, button or message should show it, for which clients, and how it should look. Lens checks it and saves a draft; it reaches users only after you launch it.</p></section>
 <section id="detail"><div class="card"><p class="empty">Pick a survey.</p></div></section>
 </div></main>
-<script>${CLIENT.replace('__BRAND__', JSON.stringify(config.surveys.brand))}</script></body></html>`
+<script>${CLIENT.replace('__BRAND__', JSON.stringify(config.surveys.brand)).replace('__CAN_LAUNCH__', JSON.stringify(v.role === 'admin' || canSurvey(v.surveys, 'launch')))}</script></body></html>`
 }
 
 // Runs in the browser. Survey names, questions and answers come from people: everything goes through esc().
 const CLIENT = String.raw`
 const BRAND=__BRAND__
+const CAN_LAUNCH=__CAN_LAUNCH__
 const $=id=>document.getElementById(id)
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
 const num=n=>n==null?'–':Number(n).toLocaleString('en-US')
@@ -147,7 +149,7 @@ async function show(id){current=id;drawList();$('detail').innerHTML='<div class=
   let r;try{r=await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'?days=90')}catch(e){$('detail').innerHTML='<div class="card"><p class="err">'+esc(e.message)+'</p></div>';return}
   if(current!==id)return
   const s=r.survey
-  const acts=(s.status==='draft'||s.status==='stopped'?'<button id="a-launch">'+(s.status==='draft'?'Launch':'Start again')+'</button>':'')+(s.status==='running'?'<button id="a-stop" class="ghost">Stop</button>':'')+'<button id="a-archive" class="ghost">Archive</button>'
+  const acts=!CAN_LAUNCH?'<span class="small muted">Launching and stopping needs the launch survey role.</span>':(s.status==='draft'||s.status==='stopped'?'<button id="a-launch">'+(s.status==='draft'?'Launch':'Start again')+'</button>':'')+(s.status==='running'?'<button id="a-stop" class="ghost">Stop</button>':'')+'<button id="a-archive" class="ghost">Archive</button>'
   const facts=[['Clients',(s.clients==='all'?'Every client':s.clients.join(', '))+(s.sample_percent<100?' · '+s.sample_percent+'% of their users':'')],['Shows',s.show==='every_time'?'Every time the steps happen':'Once per user'],['Steps must happen within',s.within_minutes?s.within_minutes+' minutes':'No limit (same page)'],
     ['Starts over when',s.reset_on.length?s.reset_on.join('; '):'Never (a page reload starts over)'],['Days between any two surveys',s.days_between_surveys||'None'],['Protecting users',s.pacing?'At most '+s.pacing.per_user+' running at once · '+s.pacing.gap_hours+' h apart at least · '+s.pacing.quiet_days_after_close+' quiet days after a close':'PostHog rules only'],['Only on pages containing',s.url_contains||'Any page'],['Stops after',s.max_responses?num(s.max_responses)+' answers':'No limit'],
     ['Made',new Date(s.created).toLocaleString()+(s.created_by?' by '+s.created_by:'')+(s.made_by_lens?' (Lens)':' (in PostHog)')],['Running since',s.started?new Date(s.started).toLocaleString():'Not launched'+(s.stopped?'':'')]].concat(s.stopped?[['Stopped',new Date(s.stopped).toLocaleString()]]:[])
@@ -164,7 +166,7 @@ async function show(id){current=id;drawList();$('detail').innerHTML='<div class=
   const act=(name,ask)=>async()=>{if(ask&&!confirm(ask))return;try{await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'/'+name,{method:'POST'});if(name==='archive')location.hash='';current=null;await loadList()}catch(e){$('a-msg').textContent=e.message;$('a-msg').className='small err'}}
   if($('a-launch'))$('a-launch').onclick=act('launch','Show "'+s.name+'" to '+(s.clients==='all'?'every client':s.clients.join(', '))+(s.sample_percent<100?' ('+s.sample_percent+'% of users)':'')+' from now on?'+(r.queue&&r.queue.level!=='clear'?'\n\n'+r.queue.alert:''))
   if($('a-stop'))$('a-stop').onclick=act('stop','Stop showing "'+s.name+'"? Its answers stay.')
-  $('a-archive').onclick=act('archive','Archive "'+s.name+'"? It stops and leaves this list. Its answers stay in PostHog.')
+  if($('a-archive'))$('a-archive').onclick=act('archive','Archive "'+s.name+'"? It stops and leaves this list. Its answers stay in PostHog.')
   if($('a-reach'))$('a-reach').onclick=async()=>{$('reach').innerHTML='<p class="small muted">Counting…</p>';try{const x=await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'/reach');$('reach').innerHTML='<p><b>'+num(x.sessions)+'</b> sessions, '+num(x.users)+' users at '+num(x.clients)+' clients.</p>'+bars(Object.fromEntries(x.by_step.map((b,i)=>['Step '+(i+1)+': '+b.step,b.sessions])))+(x.top_clients.length?'<p class="small muted">Most: '+x.top_clients.map(c=>esc(c.client)+' ('+num(c.sessions)+')').join(', ')+'</p>':'')+'<p class="small muted">'+esc(x.note)+'</p>'}catch(e){$('reach').innerHTML='<p class="err">'+esc(e.message)+'</p>'}}
 }
 loadList();setInterval(()=>{if(document.visibilityState==='visible')loadList()},60000)

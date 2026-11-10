@@ -37,6 +37,10 @@ Settings: `SURVEY_ENGINE` (on), `SURVEY_BRAND` ("Survey by ION"), `FEATURE_SURVE
 
 ## Rules worth knowing first
 
+- **Lens only**: PostHog's own survey screens and API are closed by a rule in PostHog's proxy
+  (`apply.sh`, `SURVEY_UI_LOCK`); only calls with Lens's `POSTHOG_SURVEY_GATE` header get through.
+  Access is per person in Lens: survey roles on the admin page, personal chat tokens on Connect chat.
+
 - **Users are protected**: 24 hours at least between surveys, one per visit; × closes it at once and
   gives 7 quiet days; a survey ignored twice stops; the engine keeps one key (`lensSurveyQuiet`).
 - **At most two running surveys per user** (`SURVEYS_PER_USER`): a user already in two unfinished

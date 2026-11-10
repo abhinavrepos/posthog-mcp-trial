@@ -433,7 +433,7 @@ async function surveyApi<T>(path: string, init: RequestInit = {}): Promise<T> {
     requireSurveys()
     const res = await fetch(`${config.posthog.host}/api/projects/${config.posthog.projectId}/surveys/${path}`, {
         ...init,
-        headers: { authorization: `Bearer ${config.posthog.surveyApiKey}`, 'content-type': 'application/json', ...init.headers },
+        headers: { authorization: `Bearer ${config.posthog.surveyApiKey}`, 'content-type': 'application/json', ...(config.posthog.surveyGate ? { 'x-lens-survey-gate': config.posthog.surveyGate } : {}), ...init.headers },
         signal: AbortSignal.timeout(30_000),
     })
     if (!res.ok) {
