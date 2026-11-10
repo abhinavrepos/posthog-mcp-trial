@@ -152,6 +152,66 @@ export function setSurveySettings(change: { default_role?: SurveyRole; shared_to
     })
 }
 
+// ------------------------------------------------------------------ dashboards
+// Dashboard roles, separate from the clip and survey roles:
+//   none   no Dashboards page and no dashboard tools in chat
+//   view   the task map and flow time views, and dashboards shared with them
+//   share  also pin dashboards (from chat or the page) and share them with people
+// Admins always have share, and see every pinned dashboard. Others get the default (none unless changed).
+export type DashboardRole = 'none' | 'view' | 'share'
+export const DASHBOARD_ROLES: DashboardRole[] = ['none', 'view', 'share']
+const DASHBOARD_RANK: Record<DashboardRole, number> = { none: 0, view: 1, share: 2 }
+export const canDashboard = (role: DashboardRole | undefined, needed: DashboardRole) => DASHBOARD_RANK[role || 'none'] >= DASHBOARD_RANK[needed]
+export const DASHBOARD_ROLE_TEXT: Record<DashboardRole, string> = { none: 'No access', view: 'See dashboards', share: 'Also pin and share dashboards' }
+const isDashboardRole = (r: unknown): r is DashboardRole => DASHBOARD_ROLES.includes(r as DashboardRole)
+export const defaultDashboardRole = (): DashboardRole => {
+    const r = getSetting<string>('dashboard_default_role', 'none')
+    return isDashboardRole(r) && r !== 'share' ? r : 'none'
+}
+export const sharedTokenDashboardRole = (): DashboardRole => {
+    const r = getSetting<string>('dashboard_shared_token_role', 'view')
+    return isDashboardRole(r) && r !== 'share' ? r : 'none' // pinning needs to know who pins
+}
+export function dashboardRoleOf(email: string, lensRole: Role): DashboardRole {
+    if (can(lensRole, 'admin')) return 'share'
+    const row = one<{ role: string }>('SELECT role FROM dashboard_people WHERE email = ?', email.toLowerCase())
+    return row && isDashboardRole(row.role) ? row.role : defaultDashboardRole()
+}
+export function dashboardPeople(): Map<string, { role: DashboardRole; updated_by: string; updated_at: string }> {
+    return new Map(all<{ email: string; role: DashboardRole; updated_by: string; updated_at: string }>('SELECT * FROM dashboard_people').map((r) => [r.email, r]))
+}
+export function setDashboardRole(email: string, role: DashboardRole, by: string): void {
+    const e = email.toLowerCase()
+    if (!isDashboardRole(role)) throw new Error('unknown dashboard role')
+    tx(() => {
+        const before = one<{ role: string }>('SELECT role FROM dashboard_people WHERE email = ?', e)?.role ?? null
+        run('INSERT INTO dashboard_people (email, role, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (email) DO UPDATE SET role = excluded.role, updated_by = excluded.updated_by, updated_at = excluded.updated_at', e, role, by, new Date().toISOString())
+        if (before !== role) audit(by, 'access.dashboard_role_set', { person: e, dashboard_role: role, before })
+    })
+}
+export function resetDashboardRole(email: string, by: string): void {
+    const e = email.toLowerCase()
+    tx(() => {
+        const before = one<{ role: string }>('SELECT role FROM dashboard_people WHERE email = ?', e)?.role
+        run('DELETE FROM dashboard_people WHERE email = ?', e)
+        if (before) audit(by, 'access.dashboard_role_reset', { person: e, before })
+    })
+}
+export function setDashboardSettings(change: { default_role?: DashboardRole; shared_token_role?: DashboardRole }, by: string): void {
+    tx(() => {
+        if (change.default_role !== undefined) {
+            if (!isDashboardRole(change.default_role) || change.default_role === 'share') throw new Error('The default dashboard role cannot be share.')
+            setSetting('dashboard_default_role', change.default_role)
+        }
+        if (change.shared_token_role !== undefined) {
+            if (!isDashboardRole(change.shared_token_role) || change.shared_token_role === 'share') throw new Error('The shared team token cannot pin or share: pinning needs to know who pins.')
+            setSetting('dashboard_shared_token_role', change.shared_token_role)
+        }
+        audit(by, 'access.dashboard_settings', { default_role: defaultDashboardRole(), shared_token_role: sharedTokenDashboardRole() })
+    })
+}
+export const canUseDashboards = (v: Pick<Viewer, 'role' | 'dashboards'>) => can(v.role, 'admin') || canDashboard(v.dashboards, 'view')
+
 // ------------------------------------------------------------------ personal chat tokens
 // A person makes their own token on the Connect page; chat sends it instead of the shared MCP_TOKEN,
 // so Lens knows who asks and applies their survey role. Only a SHA-256 of the token is stored.
@@ -185,12 +245,12 @@ export function revokeMcpToken(id: string, by: string, onlyFor?: string): boolea
 }
 
 /** Who a chat request is from: the shared token, or a person's own token. Undefined: refuse. */
-export interface ChatCaller { who: string; email?: string; shared: boolean; surveyRole: SurveyRole }
+export interface ChatCaller { who: string; email?: string; shared: boolean; surveyRole: SurveyRole; dashboardRole: DashboardRole; admin: boolean }
 export function chatCaller(bearer: string | undefined, sharedToken: string): ChatCaller | undefined {
     if (!bearer) return undefined
     if (sharedToken) {
         const a = Buffer.from(bearer), b = Buffer.from(sharedToken)
-        if (a.length === b.length && timingSafeEqual(a, b)) return { who: 'mcp (shared token)', shared: true, surveyRole: sharedTokenSurveyRole() }
+        if (a.length === b.length && timingSafeEqual(a, b)) return { who: 'mcp (shared token)', shared: true, surveyRole: sharedTokenSurveyRole(), dashboardRole: sharedTokenDashboardRole(), admin: false }
     }
     if (!/^lens_[A-Za-z0-9_-]{20,64}$/.test(bearer)) return undefined
     const row = one<Record<string, unknown>>('SELECT * FROM mcp_tokens WHERE hash = ? AND revoked_at IS NULL', tokenHash(bearer))
@@ -200,7 +260,7 @@ export function chatCaller(bearer: string | undefined, sharedToken: string): Cha
     const lensRole: Role = t.posthog_admin ? 'admin' : roleOf(t.email, false)
     const now = new Date().toISOString()
     if (!t.last_used_at || Date.parse(now) - Date.parse(t.last_used_at) > 60_000) run('UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?', now, t.id)
-    return { who: t.email, email: t.email, shared: false, surveyRole: surveyRoleOf(t.email, lensRole) }
+    return { who: t.email, email: t.email, shared: false, surveyRole: surveyRoleOf(t.email, lensRole), dashboardRole: dashboardRoleOf(t.email, lensRole), admin: can(lensRole, 'admin') }
 }
 
 /** Lets a person see the System page, or stops it, and records who did it. */
@@ -272,6 +332,7 @@ export interface Viewer {
     in_replay_project: boolean // can open the project (and so every replay) in PostHog itself
     system?: boolean // an admin let this person see the System page (admins see it anyway)
     surveys?: SurveyRole // this person's survey role (admins: launch)
+    dashboards?: DashboardRole // this person's dashboard role (admins: share)
     session: string // PostHog session id, used to call PostHog on the admin's behalf
 }
 
@@ -346,7 +407,7 @@ export async function currentViewer(req: IncomingMessage): Promise<Viewer | unde
     if (!session || !/^[A-Za-z0-9:._-]{8,200}$/.test(session)) return undefined
     const id = await identity(session)
     if (!id) return undefined
-    return { ...id, role: roleOf(id.email, id.posthog_admin), system: hasSystemGrant(id.email), surveys: surveyRoleOf(id.email, roleOf(id.email, id.posthog_admin)), session }
+    return { ...id, role: roleOf(id.email, id.posthog_admin), system: hasSystemGrant(id.email), surveys: surveyRoleOf(id.email, roleOf(id.email, id.posthog_admin)), dashboards: dashboardRoleOf(id.email, roleOf(id.email, id.posthog_admin)), session }
 }
 
 // ------------------------------------------------------------------ sign in and out through PostHog

@@ -18,12 +18,14 @@ import { clipUrl } from '../core/links.ts'
 import { replayUrl } from '../core/posthog.ts'
 import { recordingInfo, type RecordingInfo } from '../core/recording-info.ts'
 import { downloadName, formatClock, HourlyLimit, parseReplayInput, parseStartTime } from '../core/replay-input.ts'
-import { audit, can, canSeeSystem, canUseSurveys, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
+import { audit, can, canSeeSystem, canUseDashboards, canUseSurveys, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
 import { handleAdmin } from './admin.ts'
 import { handleLive, liveHtml } from './live.ts'
 import { handleSystem } from './system.ts'
 import { handleSurveys } from './surveyspage.ts'
 import { canConnect, handleConnect } from './connect.ts'
+import { handleDashboards } from './dashboards.ts'
+import { appEvents } from '../core/appevents.ts'
 
 const RETENTION_DAYS = Number(process.env.CLIP_RETENTION_DAYS || 14)
 const AUDIT_RETENTION_DAYS = Number(process.env.AUDIT_RETENTION_DAYS || 365)
@@ -346,6 +348,11 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         res.end(loginHtml('Chat'))
         return true
     }
+    if (!viewer && (p === '/replays/dashboards' || p.startsWith('/replays/dashboards/')) && !p.includes('/api/')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
+        res.end(loginHtml('Dashboards'))
+        return true
+    }
     if (!viewer && (p === '/replays/surveys' || p === '/replays/surveys/')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
         res.end(loginHtml('Surveys'))
@@ -364,6 +371,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
     if (p === '/replays/system' || p.startsWith('/replays/system/')) return handleSystem(req, res, url, viewer)
     if (p === '/replays/surveys' || p.startsWith('/replays/surveys/')) return handleSurveys(req, res, url, viewer)
     if (p === '/replays/connect' || p.startsWith('/replays/connect/')) return handleConnect(req, res, url, viewer)
+    if (p === '/replays/dashboards' || p.startsWith('/replays/dashboards/')) return handleDashboards(req, res, url, viewer)
     if (!can(viewer.role, 'watch')) {
         json(res, 403, { error: 'You do not have access to replay clips. Ask an admin.' })
         return true
@@ -613,7 +621,7 @@ export const PAGE_CSS = () => CSS
 
 export const APP_NAME = config.app.name
 export const APP_TAG = config.app.tag
-export type Section = 'Replay clips' | 'Live' | 'Surveys' | 'Chat' | 'System' | 'Admin'
+export type Section = 'Replay clips' | 'Live' | 'Dashboards' | 'Surveys' | 'Chat' | 'System' | 'Admin'
 
 /** The header on every page: the product name, the sections this person may open, and sign out. */
 export function headerHtml(v: Viewer | undefined, section: Section): string {
@@ -623,13 +631,14 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
         [
             ['Replay clips', '/replays', 'watch'],
             ['Live', '/replays/live', 'watch'],
+            ['Dashboards', '/replays/dashboards', 'dashboards'],
             ['Surveys', '/replays/surveys', 'surveys'],
             ['Chat', '/replays/connect', 'connect'],
             ['System', '/replays/system', 'system'],
             ['Admin', '/replays/admin', 'admin'],
         ] as const
     )
-        .filter(([, , need]) => (need === 'system' ? canSeeSystem(v) : need === 'surveys' ? surveysActive() && canUseSurveys(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need)))
+        .filter(([, , need]) => (need === 'system' ? canSeeSystem(v) : need === 'surveys' ? surveysActive() && canUseSurveys(v) : need === 'dashboards' ? !!appEvents() && canUseDashboards(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need)))
         .map(([name, href]) => `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${name}</a>`)
         .join('')
     return `<header>${brand}<nav>${tabs}</nav><span class="hdr"><span class="muted small who">${esc(v.email)} · ${esc(ROLE_TEXT[v.role])}</span><button class="ghost small" id="signout" type="button">Sign out</button></span></header>
