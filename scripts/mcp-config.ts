@@ -1,6 +1,6 @@
 // Writes .mcp.json for Claude Code from the two switches in .secrets.env (FEATURE_LENS_MCP and
 // FEATURE_POSTHOG_MCP). Run it again after changing either. .mcp.json is git-ignored: with PostHog's
-// server on it holds that server's API key, so it is written readable by its owner only.
+// server direct it holds that server's API key; through Lens it holds MCP_TOKEN. Owner-readable only.
 //
 //   pnpm mcp:config
 import { chmodSync, writeFileSync } from 'node:fs'

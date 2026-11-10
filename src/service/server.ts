@@ -2,12 +2,12 @@
 //   POST /webhooks/jira   signed Jira webhook → 202 at once, triage runs in the background
 //   GET  /clips/<name>    signed, expiring clip links (with Range support so the video can seek)
 //   POST /mcp             the MCP tools over Streamable HTTP, behind a bearer token
+//   POST/GET/DELETE /posthog-mcp  PostHog MCP with Lens routing and replay refusal
 //   GET  /status          recent jobs
 //   GET  /replays         the replay clip page (PostHog login), see replays.ts
 import { existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { basename, join } from 'node:path'
-import { timingSafeEqual } from 'node:crypto'
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -19,8 +19,11 @@ import { verifyClipLink } from '../core/links.ts'
 import { renderReport } from '../core/report.ts'
 import { triage } from '../core/triage.ts'
 import { addAttachment, addComment, addLabels, getIssue, hasTriageComment, issueToTicket, verifyWebhookSignature } from '../jira/client.ts'
+import { bearerAuthorized, handlePosthogMcp } from '../mcp/posthog-proxy.ts'
+import { lensServerInfo } from '../mcp/server-info.ts'
 import { serverInstructions } from '../mcp/instructions.ts'
-import { registerTools } from '../mcp/tools.ts'
+import { lensToolNames, registerTools } from '../mcp/tools.ts'
+import { appEvents } from '../core/appevents.ts'
 import { audit } from './access.ts'
 import { keptReleases, syncReleases, syncStatus } from '../core/releases.ts'
 import { captionedFile } from '../core/comments.ts'
@@ -140,19 +143,14 @@ function featureState() {
 }
 
 function bearerOk(req: IncomingMessage): boolean {
-    const token = config.service.mcpToken
-    if (!token) return false
-    const got = /^Bearer (.+)$/.exec(String(req.headers.authorization || ''))?.[1] || ''
-    const a = Buffer.from(got)
-    const b = Buffer.from(token)
-    return a.length === b.length && timingSafeEqual(a, b)
+    return bearerAuthorized(req, config.service.mcpToken)
 }
 
 async function handleMcp(req: IncomingMessage, res: ServerResponse) {
     if (!config.features.lensMcp) return send(res, 503, { error: `${config.app.name}'s MCP tools are switched off (FEATURE_LENS_MCP=off).` })
     if (!bearerOk(req)) return send(res, 401, { error: 'MCP needs Authorization: Bearer <MCP_TOKEN>' })
     // Stateless: a fresh server and transport per request.
-    const server = new McpServer({ name: 'ticket-triage', version: '0.1.0' }, { instructions: serverInstructions() })
+    const server = new McpServer(lensServerInfo, { instructions: serverInstructions() })
     registerTools(server, ai)
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     res.on('close', () => {
@@ -181,6 +179,12 @@ const server = createServer(async (req, res) => {
             return res.end()
         }
         if (await handleReplays(req, res, url)) return
+        if (url.pathname === '/posthog-mcp') return await handlePosthogMcp(req, res, {
+            url: config.posthog.mcpUrl, apiKey: config.posthog.mcpApiKey,
+            token: config.service.mcpToken, name: config.mcp.name,
+            enabled: config.posthog.mcpViaLens && posthogMcpActive(),
+            info: { app: appEvents()?.app || 'the app', tools: lensToolNames() },
+        })
         if (url.pathname === '/mcp') return await handleMcp(req, res)
         if (url.pathname === '/status') {
             if (!bearerOk(req)) return send(res, 401, { error: 'needs Authorization: Bearer <MCP_TOKEN>' })
