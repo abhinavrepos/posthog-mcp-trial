@@ -1,22 +1,9 @@
-// Bounded queries and settings for the pure workflow reader.
+// Bounded queries for the pure workflow reader. PMs do not configure definitions.
 import { columns, dialogLabel, dialogNames, required, toRaw, toSteps, type AppEvents, type RawEvent } from './appevents.ts'
-import { getSetting, setSetting, tx } from './db.ts'
 import { recordingSpans } from './incidents.ts'
 import { hogql, replayUrl } from './posthog.ts'
 import { P } from './props.ts'
-import { DIALOG_CODE, discoverWorkflowChains, validateWorkflow, workflowCompletion, type Workflow, type CompletionMetrics } from './workflows.ts'
-
-export interface SavedWorkflow extends Workflow { saved_by: string; saved_at: string }
-export function savedWorkflows(): SavedWorkflow[] { return getSetting<SavedWorkflow[]>('workflows', []) }
-export function saveWorkflow(value: unknown, savedBy: string): SavedWorkflow {
-    const w = validateWorkflow(value)
-    const reg = required()
-    if (w.dialogs.some((d) => [...reg.dialogs.menu, ...reg.dialogs.messages, ...reg.dialogs.notices].includes(d))) throw new Error('Use task dialogs, not menu, messagebox or toast.')
-    if (typeof savedBy !== 'string' || !savedBy.trim() || savedBy.length > 200) throw new Error('saved_by must name the person who agreed (1–200 characters).')
-    const saved = { ...w, saved_by: savedBy.trim(), saved_at: new Date().toISOString() }
-    tx(() => setSetting('workflows', [...savedWorkflows().filter((s) => s.name.toLowerCase() !== w.name.toLowerCase()), saved]))
-    return saved
-}
+import { DIALOG_CODE, discoverWorkflowChains, validateWorkflow, workflowCompletion, workflowDialogsFromId, type Workflow, type CompletionMetrics } from './workflows.ts'
 
 type Window = { from: Date; to: Date; clientId?: string }
 const prop = (reg: AppEvents, role: 'dialog' | 'action') => reg.properties[role] ? `toString(properties.${reg.properties[role]!.name})` : `''`
@@ -67,9 +54,9 @@ function labels(sessions: Awaited<ReturnType<typeof workflowSessions>>['sessions
 export async function discoverWorkflows(q: Window & { limit?: number }) {
     const data = await workflowSessions(q)
     return { window: { from: q.from.toISOString(), to: q.to.toISOString() }, client: q.clientId,
-        discovered: discoverWorkflowChains(data.sessions, required(), { names: labels(data.sessions), window: q, limit: q.limit }), saved: savedWorkflows(),
+        discovered: discoverWorkflowChains(data.sessions, required(), { names: labels(data.sessions), window: q, limit: q.limit }),
         sessions_selected: data.sessions_selected, rows_read: data.rows_read, truncated: data.truncated,
-        note: 'Chains of 2–4 contiguous dialog opens, consecutive repeats collapsed; search/menu navigation or 10 minutes idle starts a new episode. At least 2 distinct sessions; ranked by sessions × clients. Contained chains are removed when a longer chain has at least 80% of their session support. Outcomes count occurrences, separately completed and queued (accepted); either counts as done here. Durations end at the first matching outcome message. Full selected sessions are read; starts belong to this window. Limits: newest 2000 sessions, 50000 events per batch of 50. Truncated results are partial.' }
+        note: 'Names use dialog titles and the most common confirmed submit/success-message template; ids encode only the ordered dialog codes. No setup needed. Chains of 2–4 contiguous dialog opens, consecutive repeats collapsed; search/menu navigation or 10 minutes idle starts a new episode. At least 2 distinct sessions; ranked by sessions × clients. Contained chains are removed when a longer chain has at least 80% of their session support. Outcomes count occurrences, separately completed and queued (accepted); either counts as done here. Durations end at the first matching outcome message. Full selected sessions are read; starts belong to this window. Limits: newest 2000 sessions, 50000 events per batch of 50. Truncated results are partial.' }
 }
 
 /** Resolve exact labels/aliases, rejecting ambiguous names instead of picking a dialog silently. */
@@ -88,19 +75,35 @@ export function resolveWorkflowDialogs(inputs: string[], reg: AppEvents, names: 
 }
 
 export async function completionWorkflow(q: Window & { workflow?: string; dialogs?: string[] }) {
-    if (!!q.workflow === !!q.dialogs) throw new Error('Give either a saved workflow name or dialogs, not both.')
+    if ((q.workflow !== undefined) === (q.dialogs !== undefined)) throw new Error('Give either a discovered workflow id/name or dialogs, not both.')
     const reg = required()
-    if (q.workflow) {
-        const saved = savedWorkflows().find((w) => w.name.toLowerCase() === q.workflow!.trim().toLowerCase())
-        if (!saved) throw new Error(`No saved workflow "${q.workflow}". discover_workflows lists saved workflows.`)
-        return saved
+    if (q.workflow !== undefined) {
+        const input = q.workflow.trim()
+        if (!input) throw new Error('Give a discovered workflow id or name.')
+        if (input.startsWith('wf_')) {
+            const dialogs = workflowDialogsFromId(input)
+            if (dialogs.some((d) => [...reg.dialogs.menu, ...reg.dialogs.messages, ...reg.dialogs.notices].includes(d)))
+                throw new Error('Use task dialogs, not menu, messagebox or toast.')
+            return validateWorkflow({ name: dialogs.map((d) => dialogLabel(d, reg)).join(' → '), dialogs,
+                done: { dialog: dialogs.at(-1)!, outcome: 'either' } })
+        }
+        const data = await workflowSessions(q)
+        const matches = discoverWorkflowChains(data.sessions, reg, { names: labels(data.sessions), window: q, limit: Number.MAX_SAFE_INTEGER })
+            .filter((w) => w.name.toLowerCase() === input.toLowerCase())
+        if (matches.length > 1) throw new Error(`Ambiguous workflow name "${input}". Use its discovered id.`)
+        if (!matches.length) throw new Error(`No discovered workflow "${input}" in this window. Use discover_workflows, a discovered id or dialogs.`)
+        const w = matches[0]
+        return validateWorkflow({ name: w.name, dialogs: w.dialogs, done: { dialog: w.dialogs.at(-1)!, outcome: 'either' } })
     }
     if (!q.dialogs?.length || q.dialogs.length > 10) throw new Error('Give 1–10 dialogs.')
     // Codes need no name lookup; names use the vocabulary and observed titles.
     const names = q.dialogs.every((d) => /^Dlg[A-Za-z0-9_$]+$/.test(d) && !Object.values(reg.aliases).some((n) => n.toLowerCase() === d.toLowerCase()))
         ? new Map<string, { name?: string }>() : await dialogNames(q.from, q.to, q.clientId)
     const dialogs = resolveWorkflowDialogs(q.dialogs, reg, names)
-    return validateWorkflow({ name: 'Ad hoc workflow', dialogs, done: { dialog: dialogs.at(-1)!, outcome: 'completed' } })
+    const excluded = [...reg.dialogs.menu, ...reg.dialogs.messages, ...reg.dialogs.notices]
+    if (dialogs.some((d) => excluded.includes(d))) throw new Error('Use task dialogs, not menu, messagebox or toast.')
+    return validateWorkflow({ name: dialogs.map((d) => dialogLabel(d, reg, { get: (code) => names.get(code)?.name })).join(' → '), dialogs,
+        done: { dialog: dialogs.at(-1)!, outcome: 'completed' } })
 }
 
 function trend(now: CompletionMetrics, before: CompletionMetrics) {

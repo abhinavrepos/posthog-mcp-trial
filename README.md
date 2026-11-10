@@ -62,11 +62,86 @@ still completes and the report notes it.
 
 ## Your app's own events (Reval)
 
-Reval sends events of its own next to PostHog's: `PageView` when a dialog opens, gets focus or
-closes, and `Event` for each field, button, search and message. They carry `dialog_id`,
-`dialog_name`, `tab_name`, `action`, `control_type` and `action_name` (the button, or on
-`messagebox` and `toast` events the message text). The client is part 3 of the distinct id
-(`ENV|SITE|CLIENT|USER`). With these settings, the MCP server knows all of this:
+Lens reads Reval's dialogs, buttons and messages alongside PostHog events. PMs ask questions
+in plain language; Lens investigates and names workflows automatically, with no report setup.
+
+| MCP tool | Answers |
+|---|---|
+| `reval_brief` | What should I worry about, how is a client doing, or what happened to a trade? A ready-to-read brief with comparisons, evidence and limits. Start here. |
+| `describe_app_events` | What do events and properties mean? Coverage, example values, common dialogs and messages, clients and SQL guidance. |
+| `top_pains` | What hurts most this week? Dialogs ranked by affected clients, main errors, changes from the previous week and example sessions. |
+| `dialog_friction` | Where do clients fail? Button attempts and outcomes, errors, retries and stuck sessions, for all clients, one client or one dialog. |
+| `message_doctor` | Which messages leave people stuck? Field labels touched, other dialogs opened, searches, recovery and repeated failures, with flags and examples. |
+| `session_story` | What happened in this session? A timeline of dialogs, fields, buttons, outcomes and messages, with replay links for a person to open. |
+| `attempt_timings` | Is a button slow or a server call failing? Waits after Save or Run, slow calls (method and path only) and HTTP errors from recent recordings. |
+| `find_trade` | What happened to trade 4348? Sessions where it was searched for or named in a message, with clients, users, attempts and errors. |
+| `client_signals` | Which clients need attention? Changes in sessions, days, dialogs, users and failed attempts. Warning signs, not a churn prediction. |
+| `discover_workflows` | Which tasks do people do and finish? Frequent dialog chains with automatic names, stable ids, support, outcomes, times and errors. |
+| `workflow_completion` | Do clients finish this task? Starts, ordered funnel steps, failures, retries, abandonment, times and previous-window comparisons, by discovered id/name or a list of dialogs. |
+
+### Asking Lens (reval_brief)
+
+Ask “what should I worry about?”, “how is ACME doing?”, “brief me”, “what happened to trade
+4348?” or “is hedge designation a problem?”. The agent calls `reval_brief` and relays its answer.
+Lens chooses trade first, then a confidently matched client, then a whole dialog name or code,
+otherwise a general brief. It compares the last 14 days with the 14 before; trade lookups default
+to 30 days. You can give a time in plain words.
+
+Findings favour affected clients, repeated problems and blocked work, and flag when one user
+contributes more than half the failures. Counts, session ids, replay links, limits and next
+questions accompany the brief; a JSON block after `<!-- data -->` holds the same findings.
+Queued reports are not finished, missing messages are not failures, and less use is not proof
+of churn. A change after a release does not prove causation. The prompts `where_clients_struggle`,
+`weekly_review`, `client_check` and `release_check` start with this tool; a release check flags
+current concerns without isolating release effects.
+
+### Message doctor
+
+`message_doctor` groups errors by template and dialog; filter by `client`, `dialog`, `message`
+text or `when`. It observes field labels, other dialogs and searches until the next submit or
+five minutes, without showing search text or field values. Recovery means a later submit on
+the same dialog/button completes or queues within 15 minutes. Repeated failure means another
+submit shows the same error. Gave up means no later submit on that dialog in the observed
+session; recovery and repeated failure can both count.
+
+With at least three occurrences, **points elsewhere** means none of the top five touched field
+labels shares a word with the message; **dead end** means at least half gave up; **fine** means
+at least 80% recovered. Flags can overlap and are behavioural clues, not proof a field edit fixed
+anything. Dead ends and messages pointing elsewhere come first, then clients hit. Examples have
+session ids and replay links when recorded. Reads cover at most 1,000 error sessions in batches;
+row counts and cuts are disclosed, and sessions still over the event cap are omitted.
+
+### Workflows
+
+`discover_workflows` finds chains of 2–4 ordered dialog opens ending in a submit, in at least
+two distinct sessions. Lens names each chain from dialog titles, the most common successful
+submit button and its success-message template, for example
+“Hedge Designation → Save → 'Link Id … Added'”. Without an observed success, the name uses
+the dialog titles alone. Each chain has a stable id derived only from its ordered dialog codes,
+so title or message changes do not change its identity. PMs name and save nothing.
+
+`workflow_completion` accepts a discovered id or exact name, or an ordered list of dialog
+codes/names. Names resolve within the requested window; ids remain usable across windows,
+even when the chain is no longer frequent. Discovered workflows count completed or queued as
+done, reporting both separately; explicit dialog lists require completed. It reports starts,
+funnel steps, failures, retries, abandonment, times, dropout errors and example replay links,
+per client and overall, against the previous equal window. Other dialogs may appear between
+steps. A retry repeats the same dialog/button within five minutes after an error.
+
+Search/menu navigation or 10 minutes idle starts a new episode. Consecutive opens of the same
+dialog collapse; menu and message dialogs stay out. Chains rank by sessions × clients; a shorter
+chain drops out when a containing chain has at least 80% of its session support. Completion
+counts one start per episode in the window and requires all steps and an answering outcome
+message in that episode. Durations end at that message. No observed done before the episode ends
+means abandoned; active sessions can change. Reads cover at most 2,000 relevant sessions and
+50,000 events per batch of 50; limits and partial results are disclosed.
+
+### Reading the events
+
+Reval sends `PageView` when a dialog opens, gets focus or closes, and `Event` for fields,
+buttons, searches and messages. Properties include `dialog_id`, `dialog_name`, `tab_name`,
+`action`, `control_type` and `action_name` (button or message text). The client is part 3 of
+`ENV|SITE|CLIENT|USER`. Operators enable this vocabulary with:
 
 ```
 APP_EVENTS_FILE=config/app-events.reval.json
@@ -74,91 +149,18 @@ CLIENT_FROM_DISTINCT_ID=3
 PROP_CLIENT_NAME=none
 ```
 
-| MCP tool | Answers |
-|---|---|
-| `reval_brief` | Brief me, what should I worry about, how is a client doing, or what happened to a trade? One ready-to-read brief with comparisons, evidence and limits. |
-| `describe_app_events` | What do the events and properties mean? How often is each filled, with real example values, the dialogs used most, the messages Reval showed, the clients, and how to query them in SQL. |
-| `top_pains` | What hurts most this week? The dialogs where clients fail most, ranked, with the main error, whether it is new or worse than the week before, an example session, and the clients with warning signs. |
-| `dialog_friction` | Where do clients fail? Per dialog: attempts (Save, Run, Export...) and what came of each (done, queued, failed, nothing found, no message), the errors with the sessions and clients they hit, retry loops (failed, then the same button again) and stuck sessions (an error and no success after). For all clients, one client or one dialog. |
-| `message_doctor` | Which error messages leave people stuck, and what do they do to recover? Field labels touched, other dialogs opened, searches, recovery and repeated failures, with flags and example sessions. |
-| `session_story` | What happened in this session? The session as a timeline the agent can read instead of watching the replay: dialogs, tabs, fields, buttons and their outcomes, and every message, with replay links at the errors for a person to open. |
-| `attempt_timings` | Is a button slow, or does a server call fail? From the network timing in recent recordings: the wait after each Save or Run, the slowest call (method and path only) and HTTP errors. |
-| `find_trade` | What happened to trade 4348? The sessions where someone searched for it or Reval named it in a message, with the client, user, attempts and errors from when they reached the trade. |
-| `client_signals` | Which clients need attention? This period against the one before: fewer sessions, days or dialogs, users gone quiet, more failed attempts, not seen lately. Warning signs, not a churn prediction. |
+The vocabulary file handles new dialogs and buttons without code changes. An attempt is a
+submit press (Save, Run, Apply, Export...). Its outcome is the message within 20 seconds:
+`messagebox` is an error unless nothing was found; `toast` is completed or queued when a job is
+scheduled. No message means “none”, which need not be a problem. Messages with no dialog are
+tied to the preceding attempt or action. Trade/link ids remain in individual messages for support;
+templates remove ids for grouping. Typed search text and field values are never shown; field labels
+are retained and generated control ids appear as “an unlabelled field”.
 
-### Asking Lens (reval_brief)
-
-Ask “what should I worry about?”, “how is ACME doing?”, “brief me”, “what happened to trade
-4348?” or “is hedge designation a problem?”. The agent calls `reval_brief` and relays its answer.
-You do not choose tools or configure a report. The server chooses trade first, then a confidently
-matched client, then a whole dialog name or code, otherwise a general brief. It compares the last
-14 days with the 14 days before; trade lookups default to 30 days. You can give a time in plain words.
-
-Findings favour affected clients, repeated problems and blocked work. A single user contributing
-more than half of failed attempts is flagged. The brief includes counts, session ids and replay
-links for people, limits and questions to ask next. Queued reports are not finished, missing
-messages are not failures, and less use is not proof a client will leave. A change after a release
-is not proof the release caused it. A JSON block after `<!-- data -->` holds the same findings.
-The prompts `where_clients_struggle`, `weekly_review`, `client_check` and `release_check` start
-with this tool. A release check flags current concerns; it does not isolate release effects.
-
-How events are read (all in `config/app-events.reval.json`, so a new dialog or button needs no code):
-- **An attempt** is a press of a submit button (Save, Run, Apply, Export...). Its **outcome** is the
-  message or notice that follows within 20 s: a `messagebox` is an error, unless it says nothing was
-  found; a `toast` is done, or *queued* when it says a report or process was scheduled (it finishes
-  later). No message is "none", which is not always a problem.
-- **Messages carry no dialog** (`UNKNOWN`), so each is tied to the attempt before it, or else to the
-  last thing the person did.
-- **Trade and link ids stay** in messages ("Trade Id 4348 Updated"): support looks failures up by
-  trade. For grouping, ids are taken out ("Trade Id # Updated"), so the same error on different trades
-  is one problem, listed with its messages. Text typed into the search box is never shown (only menu
-  searches, which name a screen). Field labels are shown, never what was typed.
-- Generated control ids (`gridfloatedit-3404-inputEl`) are shown as "an unlabelled field".
-
-These questions belong to `lens`, including trade ids, one session and client risk. Generic
-analytics and PostHog objects belong to `posthog`; a funnel about trades or a survey about a
-Reval screen still goes there. The routing rules are repeated on both servers through the proxy.
-
-To try it without Reval: `pnpm tsx scripts/seed-reval.ts` sends made-up Reval-shaped events (four
-clients, two weeks) to the PostHog in `.secrets.env`.
-
-### Workflows
-
-`discover_workflows` answers which tasks people do in Reval and whether they finish them.
-It finds chains of 2–4 dialogs opened in order, ending in a submit, in at least two sessions.
-Search/menu navigation or 10 minutes idle starts a new episode. Consecutive opens of the same
-dialog collapse; menu and message dialogs stay out. Chains rank by sessions × clients. A shorter
-chain drops out when a containing chain has at least 80% of its session support.
-
-After agreeing a name with the person, `save_workflow` keeps its ordered dialog codes and done
-rule in SQLite settings. Discovery also lists saved workflows. `workflow_completion` takes a
-saved name or dialog codes/names. It counts starts, ordered funnel steps, failures, retries and
-abandonment per client and overall, with times, dropout errors, example replay links and a
-comparison with the previous window of equal length. A retry repeats the same button in the
-same dialog within five minutes after an error. Other dialogs may appear between funnel steps.
-
-A start belongs to the window where the episode first opened the starting dialog. Done must
-follow all steps in that episode. Its time ends at the answering message. Queued (`accepted`)
-and `completed` are reported separately; saved rules can require either or both. Ad hoc dialogs
-require completed. No observed done before the episode ends counts as abandoned; active sessions
-can change. Reads cover at most 2,000 relevant sessions and 50,000 events per batch of 50 sessions.
-The output flags partial results when a limit is reached.
-
-### Message doctor
-
-`message_doctor` groups errors by message template and dialog. Narrow it by `client`, `dialog`,
-`message` text or `when`. It learns the field labels people touch, other dialogs they open and
-whether they search, until the next submit or five minutes. It never shows search text or field values.
-A recovery is a later submit on the same dialog and button ending done or queued within 15 minutes.
-A repeated failure is another submit showing the same error template. Gave up means no later submit
-on that dialog in the observed session. Recovery and repeated failure can both count.
-
-With at least three occurrences, **points elsewhere** means none of the top five touched field
-labels shares a word with the message; **dead end** means at least half gave up. **Fine** means at
-least 80% recovered. Flags can overlap. These are clues from behaviour, not proof that a field edit
-fixed the problem. Results put dead ends and messages pointing elsewhere first, then clients hit.
-Each outcome has an example session and a replay link when recorded. The query reads at most 1,000
-error sessions in batches, reports row counts and cuts, and omits sessions still over the event cap.
+These questions belong to `lens`. Generic analytics and PostHog objects belong to `posthog`,
+including generic funnels about trades or surveys about Reval screens. Both servers repeat the
+routing rules through the proxy. To try made-up events without Reval, operators can run
+`pnpm tsx scripts/seed-reval.ts` (four clients, two weeks) against PostHog in `.secrets.env`.
 
 ## Replay clip page
 

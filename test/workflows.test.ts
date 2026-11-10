@@ -10,10 +10,10 @@ process.env.TRIAGE_DB = join(dir, 'test.db')
 process.env.APP_EVENTS_FILE = 'config/app-events.reval.json'
 process.env.POSTHOG_PROJECT_ID = 'test-project'
 process.env.POSTHOG_PERSONAL_API_KEY = 'test-key'
-const { db, getSetting } = await import('../src/core/db.ts')
+const { db } = await import('../src/core/db.ts')
 const { parseAppEvents, toSteps } = await import('../src/core/appevents.ts')
-const { discoverWorkflowChains, workflowEpisodes, workflowCompletion, validateWorkflow } = await import('../src/core/workflows.ts')
-const { saveWorkflow, savedWorkflows, resolveWorkflowDialogs, completionWorkflow, workflowCompletionReport, workflowSessions, discoverWorkflows } = await import('../src/core/workflowqueries.ts')
+const { discoverWorkflowChains, workflowEpisodes, workflowCompletion, validateWorkflow, workflowId, workflowDialogsFromId } = await import('../src/core/workflows.ts')
+const { resolveWorkflowDialogs, completionWorkflow, workflowCompletionReport, workflowSessions, discoverWorkflows } = await import('../src/core/workflowqueries.ts')
 after(() => { db.close(); rmSync(dir, { recursive: true, force: true }) })
 const reg = parseAppEvents(JSON.parse(readFileSync('config/app-events.reval.json', 'utf8')))
 type RawEvent = import('../src/core/appevents.ts').RawEvent
@@ -37,7 +37,8 @@ describe('workflow discovery', () => {
         const found = discoverWorkflowChains([...planted, noise], reg)
         assert.equal(found.length, 1)
         const c = found[0]
-        assert.equal(c.name, 'Import → Trade Import Status → IR Swap')
+        assert.equal(c.name, "Import → Trade Import Status → IR Swap → Save → 'Trade Id … Updated'")
+        assert.equal(c.id, workflowId(['A', 'B', 'C']))
         assert.deepEqual(c.dialogs, ['A', 'B', 'C'])
         assert.deepEqual([c.sessions, c.clients, c.users, c.occurrences, c.done, c.completed, c.accepted, c.score], [4, 2, 2, 4, 4, 3, 1, 8])
         assert.equal(c.median_time_s, 10)
@@ -63,6 +64,18 @@ describe('workflow discovery', () => {
         const all = [0, 1, 2].flatMap((i) => [steps(`a${i}`, 'X', [open(0, 'A'), open(1, 'B'), press(2, 'B'), notice(3)]),
             steps(`c${i}`, `${i}`, [open(0, 'C'), open(1, 'D'), press(2, 'D'), notice(3)])])
         assert.deepEqual(discoverWorkflowChains(all, reg, { limit: 1 })[0].dialogs, ['C', 'D'])
+    })
+    test('identity survives renamed dialogs and success messages; failures alone have no success suffix', () => {
+        const mine = (title: string, result?: string) => discoverWorkflowChains([1, 2].map((i) => steps(`s${i}`, 'X', [
+            open(0, 'A', title), open(1, 'B', 'Hedge Designation'), press(2, 'B'), result ? notice(3, result) : message(3)])), reg)[0]
+        const before = mine('Search', 'Link Id 3508 Added'), after = mine('Trades', 'Trade Id 4348 Updated')
+        assert.equal(before.id, after.id)
+        assert.notEqual(before.name, after.name)
+        assert.equal(before.name, "Search → Hedge Designation → Save → 'Link Id … Added'")
+        const failed = mine('Search')
+        assert.equal(failed.name, 'Search → Hedge Designation')
+        assert.equal(failed.id, before.id)
+        assert.equal(failed.done, 0)
     })
 })
 
@@ -146,21 +159,12 @@ describe('workflow completion', () => {
 
 describe('workflow definitions', () => {
     test('validates names, dialog identifiers, length, done dialog/outcome and buttons', () => {
-        for (const bad of [null, { ...workflow, name: '' }, { ...workflow, name: 'a'.repeat(81) }, { ...workflow, dialogs: [] },
+        for (const bad of [null, { ...workflow, name: '' }, { ...workflow, name: 'a'.repeat(1025) }, { ...workflow, dialogs: [] },
             { ...workflow, dialogs: Array(11).fill('A') }, { ...workflow, dialogs: ["A') OR 1=1"] }, { ...workflow, dialogs: ['IR Swap'] },
             { ...workflow, done: { dialog: 'X', outcome: 'completed' } }, { ...workflow, done: { dialog: 'C', outcome: 'queued' } },
             { ...workflow, done: { dialog: 'C', outcome: 'completed', buttons: [' '] } }]) assert.throws(() => validateWorkflow(bad))
         assert.equal(validateWorkflow({ ...workflow, name: '  Import a swap  ' }).name, 'Import a swap')
-        assert.equal(validateWorkflow({ ...workflow, name: 'a'.repeat(80), dialogs: [...Array(9).fill('A'), 'C'] }).dialogs.length, 10)
-    })
-    test('saves definitions in the workflows setting and replaces names case-insensitively', () => {
-        assert.throws(() => saveWorkflow(workflow, ' '), /saved_by/)
-        assert.throws(() => saveWorkflow({ ...workflow, dialogs: ['menuCmb', 'C'] }, 'PM'), /task dialogs/)
-        saveWorkflow(workflow, 'PM')
-        saveWorkflow({ ...workflow, name: 'IMPORT A SWAP', done: { dialog: 'C', outcome: 'either' } }, 'PM2')
-        assert.equal(savedWorkflows().length, 1)
-        assert.equal(savedWorkflows()[0].saved_by, 'PM2')
-        assert.deepEqual(getSetting('workflows', []), savedWorkflows())
+        assert.equal(validateWorkflow({ ...workflow, name: 'a'.repeat(1024), dialogs: [...Array(9).fill('A'), 'C'] }).dialogs.length, 10)
     })
     test('resolves exact observed names and aliases, rejects ambiguity and does not guess partial names', () => {
         const names = new Map([['DlgA', { name: 'IR Swap' }], ['DlgB', { name: 'Import' }]])
@@ -169,11 +173,24 @@ describe('workflow definitions', () => {
         assert.throws(() => resolveWorkflowDialogs(['IR Swap'], reg, new Map([...names, ['DlgC', { name: 'IR Swap' }]])), /Ambiguous/)
         assert.deepEqual(resolveWorkflowDialogs(['Swap'], { ...reg, aliases: { DlgA: 'Swap' } }, new Map()), ['DlgA'])
     })
-    test('completion requires exactly one of saved name or dialogs', async () => {
+    test('completion requires exactly one of discovered workflow or dialogs', async () => {
         await assert.rejects(completionWorkflow({ ...win }), /either/)
         await assert.rejects(completionWorkflow({ ...win, workflow: 'x', dialogs: ['A'] }), /either/)
-        await assert.rejects(completionWorkflow({ ...win, workflow: 'missing' }), /No saved/)
-        assert.equal((await completionWorkflow({ ...win, workflow: 'import a swap' })).done.outcome, 'either')
+        await assert.rejects(completionWorkflow({ ...win, workflow: '', dialogs: ['A'] }), /either/)
+        await assert.rejects(completionWorkflow({ ...win, workflow: 'wf_bad' }), /Invalid discovered/)
+        await assert.rejects(completionWorkflow({ ...win, workflow: ' ' }), /Give a discovered/)
+        await assert.rejects(completionWorkflow({ ...win, workflow: workflowId(['menuCmb', 'C']) }), /task dialogs/)
+    })
+    test('ids encode only the ordered dialog chain and need no observed sessions to resolve', async () => {
+        const id = workflowId(['A', 'B', 'C'])
+        assert.deepEqual(workflowDialogsFromId(id), ['A', 'B', 'C'])
+        assert.notEqual(id, workflowId(['B', 'A', 'C']))
+        for (const bad of ['wf_bad', workflowId(["A') OR 1=1"]), id + '='])
+            assert.throws(() => workflowDialogsFromId(bad), /Invalid discovered/)
+        const w = await completionWorkflow({ ...win, workflow: id })
+        assert.deepEqual(w.dialogs, ['A', 'B', 'C'])
+        assert.equal(w.id, id)
+        assert.equal(w.done.outcome, 'either')
     })
 })
 
@@ -237,11 +254,38 @@ describe('bounded workflow queries', () => {
         assert.deepEqual(w.dialogs, ['DlgImport', 'DlgSwap'])
         assert.deepEqual(w.done, { dialog: 'DlgSwap', outcome: 'completed' })
     })
-    test('discovery includes saved workflows alongside discovered chains', async (t) => {
+    test('discovery automatically names chains; completion accepts the id or exact name', async (t) => {
         let n = 0
-        t.mock.method(globalThis, 'fetch', async () => ++n === 1 ? response([{ sid: 's1' }, { sid: 's2' }]) : response([1, 2].flatMap((i) => session(`s${i}`, 'X', [open(0, 'A'), open(1, 'B'), press(2, 'B'), notice(3)]))))
+        t.mock.method(globalThis, 'fetch', async () => ++n % 2 === 1 ? response([{ sid: 's1' }, { sid: 's2' }]) : response([1, 2].flatMap((i) => session(`s${i}`, 'X', [open(0, 'A'), open(1, 'B'), press(2, 'B'), notice(3)]))))
         const r = await discoverWorkflows(win)
         assert.equal(r.discovered.length, 1)
-        assert.equal(r.saved[0].name, 'IMPORT A SWAP')
+        const found = r.discovered[0]
+        assert.equal(found.name, "A → B → Save → 'Trade Id … Updated'")
+        for (const input of [found.id, found.name.toUpperCase()]) {
+            const w = await completionWorkflow({ ...win, workflow: input })
+            assert.deepEqual(w.dialogs, found.dialogs)
+            assert.equal(w.done.outcome, 'either')
+        }
+    })
+    test('names resolve beyond the default discovery limit and unknown names fail clearly', async (t) => {
+        const rows = Array.from({ length: 16 }, (_, n) => [1, 2].flatMap((i) => session(`s${n}-${i}`, 'X', [
+            open(0, `A${n}`, `Start ${n}`), open(1, `B${n}`, `Finish ${n}`), press(2, `B${n}`), notice(3)]))).flat()
+        t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+            const q = JSON.parse(String(init.body)).query
+            return q.query.includes('GROUP BY sid') ? response([...new Set(rows.map((r) => r.sid))].map((sid) => ({ sid }))) : response(rows)
+        })
+        const all = await discoverWorkflows({ ...win, limit: 50 })
+        const w = await completionWorkflow({ ...win, workflow: all.discovered[15].name })
+        assert.deepEqual(w.dialogs, all.discovered[15].dialogs)
+        await assert.rejects(completionWorkflow({ ...win, workflow: 'missing' }), /No discovered workflow/)
+    })
+    test('ambiguous automatic names require an id instead of choosing silently', async (t) => {
+        const rows = ['A', 'C'].flatMap((first) => [1, 2].flatMap((i) => session(`${first}${i}`, 'X', [
+            open(0, first, 'Start'), open(1, 'B', 'Finish'), press(2, 'B'), notice(3)])))
+        t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+            const q = JSON.parse(String(init.body)).query
+            return q.query.includes('GROUP BY sid') ? response([...new Set(rows.map((r) => r.sid))].map((sid) => ({ sid }))) : response(rows)
+        })
+        await assert.rejects(completionWorkflow({ ...win, workflow: "Start → Finish → Save → 'Trade Id … Updated'" }), /Ambiguous workflow/)
     })
 })

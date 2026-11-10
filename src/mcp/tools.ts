@@ -4,7 +4,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
 import { appEvents, clientSignalsReport, describeAppEvents, dialogFriction, findTrade, sessionStory, slowAttempts, topPains } from '../core/appevents.ts'
-import { completionWorkflow, discoverWorkflows, saveWorkflow, workflowCompletionReport } from '../core/workflowqueries.ts'
+import { completionWorkflow, discoverWorkflows, workflowCompletionReport } from '../core/workflowqueries.ts'
+import { WORKFLOW_NAME_LIMIT } from '../core/workflows.ts'
 import { SCREENS } from '../core/catalog.ts'
 import { revalBrief } from '../core/brief.ts'
 import { renderClip } from '../core/clip.ts'
@@ -77,7 +78,7 @@ const A = appEvents()?.app || 'your app'
 
 // Every tool name, for PostHog's proxied exec description ("use the lens server's tools (...)").
 export const CORE_TOOLS = ['resolve_client', 'find_client_incidents', 'get_replay_link', 'screen_usage', 'error_blast_radius', 'find_silent_issues', 'triage_ticket', 'list_releases', 'release_outcomes', 'ticket_evidence', 'client_feedback', 'record_verdict', 'correct_ticket_link', 'refresh_releases']
-export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'save_workflow', 'message_doctor']
+export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor']
 export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(appEvents() ? APP_EVENT_TOOLS : [])]
 
 export function registerTools(server: McpServer, ai?: TriageAi): void {
@@ -434,7 +435,7 @@ function registerAppEventTools(server: McpServer): void {
         'discover_workflows',
         {
             title: 'Which tasks people do and finish',
-            description: `Which tasks do people do in ${app}, and do they finish them? Discovers frequent ordered dialog chains ending in a submit, ranked by sessions × clients, with completed and queued counts, durations and top errors. Includes saved workflows.`,
+            description: `Which tasks do people do in ${app}, and do they finish them? Discovers frequent ordered dialog chains ending in a submit, ranked by sessions × clients, with completed and queued counts, durations and top errors. Lens supplies names from dialog titles, the submit button and success message, plus stable ids; no setup needed.`,
             inputSchema: { when, client: z.string().optional(), limit: z.number().int().min(1).max(50).default(15) },
             annotations: { readOnlyHint: true },
         },
@@ -448,8 +449,8 @@ function registerAppEventTools(server: McpServer): void {
         'workflow_completion',
         {
             title: 'Do clients finish a workflow',
-            description: `Which tasks do people do in ${app}, and do they finish them? Measures a saved workflow or ordered dialogs per client and overall: starts, funnel, done, failures, retries, abandonment, time, dropout errors and example replay links for the person. Compares the previous equal window. Give either workflow or dialogs. Ad hoc dialogs require completed, not queued.`,
-            inputSchema: { workflow: z.string().min(1).max(80).optional(), dialogs: z.array(z.string().min(1).max(80)).min(1).max(10).optional(), client: z.string().optional(), when },
+            description: `Which tasks do people do in ${app}, and do they finish them? Measures a discovered workflow id/name or ordered dialogs per client and overall: starts, funnel, done, failures, retries, abandonment, time, dropout errors and example replay links for the person. Compares the previous equal window. Give either workflow or dialogs. Discovered workflows count completed or queued as done and report them separately; dialog lists require completed.`,
+            inputSchema: { workflow: z.string().trim().min(1).max(WORKFLOW_NAME_LIMIT).optional().describe('Discovered workflow id or exact name from discover_workflows.'), dialogs: z.array(z.string().min(1).max(80)).min(1).max(10).optional(), client: z.string().optional(), when },
             annotations: { readOnlyHint: true },
         },
         async ({ workflow, dialogs, client, when: w }) => {
@@ -461,25 +462,10 @@ function registerAppEventTools(server: McpServer): void {
         }
     )
     server.registerTool(
-        'save_workflow',
-        {
-            title: 'Save an agreed workflow',
-            description: `Which tasks do people do in ${app}, and do they finish them? Saves or replaces a named workflow in settings. Call only after the person agreed the name. Give ordered dialog codes; done defaults to a completed submit in the last dialog. Use accepted for queued jobs or either for both. saved_by names the person who agreed.`,
-            inputSchema: {
-                name: z.string().trim().min(1).max(80), dialogs: z.array(z.string().regex(/^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/)).min(1).max(10),
-                done_dialog: z.string().optional(), done_buttons: z.array(z.string().min(1).max(80)).min(1).max(50).optional(),
-                done_outcome: z.enum(['completed', 'accepted', 'either']).default('completed'), saved_by: z.string().trim().min(1).max(200),
-            },
-            annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
-        },
-        async ({ name, dialogs, done_dialog, done_buttons, done_outcome, saved_by }) => json('Saved workflow:', saveWorkflow({ name, dialogs,
-            done: { dialog: done_dialog ?? dialogs.at(-1)!, buttons: done_buttons, outcome: done_outcome } }, saved_by))
-    )
-    server.registerTool(
         'describe_app_events',
         {
             title: `What ${app}'s events mean`,
-            description: `Explains ${app} dialogs, screens, buttons, fields and error messages using the app's event vocabulary. Includes coverage, real example values, common dialogs and messages, clients and HogQL guidance. Call once before investigating ${app} events. Use PostHog's exec instead for managing event definitions or ad-hoc SQL.`,
+            description: `Explains ${app} dialogs, screens, buttons, fields and error messages using the app's event vocabulary. Includes coverage, real example values, common dialogs and messages, clients and HogQL guidance. Use for vocabulary details when drilling into events; reval_brief investigates directly. Use PostHog's exec instead for managing event definitions or ad-hoc SQL.`,
             inputSchema: { days: z.number().int().min(1).max(90).default(7).describe('How many days of data to look at.') },
             annotations: { readOnlyHint: true },
         },
