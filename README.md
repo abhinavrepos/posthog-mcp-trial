@@ -76,6 +76,7 @@ PROP_CLIENT_NAME=none
 
 | MCP tool | Answers |
 |---|---|
+| `reval_brief` | Brief me, what should I worry about, how is a client doing, or what happened to a trade? One ready-to-read brief with comparisons, evidence and limits. |
 | `describe_app_events` | What do the events and properties mean? How often is each filled, with real example values, the dialogs used most, the messages Reval showed, the clients, and how to query them in SQL. |
 | `top_pains` | What hurts most this week? The dialogs where clients fail most, ranked, with the main error, whether it is new or worse than the week before, an example session, and the clients with warning signs. |
 | `dialog_friction` | Where do clients fail? Per dialog: attempts (Save, Run, Export...) and what came of each (done, queued, failed, nothing found, no message), the errors with the sessions and clients they hit, retry loops (failed, then the same button again) and stuck sessions (an error and no success after). For all clients, one client or one dialog. |
@@ -85,7 +86,21 @@ PROP_CLIENT_NAME=none
 | `find_trade` | What happened to trade 4348? The sessions where someone searched for it or Reval named it in a message, with the client, user, attempts and errors from when they reached the trade. |
 | `client_signals` | Which clients need attention? This period against the one before: fewer sessions, days or dialogs, users gone quiet, more failed attempts, not seen lately. Warning signs, not a churn prediction. |
 
-The prompt `where_clients_struggle` puts them together into a short report for a product manager.
+### Asking Lens (reval_brief)
+
+Ask “what should I worry about?”, “how is ACME doing?”, “brief me”, “what happened to trade
+4348?” or “is hedge designation a problem?”. The agent calls `reval_brief` and relays its answer.
+You do not choose tools or configure a report. The server chooses trade first, then a confidently
+matched client, then a whole dialog name or code, otherwise a general brief. It compares the last
+14 days with the 14 days before; trade lookups default to 30 days. You can give a time in plain words.
+
+Findings favour affected clients, repeated problems and blocked work. A single user contributing
+more than half of failed attempts is flagged. The brief includes counts, session ids and replay
+links for people, limits and questions to ask next. Queued reports are not finished, missing
+messages are not failures, and less use is not proof a client will leave. A change after a release
+is not proof the release caused it. A JSON block after `<!-- data -->` holds the same findings.
+The prompts `where_clients_struggle`, `weekly_review`, `client_check` and `release_check` start
+with this tool. A release check flags current concerns; it does not isolate release effects.
 
 How events are read (all in `config/app-events.reval.json`, so a new dialog or button needs no code):
 - **An attempt** is a press of a submit button (Save, Run, Apply, Export...). Its **outcome** is the
