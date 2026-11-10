@@ -12,7 +12,7 @@ import {
     archiveSurvey,
     compileSurvey,
     conflictsFor,
-    conflictSummary,
+    queueAlert,
     estimateReach,
     listSurveys,
     getSurvey,
@@ -126,7 +126,7 @@ export function registerSurveyTools(server: McpServer): void {
         'design_survey',
         {
             title: 'Check a survey before saving it',
-            description: `Checks an in-app ${app} survey described in ${app}'s words (dialogs, buttons, messages, clients, colours) and estimates how many sessions would have seen it in the last 14 days. A user is in one survey at a time: it also says which clients' users are already in a running survey (they skip this one until they finish that one); tell the person. Saves nothing. Use describe_app_events for dialog ids and button names. Then show the person the plan and problems, and save_survey when they agree.`,
+            description: `Checks an in-app ${app} survey described in ${app}'s words (dialogs, buttons, messages, clients, colours) and estimates how many sessions would have seen it in the last 14 days. A user is in at most ${config.surveys.perUser} running surveys at once: when some users already are, it returns a ⚠ alert (they are queued and get this survey later, after finishing one); always pass that alert on to the person. Saves nothing. Use describe_app_events for dialog ids and button names. Then show the person the plan and problems, and save_survey when they agree.`,
             inputSchema: { ...specShape, estimate: z.boolean().default(true).describe('Count past sessions that went through the steps') },
             annotations: { readOnlyHint: true },
         },
@@ -137,14 +137,15 @@ export function registerSurveyTools(server: McpServer): void {
             const errors = c.problems.filter((p) => p.level === 'error')
             const reach = estimate && !errors.length ? await estimateReach(c.chain).catch((e) => ({ error: (e as Error).message })) : undefined
             const conflicts = conflictsFor(c.chain, {}, await listSurveys())
-            return json(errors.length || unclear.length ? 'This survey cannot be saved yet:' : 'The survey checks out. Show the person this plan, then save_survey.', {
+            const q = queueAlert(c.chain, conflicts)
+            return json(`${q.level === 'clear' ? '' : q.alert + '\n\n'}${errors.length || unclear.length ? 'This survey cannot be saved yet:' : 'The survey checks out. Show the person this plan (lead with any ⚠ alert above), then save_survey.'}`, {
                 steps: c.chain.labels,
                 reset_on: c.chain.resetLabels || [],
                 clients: ids.length ? ids : 'every client',
                 unclear_clients: unclear,
                 shows: `${spec.show === 'every_time' ? 'every time' : 'once per user'}, as soon as the last step happens${spec.wait_for_page === false ? '' : ' and the page has loaded'}`,
                 problems: c.problems,
-                one_survey_at_a_time: { summary: conflictSummary(c.chain, conflicts), conflicts: conflicts.map((x) => x.text) },
+                surveys_per_user: { ...queueAlert(c.chain, conflicts), already_in: conflicts.map((x) => x.text) },
                 reach_last_14_days: reach,
             })
         }
@@ -167,8 +168,8 @@ export function registerSurveyTools(server: McpServer): void {
             const v = viewOf(out.survey)
             const conflicts = conflictsFor(out.compiled.chain, out.survey, await listSurveys())
             return json(
-                `${survey_id ? 'Changed' : 'Saved as a draft'}: "${v.name}" (${v.status}). ${v.status === 'draft' ? 'Users see nothing yet. Ask the person before launch_survey.' : ''} ${conflictSummary(out.compiled.chain, conflicts)} Page: ${pageUrl(v.id)}`,
-                { survey: v, warnings: out.compiled.problems, users_in_other_surveys: conflicts.map((x) => x.text) }
+                `${queueAlert(out.compiled.chain, conflicts).alert}\n\n${survey_id ? 'Changed' : 'Saved as a draft'}: "${v.name}" (${v.status}). ${v.status === 'draft' ? 'Users see nothing yet. Ask the person before launch_survey.' : ''} Page: ${pageUrl(v.id)}`,
+                { survey: v, warnings: out.compiled.problems, queue: queueAlert(out.compiled.chain, conflicts), already_in: conflicts.map((x) => x.text) }
             )
         }
     )
@@ -188,14 +189,14 @@ export function registerSurveyTools(server: McpServer): void {
                 const v = viewOf(sv)
                 const chain = sv.conditions?.lensChain
                 const conflicts = chain ? conflictsFor(chain, { id: sv.id }, await listSurveys()) : []
-                return json(`Not launched. Show the person this and ask; call again with confirm: true when they agree.${chain ? ' ' + conflictSummary(chain, conflicts) : ''}`, { ...v, users_in_other_surveys: conflicts.map((x) => x.text) })
+                return json(`${chain ? queueAlert(chain, conflicts).alert + '\n\n' : ''}Not launched. Show the person this (the alert first) and ask; call again with confirm: true when they agree.`, { ...v, ...(chain ? { queue: queueAlert(chain, conflicts) } : {}), already_in: conflicts.map((x) => x.text) })
             }
             const launched = await launchSurvey(survey_id)
             const v = viewOf(launched)
             audit('mcp', 'survey.launched', { survey: v.id, name: v.name })
             const chain = launched.conditions?.lensChain
             const conflicts = chain ? conflictsFor(chain, launched, await listSurveys()) : []
-            return json(`Running: "${v.name}". It shows as soon as a user does the steps. ${chain ? conflictSummary(chain, conflicts) : ''} Answers: survey_results, or ${pageUrl(v.id)}`, { steps: v.steps, clients: v.clients, sample_percent: v.sample_percent, users_in_other_surveys: conflicts.map((x) => x.text) })
+            return json(`${chain ? queueAlert(chain, conflicts).alert + '\n\n' : ''}Running: "${v.name}". It shows as soon as a user does the steps. Answers: survey_results, or ${pageUrl(v.id)}`, { steps: v.steps, clients: v.clients, sample_percent: v.sample_percent, ...(chain ? { queue: queueAlert(chain, conflicts) } : {}), already_in: conflicts.map((x) => x.text) })
         }
     )
 

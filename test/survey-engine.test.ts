@@ -154,6 +154,16 @@ describe('matching', () => {
         // ("first" completes too, but PostHog does not show a survey she has already seen.)
         assert.deepEqual(done(m.consume(e, 3, 'C1|01|ACME|ann', (id: string) => id === 's-first')).sort(), ['first', 'second'])
     })
+    test('at most two surveys per user: a third waits until the user finishes one, then comes back', () => {
+        const lim = (id: string, start: string) => survey(chain(id, [save('DlgC')], { version: 3, maxPerUser: 2 }), { id: `s-${id}`, start_date: start })
+        const m = machine(lim('a', '2026-11-01T00:00:00Z'), lim('b', '2026-11-02T00:00:00Z'), lim('c', '2026-11-03T00:00:00Z'))
+        const e = ev('Event', { dialog_id: 'DlgC', action_name: 'Save' })
+        const go = (seen: string[]) => { const d = m.consume(e, 1, 'C1|01|ACME|ann', (id: string) => seen.includes(id)); d.forEach((x: { id: string; token: number }) => m.finish(x.id, x.token)); return ids(d).sort() }
+        assert.deepEqual(go([]), ['a', 'b'], 'c waits: ann already has a and b')
+        assert.deepEqual(go(['s-a']), ['a', 'b', 'c'], 'after finishing a, c comes back for her')
+        assert.equal(engine.normalizeChain(chain('x', [save('DlgC')], { version: 3, maxPerUser: 0 })), null)
+        assert.equal(engine.normalizeChain(chain('x', [save('DlgC')], { version: 2, maxPerUser: 2 })), null)
+    })
     test('its own events and PostHog events are ignored', () => {
         const m = machine(survey(chain('own', [{ event: 'lens_chain:own' }])))
         assert.deepEqual(ids(m.consume(ev('lens_chain:own', {}), 1)), [])

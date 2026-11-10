@@ -114,7 +114,12 @@ export const config = {
         posthogMcp: flag('FEATURE_POSTHOG_MCP', true),
     },
     // Surveys made from Lens (MCP tools and the Surveys page). Takes effect only with POSTHOG_SURVEY_API_KEY.
-    surveys: { enabled: flag('FEATURE_SURVEYS', true), brand: env('SURVEY_BRAND', 'Survey by ION') },
+    surveys: {
+        enabled: flag('FEATURE_SURVEYS', true),
+        brand: env('SURVEY_BRAND', 'Survey by ION'),
+        // A user is in at most this many running surveys at once; later ones wait until they finish one.
+        perUser: intSetting('SURVEYS_PER_USER', 2, 1, 10),
+    },
     // How your events name things. The defaults match the demo app.
     properties: {
         client: propName('PROP_CLIENT_ID', process.env.RELEASES_CLIENT_PROPERTY || 'client_id'), // event property: client id

@@ -51,7 +51,7 @@
         }
         return { event: raw.event, filters: filters };
     }
-    // Versions: 2 may carry an audience, 3 also a sample and "one survey at a time". An engine that does
+    // Versions: 2 may carry an audience, 3 also a sample and a surveys-per-user limit. An engine that does
     // not know a version refuses the chain, so it never shows a limited survey to everyone.
     // Audience: { clients: ["ACME"], distinctIdPart: 3, separator: "|" } reads the client from the user id
     // (Reval: ENV|SITE|CLIENT|USER); { clients, eventProperty: "client_id" } from each event. Compared
@@ -121,7 +121,11 @@
             var audience = audienceOf(raw.audience, raw.version);
             if (audience === false) return null;
             if (raw.oneAtATime !== undefined && (raw.version < 3 || typeof raw.oneAtATime !== 'boolean')) return null;
-            return { id: raw.id, steps: steps, resetOn: resets, withinMs: within === undefined ? Infinity : within * 1000, audience: audience, oneAtATime: raw.oneAtATime === true,
+            // maxPerUser: a user takes part in at most this many running surveys at once (oneAtATime = 1).
+            var max = raw.maxPerUser;
+            if (max !== undefined && (raw.version < 3 || !finite(max) || max < 1 || max > 10 || Math.floor(max) !== max)) return null;
+            var limit = max !== undefined ? max : raw.oneAtATime === true ? 1 : 0;
+            return { id: raw.id, steps: steps, resetOn: resets, withinMs: within === undefined ? Infinity : within * 1000, audience: audience, limit: limit,
                 ready: { documentComplete: ready.documentComplete !== false, noVisibleMask: ready.noVisibleMask !== false, maxWaitMs: wait } };
         } catch (_) { return null; }
     }
@@ -151,17 +155,18 @@
         var states = new Map(), sequence = 0;
         function reset(state) { state.index = 0; state.started = 0; state.pending = 0; }
         function earlier(a, b) { return a.launched < b.launched || (a.launched === b.launched && a.surveyId < b.surveyId); }
-        // Is this user in an earlier one-at-a-time survey's audience that they have not finished yet?
-        function takenByEarlier(state, event, distinctId, seen) {
-            var taken = false;
+        // Is this user already in as many earlier limited surveys (not finished yet) as this one allows?
+        // Then they wait: the next time they do the steps after finishing one, they get this survey.
+        function full(state, event, distinctId, seen) {
+            var holding = 0;
             states.forEach(function (other, id) {
-                if (taken || other === state || !other.chain.oneAtATime || !earlier(other, state)) return;
+                if (holding >= state.chain.limit || other === state || !other.chain.limit || !earlier(other, state)) return;
                 if (!inAudience(other.chain.audience, event, distinctId, id)) return;
                 var done = false;
                 try { done = typeof seen === 'function' && !!seen(other.surveyId); } catch (_) { done = false; }
-                if (!done) taken = true;
+                if (!done) holding++;
             });
-            return taken;
+            return holding >= state.chain.limit;
         }
         return {
             setSurveys: function (surveys) {
@@ -203,7 +208,7 @@
                             if (!state.index) state.started = now;
                             state.index++;
                             if (state.index === chain.steps.length) {
-                                if (chain.oneAtATime && takenByEarlier(state, event, distinctId, seen)) { reset(state); return; }
+                                if (chain.limit && full(state, event, distinctId, seen)) { reset(state); return; }
                                 state.pending = ++sequence;
                                 completed.push({ id: id, token: state.pending, ready: chain.ready });
                             }

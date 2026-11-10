@@ -98,29 +98,39 @@ describe('types, look and one survey at a time', () => {
     test('chains are version 3, one at a time, with the sample the engine accepts', () => {
         const c = compileSurvey({ ...base, sample_percent: 33 }, { reg, clientIds: ['ACME'] })
         assert.equal(c.chain.version, 3)
-        assert.equal(c.chain.oneAtATime, true)
+        assert.equal(c.chain.maxPerUser, 2, 'SURVEYS_PER_USER defaults to 2')
         assert.equal(c.chain.audience?.sample, 33)
         const n = engine.normalizeChain(c.chain)
-        assert.equal(n.oneAtATime, true)
+        assert.equal(n.limit, 2)
         assert.equal(n.audience.sample, 33)
         assert.ok(errors(compileSurvey({ ...base, sample_percent: 0 }, { reg })).length)
     })
-    test('conflicts: earlier running surveys that want the same users', async () => {
-        const { conflictsFor, conflictSummary } = await import('../src/core/surveys.ts')
+    test('queue alert: users already in two running surveys wait, and are told to come back later', async () => {
+        const { conflictsFor, queueAlert } = await import('../src/core/surveys.ts')
         const running = (id: string, start: string, clients?: string[], sample?: number) => {
             const ch = compileSurvey({ ...base, name: id, ...(sample ? { sample_percent: sample } : {}) }, { reg, chainId: id, clientIds: clients ?? [] }).chain
             return { id, name: id, start_date: start, end_date: null, conditions: { lensChain: ch } } as unknown as PostHogSurvey
         }
-        const list = [running('a', '2026-11-01T00:00:00Z', ['ACME'], 33), running('b', '2026-11-02T00:00:00Z', ['BETA']), running('c', '2026-11-03T00:00:00Z', ['ZED'])]
-        const mine = compileSurvey(base, { reg, chainId: 'new', clientIds: ['ACME', 'BETA'] }).chain
+        const list = [running('a', '2026-11-01T00:00:00Z', ['ACME']), running('b', '2026-11-02T00:00:00Z', ['ACME', 'BETA']), running('c', '2026-11-03T00:00:00Z', ['BETA'], 33), running('z', '2026-11-04T00:00:00Z', ['ZED'])]
+        const mine = compileSurvey(base, { reg, chainId: 'new', clientIds: ['ACME', 'BETA', 'GAMMA'] }).chain
         const cs = conflictsFor(mine, {}, list)
-        assert.deepEqual(cs.map((c) => [c.survey_id, c.clients, c.share]), [['a', ['acme'], 33], ['b', ['beta'], 100]])
-        assert.match(cs[0].text, /ACME: 33% of their users are in "a"/)
-        assert.match(conflictSummary(mine, cs), /Some users/)
-        // A running survey launched before b does not conflict with b's later ones; b only with earlier ones.
-        assert.deepEqual(conflictsFor(list[1].conditions!.lensChain!, list[1], list).map((c) => c.survey_id), [])
-        const blocked = conflictsFor(compileSurvey(base, { reg, chainId: 'n2', clientIds: ['BETA'] }).chain, {}, list)
-        assert.match(conflictSummary(compileSurvey(base, { reg, chainId: 'n2', clientIds: ['BETA'] }).chain, blocked), /Nobody can see/)
+        assert.deepEqual(cs.map((c) => c.survey_id), ['a', 'b', 'c'])
+        const q = queueAlert(mine, cs)
+        assert.equal(q.level, 'queued')
+        assert.deepEqual([q.queued, q.some_wait], [['acme'], ['beta']])
+        assert.match(q.alert, /⚠ Queued for ACME: their users already have 2 running surveys.*"a", "b".*later/)
+        assert.match(q.alert, /Some users of BETA may wait/)
+        const acmeOnly = compileSurvey(base, { reg, chainId: 'n2', clientIds: ['ACME'] }).chain
+        assert.equal(queueAlert(acmeOnly, conflictsFor(acmeOnly, {}, list)).level, 'all_queued')
+        const gamma = compileSurvey(base, { reg, chainId: 'n3', clientIds: ['GAMMA'] }).chain
+        assert.equal(queueAlert(gamma, conflictsFor(gamma, {}, list)).level, 'clear')
+        // One other survey is under the limit of two: fine.
+        const zed = compileSurvey(base, { reg, chainId: 'n4', clientIds: ['ZED'] }).chain
+        const qz = queueAlert(zed, conflictsFor(zed, {}, list))
+        assert.equal(qz.level, 'clear')
+        assert.match(qz.alert, /under the limit of 2/)
+        // b was launched after a: only a counts for b.
+        assert.deepEqual(conflictsFor(list[1].conditions!.lensChain!, list[1], list).map((c) => c.survey_id), ['a'])
     })
 })
 
