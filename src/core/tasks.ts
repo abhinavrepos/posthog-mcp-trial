@@ -7,7 +7,7 @@ import { config, ROOT } from './config.ts'
 import { hogql, replayUrl } from './posthog.ts'
 import { P } from './props.ts'
 import { workflowEpisodes } from './workflows.ts'
-import { DURATION_BUCKETS, type TaskAttempt, type Task, type TaskMapParams, type TaskMap, type TaskMapRow,
+import { DURATION_BUCKETS, type Coverage, type TaskAttempt, type Task, type TaskMapParams, type TaskMap, type TaskMapRow,
     type FlowTimeParams, type FlowTime, type FlowPoint, type IngestStatus, type Window } from './taskstypes.ts'
 
 const DAY = 86_400_000
@@ -256,6 +256,17 @@ function dataThrough(): string | null {
     // Today is mutable; only a complete, nontruncated day can be called fully processed.
     return one<{ day: string }>('SELECT max(day) AS day FROM task_ingest WHERE day < ? AND truncated = 0', today())?.day || null
 }
+/** The days of these periods not fully processed yet (today never counts as complete). */
+export function coverage(...windows: Window[]): Coverage {
+    const done = new Set(all<{ day: string }>('SELECT day FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0 AND day < ?',
+        windows.map((w) => w.from).sort()[0], windows.map((w) => w.to).sort().at(-1)!, today()).map((r) => r.day))
+    const unprocessed = new Set<string>()
+    for (const w of windows) for (let d = w.from; d <= w.to && unprocessed.size < 400; d = shift(d, 1)) if (!done.has(d)) unprocessed.add(d)
+    const list = [...unprocessed].sort()
+    if (!list.length) return { complete: true, unprocessed: [] }
+    const span = list.length === 1 ? list[0] : `${list.length} days (${list[0]} to ${list.at(-1)})`
+    return { complete: false, unprocessed: list, text: `Not processed yet: ${span}. Lens gives no flags until both periods are fully processed, so a day still missing is never shown as work that stopped. Choose dates up to ${dataThrough() ?? 'the last processed day'}, or wait for the history to catch up.` }
+}
 function note(w: Window): string {
     const complete = one<{ n: number }>('SELECT count(*) AS n FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0', w.from, w.to)!.n
     const missing = Math.max(0, (Date.parse(w.to) - Date.parse(w.from)) / DAY + 1 - complete)
@@ -270,6 +281,7 @@ function pathRows(w: Window, task?: string, client?: string, withHist = true) {
 async function computeTaskMap(p: TaskMapParams): Promise<TaskMap> {
     const days = validWindow(p.window), baseline = p.baseline || { from: shift(p.window.from, -days), to: shift(p.window.from, -1) }
     validWindow(baseline); filters(p.task, p.client)
+    const cover = coverage(p.window, baseline)
     const min = p.min_attempts ?? 5
     if (!Number.isInteger(min) || min < 1) throw new Error('min_attempts must be a positive integer')
     const now = new Map(aggregates(p.window, p.task, p.client).map((r) => [key(r), r])), before = new Map(aggregates(baseline, p.task, p.client).map((r) => [key(r), r]))
@@ -296,6 +308,7 @@ async function computeTaskMap(p: TaskMapParams): Promise<TaskMap> {
         if (prev.attempts >= min && n.done >= 5 && prev.done >= 5 && n.median_s !== null && prev.median_s !== null && n.median_s >= prev.median_s * 1.3 && n.median_s - prev.median_s >= 10) flags.push('slower')
         if (prev.attempts >= min && n.attempts > 0 && prev.done / prev.attempts - n.done / n.attempts >= 0.15 - 1e-12) flags.push('failing')
         if (!prev.attempts && n.attempts) flags.push('new')
+        if (!cover.complete) flags.length = 0 // unprocessed days are not missing work
         const path = (n.attempts ? pn : pb).get(k)?.path
         rows.push({ client: source.client, client_name: names.get(source.client) || source.client, task_id: source.task_id,
             task_name: catalog.get(source.task_id) || appEvents()?.aliases[source.task_id.slice(2)] || labels.get(source.task_id.slice(2)) || source.task_id.slice(2), now: n, before: prev, flags,
@@ -311,7 +324,7 @@ async function computeTaskMap(p: TaskMapParams): Promise<TaskMap> {
         c.missing += Number(r.flags.includes('missing')); c.slower += Number(r.flags.includes('slower'))
         c.score += Math.log2(2 + Math.max(r.now.attempts, r.before.attempts)) * r.flags.reduce((s, f) => s + ({ missing: 5, slower: 4, failing: 3, dropped: 2, new: 0 }[f]), 0)
     }
-    return { params: { ...p, baseline }, rows, clients: [...clients.values()].sort((a, b) => b.score - a.score || a.client.localeCompare(b.client)), data_through: dataThrough(), note: note(p.window) }
+    return { coverage: cover, params: { ...p, baseline }, rows, clients: [...clients.values()].sort((a, b) => b.score - a.score || a.client.localeCompare(b.client)), data_through: dataThrough(), note: note(p.window) }
 }
 
 function total(rows: Aggregate[]) {
@@ -340,7 +353,7 @@ async function computeFlowTime(p: FlowTimeParams): Promise<FlowTime> {
         a.attempts += r.attempts; a.done += r.done; merge(a.hist, histogram(r.hist))
     }
     const slow = all<TaskAttempt & { path: string }>(`SELECT * FROM task_attempts WHERE day BETWEEN ? AND ?${f.sql} ORDER BY duration_s DESC, session_id, started_at LIMIT 10`, p.window.from, p.window.to, ...f.args)
-    return { params: { ...p, granularity }, task: cat || { task_id: p.task, dialog: p.task.slice(2), name: label(p.task.slice(2)) },
+    return { coverage: coverage(p.window), params: { ...p, granularity }, task: cat || { task_id: p.task, dialog: p.task.slice(2), name: label(p.task.slice(2)) },
         client_name: p.client === undefined ? undefined : one<{ name: string }>('SELECT name FROM client_names WHERE client = ?', p.client)?.name || p.client,
         summary: { ...summary, users }, all_clients: { median_s: allSummary.median_s, p90_s: allSummary.p90_s, done_rate: allSummary.done_rate },
         series: series(p.window, p.task, granularity, p.client), series_all: p.client === undefined ? undefined : series(p.window, p.task, granularity),
@@ -350,7 +363,7 @@ async function computeFlowTime(p: FlowTimeParams): Promise<FlowTime> {
                 done_rate: r.done / r.attempts, median_s: percentile(r.hist, 0.5) }
         }),
         slowest: slow.map((a) => ({ client: a.client, user: a.user, session_id: a.session_id, started_at: a.started_at, duration_s: a.duration_s,
-            outcome: a.outcome, path: JSON.parse(a.path) as string[], first_error: a.first_error || undefined, replay_url: replayUrl(a.session_id, a.offset_s) })),
+            outcome: a.outcome, path: JSON.parse(a.path) as string[], labels: (JSON.parse(a.path) as string[]).map((d) => (d === '…' ? d : label(d))), first_error: a.first_error || undefined, replay_url: replayUrl(a.session_id, a.offset_s) })),
         top_errors: all<{ template: string; count: number }>(`SELECT first_error AS template, count(*) AS count FROM task_attempts WHERE day BETWEEN ? AND ?${f.sql} AND first_error IS NOT NULL AND first_error != '' GROUP BY first_error ORDER BY count DESC, first_error LIMIT 5`, p.window.from, p.window.to, ...f.args).map((r) => ({ template: r.template, count: r.count })),
         data_through: dataThrough(), note: note(p.window) }
 }
@@ -371,60 +384,68 @@ export type TaskQuery = (query: string, values?: Record<string, unknown>) => Pro
 let taskQuery: TaskQuery = hogql
 /** A query boundary for offline ingestion tests and maintenance scripts. */
 export function setTaskQuery(query: TaskQuery = hogql): void { taskQuery = query }
-const SESSION_PAGE = 1000, EVENT_PAGE = 10_000, MAX_SESSIONS = 100_000, MAX_EVENTS = 2_000_000
-/** Keyset cursors include UUID so events sharing a timestamp are never skipped. All scans are bounded.
- * The previous day detects sessions crossing midnight; the following day lets today's tasks finish.
+const EVENT_PAGE = 50_000, MAX_SESSIONS = 100_000, MAX_EVENTS = 3_000_000
+// PostHog limits how many queries one key may run (about 240 a minute and 1,200 an hour by default), and
+// Lens's other tools share that budget. A day costs one query for its sessions and one per 50,000 events:
+// about 4 for a full Reval day (~110,000 events). Sessions are matched on PostHog's $session_id column,
+// not inside the properties JSON, which keeps each scan cheap.
+const BUSY = new Set([429, 500, 502, 503, 504, 513])
+/** Retries a query PostHog was too busy for (rate limit, overload, timeout), waiting longer each time (5 s, 20 s, 60 s). */
+export async function patiently<T>(fn: () => Promise<T>, waits = [5_000, 20_000, 60_000]): Promise<T> {
+    for (let i = 0; ; i++) {
+        try {
+            return await fn()
+        } catch (e) {
+            const status = (e as { status?: number }).status
+            const timedOut = (e as Error).name === 'TimeoutError' // a slow answer under load is "busy" too
+            if (i >= waits.length || !(timedOut || (status && BUSY.has(status)))) throw e
+            await new Promise((r) => setTimeout(r, waits[i]))
+        }
+    }
+}
+/** One UTC day: its sessions (first Reval event that day) with all their events up to the next day's end,
+ * so a task started before midnight still finishes. Keyset pages (session, time, uuid) never skip or repeat
+ * events that share a timestamp. All scans are bounded; caps are recorded as truncated.
  */
-export async function ingestDay(day: string, query: TaskQuery = taskQuery): Promise<void> {
+export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits?: number[]): Promise<void> {
     validDay(day)
     const started = performance.now(), reg = required()
+    const q: TaskQuery = (text, values) => patiently(() => query(text, values), waits)
     const values = { from: day, to: shift(day, 1), scan_from: shift(day, -1), scan_to: shift(day, 2), events: [reg.events.screen, reg.events.interaction] }
-    const ids: Row[] = []
-    let after = '', truncated = false
-    while (ids.length < MAX_SESSIONS) {
-        const page = await query(`SELECT toString(properties.$session_id) AS sid, min(timestamp) AS first_ts,
-            argMin(toFloat(properties.$time), timestamp) AS first_ctime FROM events
-            WHERE timestamp >= {scan_from} AND timestamp < {to} AND notEmpty(toString(properties.$session_id))
-            AND toString(properties.$session_id) > {after}
-            GROUP BY sid HAVING first_ts >= {from} AND first_ts < {to} ORDER BY sid LIMIT 1000`, { ...values, after })
-        ids.push(...page)
-        if (page.length < SESSION_PAGE) break
-        const next = String(page.at(-1)!.sid)
-        if (next <= after) throw new Error('Session pagination did not advance')
-        after = next
-        if (ids.length >= MAX_SESSIONS) truncated = true
-    }
+    // Sessions whose first Reval event is on this day (a session from the evening before is not this day's).
+    const startedToday = `SELECT $session_id FROM events WHERE timestamp >= {scan_from} AND timestamp < {to} AND event IN {events} AND $session_id != ''
+            GROUP BY $session_id HAVING min(timestamp) >= {from} AND min(timestamp) < {to}`
+    const ids = await q(`SELECT $session_id AS sid, min(timestamp) AS first_ts, argMin(toFloat(properties.$time), timestamp) AS first_ctime FROM events
+            WHERE timestamp >= {scan_from} AND timestamp < {to} AND event IN {events} AND $session_id != ''
+            GROUP BY sid HAVING first_ts >= {from} AND first_ts < {to} ORDER BY sid LIMIT ${MAX_SESSIONS}`, values)
+    let truncated = ids.length >= MAX_SESSIONS
     const sessions: Step[][] = [], clientNames = new Map<string, string>(), dialogCounts = new Map<string, Map<string, number>>()
-    let events = 0
-    for (let batch = 0; batch < ids.length && events < MAX_EVENTS; batch += 100) {
-        const sids = ids.slice(batch, batch + 100).map((r) => String(r.sid)), by = new Map<string, RawEvent[]>()
-        let sid = '', ts = values.scan_from, uuid = ''
-        while (events < MAX_EVENTS) {
-            const page = await query(`SELECT ${columns(reg)}, toString(uuid) AS event_uuid, ${P.clientName} AS client_name FROM events
-                WHERE timestamp >= {scan_from} AND timestamp < {scan_to} AND event IN {events}
-                AND toString(properties.$session_id) IN {sids}
-                AND (toString(properties.$session_id), timestamp, toString(uuid)) > ({sid}, {ts}, {uuid})
-                ORDER BY sid, ts, event_uuid LIMIT 10000`, { ...values, sids, sid, ts, uuid })
-            events += page.length
-            for (const row of page) {
-                const e = toRaw(row)
-                if (!by.has(e.sid)) by.set(e.sid, [])
-                by.get(e.sid)!.push(e)
-                if (row.client_name) clientNames.set(e.client || '', String(row.client_name))
-                if (e.dialogName && e.dialogName.toUpperCase() !== 'UNKNOWN') {
-                    if (!dialogCounts.has(e.dialog)) dialogCounts.set(e.dialog, new Map())
-                    const c = dialogCounts.get(e.dialog)!; c.set(e.dialogName, (c.get(e.dialogName) || 0) + 1)
-                }
+    const by = new Map<string, RawEvent[]>()
+    let events = 0, sid = '', ts = values.from, uuid = ''
+    while (ids.length && events < MAX_EVENTS) {
+        const page = await q(`SELECT ${columns(reg)}, toString(uuid) AS event_uuid, ${P.clientName} AS client_name FROM events
+                WHERE timestamp >= {from} AND timestamp < {scan_to} AND event IN {events}
+                AND $session_id IN (${startedToday})
+                AND ($session_id, timestamp, toString(uuid)) > ({sid}, {ts}, {uuid})
+                ORDER BY $session_id, timestamp, toString(uuid) LIMIT ${EVENT_PAGE}`, { ...values, sid, ts, uuid })
+        events += page.length
+        for (const row of page) {
+            const e = toRaw(row)
+            if (!by.has(e.sid)) by.set(e.sid, [])
+            by.get(e.sid)!.push(e)
+            if (row.client_name) clientNames.set(e.client || '', String(row.client_name))
+            if (e.dialogName && e.dialogName.toUpperCase() !== 'UNKNOWN') {
+                if (!dialogCounts.has(e.dialog)) dialogCounts.set(e.dialog, new Map())
+                const c = dialogCounts.get(e.dialog)!; c.set(e.dialogName, (c.get(e.dialogName) || 0) + 1)
             }
-            if (page.length < EVENT_PAGE) break
-            const last = page.at(-1)!, next = [String(last.sid), String(last.ts), String(last.event_uuid)]
-            if (next[0] === sid && next[1] === ts && next[2] === uuid) throw new Error('Event pagination did not advance')
-            ;[sid, ts, uuid] = next
-            if (events >= MAX_EVENTS) truncated = true
         }
-        for (const ev of by.values()) sessions.push(toSteps(ev, reg))
+        if (page.length < EVENT_PAGE) break
+        const last = page.at(-1)!, next = [String(last.sid), String(last.ts), String(last.event_uuid)]
+        if (next[0] === sid && next[1] === ts && next[2] === uuid) throw new Error('Event pagination did not advance')
+        ;[sid, ts, uuid] = next
+        if (events >= MAX_EVENTS) truncated = true
     }
-    if (events >= MAX_EVENTS) truncated = true
+    for (const ev of by.values()) sessions.push(toSteps(ev, reg))
     const attempts = extractAttempts(sessions, reg), firsts = new Map(ids.map((r) => [String(r.sid), r]))
     const sessionFirst = new Map(sessions.filter((s) => s.length).map((s) => [s[0].raw.sid, s[0]]))
     for (const a of attempts) {

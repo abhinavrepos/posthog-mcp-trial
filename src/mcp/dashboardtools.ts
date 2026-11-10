@@ -106,14 +106,16 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         const window = windowFor(input.when, 28)
         const p: TaskMapParams = { window, baseline: input.compared_with ? windowFor(input.compared_with, 28) : previous(window), client: r.client, task: r.task }
         const result = await d.taskMap(p)
-        const rows = result.rows.filter(row => !input.only_flagged || row.flags.length)
-        const attention = new Set(result.rows.filter(row => row.flags.length).map(row => row.client)).size
+        // Same rule as the page: "new" (a task a client just started) is not a problem to look at.
+        const needs = (row: (typeof result.rows)[number]) => row.flags.some(f => f !== 'new')
+        const rows = result.rows.filter(row => !input.only_flagged || needs(row))
+        const attention = new Set(result.rows.filter(needs).map(row => row.client)).size
         const clients = result.clients.filter(c => rows.some(row => row.client === c.client)).map(c => ({
             ...c,
             tasks: rows.filter(row => row.client === c.client).map(({ task_id, task_name, flags, now, before }) => ({ task_id, task_name, flags, now, before })),
         }))
         return json({
-            headline: `${attention} clients have tasks needing attention.`, clients,
+            headline: result.coverage?.complete === false ? result.coverage.text : `${attention} client${attention === 1 ? '' : 's'} need${attention === 1 ? 's' : ''} attention.`, clients,
             data_through: result.data_through, note: result.note, history_behind_days: status.behind_days,
             open: open('task_map', p, input.only_flagged),
         })
@@ -134,6 +136,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         const first = mean(points.slice(0, third)), last = mean(points.slice(-third))
         const trend = points.length < 3 ? 'not enough history' : last > first * 1.1 ? 'slower' : last < first * .9 ? 'faster' : 'steady'
         return json({
+            ...(result.coverage?.complete === false ? { not_processed_yet: result.coverage.text } : {}),
             task: result.task, summary: result.summary, all_clients: result.all_clients, trend,
             paths: result.paths, slowest: result.slowest.slice(0, 3), top_errors: result.top_errors,
             data_through: result.data_through, note: result.note, open: open('flow_time', p),

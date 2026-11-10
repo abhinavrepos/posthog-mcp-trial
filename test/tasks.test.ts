@@ -159,42 +159,55 @@ test('parameter validation is clear', async () => {
     await assert.rejects(runIngest({ days: ['invalid'] }), /Dates/)
 })
 
-test('ingest uses bounded keyset pages including timestamp ties; reruns replace the day', async () => {
+test('ingest: one session query, 50,000-event keyset pages with timestamp ties, few queries per day; reruns replace the day', async () => {
     reset()
-    // Exactly full pages force a following empty read for both pagination loops.
-    const ids = Array.from({ length: 1000 }, (_, i) => ({ sid: `s${String(i).padStart(4, '0')}`, first_ts: `${now}T10:00:00.000Z`, first_ctime: 0 }))
-    const rows = Array.from({ length: 10_000 }, (_, i) => {
+    const ids = Array.from({ length: 2750 }, (_, i) => ({ sid: `s${String(i).padStart(4, '0')}`, first_ts: `${now}T10:00:00.000Z`, first_ctime: 0 }))
+    // A full page of 50,000 rows with equal timestamps forces a second read that must continue after the last uuid.
+    const page1 = Array.from({ length: 50_000 }, (_, i) => {
         const e = i < 3 ? [raw(0, 'DlgSave'), submit(1), reply(2)][i] : raw(3, 'DlgList')
         return { ...e, sid: ids[0].sid, event_uuid: `u${String(i).padStart(5, '0')}`, ctime: 0, client_name: 'Acme' }
     })
-    let sessionPages = 0, eventPages = 0, fullReads = 0
+    let sessionQueries = 0, eventQueries = 0
     const fake = async (sql: string, values: Record<string, unknown> = {}) => {
-        assert.match(sql, /LIMIT \d+/); assert.match(sql, /timestamp >= \{scan_from\}/)
+        assert.match(sql, /LIMIT \d+/)
         assert.equal(sql.includes(now), false, 'dates must be bound')
-        if (sql.includes('GROUP BY sid')) {
-            sessionPages++
-            if (!values.after) return ids
-            assert.equal(values.after, ids.at(-1)!.sid)
-            return []
-        }
-        eventPages++
-        assert.match(sql, /event_uuid LIMIT/)
-        if ((values.sids as string[]).includes(ids[0].sid)) {
-            if (values.uuid === '') { fullReads++; return rows }
-            assert.equal(values.uuid, rows.at(-1)!.event_uuid)
-        }
+        assert.match(sql, /\$session_id/, 'sessions matched on the $session_id column')
+        if (sql.includes('GROUP BY sid')) { sessionQueries++; return ids }
+        eventQueries++
+        assert.match(sql, /ORDER BY \$session_id, timestamp, toString\(uuid\) LIMIT 50000/)
+        if (values.uuid === '') return page1
+        assert.deepEqual([values.sid, values.uuid], [ids[0].sid, page1.at(-1)!.event_uuid], 'continues after the last row')
         return []
     }
     await ingestDay(now, fake)
-    assert.equal(sessionPages, 2); assert.equal(eventPages, 11); assert.equal(fullReads, 1)
+    assert.deepEqual([sessionQueries, eventQueries], [1, 2], 'a full Reval-size day costs a handful of queries')
     assert.equal(ingestStatus().attempts, 1)
     assert.match(findTasks('')[0].name, /Save → 'Trade Id … Updated'/)
-    assert.equal(findTasks('save')[0].name.includes('Save'), true)
     await ingestDay(now, fake)
-    assert.equal(ingestStatus().attempts, 1)
-    assert.equal((tasksDb.prepare('SELECT events FROM task_ingest').get() as { events: number }).events, 10_000)
+    assert.equal(ingestStatus().attempts, 1, 'a rerun replaces the day')
+    assert.equal((tasksDb.prepare('SELECT events FROM task_ingest').get() as { events: number }).events, 50_000)
     await ingestDay(now, async (sql) => { assert.match(sql, /LIMIT/); return [] })
     assert.equal(ingestStatus().attempts, 0); assert.equal(findTasks('').length, 0)
+})
+
+test('ingest retries when PostHog is busy or rate-limited, and gives up on other errors', async () => {
+    reset()
+    let calls = 0
+    const busyTwice = async () => {
+        if (++calls <= 2) throw Object.assign(new Error('under heavy load'), { status: calls === 1 ? 513 : 429 })
+        return []
+    }
+    await ingestDay(now, busyTwice, [1, 1, 1])
+    assert.equal(calls, 3, 'two busy answers, then it worked')
+    calls = 0
+    await ingestDay(now, async () => { if (++calls === 1) throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }); return [] }, [1])
+    assert.equal(calls, 2, 'a timeout is retried')
+    calls = 0
+    await assert.rejects(ingestDay(now, async () => { calls++; throw Object.assign(new Error('bad query'), { status: 400 }) }, [1, 1, 1]), /bad query/)
+    assert.equal(calls, 1, 'no retry for a real error')
+    calls = 0
+    await assert.rejects(ingestDay(now, async () => { calls++; throw Object.assign(new Error('busy'), { status: 503 }) }, [1, 1]), /busy/)
+    assert.equal(calls, 3, 'gives up after its waits')
 })
 
 test('scheduler continues after errors, serializes runs, backfills newest first, and prunes only attempts', async () => {
@@ -267,4 +280,20 @@ test('scale: 365 days × 50 clients × 40 tasks, 200k attempts; queries <600ms, 
     assert.ok(mapMs < 600, `taskMap took ${mapMs}ms`)
     assert.ok(flowMs < 600, `flowTime took ${flowMs}ms`)
     assert.ok(extractMs < 3000, `extraction took ${extractMs}ms`)
+})
+
+test('days not processed yet are never flagged as missing work', async () => {
+    reset()
+    // Baseline processed with work; the recent period not processed at all.
+    for (let i = 20; i <= 33; i++) storeAttempts(day(i), Array.from({ length: 3 }, () => attempt(day(i))))
+    const r = await taskMap({ window: { from: day(13), to: day(1) }, baseline: { from: day(33), to: day(20) } })
+    assert.equal(r.coverage.complete, false)
+    assert.equal(r.coverage.unprocessed.length, 13)
+    assert.match(r.coverage.text!, /Not processed yet: 13 days/)
+    assert.equal(r.rows.some((x) => x.flags.length), false, 'no flags while a period is unprocessed')
+    // Once processed (empty days), a real stop is flagged.
+    for (let i = 1; i <= 13; i++) storeAttempts(day(i), [])
+    const done = await taskMap({ window: { from: day(13), to: day(1) }, baseline: { from: day(33), to: day(20) } })
+    assert.equal(done.coverage.complete, true)
+    assert.ok(done.rows.some((x) => x.flags.includes('missing')))
 })

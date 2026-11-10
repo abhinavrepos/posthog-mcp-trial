@@ -22,11 +22,11 @@ let mapParams: TaskMapParams | undefined, flowParams: FlowTimeParams | undefined
 const deps = {
     async taskMap(p: TaskMapParams): Promise<TaskMap> {
         mapParams = p
-        return { params: { ...p, baseline: p.baseline || { from: '2025-12-04', to: '2025-12-31' } }, clients: [{ client: 'acme', client_name: clientName, attempts_now: 10, attempts_before: 20, tasks_now: 1, tasks_before: 2, missing: 1, slower: 1, score: 4 }], rows: [{ client: 'acme', client_name: clientName, task_id: 't_save', task_name: 'Save <trade>', now: stat, before: { ...stat, attempts: 20, median_s: 45 }, flags: ['missing', 'slower', 'failing', 'new', 'dropped'], typical_path: ['Open <trade>', 'Save'] }], data_through: '2026-01-28', note: 'Test <note>' }
+        return { coverage: { complete: true, unprocessed: [] }, params: { ...p, baseline: p.baseline || { from: '2025-12-04', to: '2025-12-31' } }, clients: [{ client: 'acme', client_name: clientName, attempts_now: 10, attempts_before: 20, tasks_now: 1, tasks_before: 2, missing: 1, slower: 1, score: 4 }], rows: [{ client: 'acme', client_name: clientName, task_id: 't_save', task_name: 'Save <trade>', now: stat, before: { ...stat, attempts: 20, median_s: 45 }, flags: ['missing', 'slower', 'failing', 'new', 'dropped'], typical_path: ['Open <trade>', 'Save'] }], data_through: '2026-01-28', note: 'Test <note>' }
     },
     async flowTime(p: FlowTimeParams): Promise<FlowTime> {
         flowParams = p
-        return { params: { ...p, granularity: p.granularity || 'day' }, task: { task_id: p.task, name: 'Save <trade>', dialog: 'DlgTrade' }, client_name: clientName,
+        return { coverage: { complete: true, unprocessed: [] }, params: { ...p, granularity: p.granularity || 'day' }, task: { task_id: p.task, name: 'Save <trade>', dialog: 'DlgTrade' }, client_name: clientName,
             summary: { attempts: 10, done: 8, done_rate: .8, median_s: 200, p90_s: 3900, users: 3 }, all_clients: { median_s: 120, p90_s: 500, done_rate: .9 },
             series: [{ period: '2026-01-01', attempts: 5, done: 4, median_s: 180, p90_s: 600 }, { period: '2026-01-02', attempts: 5, done: 4, median_s: 210, p90_s: 900 }],
             series_all: [{ period: '2026-01-01', attempts: 50, done: 45, median_s: 120, p90_s: 500 }],
