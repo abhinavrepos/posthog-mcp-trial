@@ -299,14 +299,29 @@ describe('the MCP server with app events', async () => {
     const client = new Client({ name: 'test', version: '0' })
     const [a, b] = InMemoryTransport.createLinkedPair()
     await Promise.all([server.connect(a), client.connect(b)])
-    test('offers the three tools and the prompt', async () => {
+    test('offers the app event tools and the prompt', async () => {
         const names = (await client.listTools()).tools.map((t) => t.name)
-        for (const n of ['describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade']) assert.ok(names.includes(n), n)
+        for (const n of ['describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade', 'discover_workflows', 'workflow_completion', 'save_workflow']) assert.ok(names.includes(n), n)
         assert.ok((await client.listPrompts()).prompts.some((p) => p.name === 'where_clients_struggle'))
+    })
+    test('workflow tools describe the question and keep saving explicit and writable', async () => {
+        const tools = new Map((await client.listTools()).tools.map((tool) => [tool.name, tool]))
+        for (const name of ['discover_workflows', 'workflow_completion', 'save_workflow'])
+            assert.ok(tools.get(name)?.description?.startsWith('Which tasks do people do in Reval, and do they finish them?'), name)
+        assert.equal(tools.get('save_workflow')?.annotations?.readOnlyHint, false)
+        assert.equal(tools.get('discover_workflows')?.annotations?.readOnlyHint, true)
+        assert.equal(tools.get('workflow_completion')?.annotations?.readOnlyHint, true)
+        assert.match(tools.get('save_workflow')?.description || '', /only after the person agreed the name/)
+        const result = await client.callTool({ name: 'save_workflow', arguments: { name: 'Import a swap', dialogs: ['DlgImport', 'DlgSwap'], saved_by: 'PM' } })
+        const output = JSON.parse((result.content as { text: string }[])[0].text.split('```json\n')[1].split('\n```')[0])
+        assert.deepEqual(output.done, { dialog: 'DlgSwap', outcome: 'completed' })
+        assert.equal(output.saved_by, 'PM')
+        const bad = await client.callTool({ name: 'save_workflow', arguments: { name: 'Bad', dialogs: ['IR Swap'], saved_by: 'PM' } })
+        assert.equal(bad.isError, true)
     })
     test('the instructions name them, say where the client is, and still fit', () => {
         const text = client.getInstructions() || ''
-        for (const n of ['describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade']) assert.ok(text.includes(n), n)
+        for (const n of ['describe_app_events', 'session_story', 'dialog_friction', 'client_signals', 'attempt_timings', 'top_pains', 'find_trade', 'discover_workflows', 'workflow_completion', 'save_workflow']) assert.ok(text.includes(n), n)
         assert.match(text, /part 3 of the distinct id/)
         assert.ok(text.length + 100 < INSTRUCTIONS_LIMIT, `instructions are ${text.length} characters`)
     })
