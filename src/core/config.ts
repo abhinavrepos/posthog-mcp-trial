@@ -119,6 +119,10 @@ export const config = {
         brand: env('SURVEY_BRAND', 'Survey by ION'),
         // A user is in at most this many running surveys at once; later ones wait until they finish one.
         perUser: intSetting('SURVEYS_PER_USER', 2, 1, 10),
+        // Never two surveys within this many hours for a user (24 at least).
+        gapHours: intSetting('SURVEYS_MIN_GAP_HOURS', 24, 24, 8760),
+        // After a user closes a survey with the cross: no survey for them for this many days.
+        quietDaysAfterClose: intSetting('SURVEYS_QUIET_DAYS_AFTER_CLOSE', 7, 0, 90),
     },
     // How your events name things. The defaults match the demo app.
     properties: {

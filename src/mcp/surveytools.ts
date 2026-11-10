@@ -101,7 +101,7 @@ export const specShape = {
     wait_for_page: z.boolean().optional().describe('Wait until the page has loaded and loading masks are gone (default true)'),
     max_wait_seconds: z.number().optional().describe('Skip if the page stays busy this long (default 30)'),
     show: z.enum(['once', 'every_time']).optional().describe('once per user (default) or every time the steps happen'),
-    days_between_surveys: z.number().int().optional().describe('No survey for a user who saw any survey within this many days (default 14)'),
+    days_between_surveys: z.number().int().optional().describe('No survey for a user who saw any survey within this many days (default 14, at least 1)'),
     max_responses: z.number().int().optional(),
     look: look.optional(),
 }
@@ -126,7 +126,7 @@ export function registerSurveyTools(server: McpServer): void {
         'design_survey',
         {
             title: 'Check a survey before saving it',
-            description: `Checks an in-app ${app} survey described in ${app}'s words (dialogs, buttons, messages, clients, colours) and estimates how many sessions would have seen it in the last 14 days. A user is in at most ${config.surveys.perUser} running surveys at once: when some users already are, it returns a ⚠ alert (they are queued and get this survey later, after finishing one); always pass that alert on to the person. Saves nothing. Use describe_app_events for dialog ids and button names. Then show the person the plan and problems, and save_survey when they agree.`,
+            description: `Checks an in-app ${app} survey described in ${app}'s words (dialogs, buttons, messages, clients, colours) and estimates how many sessions would have seen it in the last 14 days. Users are protected from survey fatigue: at least ${config.surveys.gapHours} hours between surveys, at most ${config.surveys.perUser} running at once, and ${config.surveys.quietDaysAfterClose} quiet days after they close one. When this survey's users are already in another running survey, it returns a ⚠ notice (overlap, or queued users who get it later); always pass it on to the person, first and in full. Saves nothing. Use describe_app_events for dialog ids and button names. Then show the person the plan and problems, and save_survey when they agree.`,
             inputSchema: { ...specShape, estimate: z.boolean().default(true).describe('Count past sessions that went through the steps') },
             annotations: { readOnlyHint: true },
         },

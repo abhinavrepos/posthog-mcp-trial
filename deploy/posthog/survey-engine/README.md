@@ -37,6 +37,8 @@ Settings: `SURVEY_ENGINE` (on), `SURVEY_BRAND` ("Survey by ION"), `FEATURE_SURVE
 
 ## Rules worth knowing first
 
+- **Users are protected**: 24 hours at least between surveys, one per visit; × closes it at once and
+  gives 7 quiet days; a survey ignored twice stops; the engine keeps one key (`lensSurveyQuiet`).
 - **At most two running surveys per user** (`SURVEYS_PER_USER`): a user already in two unfinished
   ones is queued for a newer survey and gets it later, after answering or dismissing one. The person
   making the survey gets a ⚠ alert (design, save, launch, Surveys page) naming who is queued and why.
