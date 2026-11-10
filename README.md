@@ -79,6 +79,7 @@ PROP_CLIENT_NAME=none
 | `describe_app_events` | What do the events and properties mean? How often is each filled, with real example values, the dialogs used most, the messages Reval showed, the clients, and how to query them in SQL. |
 | `top_pains` | What hurts most this week? The dialogs where clients fail most, ranked, with the main error, whether it is new or worse than the week before, an example session, and the clients with warning signs. |
 | `dialog_friction` | Where do clients fail? Per dialog: attempts (Save, Run, Export...) and what came of each (done, queued, failed, nothing found, no message), the errors with the sessions and clients they hit, retry loops (failed, then the same button again) and stuck sessions (an error and no success after). For all clients, one client or one dialog. |
+| `message_doctor` | Which error messages leave people stuck, and what do they do to recover? Field labels touched, other dialogs opened, searches, recovery and repeated failures, with flags and example sessions. |
 | `session_story` | What happened in this session? The session as a timeline the agent can read instead of watching the replay: dialogs, tabs, fields, buttons and their outcomes, and every message, with replay links at the errors for a person to open. |
 | `attempt_timings` | Is a button slow, or does a server call fail? From the network timing in recent recordings: the wait after each Save or Run, the slowest call (method and path only) and HTTP errors. |
 | `find_trade` | What happened to trade 4348? The sessions where someone searched for it or Reval named it in a message, with the client, user, attempts and errors from when they reached the trade. |
@@ -127,6 +128,22 @@ and `completed` are reported separately; saved rules can require either or both.
 require completed. No observed done before the episode ends counts as abandoned; active sessions
 can change. Reads cover at most 2,000 relevant sessions and 50,000 events per batch of 50 sessions.
 The output flags partial results when a limit is reached.
+
+### Message doctor
+
+`message_doctor` groups errors by message template and dialog. Narrow it by `client`, `dialog`,
+`message` text or `when`. It learns the field labels people touch, other dialogs they open and
+whether they search, until the next submit or five minutes. It never shows search text or field values.
+A recovery is a later submit on the same dialog and button ending done or queued within 15 minutes.
+A repeated failure is another submit showing the same error template. Gave up means no later submit
+on that dialog in the observed session. Recovery and repeated failure can both count.
+
+With at least three occurrences, **points elsewhere** means none of the top five touched field
+labels shares a word with the message; **dead end** means at least half gave up. **Fine** means at
+least 80% recovered. Flags can overlap. These are clues from behaviour, not proof that a field edit
+fixed the problem. Results put dead ends and messages pointing elsewhere first, then clients hit.
+Each outcome has an example session and a replay link when recorded. The query reads at most 1,000
+error sessions in batches, reports row counts and cuts, and omits sessions still over the event cap.
 
 ## Replay clip page
 
