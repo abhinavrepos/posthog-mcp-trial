@@ -18,7 +18,7 @@ import { clipUrl } from '../core/links.ts'
 import { replayUrl } from '../core/posthog.ts'
 import { recordingInfo, type RecordingInfo } from '../core/recording-info.ts'
 import { downloadName, formatClock, HourlyLimit, parseReplayInput, parseStartTime } from '../core/replay-input.ts'
-import { audit, can, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
+import { audit, can, canSeeSystem, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
 import { handleAdmin } from './admin.ts'
 import { handleLive, liveHtml } from './live.ts'
 import { handleSystem } from './system.ts'
@@ -609,11 +609,11 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
         [
             ['Replay clips', '/replays', 'watch'],
             ['Live', '/replays/live', 'watch'],
-            ['System', '/replays/system', 'admin'],
+            ['System', '/replays/system', 'system'],
             ['Admin', '/replays/admin', 'admin'],
         ] as const
     )
-        .filter(([, , need]) => can(v.role, need))
+        .filter(([, , need]) => (need === 'system' ? canSeeSystem(v) : can(v.role, need)))
         .map(([name, href]) => `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${name}</a>`)
         .join('')
     return `<header>${brand}<nav>${tabs}</nav><span class="hdr"><span class="muted small who">${esc(v.email)} · ${esc(ROLE_TEXT[v.role])}</span><button class="ghost small" id="signout" type="button">Sign out</button></span></header>

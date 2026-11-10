@@ -68,6 +68,31 @@ export function removePerson(email: string, by: string): void {
     })
 }
 
+// ------------------------------------------------------------------ the System page
+// Admins always see it. Anyone else only when an admin ticked "System page" for them on the admin
+// page. It is separate from the clip role: someone can see the System page with "No access" to clips.
+
+export function systemViewers(): Map<string, { updated_by: string; updated_at: string }> {
+    return new Map(all<{ email: string; updated_by: string; updated_at: string }>('SELECT * FROM system_viewers').map((r) => [r.email, r]))
+}
+
+export function hasSystemGrant(email: string): boolean {
+    return !!one('SELECT 1 FROM system_viewers WHERE email = ?', email.toLowerCase())
+}
+
+export const canSeeSystem = (v: Pick<Viewer, 'role' | 'system'>) => can(v.role, 'admin') || v.system === true
+
+/** Lets a person see the System page, or stops it, and records who did it. */
+export function setSystemAccess(email: string, on: boolean, by: string): void {
+    const e = email.toLowerCase()
+    tx(() => {
+        const before = hasSystemGrant(e)
+        if (on) run('INSERT INTO system_viewers (email, updated_by, updated_at) VALUES (?, ?, ?) ON CONFLICT (email) DO UPDATE SET updated_by = excluded.updated_by, updated_at = excluded.updated_at', e, by, new Date().toISOString())
+        else run('DELETE FROM system_viewers WHERE email = ?', e)
+        if (before !== on) audit(by, 'access.system_set', { person: e, system: on })
+    })
+}
+
 export function setAccessSettings(change: { default_role?: Role; allow_share_links?: boolean }, by: string): void {
     tx(() => {
         if (change.default_role !== undefined) setSetting('default_role', change.default_role)
@@ -124,6 +149,7 @@ export interface Viewer {
     role: Role
     posthog_admin: boolean // owner or admin of the organization that owns the project
     in_replay_project: boolean // can open the project (and so every replay) in PostHog itself
+    system?: boolean // an admin let this person see the System page (admins see it anyway)
     session: string // PostHog session id, used to call PostHog on the admin's behalf
 }
 
@@ -198,7 +224,7 @@ export async function currentViewer(req: IncomingMessage): Promise<Viewer | unde
     if (!session || !/^[A-Za-z0-9:._-]{8,200}$/.test(session)) return undefined
     const id = await identity(session)
     if (!id) return undefined
-    return { ...id, role: roleOf(id.email, id.posthog_admin), session }
+    return { ...id, role: roleOf(id.email, id.posthog_admin), system: hasSystemGrant(id.email), session }
 }
 
 // ------------------------------------------------------------------ sign in and out through PostHog
