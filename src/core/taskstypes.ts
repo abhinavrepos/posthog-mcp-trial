@@ -80,7 +80,15 @@ export interface TaskMapClient {
     slower: number
     score: number // how much needs attention, for sorting (higher first)
 }
+/** Which days of a period the history has fully processed. Flags are only given when both periods
+ * are complete: a day not processed yet would otherwise look like work that stopped. */
+export interface Coverage {
+    complete: boolean
+    unprocessed: string[] // days of the window or baseline not (fully) processed yet, at most 400
+    text?: string // for people, when not complete
+}
 export interface TaskMap {
+    coverage: Coverage
     params: Required<Pick<TaskMapParams, 'window' | 'baseline'>> & TaskMapParams
     clients: TaskMapClient[] // sorted by score
     rows: TaskMapRow[] // sorted: flagged first, then by attempts
@@ -118,10 +126,12 @@ export interface SlowAttempt {
     duration_s: number
     outcome: Outcome
     path: string[]
+    labels?: string[] // dialog titles for path
     first_error?: string
     replay_url: string
 }
 export interface FlowTime {
+    coverage: Coverage
     params: FlowTimeParams & { granularity: 'day' | 'week' }
     task: { task_id: string; name: string; dialog: string }
     client_name?: string

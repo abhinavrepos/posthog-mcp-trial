@@ -277,6 +277,49 @@ four people active for 10 minutes (`--minutes 30` for longer). `pnpm live-demo -
 one session with known timings to check the counting: with the default limit, the "Lens
 self-test" client on 2025-10-01 shows 410 s in the app, 160 s active and 250 s idle.
 
+## Dashboards: client task map and flow time
+
+`/replays/dashboards` (the **Dashboards** tab), and the same answers in chat. PMs ask in chat; the
+dashboards are where they and their team come back to.
+
+- **Client task map** (Dashboard A): for each client and task, attempts, done rate and time now
+  against an earlier period, with flags: **Missing** (did it before, not at all now), **Dropped**
+  (half or less), **Slower** (median up 30% and 10 s or more), **Failing** (done rate down 15 points),
+  **New**. Clients that need attention come first; the rest fold away. Clicking a task opens its flow time.
+- **Flow time** (Dashboard B): for one task, one client or all: median and p90 per day or week against
+  all clients, the paths of dialogs people take (share, done rate, time), the slowest attempts with replay
+  links, and the most common errors. For "how long does ACME take to book a hedge, and which path?".
+- Every view's filters are in its link. **Pin** keeps a view (fixed dates, or "always the last N days")
+  at its own link; **Share** picks people from Lens's people or by email. Owners and admins can rename,
+  change filters, reshare and delete.
+- **Chat** (MCP): `find_task`, `task_map`, `flow_time`, `list_dashboards`, `pin_dashboard`,
+  `share_dashboard`. Clients and tasks in plain words ("Treasury 2", "ir swap"); unclear ones come back as
+  choices. Each answer has a link to the live view; pinning needs the person's own chat token.
+- **Access**, per person on the admin page: *See dashboards* (views and dashboards shared with them) or
+  *Also pin and share*. Admins always have both and see every pinned dashboard. A default applies to
+  everyone else (*No access* unless changed); the shared chat token gets at most *See dashboards*.
+
+**What a task is.** The dialog where a user submits and gets a good outcome (completed or accepted),
+named after the dialog and its most common finish ("IR Swap → Save → 'Trade Id … Updated'"). An attempt
+runs from the start of a work episode (episodes split on search/menu navigation or 10 idle minutes) to
+that good outcome (done), or to the episode's end (failed when an error was shown, else abandoned). Its
+path is the dialogs opened on the way.
+
+**How it scales.** Lens builds a task history in the background (`src/core/tasks.ts`, its own SQLite
+file `run/tasks.db`): every 10 minutes it re-reads today and yesterday and catches up older days (20 a
+run, newest first, up to 400 days). A day is read in about 4 PostHog queries (one for its sessions, then
+50,000-event pages), retried with growing waits when PostHog is busy or rate-limited, and stored in one
+transaction, so a re-run replaces it. The dashboards read daily summaries (per client, task and path,
+with duration histograms for the median and p90), never raw events, and keep each answer until the
+next stored day. Measured on the test machine: a full Reval-size day (111,808 events, 2,750 sessions)
+in 4.9 s; a 20,000-event day in about 1.5 s; the task map over a year of summaries for 50 clients and
+40 tasks in about 200 to 250 ms, flow time in about 100 ms, a repeat in under 1 ms.
+
+**Honest numbers.** Flags appear only when both periods are fully processed: a day not processed yet
+is never shown as work that stopped (the page says which dates are not ready). Each answer says how far
+the history goes; days cut short by a safety cap are marked. To try it: `scripts/seed-reval-scale.ts`
+sends Reval-shaped events at volume, with a client that stops a task and one that gets slower.
+
 ## Surveys
 
 In-app surveys for the app's users, made in chat and watched on the **Surveys** page. They are

@@ -87,7 +87,7 @@ export const config = {
     tasks: {
         db: env('TASKS_DB', 'run/tasks.db'),
         intervalMinutes: intSetting('TASKS_INTERVAL_MINUTES', 10, 1, 1440),
-        backfillDaysPerRun: intSetting('TASKS_BACKFILL_DAYS_PER_RUN', 30, 0, 400),
+        backfillDaysPerRun: intSetting('TASKS_BACKFILL_DAYS_PER_RUN', 20, 0, 400),
         historyDays: intSetting('TASKS_HISTORY_DAYS', 400, 1, 400),
     },
     mcp: { name: mcpName(env('LENS_MCP_NAME', 'lens')) },
