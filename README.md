@@ -367,6 +367,16 @@ A survey is described in the app's own words:
 - Not covered: survey answers are also PostHog events, so someone who can write SQL or browse events
   in PostHog can still read them. Only PostHog's Enterprise permissions could close that.
 
+**Before a launch** (page and chat alike), the person sees the four rules of how this survey will
+behave (who sees it and when; the fatigue limits and any overlap; × and ignored surveys; where the
+answers go and how to stop it), gives the **Jira ticket** the launch is for (checked in Jira when Jira
+is connected, else by its form), and ticks **"I acknowledge that this launches a survey that real
+Reval users will see, and that I have read the rules above."** The page's Launch button stays off
+until both are done, and the server refuses a launch without them. In chat, `launch_survey` first
+returns the rules and asks for the ticket and the acknowledgement, and only launches on a second
+call with both. Each launch is recorded with who, the ticket, where (page or chat) and the rules
+shown, and the page shows "Launched under REVAL-1234".
+
 **The Surveys page** (`/replays/surveys`): every survey, made in Lens or in PostHog, with its status;
 for each, the steps as a diagram, who sees it and how often, a likeness of how it looks, and the
 results: steps completed, shown, answered, dismissed, answer rate, a chart per day, each question's

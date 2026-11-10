@@ -741,7 +741,7 @@ export function queueAlert(chain: LensChain, conflicts: Conflict[]): QueueAlert 
         if (overlap.length) parts.push(`⚠ Survey fatigue: users of ${overlap.map(label).join(', ')} are already taking part in another running survey (${listOf(overlap)}).`)
     }
     const level: QueueAlert['level'] = all ? 'all_queued' : queued.length ? 'queued' : some.length ? 'some_wait' : overlap.length ? 'overlap' : 'clear'
-    if (level === 'clear') parts.push(`No overlap: none of this survey's users is taking part in another running survey. ${pacing}`)
+    if (level === 'clear') parts.push(`None of this survey's users is taking part in another running survey. ${pacing}`)
     else parts.push(`${fatigue} ${pacing} ${advice}`)
     return { level, alert: parts.join(' '), queued, some_wait: some, overlap, limit }
 }

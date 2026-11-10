@@ -57,7 +57,7 @@ function connectHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connect chat · ${APP_NAME}</title><style>${PAGE_CSS()}
 pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--chip);padding:10px 12px;border-radius:8px;font-size:13px}.once{border-left:4px solid var(--accent);padding:8px 12px;background:var(--chip);border-radius:6px}
 table{width:100%;table-layout:fixed}td,th{overflow-wrap:anywhere}</style></head>
-<body>${headerHtml(v, 'Connect chat')}<main style="max-width:820px">
+<body>${headerHtml(v, 'Chat')}<main style="max-width:820px">
 <div class="card"><h2>Connect chat to ${APP_NAME}</h2>
 <p>Chat (Claude, Copilot or another MCP client) uses ${APP_NAME}'s tools with a token. With your own token, ${APP_NAME} knows it is you and gives you your access. Your survey role: <b>${role}</b>.</p>
 <div class="toolbar" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap"><div style="flex:1;min-width:200px"><label for="label">Name it (where you use it)</label><input id="label" placeholder="e.g. Claude on my laptop" maxlength="60"></div><div><button id="make">Make a token</button></div></div>
