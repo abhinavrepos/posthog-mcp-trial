@@ -315,12 +315,23 @@ A survey is described in the app's own words:
 - **When**: as soon as the last step happens and the page has loaded (no ExtJS loading mask), with
   no fixed delay. `wait_for_page: false` skips the wait; `max_wait_seconds` (30) gives up on a page
   that stays busy.
-- **Who**: `clients` (names or ids; unclear names stop the save), `url_contains`. `show` is `once`
-  per user or `every_time`; `days_between_surveys` (14) keeps a user from seeing two surveys close
-  together; `max_responses` stops it.
-- **Questions**: `rating` (3, 5, 7 or 10, numbers or emoji), `nps`, `open`, `single`, `multiple`.
-- **Look**: colours, position, the submit label and thank-you text. The footer reads
-  `SURVEY_BRAND` ("Survey by ION").
+- **Who**: `clients` (names or ids; unclear names stop the save), `sample_percent` (a fixed share
+  of their users), `url_contains`. `show` is `once` per user or `every_time`;
+  `days_between_surveys` (14) keeps a user from seeing two surveys close together; `max_responses`
+  stops it.
+- **One survey per user at a time.** A user in the audience of a running survey that was launched
+  earlier skips any later one until they answer or dismiss the earlier one. The browser engine
+  enforces it per user (clients and sample included). `design_survey`, `save_survey`,
+  `launch_survey` and the page tell the PM which clients' users (and what share) are already taken,
+  and say so plainly when nobody could see the new survey yet.
+- **Questions**: `rating` (3, 5, 7 or 10 numbers, or emoji with 3 or 5), `nps` (0-10), `yes_no`
+  (labels can change), `thumbs` (up or down), `open`, `single`, `multiple` (optional "Other").
+- **Look**: `theme` `light` (white, ION blue) or `dark` (navy, amber), then any part: background,
+  text, subtle text, button and its text, rating buttons and the chosen one, text boxes, border,
+  `corner_radius`, `shadow`, `padding`, `font` (Reval's own or the system's), `position` (bottom
+  right by default; also bottom left or centre, top or middle), `max_width`, submit label,
+  thank-you heading and line, placeholder. Colours are solid (#rrggbb): PostHog derives text
+  contrast from them. The footer reads `SURVEY_BRAND` ("Survey by ION"), 13px.
 - Mistakes (a step with two kinds, an unsafe pattern, a colour that is not a colour) stop the save.
   Warnings (every client, more than 3 questions, poor colour contrast, a step that will fire very
   often) are shown to the person.
@@ -335,15 +346,17 @@ stop chat from launching or stopping surveys, so only the page can. Every save, 
 in the activity log.
 
 **How it works.** Lens saves a PostHog survey whose `conditions.lensChain` holds the steps, the
-clients and the readiness rule, and whose trigger is the event `lens_chain:<id>`. The installer's
+clients, sample, one-at-a-time rule and the readiness rule, and whose trigger is the event `lens_chain:<id>`. The installer's
 `surveys` step (`deploy/posthog/survey-engine/apply.sh`) serves PostHog's own `surveys.js` with two
 changes: the footer reads `SURVEY_BRAND` instead of linking to PostHog, and the Lens chain engine
 (`engine.js`) is appended. In the browser, the engine follows each running survey's chain from the
 events the app already sends; when the last step happens and the page is ready it sends
 `lens_chain:<id>`, and PostHog shows the survey at once. Clients are read from the user id
 (`CLIENT_FROM_DISTINCT_ID`) or the client property. The engine keeps no storage, adds no requests,
-refuses risky regular expressions and never stops PostHog's own surveys from working. Chains are
-version 2; a renderer from before client limits refuses them rather than show them to everyone.
+refuses risky regular expressions and never stops PostHog's own surveys from working. It only reads
+the browser storage posthog-js keeps (`seenSurvey_<id>`) to know a user has finished a survey.
+Chains are version 3; a renderer from before client limits, samples or one-at-a-time refuses them
+rather than show them to everyone.
 
 - **Keys.** `POSTHOG_SURVEY_API_KEY` (made by `deploy/posthog/survey-engine/key.sh`, label
   `lens-surveys`) has survey read and write only, for the Lens project. Answers and counts are read

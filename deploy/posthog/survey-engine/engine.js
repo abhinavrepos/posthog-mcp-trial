@@ -1,4 +1,4 @@
-/* Lens survey chains. Readable ES2017; no storage, DOM observers or external requests. */
+/* Lens survey chains. Readable ES2017; writes no storage (reads posthog-js's seenSurvey_ flags), no DOM observers or external requests. */
 (function (factory) {
     try {
         var api = factory();
@@ -51,33 +51,57 @@
         }
         return { event: raw.event, filters: filters };
     }
-    // Version 2 chains may carry an audience; an engine without audiences refuses them, so it never
-    // shows a client-limited survey to everyone. Which clients a chain runs for: { clients: ["ACME"], distinctIdPart: 3, separator: "|" } reads the
-    // client from the user id (Reval: ENV|SITE|CLIENT|USER); { clients, eventProperty: "client_id" } from
-    // each event. Compared without case. Absent: every client. Invalid: the chain is refused (false).
-    function audienceOf(raw) {
+    // Versions: 2 may carry an audience, 3 also a sample and "one survey at a time". An engine that does
+    // not know a version refuses the chain, so it never shows a limited survey to everyone.
+    // Audience: { clients: ["ACME"], distinctIdPart: 3, separator: "|" } reads the client from the user id
+    // (Reval: ENV|SITE|CLIENT|USER); { clients, eventProperty: "client_id" } from each event. Compared
+    // without case. { sample: 33 }: a fixed 33% of users, picked from the user id. Absent: everyone.
+    // Invalid: the chain is refused (false).
+    function audienceOf(raw, version) {
         if (raw === undefined || raw === null) return null;
-        if (!object(raw) || !Array.isArray(raw.clients) || !raw.clients.length || raw.clients.length > 500) return false;
-        var clients = [];
-        for (var c of raw.clients) { var t = text(c); if (t === null || !t.length) return false; clients.push(t.toLowerCase()); }
+        if (!object(raw)) return false;
+        var out = {};
+        if (raw.sample !== undefined) {
+            if (version < 3 || !finite(raw.sample) || raw.sample < 1 || raw.sample > 100) return false;
+            out.sample = raw.sample;
+        }
+        if (raw.clients === undefined) return out.sample ? out : false;
+        if (!Array.isArray(raw.clients) || !raw.clients.length || raw.clients.length > 500) return false;
+        out.clients = [];
+        for (var c of raw.clients) { var t = text(c); if (t === null || !t.length) return false; out.clients.push(t.toLowerCase()); }
         if (raw.eventProperty !== undefined) {
             if (typeof raw.eventProperty !== 'string' || !raw.eventProperty.length || raw.eventProperty.length > 200) return false;
-            return { clients: clients, eventProperty: raw.eventProperty };
+            out.eventProperty = raw.eventProperty;
+            return out;
         }
         var part = raw.distinctIdPart, sep = raw.separator === undefined ? '|' : raw.separator;
         if (!finite(part) || part < 1 || part > 20 || Math.floor(part) !== part || typeof sep !== 'string' || sep.length !== 1) return false;
-        return { clients: clients, part: part, separator: sep };
+        out.part = part; out.separator = sep;
+        return out;
     }
-    function inAudience(audience, event, distinctId) {
+    // FNV-1a: the same user always lands in the same bucket (0-99) for a chain.
+    function bucket(value) {
+        var h = 0x811c9dc5;
+        for (var i = 0; i < value.length; i++) { h ^= value.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+        return h % 100;
+    }
+    function inAudience(audience, event, distinctId, chainId) {
         if (!audience) return true;
-        var value;
-        if (audience.eventProperty) value = object(event.properties) ? text(event.properties[audience.eventProperty]) : null;
-        else value = typeof distinctId === 'string' ? (distinctId.split(audience.separator)[audience.part - 1] || null) : null;
-        return value !== null && audience.clients.indexOf(String(value).toLowerCase()) !== -1;
+        if (audience.clients) {
+            var value;
+            if (audience.eventProperty) value = object(event.properties) ? text(event.properties[audience.eventProperty]) : null;
+            else value = typeof distinctId === 'string' ? (distinctId.split(audience.separator)[audience.part - 1] || null) : null;
+            if (value === null || audience.clients.indexOf(String(value).toLowerCase()) === -1) return false;
+        }
+        if (audience.sample !== undefined && audience.sample < 100) {
+            if (typeof distinctId !== 'string' || !distinctId.length) return false;
+            if (bucket(distinctId + '|' + chainId) >= audience.sample) return false;
+        }
+        return true;
     }
     function normalizeChain(raw) {
         try {
-            if (!object(raw) || (raw.version !== 1 && raw.version !== 2) || typeof raw.id !== 'string' || !/^[a-z0-9-]{1,40}$/.test(raw.id) ||
+            if (!object(raw) || [1, 2, 3].indexOf(raw.version) === -1 || typeof raw.id !== 'string' || !/^[a-z0-9-]{1,40}$/.test(raw.id) ||
                 !Array.isArray(raw.steps) || raw.steps.length < 1 || raw.steps.length > 10) return null;
             var steps = raw.steps.map(matcher);
             if (steps.some(function (step) { return !step; })) return null;
@@ -94,9 +118,10 @@
             }
             var wait = ready.maxWaitMs === undefined ? 10000 : ready.maxWaitMs;
             if (!finite(wait) || wait < 0 || wait > Number.MAX_SAFE_INTEGER) return null;
-            var audience = audienceOf(raw.audience);
+            var audience = audienceOf(raw.audience, raw.version);
             if (audience === false) return null;
-            return { id: raw.id, steps: steps, resetOn: resets, withinMs: within === undefined ? Infinity : within * 1000, audience: audience,
+            if (raw.oneAtATime !== undefined && (raw.version < 3 || typeof raw.oneAtATime !== 'boolean')) return null;
+            return { id: raw.id, steps: steps, resetOn: resets, withinMs: within === undefined ? Infinity : within * 1000, audience: audience, oneAtATime: raw.oneAtATime === true,
                 ready: { documentComplete: ready.documentComplete !== false, noVisibleMask: ready.noVisibleMask !== false, maxWaitMs: wait } };
         } catch (_) { return null; }
     }
@@ -125,6 +150,19 @@
     function createMachine() {
         var states = new Map(), sequence = 0;
         function reset(state) { state.index = 0; state.started = 0; state.pending = 0; }
+        function earlier(a, b) { return a.launched < b.launched || (a.launched === b.launched && a.surveyId < b.surveyId); }
+        // Is this user in an earlier one-at-a-time survey's audience that they have not finished yet?
+        function takenByEarlier(state, event, distinctId, seen) {
+            var taken = false;
+            states.forEach(function (other, id) {
+                if (taken || other === state || !other.chain.oneAtATime || !earlier(other, state)) return;
+                if (!inAudience(other.chain.audience, event, distinctId, id)) return;
+                var done = false;
+                try { done = typeof seen === 'function' && !!seen(other.surveyId); } catch (_) { done = false; }
+                if (!done) taken = true;
+            });
+            return taken;
+        }
         return {
             setSurveys: function (surveys) {
                 try {
@@ -137,14 +175,19 @@
                             var chain = normalizeChain(raw);
                             if (!chain || next.has(chain.id)) continue; // One event for a shared id; first valid definition wins.
                             var signature = JSON.stringify(raw), old = states.get(chain.id);
-                            next.set(chain.id, old && old.signature === signature ? old :
-                                { chain: chain, signature: signature, index: 0, started: 0, pending: 0 });
+                            var state = old && old.signature === signature ? old :
+                                { chain: chain, signature: signature, index: 0, started: 0, pending: 0 };
+                            // The survey launched first wins a user both want (one survey at a time).
+                            state.surveyId = typeof survey.id === 'string' ? survey.id : '';
+                            state.launched = Date.parse(survey.start_date) || 0;
+                            next.set(chain.id, state);
                         } catch (_) { /* Ignore only this malformed survey. */ }
                     }
                     states = next;
                 } catch (_) { /* Keep the last good snapshot. */ }
             },
-            consume: function (event, now, distinctId) {
+            // seen(surveyId): the user has answered or dismissed that survey (posthog-js remembers it).
+            consume: function (event, now, distinctId, seen) {
                 var completed = [];
                 try {
                     if (!object(event) || typeof event.event !== 'string' || !finite(now) ||
@@ -154,12 +197,13 @@
                             var chain = state.chain;
                             if (chain.resetOn.some(function (step) { return matches(step, event); })) { reset(state); return; }
                             if (state.pending) return;
-                            if (!inAudience(chain.audience, event, distinctId)) return;
+                            if (!inAudience(chain.audience, event, distinctId, id)) return;
                             if (state.index && now - state.started > chain.withinMs) reset(state);
                             if (!matches(chain.steps[state.index], event)) return;
                             if (!state.index) state.started = now;
                             state.index++;
                             if (state.index === chain.steps.length) {
+                                if (chain.oneAtATime && takenByEarlier(state, event, distinctId, seen)) { reset(state); return; }
                                 state.pending = ++sequence;
                                 completed.push({ id: id, token: state.pending, ready: chain.ready });
                             }
@@ -203,6 +247,10 @@
             var extensions = root.__PosthogExtensions__, original = extensions && extensions.generateSurveys;
             if (typeof original !== 'function' || original.__lensSurveyEngine) return;
             var instances = new WeakMap();
+            // posthog-js writes seenSurvey_<id> when a user answers or dismisses a survey. Read only.
+            function seen(surveyId) {
+                try { return !!surveyId && !!root.localStorage && root.localStorage.getItem('seenSurvey_' + surveyId) !== null; } catch (_) { return false; }
+            }
             function debug(instance, error) {
                 try { if (instance.config && instance.config.debug === true && root.console) root.console.debug('Lens survey engine', error); } catch (_) {}
             }
@@ -247,7 +295,7 @@
                     instance.on('eventCaptured', function (event) {
                         var who;
                         try { who = instance.get_distinct_id(); } catch (_) { who = undefined; }
-                        try { machine.consume(event, Date.now(), who).forEach(wait); } catch (error) { debug(instance, error); }
+                        try { machine.consume(event, Date.now(), who, seen).forEach(wait); } catch (error) { debug(instance, error); }
                     });
                     refresh();
                 } catch (error) { debug(instance, error); }
