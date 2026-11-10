@@ -23,5 +23,5 @@ Lens tools:
 - Jira triage: triage_ticket
 - releases: list_releases, release_outcomes; one ticket: ticket_evidence; complaints after shipping: client_feedback
 - save an agreed verdict: record_verdict; fix a ticket link: correct_ticket_link; sync: refresh_releases${appEvents() ? `
-- ${app} vocabulary: describe_app_events (once first); worst pains: top_pains; dialog failures/messages: dialog_friction; one session timeline: session_story; slow buttons/HTTP failures: attempt_timings; trade/link id: find_trade; clients at risk: client_signals` : ''}`
+- ${app} vocabulary: describe_app_events (once first); worst pains: top_pains; dialog failures: dialog_friction; misleading messages: message_doctor; session timeline: session_story; slow buttons/HTTP failures: attempt_timings; trade/link id: find_trade; clients at risk: client_signals` : ''}`
 }

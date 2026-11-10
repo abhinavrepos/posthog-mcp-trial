@@ -8,6 +8,7 @@ import { SCREENS } from '../core/catalog.ts'
 import { renderClip } from '../core/clip.ts'
 import { errorImpact } from '../core/impact.ts'
 import { bestPerSession, findIncidents } from '../core/incidents.ts'
+import { messageDoctor } from '../core/messagedoctor.ts'
 import { config } from '../core/config.ts'
 import { replayUrl } from '../core/posthog.ts'
 import {
@@ -74,7 +75,7 @@ const A = appEvents()?.app || 'your app'
 
 // Every tool name, for PostHog's proxied exec description ("use the lens server's tools (...)").
 export const CORE_TOOLS = ['resolve_client', 'find_client_incidents', 'get_replay_link', 'screen_usage', 'error_blast_radius', 'find_silent_issues', 'triage_ticket', 'list_releases', 'release_outcomes', 'ticket_evidence', 'client_feedback', 'record_verdict', 'correct_ticket_link', 'refresh_releases']
-export const APP_EVENT_TOOLS = ['describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals']
+export const APP_EVENT_TOOLS = ['describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'message_doctor']
 export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(appEvents() ? APP_EVENT_TOOLS : [])]
 
 export function registerTools(server: McpServer, ai?: TriageAi): void {
@@ -462,6 +463,25 @@ function registerAppEventTools(server: McpServer): void {
             const best = client ? (await pickClient(client)).best : undefined
             const r = await dialogFriction({ from: win.from, to: win.to, clientId: best?.id, dialog, limit })
             return json(`${app} friction${best ? ` for ${best.name}` : ''}${dialog ? `, dialog "${dialog}"` : ''} (${win.label}):`, r)
+        }
+    )
+    server.registerTool(
+        'message_doctor',
+        {
+            title: 'Which error messages mislead',
+            description: `Which of Reval's error messages leave people stuck, and what do they do to recover? Groups errors by template and dialog, learns the field labels touched, other dialogs opened and whether people search, then reports recovery, repeated failures and give-ups. Flags dead ends and messages pointing elsewhere, with counts and example sessions.`,
+            inputSchema: {
+                client: z.string().optional().describe('One client (name, code or a user email). All clients if left out.'),
+                dialog: z.string().optional().describe('A dialog code or part of its name.'),
+                message: z.string().optional().describe('Text to match in an error message or its template, ignoring case.'),
+                when,
+            },
+            annotations: { readOnlyHint: true },
+        },
+        async ({ client, dialog, message, when: w }) => {
+            const win = parseTimeWindow(w || 'last 7 days')
+            const best = client ? (await pickClient(client)).best : undefined
+            return json(`${app} message doctor${best ? ` for ${best.name}` : ''} (${win.label}):`, await messageDoctor({ from: win.from, to: win.to, clientId: best?.id, dialog, message }))
         }
     )
     server.registerTool(
