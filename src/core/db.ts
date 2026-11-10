@@ -10,6 +10,7 @@
 //   survey_people  each person's survey role (view, edit, launch), besides admins (always launch)
 //   mcp_tokens     personal chat (MCP) tokens: who they belong to, stored as a hash, revocable
 //   survey_launches every survey launch: who, the Jira ticket, the rules they acknowledged
+//   dashboards, dashboard_shares, dashboard_people  pinned dashboards, who they are shared with, dashboard roles
 //   audit         sign-ins, views, downloads, shares and access changes
 //   releases, release_tickets, release_snapshots, release_verdicts
 //                 release outcomes for the MCP tools: the last N Jira releases (default 12), their
@@ -198,6 +199,34 @@ const MIGRATIONS: string[] = [
         at TEXT NOT NULL
     );
     CREATE INDEX survey_launches_survey ON survey_launches (survey_id, at);`,
+
+    // Dashboards: views pinned from chat or the page (task map, flow time), who they are shared with,
+    // and each person's dashboard role. The task history behind them lives in run/tasks.db (core/tasks.ts).
+    `CREATE TABLE dashboards (
+        id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        params TEXT NOT NULL,
+        via TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX dashboards_owner ON dashboards (owner);
+    CREATE TABLE dashboard_shares (
+        dashboard_id TEXT NOT NULL REFERENCES dashboards (id) ON DELETE CASCADE,
+        email TEXT NOT NULL,
+        shared_by TEXT NOT NULL,
+        at TEXT NOT NULL,
+        PRIMARY KEY (dashboard_id, email)
+    );
+    CREATE INDEX dashboard_shares_email ON dashboard_shares (email);
+    CREATE TABLE dashboard_people (
+        email TEXT PRIMARY KEY,
+        role TEXT NOT NULL,
+        updated_by TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

@@ -24,6 +24,7 @@ import { lensServerInfo } from '../mcp/server-info.ts'
 import { serverInstructions } from '../mcp/instructions.ts'
 import { lensToolNames, registerTools } from '../mcp/tools.ts'
 import { appEvents } from '../core/appevents.ts'
+import { startTaskHistory } from '../core/tasks.ts'
 import { audit, chatCaller } from './access.ts'
 import { keptReleases, syncReleases, syncStatus } from '../core/releases.ts'
 import { captionedFile } from '../core/comments.ts'
@@ -207,6 +208,8 @@ for (const [name, value] of Object.entries({ ...(jiraConfigured() ? { JIRA_WEBHO
 }
 
 pruneOldClips()
+// The task history behind the dashboards: day by day in the background (core/tasks.ts).
+if (appEvents()) startTaskHistory()
 setInterval(() => pruneOldClips(), 6 * 3_600_000).unref()
 
 // The release dashboard reads Jira and PostHog at start (when its data is older than an hour)
