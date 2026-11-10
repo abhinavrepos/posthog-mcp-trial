@@ -99,7 +99,8 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
     return next
 }
 
-async function snapshotsFile(sessionId: string): Promise<string> {
+/** The recording's snapshots as a cached JSONL file (also read by replaynet.ts). */
+export async function snapshotsFile(sessionId: string): Promise<string> {
     const dir = join(config.clip.cacheDir, 'snapshots')
     mkdirSync(dir, { recursive: true })
     const meta = await getRecording(sessionId)
