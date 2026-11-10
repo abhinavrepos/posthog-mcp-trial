@@ -128,7 +128,8 @@ async function containerUsage(id) {
         const cache = m.stats?.inactive_file ?? m.stats?.total_inactive_file ?? 0
         const net = Object.values(s.networks || {})
         const io = s.blkio_stats?.io_service_bytes_recursive
-        const sumIO = op => io ? io.filter(x => x.op.toLowerCase() === op).reduce((n, x) => n + Number(x.value), 0) : null
+        // Docker leaves the list empty (null) until the container has read or written anything.
+        const sumIO = op => io ? io.filter(x => x.op.toLowerCase() === op).reduce((n, x) => n + Number(x.value), 0) : s.blkio_stats ? 0 : null
         return { cpu_pct: cpu, mem_bytes: m.usage == null ? null : Math.max(0, m.usage - cache),
             network_rx_bytes: s.networks ? net.reduce((n, x) => n + x.rx_bytes, 0) : null,
             network_tx_bytes: s.networks ? net.reduce((n, x) => n + x.tx_bytes, 0) : null,
