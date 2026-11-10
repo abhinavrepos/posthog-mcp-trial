@@ -28,7 +28,8 @@ fi
 . ../offline/ecr.sh
 if [ "$IMAGES_FROM" = ecr ]; then
     images_login
-    ecr_pull_tag "$ECR_STATUS" posthog-lens-status:latest
+    # The status page runs from the PostHog Lens image (ECR_STATUS is the same image in older kits' lists).
+    ecr_pull_tag "${ECR_LENS:-$ECR_STATUS}" posthog-lens-status:latest
     docker compose up -d --no-build
 else
     docker compose up -d --build

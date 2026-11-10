@@ -1,5 +1,5 @@
 # PostHog Lens as a container: the service, its MCP tools, and Chrome and ffmpeg for rendering clips.
-# Built by deploy/offline/push-images.sh (pushed to ECR as posthog/lens), or by deploy/install.sh on a
+# Built by deploy/offline/build-images.sh (pushed to ECR as posthog/lens), or by deploy/install.sh on a
 # machine with internet. It runs through deploy/lens/lens.sh, which mounts the settings and the data
 # folders (run/, clips/, .cache/, config/) from the project folder and runs it as the "triage" user.
 FROM node:24-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c

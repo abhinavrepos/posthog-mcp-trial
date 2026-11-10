@@ -2,14 +2,14 @@
 # Sourced (not run) by deploy/migrate/versions/versions.env, so every script that reads the pinned
 # versions gets this too, and by the scripts that pull images.
 #
-# It is on when deploy/offline/ecr.env exists. deploy/offline/push-images.sh writes that file, with
+# It is on when deploy/offline/ecr.env exists. deploy/offline/build-images.sh writes that file, with
 # images.lock next to it, after copying every image to the registry; the kit image (posthog/kit) carries
 # both to the machine. IMAGES_FROM=upstream turns it off for one run.
 #
 # What changes when it is on:
 #   - TARGET_APP_IMAGE, STEPPING_STONE_IMAGE and NODE_BASE_IMAGE are the registry's copies (same digests'
-#     content: push-images.sh copies them byte for byte)
-#   - the Node image is not built here: POSTHOG_NODE_PREBUILT is the one push-images.sh built
+#     content: build-images.sh copies them byte for byte)
+#   - the Node image is not built here: POSTHOG_NODE_PREBUILT is the one build-images.sh built
 #   - ecr_compose_override writes docker-compose.ecr.yml in the PostHog folder: every PostHog service's
 #     image from the registry. It stops with a list when one has no copy there.
 #   - HELPER_IMAGE (the small image the upgrade runs for copying files) is the registry's alpine
@@ -41,6 +41,8 @@ kit_file() { [ -s "$KIT_DIR/$1" ] && echo "$KIT_DIR/$1" || true; }
 # AmazonEC2ContainerRegistryReadOnly). A login lasts 12 hours, so every script that pulls calls this.
 images_login() {
     [ "$IMAGES_FROM" = ecr ] || return 0
+    # A local registry (a rehearsal: build-images.sh with SKIP_AWS=1 REGISTRY=localhost:5000) needs no login.
+    case "$IMAGE_REGISTRY" in localhost:* | 127.0.0.1:*) return 0 ;; esac
     command -v aws >/dev/null 2>&1 || { echo "The AWS CLI is missing (sudo dnf install -y awscli): it logs Docker in to $IMAGE_REGISTRY." >&2; return 1; }
     local pw
     pw="$(aws ecr get-login-password --region "$IMAGE_REGION" 2>&1)" || {
@@ -60,7 +62,7 @@ ecr_pull_tag() {
 
 # posthog-dir: writes docker-compose.ecr.yml there (every service's image from the registry) and lists
 # it last in COMPOSE_FILE, and in EXTRA_COMPOSE_FILES so scale.sh and posthog-upgrade.sh keep it.
-# Services on PostHog's Node image get the Node image push-images.sh built. Stops, listing them, when an
+# Services on PostHog's Node image get the Node image build-images.sh built. Stops, listing them, when an
 # image has no copy in the registry.
 ecr_compose_override() {
     [ "$IMAGES_FROM" = ecr ] || return 0
@@ -94,7 +96,7 @@ for name, svc in sorted(cfg.get("services", {}).items()):
 if missing:
     print("These PostHog services use images that are not in " + reg + " (images.lock):", file=sys.stderr)
     print("\n".join(missing), file=sys.stderr)
-    print("Run deploy/offline/push-images.sh again for this version, and use the new kit.", file=sys.stderr)
+    print("Run deploy/offline/build-images.sh again for this version, and use the new kit.", file=sys.stderr)
     sys.exit(1)
 with open(os.path.join(d, out_name), "w") as f:
     f.write("# Written by deploy/offline/ecr.sh: every image from " + reg + " (see deploy/offline/images.lock).\nservices:\n")

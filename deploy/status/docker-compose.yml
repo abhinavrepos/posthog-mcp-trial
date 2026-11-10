@@ -5,6 +5,14 @@ services:
     status:
         build: .
         image: posthog-lens-status:latest
+        # The same in this folder's small image and in the PostHog Lens image (images from ECR).
+        user: node
+        working_dir: /app/deploy/status
+        command: ['node', 'server.mjs']
+        healthcheck:
+            test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:8090/self').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+            interval: 30s
+            timeout: 5s
         restart: unless-stopped
         read_only: true
         cap_drop: [ALL]

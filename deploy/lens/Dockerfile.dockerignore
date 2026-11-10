@@ -8,5 +8,8 @@ run
 .secrets.env
 .mcp.json
 *.log
-deploy
+# deploy/ stays out, except the status page, which runs from this image too (deploy/status/up.sh).
+deploy/*
+!deploy/status
+deploy/status/status.env
 demo-app

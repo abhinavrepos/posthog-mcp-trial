@@ -8,8 +8,9 @@ run/
 __pycache__/
 .mcp.json
 deploy/status/status.env
-# Written by deploy/offline/push-images.sh, and unpacked from the kit on a machine without internet.
+# Written by deploy/offline/build-images.sh, and unpacked from the kit on a machine without internet.
 deploy/offline/ecr.env
 deploy/offline/images.lock
 deploy/offline/last-kit.txt
+deploy/offline/out/
 deploy/offline/kit/

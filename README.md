@@ -308,7 +308,7 @@ The local `.mcp.json` server has the same tools.
 | `deploy/migrate/` | Upgrading an existing PostHog to the tested version, with backups |
 | `deploy/posthog/` | PostHog's installer (pinned), scaling, load tests |
 | `deploy/status/` | The status page |
-| `deploy/offline/` | `push-images.sh`: every image into your ECR, plus the kit; `ecr.sh`: the machine takes them from there; `no-internet.sh`: outside calls fail at once ([README](deploy/offline/README.md)) |
+| `deploy/offline/` | `build-images.sh`: every image into your ECR, plus the kit; `ecr.sh`: the machine takes them from there; `no-internet.sh`: outside calls fail at once ([README](deploy/offline/README.md)) |
 | `deploy/lens/` | PostHog Lens as a container: `Dockerfile`, `lens.sh` (serve, doctor, mcp-config, test), Chrome's seccomp profile |
 
 ## Install on a fresh machine
