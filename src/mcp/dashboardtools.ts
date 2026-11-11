@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { appEvents } from '../core/appevents.ts'
 import { config } from '../core/config.ts'
+import { rescueQueue, setRescueAction, rescueClients, RESCUE_STATUSES } from '../core/rescue.ts'
 import { taskMap, flowTime, findTasks, ingestStatus } from '../core/tasks.ts'
 import { createDashboard, shareDashboard, listDashboards, getDashboard, canManage } from '../core/dashboards.ts'
 import { resolveClient } from '../core/resolve.ts'
@@ -10,10 +11,10 @@ import { parseTimeWindow } from '../core/timewindow.ts'
 import type { FlowTimeParams, TaskMapParams, Window } from '../core/taskstypes.ts'
 import type { ChatCaller, DashboardRole } from '../service/access.ts'
 
-export const DASHBOARD_TOOLS = ['find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'share_dashboard']
+export const DASHBOARD_TOOLS = ['rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'share_dashboard']
 export const dashboardToolNames = (role: DashboardRole = 'share'): string[] =>
-    !appEvents() || role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => role === 'share' || !['pin_dashboard', 'share_dashboard'].includes(t))
-const realDeps = { taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
+    !appEvents() || role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => role === 'share' || !['pin_dashboard', 'share_dashboard', 'set_rescue_status'].includes(t))
+const realDeps = { rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
 type Caller = Pick<ChatCaller, 'who' | 'email' | 'dashboardRole' | 'admin'>
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
 const json = (value: unknown) => text(JSON.stringify(value, null, 2))
@@ -52,7 +53,7 @@ const filters = {
 
 export function registerDashboardTools(server: McpServer, caller: Caller = { who: 'mcp', dashboardRole: 'share', admin: false }, deps: Partial<typeof realDeps> = {}): void {
     const d = { ...realDeps, ...deps }
-    const allowed = new Set(dashboardToolNames(caller.dashboardRole))
+    const allowed = new Set(dashboardToolNames(caller.admin ? 'share' : caller.dashboardRole))
     const reg = ((name: string, ...rest: unknown[]) => allowed.has(name) ? (server.registerTool as (...a: unknown[]) => unknown)(name, ...rest) : undefined) as typeof server.registerTool
     const safe = <T>(fn: (input: T) => Promise<ReturnType<typeof text>>) => async (input: T) => {
         try { return await fn(input) } catch (e) { return text((e as Error).message) }
@@ -88,6 +89,26 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         if (flagged !== undefined) q.set('only_flagged', String(flagged))
         return `${page()}?${q}`
     }
+    reg('rescue_queue', {
+        description: 'Which clients need someone this week, and why? Ranked rescue queue with evidence, next steps, owner and status from processed Lens history.',
+        inputSchema: { when: filters.when, compared_with: filters.compared_with, min_attempts: z.number().int().min(1).max(100000).optional(), include_snoozed: z.boolean().optional(), limit: z.number().int().min(1).max(50).default(10) },
+        annotations: { readOnlyHint: true },
+    }, safe(async input => {
+        const result = await d.rescueQueue({ ...(input.when ? { window: windowFor(input.when, 28) } : {}), ...(input.compared_with ? { baseline: windowFor(input.compared_with, 28) } : {}), min_attempts: input.min_attempts, include_snoozed: input.include_snoozed })
+        const q = new URLSearchParams({ view: 'rescue', from: result.window.from, to: result.window.to, baseline_from: result.baseline.from, baseline_to: result.baseline.to })
+        if (input.include_snoozed) q.set('include_snoozed', 'true')
+        if (input.min_attempts) q.set('min_attempts', String(input.min_attempts))
+        return json({ ...result, headline: result.coverage.complete ? `${result.clients.length} clients need someone this week` : result.coverage.text,
+            clients: result.clients.slice(0, input.limit).map(c => ({ ...c, reasons: c.reasons.slice(0, 3) })), open: `${page()}?${q}` })
+    }))
+    reg('set_rescue_status', {
+        description: 'Set the owner, status, note, due date or expected-decline snooze for a client in the rescue queue.',
+        inputSchema: { client: z.string(), owner: z.string().optional(), status: z.enum(RESCUE_STATUSES).optional(), note: z.string().max(500).optional(), due: z.string().optional(), snooze_until: z.string().optional() },
+    }, safe(async ({ client, ...change }) => {
+        const matches = await d.rescueClients(client)
+        if (matches.length !== 1) return json({ message: 'Which client did you mean? Choose a client id.', candidates: matches })
+        return json(await d.setRescueAction(matches[0].id, Object.fromEntries(Object.entries(change).filter(([, v]) => v !== undefined)), caller.email || caller.who))
+    }))
     reg('find_task', {
         description: `Which ${appEvents()?.app || 'app'} task does someone mean? Matches their own words ("book a hedge", "run the FX report") to task ids and names, with use over the last 90 days. Call it before flow_time when a task is named loosely.`,
         inputSchema: { query: z.string().describe('Task in the person’s own words, or its id.') },

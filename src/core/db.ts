@@ -229,6 +229,17 @@ const MIGRATIONS: string[] = [
         updated_by TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );`,
+    `CREATE TABLE rescue_actions (
+        client TEXT PRIMARY KEY,
+        owner TEXT,
+        status TEXT NOT NULL CHECK(status IN ('open','contacted','in_progress','resolved','expected')),
+        note TEXT CHECK(length(note) <= 500),
+        due TEXT,
+        snooze_until TEXT,
+        score_at_snooze REAL,
+        updated_by TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

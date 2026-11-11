@@ -55,7 +55,7 @@ test('registered tools follow none, view and share roles', async () => {
             } else assert.deepEqual((await c.client.listTools()).tools.map(t => t.name).sort(), dashboardToolNames(role).sort())
         } finally { await c.close() }
     }
-    assert.equal(dashboardToolNames('view').length, 4)
+    assert.equal(dashboardToolNames('view').length, 5)
     assert.equal(dashboardToolNames('share').length, DASHBOARD_TOOLS.length)
 })
 
@@ -185,4 +185,27 @@ test('date windows and defaults use complete UTC days and matching preceding per
     assert.equal(fixed.searchParams.get('from'), '2026-01-01')
     assert.equal(fixed.searchParams.get('to'), '2026-01-28')
     assert.match(await call('task_map', { when: 'not a date' }), /could not read those dates/)
+})
+
+test('rescue chat shows top three reasons, limits rows and descriptions, links dates, and audits status by local client name', async () => {
+    const { storeAttempts } = await import('../src/core/tasks.ts')
+    storeAttempts('2026-01-01', [{ day: '2026-01-01', client: 'rescue-client', user: 'person', session_id: 's', task_id: 't_Hedge', path: ['Hedge'], started_at: '2026-01-01', ended_at: '2026-01-01', duration_s: 10, outcome: 'done', errors: 0, offset_s: 0 }], { clientNames: new Map([['rescue-client', 'Rescue Company']]) })
+    const output = JSON.parse(await call('set_rescue_status', { client: 'Rescue Company', owner: 'pm@x.com', status: 'contacted', note: 'Called', due: '2026-12-01' }))
+    assert.equal(output.status, 'contacted'); assert.equal(output.updated_by, 'pm@x.com')
+    assert.equal(access.readAudit({ action: 'rescue.updated' }).at(0)?.client, 'rescue-client')
+    const c = await chat('view')
+    try {
+        const listed = (await c.client.listTools()).tools
+        assert.equal(listed.some(t => t.name === 'set_rescue_status'), false)
+        assert.ok(listed.find(t => t.name === 'rescue_queue')!.description!.length < 200)
+        const forbidden = await c.client.callTool({ name: 'set_rescue_status', arguments: { client: 'rescue-client', status: 'resolved' } })
+        assert.equal(forbidden.isError, true)
+    } finally { await c.close() }
+    const queue = { coverage: { complete: true, unprocessed: [] }, window: { from: '2026-01-01', to: '2026-01-28' }, baseline: { from: '2025-12-04', to: '2025-12-31' }, data_through: '2026-01-28', hidden_snoozed: 0, note: '', clients: Array.from({ length: 60 }, (_, i) => ({ client: String(i), client_name: String(i), score: 50, level: 'urgent' as const, trend: 'new' as const, reasons: Array.from({ length: 5 }, (_, n) => ({ kind: 'missing' as const, text: String(n), now: 0, before: 5 })), next_step: 'Call' })) }
+    const result = JSON.parse(await call('rescue_queue', {}, { rescueQueue: async () => queue }))
+    assert.equal(result.clients.length, 10); assert.equal(result.clients[0].reasons.length, 3)
+    assert.equal(new URL(result.open).searchParams.get('view'), 'rescue')
+    assert.equal(new URL(result.open).searchParams.get('from'), queue.window.from)
+    const fifty = JSON.parse(await call('rescue_queue', { limit: 50 }, { rescueQueue: async () => queue })); assert.equal(fifty.clients.length, 50)
+    assert.match(await call('set_rescue_status', { client: 'rescue-client', status: 'expected' }), /snooze date/)
 })

@@ -217,13 +217,13 @@ test('validation refuses invalid dates, ranges, fields, JSON and pin changes', a
 
 test('empty states and core failures produce useful pages and sanitized JSON', async () => {
     const empty = { ...deps, async taskMap(p: TaskMapParams) { const m = await deps.taskMap(p); return { ...m, clients: [], rows: [], data_through: null } }, ingestStatus() { return { ...history, first_day: null, last_day: null, attempts: 0, behind_days: 0 } } }
-    const r = await request('', viewer(), 'GET', undefined, empty)
+    const r = await request('?view=task_map', viewer(), 'GET', undefined, empty)
     assert.equal(r.status, 200)
     assert.match(r.body, /Building history/)
     assert.match(r.body, /No tasks match these filters/)
     scriptsParse(r.body)
     const broken = { ...deps, async taskMap(): Promise<TaskMap> { throw new Error('secret SQL query and stack') }, async flowTime(): Promise<FlowTime> { throw new Error('secret SQL query and stack') } }
-    for (const path of ['', '?view=flow_time&task=t_save', '/api/task-map', '/api/flow-time?task=t_save']) {
+    for (const path of ['?view=task_map', '?view=flow_time&task=t_save', '/api/task-map', '/api/flow-time?task=t_save']) {
         const r = await request(path, viewer(), 'GET', undefined, broken)
         assert.doesNotMatch(r.body, /secret SQL|stack/)
         assert.match(r.body, /history/i)
@@ -244,4 +244,52 @@ test('events without a client: listed as "Unknown client", never selected in the
     assert.doesNotMatch(select, /Unknown client/)
     assert.doesNotMatch(select, /value="" selected[^>]*>(?!All clients)/)
     assert.match(r.body, /<b>Unknown client<\/b>/)
+})
+
+test('rescue is the default first tab; role forms, top three reasons, filters, coverage and pager', async () => {
+    const rescue = { coverage: { complete: true, unprocessed: [] as string[] }, window, baseline: window, data_through: window.to, hidden_snoozed: 2, note: 'Local history', clients: [{ client: 'acme', client_name: clientName, level: 'urgent' as const, trend: 'worse' as const, score: 50, reasons: ['First', 'Second', 'Third', 'Fourth'].map(text => ({ kind: 'missing' as const, text, now: 0, before: 5 })), critical_task: { task_id: 't_save', task_name: 'Save' }, next_step: 'Ask the team', action: { owner: 'pm@example.com', status: 'contacted' as const, due: null, note: '<note>', snooze_until: null, score_at_snooze: null, updated_by: 'pm@example.com', updated_at: '2026-01-01' } }] }
+    const injected = { ...deps, rescueQueue: async () => rescue }
+    for (const v of [viewer(), viewer('share'), viewer('none', 'admin@example.com', true)]) {
+        const r = await request('', v, 'GET', undefined, injected)
+        assert.equal(r.status, 200); assert.match(r.body, /1 clients need someone this week/)
+        assert.ok(r.body.indexOf('>Rescue queue</a>') < r.body.indexOf('>Client task map</a>'))
+        assert.match(r.body, /&lt;img src=x onerror=1&gt;/); assert.doesNotMatch(r.body, /<img|<note>|<li>Fourth/)
+        assert.match(r.body, /data-page-list="rescue-pager"/); assert.match(r.body, /Open task map for this client/)
+        assert.equal(r.body.includes('<form class="rescue-action"'), v.role === 'admin' || v.dashboards === 'share')
+        assert.match(r.body, /role="status" aria-live="polite"/); scriptsParse(r.body)
+    }
+    assert.doesNotMatch((await request('?level=watch', viewer(), 'GET', undefined, injected)).body, /<li>First/)
+    assert.doesNotMatch((await request('?status=unassigned', viewer(), 'GET', undefined, injected)).body, /<li>First/)
+    assert.match((await request('?status=mine', viewer(), 'GET', undefined, injected)).body, /<li>First/)
+    assert.equal((await request('?level=invalid', viewer(), 'GET', undefined, injected)).status, 400)
+    const incomplete = { ...injected, rescueQueue: async () => ({ ...rescue, clients: [], coverage: { complete: false, unprocessed: ['2026-01-02'], text: 'Not processed yet' } }) }
+    const page = await request('', viewer(), 'GET', undefined, incomplete)
+    assert.match(page.body, /Not processed yet/); assert.match(page.body, /Unprocessed days/); assert.doesNotMatch(page.body, /rescue-level urgent/)
+})
+
+test('rescue API enforces read/write roles, page header, validates changes and audits', async () => {
+    for (const v of [viewer('none'), viewer(), viewer('share'), viewer('none', 'admin@example.com', true)]) {
+        assert.equal((await request('/api/rescue', v)).status, v.dashboards === 'none' && v.role !== 'admin' ? 403 : 200)
+        assert.equal((await request('/api/rescue/acme', v, 'POST', { status: 'contacted' })).status, v.dashboards === 'share' || v.role === 'admin' ? 200 : 403)
+    }
+    assert.equal((await request('/api/rescue/acme', viewer('share'), 'POST', { status: 'open' }, deps, '')).status, 403)
+    for (const change of [{ owner: 'bad' }, { status: 'bad' }, { note: 'x'.repeat(501) }, { due: '2026-02-30' }, { status: 'expected' }, []]) {
+        assert.equal((await request('/api/rescue/acme', viewer('share'), 'POST', change)).status, 400)
+    }
+    for (const q of ['from=bad&to=2026-01-01', 'min_attempts=0', 'include_snoozed=maybe', 'baseline_from=2026-01-01']) assert.equal((await request('/api/rescue?' + q)).status, 400)
+    assert.ok(access.readAudit({ action: 'rescue.updated' }).length >= 2)
+    const row = await request('/api/rescue/acme', viewer('share'), 'POST', { owner: 'pm@example.com', status: 'in_progress', note: 'Called', due: '2026-12-01' })
+    assert.equal(row.data.status, 'in_progress'); assert.equal(row.data.updated_by, 'pm@example.com')
+})
+
+
+test('rescue failures keep internal details out of pages and JSON', async () => {
+    const broken = { ...deps, rescueQueue: async (): Promise<never> => { throw new Error('secret SQL and stack') }, setRescueAction: async (): Promise<never> => { throw new Error('secret SQL and stack') } }
+    for (const path of ['', '/api/rescue']) {
+        const r = await request(path, viewer(), 'GET', undefined, broken)
+        assert.doesNotMatch(r.body, /secret SQL|stack/); assert.match(r.body, /history/)
+        if (!path) scriptsParse(r.body)
+    }
+    const r = await request('/api/rescue/acme', viewer('share'), 'POST', { status: 'contacted' }, broken)
+    assert.doesNotMatch(r.body, /secret SQL|stack/)
 })

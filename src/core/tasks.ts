@@ -165,7 +165,7 @@ function label(dialog: string, names?: Map<string, string>): string {
 // for "today" in relative windows). Many people opening the same dashboard cost one query.
 let generation = 0
 const answers = new Map<string, { at: number; generation: number; value: Promise<unknown> }>()
-function cached<T>(kind: string, p: object, compute: () => Promise<T>): Promise<T> {
+export function cached<T>(kind: string, p: object, compute: () => Promise<T>): Promise<T> {
     const key = kind + JSON.stringify(p), hit = answers.get(key)
     if (hit && hit.generation === generation && Date.now() - hit.at < 600_000) return hit.value as Promise<T>
     const value = compute()
@@ -220,10 +220,10 @@ export function storeAttempts(day: string, attempts: TaskAttempt[], info: StoreI
     })
 }
 
-function validDay(s: string): void {
+export function validDay(s: string): void {
     if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s) || !Number.isFinite(Date.parse(s)) || date(Date.parse(s)) !== s) throw new Error('Dates must be valid YYYY-MM-DD UTC dates')
 }
-function validWindow(w: Window): number {
+export function validWindow(w: Window): number {
     if (!w) throw new Error('A window with from and to is required')
     validDay(w.from); validDay(w.to)
     const days = (Date.parse(w.to) - Date.parse(w.from)) / DAY + 1
@@ -236,7 +236,7 @@ function filters(task?: string, client?: string) {
     return { sql: `${task === undefined ? '' : ' AND task_id = ?'}${client === undefined ? '' : ' AND client = ?'}`, args: [task, client].filter((v): v is string => v !== undefined) }
 }
 interface Aggregate { client: string; task_id: string; attempts: number; done: number; failed: number; abandoned: number; hist: string }
-function aggregates(w: Window, task?: string, client?: string): Aggregate[] {
+export function aggregates(w: Window, task?: string, client?: string): Aggregate[] {
     const f = filters(task, client)
     return all<Aggregate>(`SELECT client, task_id, sum(attempts) AS attempts, sum(done) AS done,
         sum(failed) AS failed, sum(abandoned) AS abandoned, hist_merge(dur_hist) AS hist
@@ -247,12 +247,12 @@ function userCounts(w: Window, task?: string, client?: string): Map<string, numb
     return new Map(all<{ client: string; task_id: string; n: number }>(`SELECT client, task_id, count(DISTINCT user) AS n FROM task_users_daily WHERE day BETWEEN ? AND ?${f.sql} GROUP BY client, task_id`, w.from, w.to, ...f.args).map((r) => [JSON.stringify([r.client, r.task_id]), r.n]))
 }
 const key = (r: { client: string; task_id: string }) => JSON.stringify([r.client, r.task_id])
-function metrics(a?: Aggregate, users = 0): TaskMapRow['now'] {
+export function metrics(a?: Aggregate, users = 0): TaskMapRow['now'] {
     const h = a ? histogram(a.hist) : emptyHist()
     return { attempts: a?.attempts || 0, done: a?.done || 0, failed: a?.failed || 0, abandoned: a?.abandoned || 0,
         users, median_s: percentile(h, 0.5), p90_s: percentile(h, 0.9) }
 }
-function dataThrough(): string | null {
+export function dataThrough(): string | null {
     // Today is mutable; only a complete, nontruncated day can be called fully processed.
     return one<{ day: string }>('SELECT max(day) AS day FROM task_ingest WHERE day < ? AND truncated = 0', today())?.day || null
 }
