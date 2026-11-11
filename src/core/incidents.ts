@@ -60,19 +60,20 @@ export async function findIncidents(q: IncidentQuery): Promise<Incident[]> {
         `SELECT event, timestamp, toString(${P.client}) AS client_id, toString(${P.clientName}) AS client_name,
                 coalesce(nullIf(toString(${P.email}), ''), distinct_id) AS user,
                 toString(properties.$pathname) AS pathname, toString(${P.version}) AS app_version,
-                toString(properties.$session_id) AS session_id,
+                $session_id AS session_id,
                 toString(properties.$exception_types[1]) AS error_type,
                 toString(properties.$exception_values[1]) AS error_message,
                 toString(properties.$exception_issue_id) AS issue_id,
                 elements_chain
          FROM events
-         WHERE event IN {events}
-           AND toString(${P.client}) = {client}
-           AND timestamp >= {from} AND timestamp < {to}
-           AND ({pathname} = '' OR toString(properties.$pathname) = {pathname})
-           AND ({email} = '' OR lower(toString(${P.email})) = {email})
-         ORDER BY timestamp DESC
-         LIMIT {limit}`,
+         WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND uuid IN (
+             SELECT uuid FROM events WHERE event IN {events}
+               AND timestamp >= {from} AND timestamp < {to}
+               AND toString(${P.client}) = {client}
+               AND ({pathname} = '' OR toString(properties.$pathname) = {pathname})
+               AND ({email} = '' OR lower(toString(${P.email})) = {email})
+             ORDER BY timestamp DESC, uuid LIMIT {limit}
+         ) LIMIT {limit}`,
         {
             events: kinds.map((k) => EVENT_FOR[k]),
             client: q.clientId,
@@ -81,8 +82,10 @@ export async function findIncidents(q: IncidentQuery): Promise<Incident[]> {
             pathname: q.pathname || '',
             email: (q.email || '').toLowerCase(),
             limit: q.limit ?? 50,
-        }
+        }, { cache: true }
     )
+    // The wide fetch is unsorted; restore the public newest-first order locally.
+    rows.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)))
     const incidents: Incident[] = rows.map((r) => {
         const kind = (Object.keys(EVENT_FOR) as IncidentKind[]).find((k) => EVENT_FOR[k] === r.event)!
         return {
@@ -110,7 +113,7 @@ export interface RecordingSpan {
 }
 
 export async function recordingSpans(sessionIds: string[]): Promise<Map<string, RecordingSpan>> {
-    const ids = [...new Set(sessionIds.filter(Boolean))]
+    const ids = [...new Set(sessionIds.filter(Boolean))].sort()
     if (!ids.length) return new Map()
     const rows = await hogql(
         `SELECT session_id, min(min_first_timestamp) AS start, max(max_last_timestamp) AS end
@@ -118,7 +121,7 @@ export async function recordingSpans(sessionIds: string[]): Promise<Map<string, 
          WHERE session_id IN {ids}
          GROUP BY session_id
          LIMIT 50000`,
-        { ids }
+        { ids }, { cache: true, ttlMs: 60_000 }
     )
     return new Map(
         rows.map((r) => [

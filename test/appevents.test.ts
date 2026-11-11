@@ -357,3 +357,171 @@ describe('the MCP server with app events', async () => {
         assert.ok(text.length + 100 < INSTRUCTIONS_LIMIT, `instructions are ${text.length} characters`)
     })
 })
+
+describe('app answer cache', () => {
+    test('shares concurrent work, clones answers, expires and clears entries', async () => {
+        let now = 0, calls = 0
+        const cache = new ae.AppAnswerCache(4096, 2, () => now)
+        const work = async () => { calls++; return { rows: [1] } }
+        const [a, b] = await Promise.all([cache.get('x', 60, work), cache.get('x', 60, work)])
+        a.rows.push(2)
+        assert.deepEqual(b.rows, [1])
+        assert.deepEqual(await cache.get('x', 60, work), { rows: [1] })
+        assert.equal(calls, 1)
+        now = 60
+        await cache.get('x', 60, work)
+        assert.equal(calls, 2)
+        cache.clear()
+        await cache.get('x', 60, work)
+        assert.equal(calls, 3)
+    })
+    test('bounds bytes and entries with LRU eviction and does not cache failures', async () => {
+        const cache = new ae.AppAnswerCache(50, 2)
+        let calls = 0
+        const get = (key: string) => cache.get(key, 1000, async () => { calls++; return { n: key } })
+        await get('a'); await get('b'); await get('a'); await get('c'); await get('b')
+        assert.equal(calls, 4)
+        await cache.get('large', 1000, async () => 'x'.repeat(100))
+        await cache.get('large', 1000, async () => { calls++; return 'x'.repeat(100) })
+        assert.equal(calls, 5)
+        await assert.rejects(cache.get('error', 1000, async () => { throw new Error('bad') }))
+        assert.equal(await cache.get('error', 1000, async () => 7), 7)
+    })
+    test('marks stale transient fallbacks, rejects permanent errors and bounds stale age', async () => {
+        const { PostHogError } = await import('../src/core/posthog.ts')
+        let now = 0
+        const cache = new ae.AppAnswerCache(4096, 2, () => now)
+        await cache.get('x', 60, async () => ({ note: 'original' }))
+        now = 61
+        const stale = await cache.get('x', 60, async () => { throw new PostHogError('busy', 513) }) as { note: string; _cache?: { stale: boolean } }
+        assert.equal(stale.note, 'original')
+        assert.equal(stale._cache?.stale, true)
+        await assert.rejects(cache.get('x', 60, async () => { throw new PostHogError('bad query', 400) }))
+        now += 3_600_000
+        await assert.rejects(cache.get('x', 60, async () => { throw new PostHogError('busy', 502) }))
+    })
+    test('normalizes argument order and default rolling windows, keeps explicit windows exact', async () => {
+        ae.clearAppAnswers()
+        let calls = 0
+        const work = async () => ++calls
+        const to = new Date(), from = new Date(to.getTime() - 7 * 86_400_000)
+        assert.equal(await ae.appAnswer('normalize', [{ from, to, limit: 5 }], work), 1)
+        assert.equal(await ae.appAnswer('normalize', [{ limit: 5, to: new Date(to.getTime() + 1), from: new Date(from.getTime() + 1) }], work), 1)
+        await ae.appAnswer('normalize', [{ from: new Date('2020-01-01'), to: new Date('2020-01-02') }], work)
+        await ae.appAnswer('normalize', [{ from: new Date('2020-01-01'), to: new Date('2020-01-02T00:00:00.001Z') }], work)
+        assert.equal(calls, 3)
+        ae.clearAppAnswers()
+    })
+})
+
+test('app event selection sorts only keys, fetches bounded rows unsorted and restores order', async (t) => {
+    process.env.POSTHOG_PERSONAL_API_KEY = 'test-only'
+    const { config } = await import('../src/core/config.ts')
+    const saved = config.posthog.personalApiKey
+    config.posthog.personalApiKey = 'test-only'
+    t.after(() => { config.posthog.personalApiKey = saved })
+    const queries: { query: string; values: Record<string, unknown> }[] = []
+    const rows = [
+        { event_uuid: 'b', sid: 's2', ts: '2026-11-05T00:00:02Z', dialog: 'B' },
+        { event_uuid: 'a', sid: 's1', ts: '2026-11-05T00:00:01Z', dialog: 'A' },
+    ]
+    t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+        const q = JSON.parse(String(init.body)).query
+        queries.push(q)
+        const out = queries.length === 1 ? [...rows].reverse() : rows
+        const columns = Object.keys(out[0])
+        return new Response(JSON.stringify({ columns, results: out.map((r) => columns.map((c) => r[c as keyof typeof r])) }))
+    })
+    const result = await ae.appRows("$session_id AS sid, timestamp AS ts, toString(properties.dialog) AS dialog", 'timestamp >= {from} AND timestamp < {to} AND event IN {events}',
+        { from: '2026-11-05', to: '2026-11-06', events: ['Event'] }, 'sid, ts', 50000)
+    assert.deepEqual(result, [...rows].reverse())
+    assert.equal(queries.length, 2)
+    assert.doesNotMatch(queries[0].query.split('FROM events')[0], /properties/)
+    assert.match(queries[0].query, /ORDER BY sid, ts LIMIT 50000/)
+    assert.doesNotMatch(queries[1].query, /ORDER BY/)
+    assert.deepEqual(queries[1].values.event_ids, ['a', 'b'])
+    for (const q of queries) {
+        assert.match(q.query, /timestamp >= \{from\} AND timestamp < \{to\}/)
+        assert.match(q.query, /LIMIT 50000/)
+    }
+})
+
+test('clearing app answers during an in-flight read prevents it from repopulating the cache', async () => {
+    const cache = new ae.AppAnswerCache()
+    let finish!: (n: number) => void
+    const pending = cache.get('x', 1000, () => new Promise<number>((resolve) => { finish = resolve }))
+    cache.clear()
+    finish(1)
+    assert.equal(await pending, 1)
+    assert.equal(await cache.get('x', 1000, async () => 2), 2)
+})
+
+test('screen usage combines exact screen totals and the client denominator in one scan', async (t) => {
+    const { screenUsage } = await import('../src/core/usage.ts')
+    const { config } = await import('../src/core/config.ts')
+    const saved = config.posthog.personalApiKey
+    config.posthog.personalApiKey = 'test-only'
+    t.after(() => { config.posthog.personalApiKey = saved; ae.clearAppAnswers() })
+    ae.clearAppAnswers()
+    const queries: string[] = []
+    t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+        const q = JSON.parse(String(init.body)).query
+        queries.push(q.query)
+        assert.match(q.query, /event = '\$pageview'.*timestamp > now\(\) - toIntervalDay\(\{days\}\)/)
+        assert.match(q.query, /LIMIT \d+/)
+        let rows: Record<string, unknown>[]
+        if (q.query.includes('AS clients_total')) {
+            // The denominator has no screen condition; all numerator distincts exclude nonmatches.
+            assert.match(q.query, /count\(DISTINCT toString\(.*\)\) AS clients_total/)
+            for (const alias of ['clients', 'users', 'sessions']) assert.ok(q.query.includes(`NULL)) AS ${alias}`))
+            rows = [{ clients_total: 3, clients: 2, users: 3, sessions: 4, pageviews: 5 }]
+        } else if (q.query.includes('AS dow')) rows = [{ dow: 1, pageviews: 5 }]
+        else if (q.query.includes('AS day')) rows = [{ day: '2026-11-09', pageviews: 5 }]
+        else rows = [{ client_id: 'C1', client_name: 'Client', pageviews: 3, users: 2, last_seen: '2026-11-09T00:00:00Z' }]
+        const columns = Object.keys(rows[0])
+        return new Response(JSON.stringify({ columns, results: rows.map((r) => columns.map((c) => r[c])) }))
+    })
+    const result = await screenUsage('/screen', { days: 7, clientId: 'C1' })
+    assert.equal(queries.length, 4)
+    assert.equal(result.clients_total, 3)
+    assert.equal(result.clients_using, 2)
+    assert.equal(result.users, 3)
+    assert.equal(result.sessions, 4)
+    assert.equal(result.pageviews, 5)
+    assert.equal(result.by_weekday[0].pageviews, 5)
+    assert.deepEqual(result.client, { client_id: 'C1', pageviews: 3, users: 2, rank: 1, last_seen: '2026-11-09T00:00:00.000Z' })
+    await screenUsage('/screen', { clientId: 'C1', days: 7 })
+    assert.equal(queries.length, 4)
+})
+
+test('dialog friction from unsorted fetched rows equals the existing session reader', async (t) => {
+    const { config } = await import('../src/core/config.ts')
+    const saved = config.posthog.personalApiKey
+    config.posthog.personalApiKey = 'test-only'
+    ae.clearAppAnswers()
+    t.after(() => { config.posthog.personalApiKey = saved; ae.clearAppAnswers() })
+    // Apply the existing friction filter: field edits intentionally do not enter this reader.
+    const selected = [...hedge, ...accrual].filter((e) => e.event === reg.events.screen || [...reg.dialogs.messages, ...reg.dialogs.notices].includes(e.dialog) || e.button || ['SEARCH', 'SEARCHTYPE', 'MENU'].includes(e.control || ''))
+        .map((e, i) => ({ ...e, event_uuid: `event-${i}` }))
+        .sort((a, b) => a.sid.localeCompare(b.sid) || a.ts.localeCompare(b.ts))
+    t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+        const q = JSON.parse(String(init.body)).query
+        let rows: Record<string, unknown>[]
+        if (q.query.includes('GROUP BY dialog')) rows = []
+        else if (q.query.includes('ORDER BY')) {
+            assert.doesNotMatch(q.query.split('FROM events')[0], /properties/)
+            rows = selected.map((e) => ({ event_uuid: e.event_uuid, sid: e.sid, ts: e.ts }))
+        } else {
+            assert.ok(q.values.event_ids)
+            assert.doesNotMatch(q.query, /upper\(|notEmpty\(/)
+            rows = [...selected].reverse()
+        }
+        const columns = [...new Set(rows.flatMap(Object.keys))]
+        return new Response(JSON.stringify({ columns, results: rows.map((r) => columns.map((c) => r[c])) }))
+    })
+    const actual = await ae.dialogFriction({ from: new Date(T0), to: new Date(T0 + 86_400_000) })
+    const sessions = [...new Set(selected.map((e) => e.sid))].map((sid) => ae.toSteps(selected.filter((e) => e.sid === sid), reg))
+    assert.deepEqual(actual.dialogs, ae.frictionByDialog(sessions, reg, new Map()))
+    assert.equal(actual.rows_read, selected.length)
+    assert.equal(actual.truncated, false)
+})

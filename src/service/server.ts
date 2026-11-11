@@ -8,6 +8,7 @@
 import { existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { basename, join } from 'node:path'
+import { brotliCompress, constants, gzip } from 'node:zlib'
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
@@ -166,7 +167,76 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse) {
     await transport.handleRequest(req, res, body)
 }
 
+/** Compress only complete HTML/JSON bodies. The first write/flush commits a stream unchanged.
+ * No response cache: authenticated pages and tool results must retain their own cache policy.
+ */
+export function compressResponse(req: IncomingMessage, res: ServerResponse) {
+    if (req.method === 'HEAD' || req.headers.range || process.env.LENS_HTTP_COMPRESSION === 'off') return
+    const writeHead = res.writeHead.bind(res)
+    const write = res.write.bind(res)
+    const end = res.end.bind(res)
+    const flush = res.flushHeaders.bind(res)
+    let pending: (() => void) | undefined
+    const commit = () => { res.writeHead = writeHead; const fn = pending; pending = undefined; fn?.() }
+    // Defer just the headers until end(), so existing page handlers need no changes.
+    res.writeHead = ((status: number, reason: unknown, headers?: unknown) => {
+        const values = typeof reason === 'string' ? headers : reason
+        if (Array.isArray(values)) {
+            for (let i = 0; i < values.length; i += 2) res.setHeader(String(values[i]), String(values[i + 1]))
+        } else if (values) {
+            for (const [key, value] of Object.entries(values)) if (value !== undefined) res.setHeader(key, value as string | number | string[])
+        }
+        res.statusCode = status
+        if (typeof reason === 'string') res.statusMessage = reason
+        pending = () => { writeHead(res.statusCode) }
+        const type = String(res.getHeader('content-type') || '')
+        if (!/^(text\/html|application\/(?:[\w.+-]+\+)?json)(?:;|$)/i.test(type)
+            || [204, 206, 304].includes(status) || res.hasHeader('content-encoding') || res.hasHeader('content-range')) commit()
+        return res
+    }) as typeof res.writeHead
+    res.write = ((...args: Parameters<typeof res.write>) => { commit(); return write(...args) }) as typeof res.write
+    res.flushHeaders = () => { commit(); flush() }
+    res.end = ((chunk?: string | Uint8Array | (() => void), encoding?: BufferEncoding | (() => void), callback?: () => void) => {
+        const done = typeof chunk === 'function' ? chunk : typeof encoding === 'function' ? encoding : callback
+        const body = typeof chunk === 'string' ? Buffer.from(chunk, typeof encoding === 'string' ? encoding : 'utf8') : chunk instanceof Uint8Array ? Buffer.from(chunk) : undefined
+        const type = String(res.getHeader('content-type') || '')
+        const eligible = !res.headersSent && body && body.length >= 1024 && body.length <= 4 * 1024 * 1024
+            && /^(text\/html|application\/(?:[\w.+-]+\+)?json)(?:;|$)/i.test(type)
+            && res.statusCode !== 206 && res.statusCode !== 204 && res.statusCode !== 304
+            && !res.hasHeader('content-encoding') && !res.hasHeader('content-range')
+            && !/\bno-transform\b/i.test(String(res.getHeader('cache-control') || ''))
+        if (!eligible) { commit(); return end(body, done) }
+        const vary = String(res.getHeader('vary') || '')
+        if (vary !== '*' && !vary.toLowerCase().split(/\s*,\s*/).includes('accept-encoding')) res.setHeader('vary', [vary, 'Accept-Encoding'].filter(Boolean).join(', '))
+        const accepted = new Map(String(req.headers['accept-encoding'] || '').toLowerCase().split(',').map(part => {
+            const [name, ...params] = part.trim().split(';')
+            const q = params.find(p => p.trim().startsWith('q='))?.trim().slice(2)
+            return [name!, q === undefined ? 1 : Number(q)]
+        }))
+        const quality = (name: string) => accepted.get(name) ?? accepted.get('*') ?? 0
+        const br = quality('br'), gz = quality('gzip')
+        const coding = br > 0 && br >= gz ? 'br' : gz > 0 ? 'gzip' : undefined
+        if (!coding) { commit(); return end(body, done) }
+        const finish = (error: Error | null, packed: Buffer) => {
+            if (res.destroyed) return
+            if (!error && packed.length < body.length) {
+                res.setHeader('content-encoding', coding)
+                res.setHeader('content-length', packed.length)
+                // Strong ETags describe the identity representation; preserve conditional semantics.
+                const etag = res.getHeader('etag')
+                if (typeof etag === 'string' && !etag.startsWith('W/')) res.setHeader('etag', `W/${etag}`)
+            }
+            commit()
+            end(!error && packed.length < body.length ? packed : body, done)
+        }
+        if (coding === 'br') brotliCompress(body, { params: { [constants.BROTLI_PARAM_QUALITY]: 4 } }, finish)
+        else gzip(body, { level: 4 }, finish)
+        return res
+    }) as typeof res.end
+}
+
 const server = createServer(async (req, res) => {
+    compressResponse(req, res)
     const url = new URL(req.url || '/', 'http://localhost')
     try {
         if (url.pathname === '/healthz') return send(res, 200, 'ok')
@@ -223,6 +293,10 @@ const syncNow = async (why: string) => {
 const last = syncStatus().at
 if (!keptReleases().length || !last || Date.now() - Date.parse(last) > 3_600_000) setTimeout(() => void syncNow('start'), 5_000).unref()
 setInterval(() => void syncNow('schedule'), 6 * 3_600_000).unref()
+
+server.keepAliveTimeout = 65_000
+server.headersTimeout = 70_000
+server.requestTimeout = 300_000
 
 server.listen(config.service.port, '0.0.0.0', () => log('triage service listening', { port: config.service.port, ai: !!ai, ai_model: ai ? config.anthropic.model : undefined, features: featureState() }))
 

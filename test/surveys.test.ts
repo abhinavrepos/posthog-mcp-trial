@@ -6,7 +6,7 @@ import { describe, test, type TestContext } from 'node:test'
 
 import { parseAppEvents } from '../src/core/appevents.ts'
 import { config } from '../src/core/config.ts'
-import { compileSurvey, contrast, safeRegex, specOf, viewOf, type PostHogSurvey, type SurveySpec } from '../src/core/surveys.ts'
+import { compileSurvey, invalidateSurveyCache, contrast, safeRegex, specOf, viewOf, type PostHogSurvey, type SurveySpec } from '../src/core/surveys.ts'
 import reval from '../config/app-events.reval.json' with { type: 'json' }
 
 const engine = createRequire(import.meta.url)('../deploy/posthog/survey-engine/engine.js')
@@ -208,6 +208,8 @@ const queryResponse = (rows: Record<string, unknown>[]) => {
     return new Response(JSON.stringify({ columns, results: rows.map((r) => columns.map((c) => r[c])) }))
 }
 function mockResults(t: TestContext, reply: (q: SurveyQuery) => Record<string, unknown>[], survey = resultSurvey) {
+    invalidateSurveyCache()
+    t.after(invalidateSurveyCache)
     const saved = { ...config.posthog }, enabled = config.surveys.enabled
     Object.assign(config.posthog, { projectId: '1', personalApiKey: 'read-test', surveyApiKey: 'survey-test' })
     config.surveys.enabled = true
@@ -228,13 +230,12 @@ describe('survey results without submission sampling', () => {
             if (query.includes('GROUP BY event')) return [{ event: 'survey sent', n: 12000 }, { event: 'survey shown', n: 15000 }]
             if (query.includes('GROUP BY client')) return Array.from({ length: 125 }, (_, i) => ({ client: String(i), shown: 100, answered: 80, dismissed: 1 }))
             if (query.includes('GROUP BY day')) return []
-            if (query.includes('numeric_answers')) return values.key0 === '$survey_response_nps'
-                ? [{ answers: 12000, numeric_answers: 12000, average: 8.126, promoters: 8000, detractors: 3000, bin_0: 10, bin_9: 5000, bin_10: 3000 }]
-                : [{ answers: 12000, numeric_answers: 12000, bin_1: 10000, bin_2: 2000 }]
+            if (query.includes('numeric_answers')) return [{ r0_answers: 12000, r0_numeric_answers: 12000, r0_average: 8.126, r0_promoters: 8000, r0_detractors: 3000, r0_bin_0: 10, r0_bin_9: 5000, r0_bin_10: 3000,
+                r1_answers: 12000, r1_numeric_answers: 12000, r1_bin_1: 10000, r1_bin_2: 2000 }]
             if (query.includes('GROUP BY label')) return values.key0 === '$survey_response_choice' ? [{ label: 'Yes', n: 9000 }, { label: 'No', n: 3000 }] : [{ label: 'A', n: 10000 }, { label: 'B', n: 8000 }]
             if (query.startsWith('SELECT count() AS answers')) return [{ answers: 12000 }]
             if (query.startsWith('SELECT count() AS total')) return [{ total: 9000 }]
-            return [{ text: 'Long answer ' + 'x'.repeat(2500), client: 'ACME', at: '2026-11-10' }]
+            return [{ text: 'Long answer ' + 'x'.repeat(2500), client: 'ACME', at: '2026-11-10', submission: 's1', total: 9000 }]
         })
         const { surveyResults } = await import('../src/core/surveys.ts')
         const r = await surveyResults(resultSurvey.id)
@@ -251,7 +252,7 @@ describe('survey results without submission sampling', () => {
         assert.equal(r.questions[4].recent?.[0].text.length, 2000, 'old preview stays bounded')
         assert.equal(r.by_client.length, 125)
         assert.equal(r.by_client_truncated, false)
-        for (const q of seen.filter((q) => q.query.includes('argMax(tuple('))) {
+        for (const q of seen.filter((q) => q.query.includes('AS answer_raw'))) {
             assert.match(q.query, /GROUP BY submission/)
             assert.match(q.query, /coalesce\(nullIf\(toString\(properties.\$survey_submission_id\)/)
             assert.match(q.query, /tupleElement\(argMax\(tuple\(coalesce\(/)
@@ -265,6 +266,16 @@ describe('survey results without submission sampling', () => {
         assert.ok(seen.some((q) => q.values.key0 === '$survey_response_written' && q.values.key1 === '$survey_response_4'))
         assert.ok(seen.some((q) => q.values.key0 === '$survey_response_5' && q.values.key1 === undefined))
         assert.ok(seen.some((q) => q.values.limit === 31))
+        const ratings = seen.filter((q) => q.query.includes('numeric_answers'))
+        assert.equal(ratings.length, 1, 'rating questions share one scan')
+        assert.equal(ratings[0].values.r0_key0, '$survey_response_nps')
+        assert.equal(ratings[0].values.r1_key0, '$survey_response_thumb')
+        assert.match(ratings[0].query, /argMax\(tuple\(coalesce\(/)
+        for (const q of seen) {
+            assert.match(q.query, /LIMIT/)
+            assert.match(q.query, /timestamp > now\(\) - toIntervalDay\(\{days\}\)/)
+            assert.doesNotMatch(q.query, /OFFSET/)
+        }
     })
 
     test('other choice labels are paged as aggregates and client truncation is explicit', async (t) => {
@@ -301,7 +312,11 @@ describe('survey results without submission sampling', () => {
 
     test('written pages return full text, stable ordering, totals and safe bounds, including old question ids', async (t) => {
         const full = 'x'.repeat(3000)
-        const seen = mockResults(t, ({ query, values }) => query.startsWith('SELECT count()') ? [{ total: 15000 }] : Array.from({ length: Number(values.limit) }, (_, i) => ({ text: full, client: 'ACME', at: '2026-11-10T10:00:00.00' + i + 'Z', submission: 's' + i })))
+        const seen = mockResults(t, ({ query, values }) => {
+            if (query.startsWith('SELECT count()')) return [{ total: 15000 }]
+            const rows = Array.from({ length: Number(values.limit) }, (_, i) => ({ text: full, client: 'ACME', at: '2026-11-10T10:00:00.00' + i + 'Z', submission: 's' + i, total: 15000 }))
+            return query.startsWith('SELECT value AS text') ? rows.reverse() : rows
+        })
         const { surveyAnswers } = await import('../src/core/surveys.ts')
         const r = await surveyAnswers(resultSurvey.id, 'written', undefined, 900, 180)
         assert.equal(r.total, 15000)
@@ -312,16 +327,25 @@ describe('survey results without submission sampling', () => {
         assert.equal(page.values.days, 180)
         assert.match(page.query, /ORDER BY last_at DESC, submission DESC LIMIT \{limit\}$/)
         assert.doesNotMatch(page.query, /OFFSET/)
-        assert.match(page.query, /WHERE answer_raw IS NOT NULL/)
+        assert.match(page.query, /^SELECT last_at AS at, submission, total/)
+        assert.match(page.query, /count\(\) OVER \(\) AS total/)
+        assert.match(page.query, /argMax\(tuple\(isNotNull\(/)
+        assert.doesNotMatch(page.query, /AS answer_raw|AS client|SELECT value AS text/)
+        assert.match(page.query, /tuple\(timestamp, uuid\)\), 1\) AS answer_present/)
+        const fetchPage = seen.find((q) => q.query.startsWith('SELECT value AS text'))!
+        assert.doesNotMatch(fetchPage.query, /ORDER BY/)
+        assert.match(fetchPage.query, /IN \{submissions\}/)
+        assert.equal((fetchPage.values.submissions as string[]).length, 200)
+        assert.match(page.query, /WHERE answer_present/)
         assert.ok(r.next, 'a next cursor when more rows exist')
         await surveyAnswers(resultSurvey.id, 'written', r.next, 50)
-        const second = seen.at(-1)!
+        const second = seen.filter((q) => q.query.startsWith('SELECT last_at AS at')).at(-1)!
         assert.equal(second.values.after_sub, 's199')
         assert.equal(second.values.after_at, '2026-11-10T10:00:00.00199Z'.replace('00199', '00199'))
         assert.match(second.query, /last_at < toDateTime64\(\{after_at\}, 6, 'UTC'\) OR \(last_at = toDateTime64\(\{after_at\}, 6, 'UTC'\) AND submission < \{after_sub\}\)/)
         await surveyAnswers(resultSurvey.id, '5', 'not-a-cursor', NaN)
         assert.equal(seen.at(-1)?.values.after_at, undefined, 'a bad cursor starts from the newest')
-        assert.equal(seen.at(-1)?.values.limit, 51)
+        assert.equal(seen.filter((q) => q.query.startsWith('SELECT last_at AS at')).at(-1)?.values.limit, 51)
         const before = seen.length
         await assert.rejects(surveyAnswers(resultSurvey.id, 'unknown'), /Question not found/)
         assert.equal(seen.length, before, 'invalid question does not query events')
@@ -385,4 +409,196 @@ test('written answer UI fetches successive server pages, keeps the shared pager,
     assert.equal(batches.at(-1)?.length, 60)
     assert.equal(elements['answers-more-0'].hidden, true)
     assert.equal(elements['answers-status-0'].textContent, '60 of 60 answers loaded.')
+})
+
+describe('shared survey read caches', () => {
+    test('identical detail calls share a flight and warm calls issue no API or HogQL requests', async (t) => {
+        const seen = mockResults(t, () => [], { ...resultSurvey, questions: [] })
+        const { surveyResults } = await import('../src/core/surveys.ts')
+        const results = await Promise.all(Array.from({ length: 20 }, () => surveyResults(resultSurvey.id)))
+        assert.equal(seen.length, 3)
+        results[0].survey.name = 'mutated by caller'
+        assert.equal(results[1].survey.name, 'Results', 'callers own their result objects')
+        assert.equal((await surveyResults(resultSurvey.id)).survey.name, 'Results')
+        assert.equal(seen.length, 3)
+        await surveyResults(resultSurvey.id, 14)
+        assert.equal(seen.length, 6, 'different date windows have different cache keys')
+    })
+
+    test('metadata list paging is single-flight and expires after 30 seconds', async (t) => {
+        mockResults(t, () => [])
+        let calls = 0, now = Date.now()
+        t.mock.method(Date, 'now', () => now)
+        t.mock.method(globalThis, 'fetch', async (url: unknown) => {
+            calls++
+            const second = String(url).includes('cursor=next')
+            return Response.json({ results: [{ ...resultSurvey, id: second ? 'next' : resultSurvey.id }], next: second ? null : 'http://posthog/api/surveys/?cursor=next' })
+        })
+        const { listSurveys } = await import('../src/core/surveys.ts')
+        const lists = await Promise.all(Array.from({ length: 10 }, () => listSurveys()))
+        assert.equal(calls, 2)
+        assert.equal(lists[0].length, 2)
+        lists[0][0].name = 'caller mutation'
+        assert.equal((await listSurveys())[0].name, 'Results')
+        assert.equal(calls, 2)
+        now += 30_001
+        await listSurveys()
+        assert.equal(calls, 4)
+    })
+
+    test('overview uses one bounded count query for all surveys and never caches invented zeros on failure', async (t) => {
+        mockResults(t, () => [])
+        let gets = 0, queries = 0, fail = true
+        t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
+            if (!init?.body) { gets++; return Response.json({ results: [resultSurvey, { ...resultSurvey, id: 'another' }], next: null }) }
+            queries++
+            const q = JSON.parse(String(init.body)).query as SurveyQuery
+            assert.match(q.query, /GROUP BY id LIMIT \{limit\}/)
+            assert.match(q.query, /event IN \('survey shown', 'survey sent', 'survey dismissed'\)/)
+            assert.equal(q.values.days, 30)
+            assert.equal(q.values.limit, 2)
+            if (fail) return new Response('unavailable', { status: 400 })
+            return queryResponse([{ id: resultSurvey.id, shown: 7, answered: 3, dismissed: 1 }])
+        })
+        const { surveyOverview } = await import('../src/core/surveys.ts')
+        await assert.rejects(surveyOverview(), /400/)
+        fail = false
+        const lists = await Promise.all([surveyOverview(), surveyOverview(30)])
+        assert.equal(gets, 1)
+        assert.equal(queries, 2)
+        assert.deepEqual([lists[0][0].shown, lists[0][0].answered, lists[0][0].dismissed], [7, 3, 1])
+        await surveyOverview()
+        assert.equal(queries, 2)
+    })
+
+    test('expired analytics return marked stale immediately, refresh once, and expire after five minutes', async (t) => {
+        const seen = mockResults(t, () => [], { ...resultSurvey, questions: [] })
+        let now = Date.now()
+        t.mock.method(Date, 'now', () => now)
+        const { surveyResults } = await import('../src/core/surveys.ts')
+        await surveyResults(resultSurvey.id)
+        const original = now
+        now += 60_001
+        let release!: () => void, entered!: () => void
+        const started = new Promise<void>((resolve) => { entered = resolve })
+        const wait = new Promise<void>((resolve) => { release = resolve })
+        let calls = 0
+        t.mock.method(globalThis, 'fetch', async () => { calls++; entered(); await wait; return new Response('unavailable', { status: 503 }) })
+        const reads = await Promise.all(Array.from({ length: 10 }, () => surveyResults(resultSurvey.id)))
+        assert.deepEqual(reads[0].freshness, { stale: true, cached_at: new Date(original).toISOString() })
+        await started
+        assert.equal(calls, 1)
+        release()
+        await new Promise((resolve) => setImmediate(resolve))
+        assert.equal((await surveyResults(resultSurvey.id)).freshness?.stale, true)
+        assert.equal(calls, 1, 'failed refresh has a cooldown')
+        assert.equal(seen.length, 3)
+        now = original + 300_001
+        await assert.rejects(surveyResults(resultSurvey.id), /503/, 'ancient data is not returned')
+        assert.equal(calls, 2)
+    })
+
+    test('writes invalidate metadata, results, answers, and in-flight cache fills', async (t) => {
+        mockResults(t, () => [])
+        let gets = 0, patches = 0, queries = 0, state = { ...resultSurvey, questions: [], start_date: null } as PostHogSurvey
+        let release!: () => void, entered!: () => void, block = false
+        const started = new Promise<void>((resolve) => { entered = resolve })
+        const wait = new Promise<void>((resolve) => { release = resolve })
+        t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
+            if (init?.method === 'PATCH') { patches++; state = { ...state, ...JSON.parse(String(init.body)) }; return Response.json(state) }
+            if (init?.body) { queries++; return queryResponse([]) }
+            gets++
+            const snapshot = structuredClone(state)
+            if (block) { block = false; entered(); await wait }
+            return Response.json(snapshot)
+        })
+        const { getSurvey, launchSurvey, stopSurvey, archiveSurvey, surveyResults } = await import('../src/core/surveys.ts')
+        await surveyResults(state.id)
+        assert.equal(queries, 3)
+        assert.equal((await launchSurvey(state.id)).start_date !== null, true)
+        assert.equal(patches, 1)
+        assert.equal((await getSurvey(state.id)).start_date !== null, true)
+        await surveyResults(state.id)
+        assert.equal(queries, 6)
+        await stopSurvey(state.id)
+        assert.ok((await getSurvey(state.id)).end_date)
+        await archiveSurvey(state.id)
+        assert.equal((await getSurvey(state.id)).archived, true)
+        assert.equal(patches, 3)
+        invalidateSurveyCache()
+        block = true
+        const oldRead = getSurvey(state.id)
+        await started
+        await archiveSurvey(state.id)
+        release()
+        await oldRead
+        const before = gets
+        await getSurvey(state.id)
+        assert.equal(gets, before + 1, 'a read started before a write cannot fill the new cache')
+    })
+
+    test('scope, feature switch, and LRU eviction prevent inappropriate reuse', async (t) => {
+        mockResults(t, () => [])
+        let gets = 0
+        t.mock.method(globalThis, 'fetch', async () => { gets++; return Response.json(resultSurvey) })
+        const { getSurvey } = await import('../src/core/surveys.ts')
+        await getSurvey(resultSurvey.id)
+        config.posthog.projectId = '2'
+        await getSurvey(resultSurvey.id)
+        assert.equal(gets, 2)
+        config.surveys.enabled = false
+        await assert.rejects(getSurvey(resultSurvey.id), /switched off/)
+        config.surveys.enabled = true
+        for (let i = 0; i < 129; i++) await getSurvey(i.toString(16).padStart(8, '0'))
+        const before = gets
+        await getSurvey(resultSurvey.id)
+        assert.equal(gets, before + 1, 'bounded entry count evicts the least recently used metadata')
+    })
+
+    test('answer caches normalize limits/cursors and background refresh replaces stale results', async (t) => {
+        const seen = mockResults(t, ({ query, values }) => query.startsWith('SELECT count()') ? [{ total: 0 }] :
+            Array.from({ length: Number(values.limit) || 0 }, (_, i) => ({ text: 'Answer', at: '2026-11-10', submission: 's' + i, total: 500, client: 'ACME' })))
+        let now = Date.now()
+        t.mock.method(Date, 'now', () => now)
+        const { surveyAnswers } = await import('../src/core/surveys.ts')
+        const first = await surveyAnswers(resultSurvey.id, 'written', 'bad', 999)
+        await surveyAnswers(resultSurvey.id, 'written', undefined, 200)
+        assert.equal(seen.length, 2, 'normalized cursors/limits share a cache entry')
+        assert.equal(first.total, 500)
+        now += 60_001
+        const stale = await surveyAnswers(resultSurvey.id, 'written', undefined, 200)
+        assert.equal(stale.freshness?.stale, true)
+        await new Promise((resolve) => setImmediate(resolve))
+        const fresh = await surveyAnswers(resultSurvey.id, 'written', undefined, 200)
+        assert.equal(fresh.freshness, undefined)
+        assert.equal(seen.length, 4)
+    })
+
+    test('byte budget evicts large entries even below the entry-count limit', async (t) => {
+        mockResults(t, () => [])
+        let gets = 0
+        t.mock.method(globalThis, 'fetch', async () => { gets++; return Response.json({ ...resultSurvey, description: 'x'.repeat(1_100_000) }) })
+        const { getSurvey } = await import('../src/core/surveys.ts')
+        for (let i = 0; i < 9; i++) await getSurvey(i.toString(16).padStart(8, '0'))
+        const before = gets
+        await getSurvey('00000000')
+        assert.equal(gets, before + 1)
+    })
+
+    test('different surveys never run HogQL concurrently and errors release the query queue', async (t) => {
+        mockResults(t, () => [], { ...resultSurvey, questions: [] })
+        let active = 0, peak = 0, queries = 0
+        t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
+            if (!init?.body) return Response.json({ ...resultSurvey, questions: [] })
+            active++; peak = Math.max(peak, active); queries++
+            await new Promise((resolve) => setImmediate(resolve))
+            active--
+            return queries === 1 ? new Response('bad query', { status: 400 }) : queryResponse([])
+        })
+        const { surveyResults } = await import('../src/core/surveys.ts')
+        const results = await Promise.allSettled([surveyResults(resultSurvey.id), surveyResults('abcdef12')])
+        assert.equal(results[0].status, 'rejected')
+        assert.equal(results[1].status, 'fulfilled')
+        assert.equal(peak, 1)
+    })
 })

@@ -197,3 +197,150 @@ describe('moving finished files', () => {
         rmSync(dir, { recursive: true })
     })
 })
+
+// Shared read client: fake HTTP only; no reachable PostHog is required.
+describe('PostHog read cache and transport', () => {
+    test('opt-in cache normalizes argument keys, shares flights, clones answers and keeps fresh default', async (t) => {
+        const { hogql, clearPosthogCache } = await import('../src/core/posthog.ts')
+        const { config } = await import('../src/core/config.ts')
+        const old = { ...config.posthog }
+        Object.assign(config.posthog, { projectId: 'cache-test', personalApiKey: 'test-key' })
+        t.after(() => { Object.assign(config.posthog, old); clearPosthogCache() })
+        clearPosthogCache()
+        let calls = 0
+        let release!: () => void
+        const barrier = new Promise<void>((resolve) => { release = resolve })
+        t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit & { dispatcher?: unknown }) => {
+            calls++
+            assert.ok(init.dispatcher, 'a reusable dispatcher is supplied')
+            await barrier
+            return new Response(JSON.stringify({ columns: ['n'], results: [[1]] }))
+        })
+        const first = hogql('SELECT {a} LIMIT 1', { a: 1, b: 2 }, { cache: true })
+        const second = hogql('SELECT {a} LIMIT 1', { b: 2, a: 1 }, { cache: true })
+        assert.equal(calls, 1)
+        release()
+        const [a, b] = await Promise.all([first, second])
+        a[0].n = 99
+        assert.equal(b[0].n, 1)
+        assert.equal((await hogql('SELECT {a} LIMIT 1', { b: 2, a: 1 }, { cache: true }))[0].n, 1)
+        assert.equal(calls, 1)
+        await hogql('SELECT {a} LIMIT 1', { a: 1, b: 2 })
+        assert.equal(calls, 2)
+        clearPosthogCache()
+        await hogql('SELECT {a} LIMIT 1', { a: 1, b: 2 }, { cache: true })
+        assert.equal(calls, 3)
+    })
+    test('TTL, LRU, oversize rejection, transient stale fallback and failed-flight cleanup', async (t) => {
+        const { cachedPosthogRead, clearPosthogCache, PostHogError } = await import('../src/core/posthog.ts')
+        clearPosthogCache(); t.after(clearPosthogCache)
+        let now = 1000, calls = 0
+        t.mock.method(Date, 'now', () => now)
+        const work = async () => ({ n: ++calls })
+        assert.equal((await cachedPosthogRead('ttl', work, { ttlMs: 10 })).value.n, 1)
+        now += 11
+        assert.equal((await cachedPosthogRead('ttl', work, { ttlMs: 10 })).value.n, 2)
+        now += 11
+        const stale = await cachedPosthogRead('ttl', async () => { throw new PostHogError('busy', 513) }, { ttlMs: 10, staleMs: 100 })
+        assert.deepEqual([stale.value, stale.stale, stale.cachedAt], [{ n: 2 }, true, 1011])
+        await assert.rejects(cachedPosthogRead('ttl', async () => { throw new PostHogError('bad', 400) }, { ttlMs: 10, staleMs: 100 }))
+        now += 101
+        await assert.rejects(cachedPosthogRead('ttl', async () => { throw new PostHogError('busy', 503) }, { ttlMs: 10, staleMs: 100 }))
+        clearPosthogCache()
+        for (let i = 0; i < 65; i++) await cachedPosthogRead(`lru${i}`, work)
+        const before = calls
+        await cachedPosthogRead('lru0', work)
+        assert.equal(calls, before + 1)
+        let bigCalls = 0
+        const big = async () => { bigCalls++; return 'x'.repeat(3 * 1024 * 1024) }
+        await cachedPosthogRead('big', big); await cachedPosthogRead('big', big)
+        assert.equal(bigCalls, 2)
+        const fail = () => cachedPosthogRead('failure', async () => { throw new Error('failure') })
+        await assert.rejects(fail()); await assert.rejects(fail())
+        assert.equal((await cachedPosthogRead('failure', async () => 42)).value, 42)
+    })
+    test('retries overload once, never retries invalid requests, and caps simultaneous reads at two', async (t) => {
+        const { hogql, clearPosthogCache } = await import('../src/core/posthog.ts')
+        const { config } = await import('../src/core/config.ts')
+        const old = { ...config.posthog }
+        Object.assign(config.posthog, { projectId: 'retry-test', personalApiKey: 'test-key' })
+        t.after(() => { Object.assign(config.posthog, old); clearPosthogCache() })
+        let calls = 0, active = 0, peak = 0, status = 513
+        t.mock.method(globalThis, 'fetch', async () => {
+            calls++; active++; peak = Math.max(peak, active)
+            await new Promise((resolve) => setTimeout(resolve, 5))
+            active--
+            if (status !== 200) { const responseStatus = status; if (status === 513) status = 200; return new Response('{}', { status: responseStatus }) }
+            return new Response(JSON.stringify({ columns: ['n'], results: [[1]] }))
+        })
+        await hogql('SELECT 1 LIMIT 1')
+        assert.equal(calls, 2)
+        status = 400
+        await assert.rejects(hogql('bad query'))
+        assert.equal(calls, 3)
+        status = 200
+        await Promise.all(Array.from({ length: 8 }, () => hogql('SELECT 1 LIMIT 1')))
+        assert.equal(peak, 2)
+    })
+})
+
+test('expired reports serve marked stale immediately and refresh only once in the background', async (t) => {
+    const { cachedPosthogRead, clearPosthogCache } = await import('../src/core/posthog.ts')
+    clearPosthogCache(); t.after(clearPosthogCache)
+    let now = 100, calls = 0
+    t.mock.method(Date, 'now', () => now)
+    const options = { ttlMs: 10, staleMs: 1000, staleWhileRevalidate: true }
+    await cachedPosthogRead('swr', async () => 1, options)
+    now += 11
+    let release!: (value: number) => void
+    const pending = new Promise<number>((resolve) => { release = resolve })
+    const refresh = () => { calls++; return pending }
+    const a = await cachedPosthogRead('swr', refresh, options)
+    const b = await cachedPosthogRead('swr', refresh, options)
+    assert.deepEqual([a.value, a.stale, b.value, b.stale, calls], [1, true, 1, true, 1])
+    release(2)
+    await new Promise((resolve) => setImmediate(resolve))
+    const fresh = await cachedPosthogRead('swr', refresh, options)
+    assert.deepEqual([fresh.value, fresh.stale, calls], [2, false, 1])
+})
+
+test('incident reads sort only UUID keys and restore newest-first results after the unsorted fetch', async (t) => {
+    const { findIncidents } = await import('../src/core/incidents.ts')
+    const { clearPosthogCache } = await import('../src/core/posthog.ts')
+    const { config } = await import('../src/core/config.ts')
+    const old = { ...config.posthog }
+    Object.assign(config.posthog, { projectId: 'incident-test', personalApiKey: 'test-key' })
+    clearPosthogCache()
+    t.after(() => { Object.assign(config.posthog, old); clearPosthogCache() })
+    let reads = 0
+    t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+        const { query, values } = JSON.parse(String(init.body)).query
+        if (query.includes('raw_session_replay_events')) return new Response(JSON.stringify({ columns: [], results: [] }))
+        reads++
+        assert.match(query, /SELECT uuid FROM events/)
+        assert.match(query, /timestamp >= \{from\} AND timestamp < \{to\}/)
+        assert.match(query, /ORDER BY timestamp DESC, uuid LIMIT \{limit\}\s*\) LIMIT \{limit\}/)
+        assert.equal(values.limit, 2)
+        return new Response(JSON.stringify({ columns: ['event', 'timestamp', 'session_id'], results: [
+            ['$rageclick', '2026-10-31T10:00:00Z', 'early'], ['$rageclick', '2026-10-31T11:00:00Z', 'late'],
+        ] }))
+    })
+    const q = { clientId: 'ACME', from: new Date('2026-10-31'), to: NOW, limit: 2 }
+    const incidents = await findIncidents(q)
+    assert.deepEqual(incidents.map((i) => i.session_id), ['late', 'early'])
+    assert.deepEqual(await findIncidents(q), incidents)
+    assert.equal(reads, 1)
+})
+
+test('cache invalidation separates new reads from work already in flight', async (t) => {
+    const { cachedPosthogRead, clearPosthogCache } = await import('../src/core/posthog.ts')
+    clearPosthogCache(); t.after(clearPosthogCache)
+    let release!: (value: number) => void
+    const old = cachedPosthogRead('invalidate', () => new Promise<number>((resolve) => { release = resolve }))
+    clearPosthogCache()
+    const fresh = await cachedPosthogRead('invalidate', async () => 2)
+    release(1)
+    assert.equal((await old).value, 1)
+    assert.equal(fresh.value, 2)
+    assert.equal((await cachedPosthogRead('invalidate', async () => 3)).value, 2)
+})

@@ -1,5 +1,5 @@
 // "How many clients use this screen, and when?" Usage of one screen over a period.
-import { hogql } from './posthog.ts'
+import { appAnswer, appQuery as hogql } from './appevents.ts'
 import { P } from './props.ts'
 
 export interface ScreenUsage {
@@ -19,22 +19,29 @@ export interface ScreenUsage {
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
 
 export async function screenUsage(pathname: string, opts: { days?: number; clientId?: string } = {}): Promise<ScreenUsage> {
+    return appAnswer('screenUsage', [pathname, opts], () => computeScreenUsage(pathname, opts), 60_000)
+}
+
+async function computeScreenUsage(pathname: string, opts: { days?: number; clientId?: string } = {}): Promise<ScreenUsage> {
     const days = opts.days ?? 30
     const values = { path: pathname, days }
     const scope = `event = '$pageview' AND timestamp > now() - toIntervalDay({days}) AND notEmpty(toString(${P.client}))`
 
-    const [totals, everyone, weekday, busiest, top] = await Promise.all([
+    const [totals, weekday, busiest, top] = await Promise.all([
         hogql(
-            `SELECT count(DISTINCT toString(${P.client})) AS clients, count(DISTINCT person_id) AS users,
-                    count(DISTINCT toString(properties.$session_id)) AS sessions, count() AS pageviews
-             FROM events WHERE ${scope} AND toString(properties.$pathname) = {path}`,
+            // Count the screen and the client denominator together, preserving exact distincts.
+            `SELECT count(DISTINCT toString(${P.client})) AS clients_total,
+                    count(DISTINCT if(toString(properties.$pathname) = {path}, toString(${P.client}), NULL)) AS clients,
+                    count(DISTINCT if(toString(properties.$pathname) = {path}, person_id, NULL)) AS users,
+                    count(DISTINCT if(toString(properties.$pathname) = {path}, toString($session_id), NULL)) AS sessions,
+                    countIf(toString(properties.$pathname) = {path}) AS pageviews
+             FROM events WHERE ${scope} LIMIT 1`,
             values
         ),
-        hogql(`SELECT count(DISTINCT toString(${P.client})) AS clients FROM events WHERE ${scope}`, values),
         hogql(
             `SELECT toDayOfWeek(timestamp) AS dow, count() AS pageviews
              FROM events WHERE ${scope} AND toString(properties.$pathname) = {path}
-             GROUP BY dow ORDER BY dow`,
+             GROUP BY dow ORDER BY dow LIMIT 7`,
             values
         ),
         hogql(
@@ -67,7 +74,7 @@ export async function screenUsage(pathname: string, opts: { days?: number; clien
         pathname,
         days,
         clients_using: Number(t.clients || 0),
-        clients_total: Number(everyone[0]?.clients || 0),
+        clients_total: Number(t.clients_total || 0),
         users: Number(t.users || 0),
         sessions: Number(t.sessions || 0),
         pageviews: Number(t.pageviews || 0),

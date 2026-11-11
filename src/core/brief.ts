@@ -4,7 +4,7 @@ import {
     sessionStory, slowAttempts, toRaw, toSteps, topPains,
     type ClientSignalsResult, type FrictionResult, type PainsReport, type SessionStoryResult, type Step,
 } from './appevents.ts'
-import { hogql, replayUrl } from './posthog.ts'
+import { cachedPosthogRead, readCacheKey, hogql, replayUrl } from './posthog.ts'
 import { recordingSpans } from './incidents.ts'
 import { P } from './props.ts'
 import { resolveClient, type ClientMatch } from './resolve.ts'
@@ -263,13 +263,15 @@ export function composeBrief(r: BriefResults): string {
 /** Bounded event-only read for concentration. Uses exactly the event vocabulary's safe columns. */
 async function contributions(from: Date, to: Date, clientId?: string) {
     const reg = appEvents()!
-    const rows = await hogql(`SELECT ${columns(reg)} FROM events
-        WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}
-        AND ({client} = '' OR toString(${P.client}) = {client})
-        AND notEmpty(toString(properties.$session_id))
-        ORDER BY sid, ts LIMIT 50000`, {
+    const range = `timestamp >= {from} AND timestamp < {to} AND event IN {events}
+        AND ({client} = '' OR toString(${P.client}) = {client}) AND $session_id != ''`
+    const rows = await hogql(`SELECT ${columns(reg).replace('toString(properties.$session_id)', '$session_id')} FROM events
+        WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND uuid IN (
+            SELECT uuid FROM events WHERE ${range}
+            ORDER BY $session_id, timestamp, uuid LIMIT 50000
+        ) LIMIT 50000`, {
         from: from.toISOString(), to: to.toISOString(), events: [reg.events.screen, reg.events.interaction], client: clientId || '',
-    })
+    }, { cache: true, ttlMs: 60_000 })
     const sessions = new Map<string, ReturnType<typeof toRaw>[]>()
     for (const row of rows) {
         const raw = toRaw(row)
@@ -297,6 +299,15 @@ async function contributions(from: Date, to: Date, clientId?: string) {
 // Injectable data functions let orchestration be tested without a PostHog or a recording.
 export const briefSources = { resolveClient, dialogNames, topPains, clientSignalsReport, dialogFriction, slowAttempts, findTrade, sessionStory, recordingSpans, contributions }
 export async function revalBrief(input: BriefInput, sources = briefSources, now = new Date()): Promise<string> {
+    // Injected sources remain isolated. Relative windows are frozen for the 60-second answer TTL.
+    if (sources !== briefSources) return composeBrief(await buildBrief(input, sources, now))
+    const normalized = Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined).map(([k, v]) => [k, v?.trim()]))
+    const answer = await cachedPosthogRead(readCacheKey('brief', { input: normalized, reg: appEvents() }),
+        () => buildBrief(input, sources, now), { ttlMs: 60_000, staleMs: 15 * 60_000, staleWhileRevalidate: true, degraded: (result) => !!result.limits?.some((limit) => limit.endsWith(' unavailable.')) })
+    if (answer.stale) (answer.value.limits ??= []).push(`Cached answer from ${new Date(answer.cachedAt).toISOString()}; refresh is running or PostHog is temporarily unavailable.`)
+    return composeBrief(answer.value)
+}
+async function buildBrief(input: BriefInput, sources: typeof briefSources, now: Date): Promise<BriefResults> {
     const limits: string[] = []
     const optional = async <T>(label: string, work: () => Promise<T>): Promise<T | undefined> => {
         try { return await work() } catch { limits.push(`${label} unavailable.`); return undefined }
@@ -306,7 +317,7 @@ export async function revalBrief(input: BriefInput, sources = briefSources, now 
     const matches = input.client || input.question ? await optional('Client resolution', () => sources.resolveClient({ text: input.client || input.question || '', clientHint: input.client, emails: emailsIn(input.client || input.question || '') })) : []
     // An explicit client must never silently become an all-client query.
     if (input.client && !confidentClient(matches || [])) throw new Error(`No unambiguous client matches “${input.client}”. Use its full name or id.`)
-    const names = provisional.kind !== 'trade' && !input.client && !confidentClient(matches || []) ?
+    const names = !!input.question?.trim() && !input.dialog && provisional.kind !== 'trade' && !input.client && !confidentClient(matches || []) ?
         await optional('Dialog names', () => sources.dialogNames(win.from, win.to)) : undefined
     const route = detectBriefKind(input, matches, names)
     if (matches?.length && !confidentClient(matches)) limits.push('Client name matches were uncertain; no client filter was applied.')
@@ -316,14 +327,14 @@ export async function revalBrief(input: BriefInput, sources = briefSources, now 
         r.trade = await optional('Trade lookup', () => sources.findTrade({ ...q, id: route.target!, limit: 10 }))
     } else {
         const previousFrom = new Date(win.from.getTime() - (win.to.getTime() - win.from.getTime()))
-        const reports = await Promise.all([
-            route.kind === 'general' ? optional('Top pains', () => sources.topPains({ ...q, max: 3 })) : Promise.resolve(undefined),
-            route.kind !== 'dialog' ? optional('Client signals', () => sources.clientSignalsReport({ ...q, limit: 100 })) : Promise.resolve(undefined),
-            route.kind !== 'general' ? optional('Dialog friction', () => sources.dialogFriction({ ...q, dialog: route.kind === 'dialog' ? route.target : undefined, limit: 200 })) : Promise.resolve(undefined),
-            route.kind !== 'general' ? optional('Previous dialog friction', () => sources.dialogFriction({ ...q, from: previousFrom, to: win.from, dialog: route.kind === 'dialog' ? route.target : undefined, limit: 200 })) : Promise.resolve(undefined),
-            optional('Per-user counts', () => sources.contributions(q.from, q.to, q.clientId)),
-            route.kind === 'dialog' ? optional('Attempt timings', () => sources.slowAttempts({ ...q, dialog: route.target, sessions: 6 })) : Promise.resolve(undefined),
-        ])
+        const reports = [
+            route.kind === 'general' ? await optional('Top pains', () => sources.topPains({ ...q, max: 3 })) : undefined,
+            route.kind !== 'dialog' ? await optional('Client signals', () => sources.clientSignalsReport({ ...q, limit: 100 })) : undefined,
+            route.kind !== 'general' ? await optional('Dialog friction', () => sources.dialogFriction({ ...q, dialog: route.kind === 'dialog' ? route.target : undefined, limit: 200 })) : undefined,
+            route.kind !== 'general' ? await optional('Previous dialog friction', () => sources.dialogFriction({ ...q, from: previousFrom, to: win.from, dialog: route.kind === 'dialog' ? route.target : undefined, limit: 200 })) : undefined,
+            await optional('Per-user counts', () => sources.contributions(q.from, q.to, q.clientId)),
+            route.kind === 'dialog' ? await optional('Attempt timings', () => sources.slowAttempts({ ...q, dialog: route.target, sessions: 6 })) : undefined,
+        ] as const
         const [pains, signals, friction, previous, users, timings] = reports
         Object.assign(r, { pains, signals, friction, previous, contributions: users?.counts, clientContributions: users?.clientCounts, timings })
         if (users?.truncated) limits.push('Per-user event read reached 50,000 rows; concentration and counts may be incomplete.')
@@ -339,5 +350,5 @@ export async function revalBrief(input: BriefInput, sources = briefSources, now 
         const story = await optional('Example session', () => sources.sessionStory(sid, { maxLines: 5000 }))
         if (story) r.stories = [story]
     }
-    return composeBrief(r)
+    return r
 }

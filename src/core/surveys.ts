@@ -12,11 +12,80 @@
 // Writes use POSTHOG_SURVEY_API_KEY (survey read and write, this project only). Reads of events and
 // answers use the normal read key through HogQL.
 import { randomBytes } from 'node:crypto'
+import { LRUCache } from 'lru-cache'
 
 import { appEvents, type AppEvents } from './appevents.ts'
 import { config, surveysActive } from './config.ts'
 import { hogql, PostHogError } from './posthog.ts'
 import { clientExpr } from './props.ts'
+
+// Shared by MCP and HTTP readers. No timers or speculative prewarming: only requested answers
+// are refreshed. Entries and pending work are bounded independently; writes fence old flights.
+interface CachedSurveyAnswer { value: unknown; at: number; retryAt?: number }
+const surveyCache = new LRUCache<string, CachedSurveyAnswer>({
+    max: 128, maxSize: 8 * 1024 * 1024,
+    sizeCalculation: (entry, key) => Buffer.byteLength(JSON.stringify(entry)) + Buffer.byteLength(key),
+})
+const surveyFlights = new Map<string, Promise<unknown>>()
+let surveyGeneration = 0
+export function invalidateSurveyCache(): void {
+    surveyGeneration++
+    surveyCache.clear()
+    surveyFlights.clear()
+}
+
+export interface SurveyFreshness { stale: true; cached_at: string }
+const freshness = (at: number): SurveyFreshness => ({ stale: true, cached_at: new Date(at).toISOString() })
+async function cachedSurvey<T>(key: unknown[], load: () => Promise<T>, stale?: (value: T, at: number) => T): Promise<T> {
+    requireSurveys() // never serve cached data after surveys are disabled
+    const scope = [config.posthog.host, config.posthog.projectId, config.posthog.personalApiKey, config.posthog.surveyApiKey, config.posthog.surveyGate]
+    const k = JSON.stringify([scope, key])
+    const hit = surveyCache.get(k)
+    const age = hit ? Date.now() - hit.at : Infinity
+    const ttl = key[0] === 'list' || key[0] === 'get' ? 30_000 : 60_000
+    if (hit && age < ttl) return structuredClone(hit.value) as T
+    if (hit && stale && age < 300_000 && hit.retryAt && Date.now() < hit.retryAt) return stale(structuredClone(hit.value) as T, hit.at)
+    let flight = surveyFlights.get(k) as Promise<T> | undefined
+    if (!flight) {
+        if (surveyFlights.size >= 64) {
+            if (hit && stale && age < 300_000) return stale(structuredClone(hit.value) as T, hit.at)
+            throw new Error('Survey reads are busy; please retry shortly.')
+        }
+        const generation = surveyGeneration
+        flight = Promise.resolve().then(load).then((value) => {
+            if (generation === surveyGeneration) surveyCache.set(k, { value: structuredClone(value), at: Date.now() })
+            return value
+        }).catch((error: unknown) => {
+            // A failed background refresh gets a short cooldown instead of one retry per visitor.
+            if (hit && generation === surveyGeneration && surveyCache.peek(k) === hit) {
+                surveyCache.set(k, { ...hit, retryAt: Date.now() + 5_000 })
+            }
+            throw error
+        }).finally(() => {
+            if (surveyFlights.get(k) === flight) surveyFlights.delete(k)
+        })
+        surveyFlights.set(k, flight)
+    }
+    // Stale-while-revalidate keeps chat/pages responsive even if PostHog is slow or unavailable.
+    // Metadata used by launch/stop validation deliberately has no stale fallback.
+    if (hit && stale && age < 300_000) {
+        void flight.catch(() => {})
+        return stale(structuredClone(hit.value) as T, hit.at)
+    }
+    return structuredClone(await flight)
+}
+
+// One survey HogQL request at a time, across all readers, not one pool per detail page.
+// This avoids multiplying aggregation memory by the number of questions and visitors.
+let surveyQueryTail: Promise<unknown> = Promise.resolve()
+let surveyQueries = 0
+function surveyQuery(query: string, values: Record<string, unknown> = {}) {
+    if (surveyQueries >= 64) return Promise.reject(new PostHogError('Survey query queue is busy; please retry shortly.', 503))
+    surveyQueries++
+    const run = surveyQueryTail.then(() => hogql(query, values)).finally(() => { surveyQueries-- })
+    surveyQueryTail = run.catch(() => {})
+    return run
+}
 
 // ------------------------------------------------------------------ the spec, in the app's words
 
@@ -446,14 +515,20 @@ async function surveyApi<T>(path: string, init: RequestInit = {}): Promise<T> {
         if (!detail.trim()) detail = res.status >= 500 ? 'PostHog is not answering (starting up or down)' : res.statusText
         throw new PostHogError(`PostHog surveys ${init.method || 'GET'} → ${res.status}: ${detail}`, res.status)
     }
-    return (res.status === 204 ? undefined : await res.json()) as T
+    const value = (res.status === 204 ? undefined : await res.json()) as T
+    if (init.method && init.method !== 'GET') invalidateSurveyCache()
+    return value
 }
 
 export type Status = 'draft' | 'running' | 'stopped' | 'archived'
 export const statusOf = (s: Pick<PostHogSurvey, 'start_date' | 'end_date' | 'archived'>): Status =>
     s.archived ? 'archived' : !s.start_date ? 'draft' : s.end_date ? 'stopped' : 'running'
 
-export async function listSurveys(): Promise<PostHogSurvey[]> {
+export function listSurveys(): Promise<PostHogSurvey[]> {
+    return cachedSurvey(['list'], loadSurveys)
+}
+
+async function loadSurveys(): Promise<PostHogSurvey[]> {
     const out: PostHogSurvey[] = []
     let path = '?limit=100'
     for (let i = 0; i < 20 && path; i++) {
@@ -464,7 +539,10 @@ export async function listSurveys(): Promise<PostHogSurvey[]> {
     return out
 }
 
-export const getSurvey = (id: string) => surveyApi<PostHogSurvey>(`${checkId(id)}/`)
+export const getSurvey = (id: string): Promise<PostHogSurvey> => {
+    checkId(id)
+    return cachedSurvey(['get', id], () => surveyApi<PostHogSurvey>(`${id}/`))
+}
 
 function checkId(id: string): string {
     if (!/^[0-9a-f-]{8,64}$/i.test(id)) throw new Error(`"${id}" is not a survey id`)
@@ -476,7 +554,7 @@ export async function saveSurvey(spec: SurveySpec, opts: { id?: string; clientId
     let chainId: string | undefined
     let old: PostHogSurvey | undefined
     if (opts.id) {
-        old = await getSurvey(opts.id)
+        old = await surveyApi<PostHogSurvey>(`${checkId(opts.id)}/`)
         chainId = old.conditions?.lensChain?.managedBy === 'lens' ? old.conditions.lensChain.id : undefined
         if (!chainId) throw new Error(`Survey ${opts.id} was not made by Lens; change it in PostHog, or make a new one here.`)
     }
@@ -498,7 +576,7 @@ export async function saveSurvey(spec: SurveySpec, opts: { id?: string; clientId
 
 /** Starts a draft, or starts a stopped survey again. PostHog activates the survey's flag only on this PATCH. */
 export async function launchSurvey(id: string): Promise<PostHogSurvey> {
-    const s = await getSurvey(id)
+    const s = await surveyApi<PostHogSurvey>(`${checkId(id)}/`)
     const st = statusOf(s)
     if (st === 'running') return s
     if (st === 'archived') throw new Error('This survey is archived.')
@@ -508,7 +586,7 @@ export async function launchSurvey(id: string): Promise<PostHogSurvey> {
 }
 
 export async function stopSurvey(id: string): Promise<PostHogSurvey> {
-    const s = await getSurvey(id)
+    const s = await surveyApi<PostHogSurvey>(`${checkId(id)}/`)
     if (statusOf(s) !== 'running') return s
     return surveyApi<PostHogSurvey>(`${encodeURIComponent(id)}/`, { method: 'PATCH', body: JSON.stringify({ end_date: new Date().toISOString() }) })
 }
@@ -800,7 +878,7 @@ export async function estimateReach(chain: LensChain, days = 14): Promise<Reach>
     }
     const events = [...new Set(chain.steps.map((s) => s.event))]
     values.events = events
-    const rows = await hogql(
+    const rows = await surveyQuery(
         `SELECT level, count() AS sessions, uniq(person) AS users, uniq(cl) AS clients, groupArray(10)(cl) AS sample
          FROM (
             SELECT $session_id AS sid, any(distinct_id) AS person, any(toString(${client})) AS cl,
@@ -816,7 +894,7 @@ export async function estimateReach(chain: LensChain, days = 14): Promise<Reach>
     const full = rows.find((r) => Number(r.level) === chain.steps.length)
     let top: { client: string; sessions: number }[] = []
     if (full && Number(full.sessions)) {
-        const tops = await hogql(
+        const tops = await surveyQuery(
             `SELECT cl AS client, count() AS sessions FROM (
                 SELECT $session_id AS sid, any(toString(${client})) AS cl,
                        windowFunnel(${Math.max(1, Math.round(window))})(toDateTime(timestamp), ${conds.join(', ')}) AS level
@@ -840,6 +918,8 @@ export async function estimateReach(chain: LensChain, days = 14): Promise<Reach>
 
 export interface Results {
     survey: SurveyView
+    spec?: Partial<SurveySpec>
+    freshness?: SurveyFreshness
     days: number
     chain_completed?: number // lens_chain:<id> events: the steps happened and the page was ready
     shown: number
@@ -872,17 +952,22 @@ const ANSWERED = `uniqIf(${SUBMISSION}, event = 'survey sent')`
 
 // Resolve each question from the latest event, which holds the SDK's cumulative answers.
 // A UUID breaks timestamp ties, and also gives answer pages a stable order.
-function questionSource(s: PostHogSurvey, index: number, days: number) {
+function questionRaw(s: PostHogSurvey, index: number, values: Record<string, unknown>, prefix = ''): string {
     const q = s.questions[index]
     const keys = [q.id ? `$survey_response_${q.id}` : '', index === 0 ? '$survey_response' : `$survey_response_${index}`].filter(Boolean)
-    const values: Record<string, unknown> = { id: s.id, days, question_text: q.question }
-    const present = (raw: string) => `nullIf(nullIf(nullIf(${raw}, ''), 'null'), '""')`
+    values[`${prefix}question_text`] = q.question
+    const present = (raw: string) => `nullIf(nullIf(nullIf(${raw}, ''), 'null'), '\"\"')`
     const direct = keys.map((key, i) => {
-        values[`key${i}`] = key
-        return present(`JSONExtractRaw(properties, {key${i}})`)
+        values[`${prefix}key${i}`] = key
+        return present(`JSONExtractRaw(properties, {${prefix}key${i}})`)
     })
-    const fallback = `JSONExtractRaw(arrayFirst(x -> JSONExtractString(x, 'question') = {question_text} AND isNotNull(${present("JSONExtractRaw(x, 'response')")}), JSONExtractArrayRaw(properties, '$survey_questions')), 'response')`
-    const raw = `coalesce(${[...direct, present(fallback)].join(', ')})`
+    const fallback = `JSONExtractRaw(arrayFirst(x -> JSONExtractString(x, 'question') = {${prefix}question_text} AND isNotNull(${present("JSONExtractRaw(x, 'response')")}), JSONExtractArrayRaw(properties, '$survey_questions')), 'response')`
+    return `coalesce(${[...direct, present(fallback)].join(', ')})`
+}
+
+function questionSource(s: PostHogSurvey, index: number, days: number, submissions?: string[]) {
+    const values: Record<string, unknown> = { id: s.id, days, ...(submissions ? { submissions } : {}) }
+    const raw = questionRaw(s, index, values)
     // Wrap nullable answers in a tuple: argMax otherwise skips an empty latest answer and
     // resurrects an older event. Keep only this question in aggregate memory, not all properties.
     const source = `SELECT submission, last_at, client, ifNull(answer_raw, '') AS raw,
@@ -893,12 +978,29 @@ function questionSource(s: PostHogSurvey, index: number, days: number) {
                 tupleElement(argMax(tuple(${raw}), tuple(timestamp, uuid)), 1) AS answer_raw
             FROM events WHERE timestamp > now() - toIntervalDay({days})
                 AND event = 'survey sent' AND toString(properties.$survey_id) = {id}
+                ${submissions ? `AND ${SUBMISSION} IN {submissions}` : ''}
             GROUP BY submission
         ) WHERE answer_raw IS NOT NULL`
     return { source, values }
 }
 
+// The paging/count pass needs only answer presence, not the text or client. Keeping a boolean
+// per submission avoids retaining every written answer in aggregate memory before the key sort.
+function questionKeys(s: PostHogSurvey, index: number, days: number) {
+    const values: Record<string, unknown> = { id: s.id, days }
+    const raw = questionRaw(s, index, values)
+    const source = `SELECT submission, last_at FROM (
+        SELECT ${SUBMISSION} AS submission, max(timestamp) AS last_at,
+            tupleElement(argMax(tuple(isNotNull(${raw})), tuple(timestamp, uuid)), 1) AS answer_present
+        FROM events WHERE timestamp > now() - toIntervalDay({days})
+            AND event = 'survey sent' AND toString(properties.$survey_id) = {id}
+        GROUP BY submission
+    ) WHERE answer_present`
+    return { source, values }
+}
+
 export interface SurveyAnswers {
+    freshness?: SurveyFreshness
     answers: { text: string; client: string; at: string }[]
     total: number
     next?: string // pass as `after` for the next page; absent on the last page
@@ -919,114 +1021,170 @@ function parseCursor(after: unknown): { at: string; submission: string } | null 
 }
 
 async function answerPage(s: PostHogSurvey, index: number, days: number, after: string | undefined, limit: number): Promise<SurveyAnswers> {
-    const { source, values } = questionSource(s, index, days)
+    const { source, values } = questionKeys(s, index, days)
     const c = parseCursor(after)
     const where = c ? `WHERE last_at < toDateTime64({after_at}, 6, 'UTC') OR (last_at = toDateTime64({after_at}, 6, 'UTC') AND submission < {after_sub})` : ''
-    const [counts, rows] = await Promise.all([
-        hogql(`SELECT count() AS total FROM (${source}) LIMIT 1`, values),
-        hogql(`SELECT value AS text, client, last_at AS at, submission FROM (${source}) ${where}
-            ORDER BY last_at DESC, submission DESC LIMIT {limit}`, { ...values, limit: limit + 1, ...(c ? { after_at: c.at, after_sub: c.submission } : {}) }),
-    ])
-    const page = rows.slice(0, limit)
+    // Count before applying the cursor. Sort only (time, submission), never answer text/client.
+    const keys = await surveyQuery(`SELECT last_at AS at, submission, total FROM (
+            SELECT last_at, submission, count() OVER () AS total FROM (${source})
+        ) ${where} ORDER BY last_at DESC, submission DESC LIMIT {limit}`,
+        { ...values, limit: limit + 1, ...(c ? { after_at: c.at, after_sub: c.submission } : {}) })
+    const page = keys.slice(0, limit)
+    const selected = questionSource(s, index, days, page.map((r) => String(r.submission)))
+    const rows = page.length ? await surveyQuery(`SELECT value AS text, client, last_at AS at, submission FROM (${selected.source}) LIMIT {limit}`,
+        { ...selected.values, limit }) : []
+    const bySubmission = new Map(rows.map((r) => [String(r.submission), r]))
     const last = page.at(-1)
+    // A cursor beyond the last answer has no row carrying the window count.
+    const total = keys.length ? Number(keys[0].total) : Number((await surveyQuery(`SELECT count() AS total FROM (${source}) LIMIT 1`, values))[0]?.total || 0)
     return {
-        answers: page.map((r) => ({ text: String(r.text), client: String(r.client), at: String(r.at) })),
-        total: Number(counts[0]?.total || 0),
-        ...(rows.length > limit && last ? { next: cursorOf(String(last.at), String(last.submission)) } : {}),
+        answers: page.flatMap((key) => {
+            const r = bySubmission.get(String(key.submission))
+            return r ? [{ text: String(r.text), client: String(r.client), at: String(r.at) }] : []
+        }),
+        total,
+        ...(keys.length > limit && last ? { next: cursorOf(String(last.at), String(last.submission)) } : {}),
     }
 }
 
 /** Written answers over all submissions, newest first. An index is accepted for older questions without an id. */
 export async function surveyAnswers(id: string, question: string, after?: string, limit = 50, days = 90): Promise<SurveyAnswers> {
-    const s = await getSurvey(id)
-    const index = s.questions.findIndex((q) => q.id === question)
-    const at = index >= 0 ? index : s.questions.findIndex((q, i) => !q.id && String(i) === question)
-    if (at < 0) throw new RangeError('Question not found.')
+    checkId(id)
     const n = Number(limit)
-    return answerPage(s, at, days, after, Number.isFinite(n) ? Math.min(200, Math.max(1, Math.floor(n))) : 50)
+    const size = Number.isFinite(n) ? Math.min(200, Math.max(1, Math.floor(n))) : 50
+    const cursor = parseCursor(after) ? after : undefined
+    return cachedSurvey(['answers', id, question, days, cursor ?? null, size], async () => {
+        const s = await getSurvey(id)
+        const index = s.questions.findIndex((q) => q.id === question)
+        const at = index >= 0 ? index : s.questions.findIndex((q, i) => !q.id && String(i) === question)
+        if (at < 0) throw new RangeError('Question not found.')
+        return answerPage(s, at, days, cursor, size)
+    }, (value, time) => ({ ...value, freshness: freshness(time) }))
+}
+
+function ratingResult(q: PostHogSurvey['questions'][number], r: Record<string, unknown>): Results['questions'][number] {
+    const out: Results['questions'][number] = { id: q.id, text: q.question, type: q.type, answers: 0 }
+    const thumbs = kindOf(q) === 'thumbs'
+    const bins = ratingBins(q)
+    out.answers = Number(r.answers || 0)
+    out.distribution = Object.fromEntries(bins.map((n) => [thumbs ? n === 1 ? 'Thumbs up' : 'Thumbs down' : String(n), Number(r[`bin_${n}`] || 0)]))
+    const total = Number(r.numeric_answers || 0)
+    if (!thumbs && total) {
+        out.average = Math.round(Number(r.average) * 100) / 100
+        if (q.scale === 10) {
+            const pro = Number(r.promoters), det = Number(r.detractors)
+            out.nps = { score: Math.round((pro - det) / total * 100), promoters: pro, passives: total - pro - det, detractors: det }
+        }
+    }
+    return out
+}
+
+function ratingBins(q: PostHogSurvey['questions'][number]): number[] {
+    return kindOf(q) === 'thumbs' ? [1, 2] : Array.from({ length: (q.scale ?? 5) + (q.scale === 10 ? 1 : 0) }, (_, k) => q.scale === 10 ? k : k + 1)
+}
+
+// All rating questions share one submission aggregation and one scan of survey-sent events.
+// The tuple includes nullable values so an empty latest answer never revives an older answer.
+async function ratingResults(s: PostHogSurvey, days: number): Promise<Map<number, Results['questions'][number]>> {
+    const indices = s.questions.flatMap((q, i) => q.type === 'rating' ? [i] : [])
+    if (!indices.length) return new Map()
+    const values: Record<string, unknown> = { id: s.id, days }
+    const raw = indices.map((i) => questionRaw(s, i, values, `r${i}_`))
+    const columns = indices.flatMap((i, at) => {
+        const value = `tupleElement(latest, ${at + 1})`
+        const number = `if(isFinite(toFloat(if(startsWith(${value}, '\"'), JSONExtractString(${value}), ${value}))), toFloat(if(startsWith(${value}, '\"'), JSONExtractString(${value}), ${value})), NULL)`
+        return [
+            `countIf(isNotNull(${value})) AS r${i}_answers`,
+            `count(${number}) AS r${i}_numeric_answers`,
+            `avg(${number}) AS r${i}_average`,
+            `countIf(${number} >= 9) AS r${i}_promoters`,
+            `countIf(${number} <= 6) AS r${i}_detractors`,
+            ...ratingBins(s.questions[i]).map((n) => `countIf(${number} = ${n}) AS r${i}_bin_${n}`),
+        ]
+    })
+    const rows = await surveyQuery(`SELECT ${columns.join(', ')} FROM (
+        SELECT ${SUBMISSION} AS submission, argMax(tuple(${raw.join(', ')}), tuple(timestamp, uuid)) AS latest
+        FROM events WHERE timestamp > now() - toIntervalDay({days})
+            AND event = 'survey sent' AND toString(properties.$survey_id) = {id}
+        GROUP BY submission
+    ) LIMIT 1`, values)
+    const row = rows[0] || {}
+    return new Map(indices.map((i) => [i, ratingResult(s.questions[i], Object.fromEntries(
+        Object.entries(row).filter(([key]) => key.startsWith(`r${i}_`)).map(([key, value]) => [key.slice(`r${i}_`.length), value])
+    ))]))
 }
 
 async function questionResults(s: PostHogSurvey, index: number, days: number): Promise<Results['questions'][number]> {
     const q = s.questions[index]
     const out: Results['questions'][number] = { id: q.id, text: q.question, type: q.type, answers: 0 }
-    if (q.type !== 'rating' && q.type !== 'single_choice' && q.type !== 'multiple_choice') {
+    if (q.type !== 'single_choice' && q.type !== 'multiple_choice') {
         const page = await answerPage(s, index, days, undefined, RECENT_TEXT)
         out.answers = page.total
         out.recent = page.answers.map((a) => ({ ...a, text: a.text.slice(0, 2000) }))
         return out
     }
     const { source, values } = questionSource(s, index, days)
-    if (q.type === 'rating') {
-        const thumbs = kindOf(q) === 'thumbs'
-        const bins = thumbs ? [1, 2] : Array.from({ length: (q.scale ?? 5) + (q.scale === 10 ? 1 : 0) }, (_, k) => q.scale === 10 ? k : k + 1)
-        const rows = await hogql(`SELECT count() AS answers, count(number) AS numeric_answers, avg(number) AS average,
-            countIf(number >= 9) AS promoters, countIf(number <= 6) AS detractors,
-            ${bins.map((n) => `countIf(number = ${n}) AS bin_${n}`).join(', ')}
-            FROM (SELECT if(isFinite(toFloat(value)), toFloat(value), NULL) AS number FROM (${source})) LIMIT 1`, values)
-        const r = rows[0] || {}
-        out.answers = Number(r.answers || 0)
-        out.distribution = Object.fromEntries(bins.map((n) => [thumbs ? n === 1 ? 'Thumbs up' : 'Thumbs down' : String(n), Number(r[`bin_${n}`] || 0)]))
-        const total = Number(r.numeric_answers || 0)
-        if (!thumbs && total) {
-            out.average = Math.round(Number(r.average) * 100) / 100
-            if (q.scale === 10) {
-                const pro = Number(r.promoters), det = Number(r.detractors)
-                out.nps = { score: Math.round((pro - det) / total * 100), promoters: pro, passives: total - pro - det, detractors: det }
-            }
-        }
-    } else {
-        const counts = await hogql(`SELECT count() AS answers FROM (${source}) LIMIT 1`, values)
-        out.answers = Number(counts[0]?.answers || 0)
-        out.distribution = Object.fromEntries((q.choices || []).map((c) => [c, 0]))
-        // "Other" choices can have arbitrarily many distinct labels. Page the aggregates too:
-        // never rely on HogQL's implicit 100-row limit or cap the underlying submissions.
-        // Keyset pages (PostHog refuses OFFSET on API-key queries): continue after the last label.
-        for (let after: string | null = null; ;) {
-            const rows: Record<string, unknown>[] = await hogql(`SELECT label, count() AS n FROM (
-                    SELECT if(startsWith(choice, '"'), JSONExtractString(choice), choice) AS label
-                    FROM (SELECT arrayJoin(if(startsWith(raw, '['), JSONExtractArrayRaw(raw), [raw])) AS choice FROM (${source}))
-                ) ${after === null ? '' : 'WHERE label > {after}'} GROUP BY label ORDER BY label LIMIT 1000`, { ...values, ...(after === null ? {} : { after }) })
-            for (const r of rows) out.distribution[String(r.label)] = Number(r.n)
-            if (rows.length < 1000) break
-            after = String(rows[rows.length - 1].label)
-        }
+    const counts = await surveyQuery(`SELECT count() AS answers FROM (${source}) LIMIT 1`, values)
+    out.answers = Number(counts[0]?.answers || 0)
+    out.distribution = Object.fromEntries((q.choices || []).map((c) => [c, 0]))
+    // "Other" choices can have arbitrarily many distinct labels. Page the aggregates too:
+    // never rely on HogQL's implicit 100-row limit or cap the underlying submissions.
+    // Keyset pages (PostHog refuses OFFSET on API-key queries): continue after the last label.
+    for (let after: string | null = null; ;) {
+        const rows: Record<string, unknown>[] = await surveyQuery(`SELECT label, count() AS n FROM (
+                SELECT if(startsWith(choice, '"'), JSONExtractString(choice), choice) AS label
+                FROM (SELECT arrayJoin(if(startsWith(raw, '['), JSONExtractArrayRaw(raw), [raw])) AS choice FROM (${source}))
+            ) ${after === null ? '' : 'WHERE label > {after}'} GROUP BY label ORDER BY label LIMIT 1000`, { ...values, ...(after === null ? {} : { after }) })
+        for (const r of rows) out.distribution[String(r.label)] = Number(r.n)
+        if (rows.length < 1000) break
+        after = String(rows[rows.length - 1].label)
     }
     return out
 }
 
-export async function surveyResults(id: string, days = 90): Promise<Results> {
+export function surveyResults(id: string, days = 90): Promise<Results> {
+    return cachedSurvey(['results', checkId(id), days], () => loadSurveyResults(id, days),
+        (value, at) => ({ ...value, freshness: freshness(at) }))
+}
+
+async function loadSurveyResults(id: string, days: number): Promise<Results> {
     const s = await getSurvey(id)
     const view = viewOf(s)
     const chain = s.conditions?.lensChain?.managedBy === 'lens' ? s.conditions.lensChain : undefined
     const conflicts = chain && view.status !== 'archived' && view.status !== 'stopped' ? conflictsFor(chain, view.status === 'running' ? s : { id: s.id }, await listSurveys()) : []
     const client = clientExpr()
     const values = { id: s.id, days, chain: view.chain_id ? `lens_chain:${view.chain_id}` : '' }
-    const [counts, perClient, perDay, questions] = await Promise.all([
-        hogql(
+    const [counts, perClient, perDay] = await Promise.all([
+        surveyQuery(
             `SELECT event, if(event = 'survey sent', uniq(${SUBMISSION}), count()) AS n FROM events WHERE timestamp > now() - toIntervalDay({days})
              AND ((event IN ('survey shown', 'survey sent', 'survey dismissed') AND toString(properties.$survey_id) = {id}) OR (event = {chain} AND {chain} != ''))
              GROUP BY event LIMIT 10`,
             values
         ),
-        hogql(
+        surveyQuery(
             `SELECT toString(${client}) AS client, countIf(event = 'survey shown') AS shown, ${ANSWERED} AS answered, countIf(event = 'survey dismissed') AS dismissed
              FROM events WHERE timestamp > now() - toIntervalDay({days}) AND event IN ('survey shown', 'survey sent', 'survey dismissed') AND toString(properties.$survey_id) = {id}
              GROUP BY client ORDER BY shown DESC, client LIMIT 5001`,
             values
         ),
-        hogql(
+        surveyQuery(
             `SELECT toString(toDate(timestamp)) AS day, countIf(event = 'survey shown') AS shown, ${ANSWERED} AS answered
              FROM events WHERE timestamp > now() - toIntervalDay({days}) AND event IN ('survey shown', 'survey sent') AND toString(properties.$survey_id) = {id}
              GROUP BY day ORDER BY day LIMIT 400`,
             values
         ),
-        Promise.all((s.questions || []).map((_, i) => questionResults(s, i, days))),
     ])
+    const ratings = await ratingResults(s, days)
+    const questions: Results['questions'] = []
+    for (let i = 0; i < (s.questions || []).length; i++) {
+        questions.push(ratings.get(i) ?? await questionResults(s, i, days))
+    }
     const n = (e: string) => Number(counts.find((r) => r.event === e)?.n || 0)
     const shown = n('survey shown')
     const answered = n('survey sent')
     return {
         survey: view,
+        ...(view.made_by_lens ? { spec: specOf(s) } : {}),
         days,
         ...(view.chain_id ? { chain_completed: n(values.chain) } : {}),
         shown,
@@ -1043,15 +1201,21 @@ export async function surveyResults(id: string, days = 90): Promise<Results> {
 }
 
 /** Every survey with its headline numbers, for list_surveys and the Surveys page. */
-export async function surveyOverview(days = 30): Promise<(SurveyView & { shown: number; answered: number; dismissed: number })[]> {
+type Overview = SurveyView & { shown: number; answered: number; dismissed: number; freshness?: SurveyFreshness }
+export function surveyOverview(days = 30): Promise<Overview[]> {
+    return cachedSurvey(['overview', days], () => loadSurveyOverview(days),
+        (value, at) => value.map((row) => ({ ...row, freshness: freshness(at) })))
+}
+
+async function loadSurveyOverview(days: number): Promise<Overview[]> {
     const list = (await listSurveys()).filter((s) => !s.archived)
     if (!list.length) return []
-    const rows = await hogql(
+    const rows = await surveyQuery(
         `SELECT toString(properties.$survey_id) AS id, countIf(event = 'survey shown') AS shown, ${ANSWERED} AS answered, countIf(event = 'survey dismissed') AS dismissed
          FROM events WHERE timestamp > now() - toIntervalDay({days}) AND event IN ('survey shown', 'survey sent', 'survey dismissed') AND toString(properties.$survey_id) IN {ids}
-         GROUP BY id LIMIT 1000`,
-        { days, ids: list.map((s) => s.id) }
-    ).catch(() => [] as Record<string, unknown>[])
+         GROUP BY id LIMIT {limit}`,
+        { days, ids: list.map((s) => s.id), limit: list.length }
+    )
     const by = new Map(rows.map((r) => [String(r.id), r]))
     const order: Record<Status, number> = { running: 0, draft: 1, stopped: 2, archived: 3 }
     return list

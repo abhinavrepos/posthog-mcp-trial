@@ -247,3 +247,51 @@ describe('brief investigation with stubbed sources', () => {
         assert.equal(briefFindings(results()).length, 1)
     })
 })
+
+describe('brief caching and narrow concentration reads', () => {
+    test('default brief skips routing vocabulary, shares work and returns the same composed answer', async (t) => {
+        const { clearPosthogCache } = await import('../src/core/posthog.ts')
+        clearPosthogCache(); t.after(clearPosthogCache)
+        let pains = 0
+        const fake = sources({
+            dialogNames: async () => { throw new Error('default brief must not query dialog names') },
+            topPains: async () => { pains++; return results().pains! },
+            clientSignalsReport: async () => ({ now: window, before, clients: [], quiet_clients: 0, note: '' }),
+            sessionStory: async () => story,
+        })
+        for (const key of Object.keys(fake) as (keyof typeof briefSources)[]) t.mock.method(briefSources, key, fake[key])
+        const [a, b] = await Promise.all([revalBrief({}, briefSources, new Date(window.to)), revalBrief({}, briefSources, new Date(window.to))])
+        assert.equal(a, b)
+        assert.equal(pains, 1)
+        assert.doesNotMatch(a, /unavailable/)
+        assert.equal(await revalBrief({}, briefSources, new Date(window.to)), a)
+        assert.equal(pains, 1)
+    })
+    test('concentration reads bound dates, sort keys, and preserve failed-attempt/user counts', async (t) => {
+        const { clearPosthogCache } = await import('../src/core/posthog.ts')
+        const { config } = await import('../src/core/config.ts')
+        const old = { ...config.posthog }
+        Object.assign(config.posthog, { projectId: 'brief-test', personalApiKey: 'test-key' })
+        clearPosthogCache()
+        t.after(() => { Object.assign(config.posthog, old); clearPosthogCache() })
+        const rows: RawEvent[] = [
+            { sid: 'one', ts: window.from, event: 'PageView', client: 'ACME', user: 'u', dialog: 'DlgHedge', action: 'OPEN' },
+            { sid: 'one', ts: '2026-10-27T12:00:01Z', event: 'Event', client: 'ACME', user: 'u', dialog: 'DlgHedge', action: '', button: 'Save' },
+            { sid: 'one', ts: '2026-10-27T12:00:02Z', event: 'Event', client: 'ACME', user: 'u', dialog: 'messagebox', action: '', button: 'Cannot save' },
+        ]
+        t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+            const { query, values } = JSON.parse(String(init.body)).query
+            assert.match(query, /timestamp >= \{from\} AND timestamp < \{to\}/)
+            assert.match(query, /SELECT uuid FROM events/)
+            assert.match(query, /ORDER BY \$session_id, timestamp, uuid LIMIT 50000\s*\) LIMIT 50000/)
+            assert.doesNotMatch(query, /properties\.\$session_id|ORDER BY sid, ts/)
+            assert.equal(values.from, window.from)
+            const columns = ['sid', 'ts', 'event', 'client', 'user', 'dialog', 'action', 'button'] as const
+            return new Response(JSON.stringify({ columns, results: [...rows].reverse().map((r) => columns.map((c) => r[c])) }))
+        })
+        const got = await briefSources.contributions(new Date(window.from), new Date(window.to))
+        assert.deepEqual(got.counts, briefContributions([toSteps(rows, appEvents()!)]))
+        assert.deepEqual(got.clientCounts.ACME, { total: 1, largest: 1, users: 1, blocked_users: 0 })
+        assert.equal(got.truncated, false)
+    })
+})
