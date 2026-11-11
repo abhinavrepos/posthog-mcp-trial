@@ -615,9 +615,33 @@ textarea{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px s
 .comments{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}.comments h3{font-size:15px;margin:0 0 4px}
 .cm{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line)}.cm .at{flex:none;font-variant-numeric:tabular-nums;padding:2px 8px;font-size:13px}
 .cm .tx{flex:1;white-space:pre-wrap;overflow-wrap:anywhere}.cm .by{font-size:12px;color:var(--muted)}.cm.on{background:var(--chip)}.cm button{padding:2px 8px;font-size:13px}
-.spin{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s 1s linear infinite;display:inline-block}@keyframes s{to{transform:rotate(1turn)}}`
+.spin{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s 1s linear infinite;display:inline-block}@keyframes s{to{transform:rotate(1turn)}}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}a:focus-visible,button:focus-visible{border-radius:7px}
+.skip{position:absolute;left:-9999px;top:8px;z-index:10;background:var(--card);color:var(--accent);padding:8px 12px;border-radius:7px;font-weight:600}.skip:focus{left:12px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.pager{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:10px;font-size:13px}.pager .pg{display:flex;gap:6px;align-items:center}
+.pager button{padding:5px 10px}.pager select{width:auto;padding:4px 8px}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}`
 
 export const PAGE_CSS = () => CSS
+
+/** Client-side pagination for any list a page has already loaded. Put ${PAGER_JS} inside a page's
+ * <script>, then:
+ *   const pg = makePager({ mount: $('people-pager'), noun: 'people', size: 25, draw: (slice, start) => { ...render slice... } })
+ *   pg.set(items)            // new items: back to page 1 (pg.set(items, true) keeps the page, e.g. after a save)
+ * It renders "1–25 of 230 people", Previous/Next, "Page 2 of 10" and a page-size choice (25/50/100) into
+ * mount, announces changes to screen readers, and hides itself when everything fits on one page. */
+export const PAGER_JS = String.raw`function makePager(o){const mount=o.mount,noun=o.noun||'items';let size=o.size||25,page=0,items=[]
+mount.classList.add('pager');mount.setAttribute('role','navigation');mount.setAttribute('aria-label',(o.label||noun)+' pages')
+function draw(){const pages=Math.max(1,Math.ceil(items.length/size));if(page>=pages)page=pages-1;const start=page*size,slice=items.slice(start,start+size)
+o.draw(slice,start);mount.innerHTML='';if(items.length<=Math.min(size,25)){mount.hidden=true;return}mount.hidden=false
+const info=document.createElement('span');info.setAttribute('aria-live','polite');info.textContent=(start+1)+'–'+(start+slice.length)+' of '+items.length+' '+noun
+const pg=document.createElement('span');pg.className='pg'
+const btn=(t,dis,go,lab)=>{const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent=t;b.disabled=dis;b.setAttribute('aria-label',lab);b.onclick=()=>{page=go;draw();(mount.querySelector('button:not(:disabled)')||mount).focus()};return b}
+pg.appendChild(btn('‹ Previous',page===0,page-1,'Previous page'));const at=document.createElement('span');at.textContent='Page '+(page+1)+' of '+pages;pg.appendChild(at);pg.appendChild(btn('Next ›',page>=pages-1,page+1,'Next page'))
+const sel=document.createElement('select');sel.setAttribute('aria-label','Rows per page');[25,50,100].forEach(n=>{const op=document.createElement('option');op.value=n;op.textContent=n+' per page';if(n===size)op.selected=true;sel.appendChild(op)})
+sel.onchange=()=>{size=+sel.value;page=0;draw()};pg.appendChild(sel);mount.appendChild(info);mount.appendChild(pg)}
+return{set(list,keep){items=list||[];if(!keep)page=0;draw()},redraw:draw,get page(){return page}}}`
 
 export const APP_NAME = config.app.name
 export const APP_TAG = config.app.tag
@@ -626,7 +650,9 @@ export type Section = 'Replay clips' | 'Live' | 'Dashboards' | 'Surveys' | 'Chat
 /** The header on every page: the product name, the sections this person may open, and sign out. */
 export function headerHtml(v: Viewer | undefined, section: Section): string {
     const brand = `<a class="brand" href="/"><span class="mark" aria-hidden="true"></span>${esc(APP_NAME)}${APP_TAG ? `<span class="tag">${esc(APP_TAG)}</span>` : ''}</a>`
-    if (!v) return `<header>${brand}</header>`
+    const skip = `<a class="skip" href="#main">Skip to content</a>`
+    const mainId = `<script>addEventListener('DOMContentLoaded',()=>{const m=document.querySelector('main');if(m&&!m.id)m.id='main'})</script>`
+    if (!v) return `${skip}<header>${brand}</header>${mainId}`
     const tabs = (
         [
             ['Replay clips', '/replays', 'watch'],
@@ -641,7 +667,7 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
         .filter(([, , need]) => (need === 'system' ? canSeeSystem(v) : need === 'surveys' ? surveysActive() && canUseSurveys(v) : need === 'dashboards' ? !!appEvents() && canUseDashboards(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need)))
         .map(([name, href]) => `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${name}</a>`)
         .join('')
-    return `<header>${brand}<nav>${tabs}</nav><span class="hdr"><span class="muted small who">${esc(v.email)} · ${esc(ROLE_TEXT[v.role])}</span><button class="ghost small" id="signout" type="button">Sign out</button></span></header>
+    return `${skip}${mainId}<header>${brand}<nav aria-label="Sections">${tabs}</nav><span class="hdr"><span class="muted small who">${esc(v.email)} · ${esc(ROLE_TEXT[v.role])}</span><button class="ghost small" id="signout" type="button">Sign out</button></span></header>
 <script>document.getElementById('signout').onclick=()=>fetch('/replays/logout',{method:'POST',headers:{'x-clip-page':'1'}}).then(()=>location.href='/')</script>`
 }
 
