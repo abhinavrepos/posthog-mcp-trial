@@ -251,7 +251,7 @@ test('rescue is the default first tab; role forms, top three reasons, filters, c
     const injected = { ...deps, rescueQueue: async () => rescue }
     for (const v of [viewer(), viewer('share'), viewer('none', 'admin@example.com', true)]) {
         const r = await request('', v, 'GET', undefined, injected)
-        assert.equal(r.status, 200); assert.match(r.body, /1 clients need someone this week/)
+        assert.equal(r.status, 200); assert.match(r.body, /1 client needs someone/)
         assert.ok(r.body.indexOf('>Rescue queue</a>') < r.body.indexOf('>Client task map</a>'))
         assert.match(r.body, /&lt;img src=x onerror=1&gt;/); assert.doesNotMatch(r.body, /<img|<note>|<li>Fourth/)
         assert.match(r.body, /data-page-list="rescue-pager"/); assert.match(r.body, /Open task map for this client/)
@@ -292,4 +292,18 @@ test('rescue failures keep internal details out of pages and JSON', async () => 
     }
     const r = await request('/api/rescue/acme', viewer('share'), 'POST', { status: 'contacted' }, broken)
     assert.doesNotMatch(r.body, /secret SQL|stack/)
+})
+
+test('rescue period: a chosen period replaces explicit dates, custom keeps them, forms collapse to a summary', async () => {
+    let seen: any
+    const spy = { ...deps, rescueQueue: async (p: any) => { seen = p; return { coverage: { complete: true, unprocessed: [] }, window: p.window || { from: '2026-01-01', to: '2026-01-28' }, baseline: { from: '2025-12-04', to: '2025-12-31' }, data_through: '2026-01-28', hidden_snoozed: 0, note: 'n',
+        clients: [{ client: 'acme', client_name: 'Acme', level: 'urgent', score: 9, trend: 'new', reasons: [{ kind: 'missing', text: 'Stopped doing X', now: 0, before: 9 }], next_step: 'Ask', action: { owner: 'pm@example.com', status: 'contacted', note: null, due: null, snooze_until: null, score_at_snooze: null, updated_by: 'a', updated_at: 'b' } }] } as any } }
+    await request('?view=rescue&from=2026-01-01&to=2026-01-10&baseline_from=2025-12-01&baseline_to=2025-12-10&days=14', viewer('share'), 'GET', undefined, spy as any)
+    assert.equal(Math.round((Date.parse(seen.window.to) - Date.parse(seen.window.from)) / 86400000) + 1, 14, 'the chosen period wins')
+    assert.equal(seen.baseline, undefined, 'and the explicit comparison is dropped with it')
+    const custom = await request('?view=rescue&from=2026-01-01&to=2026-01-10&days=custom', viewer('share'), 'GET', undefined, spy as any)
+    assert.deepEqual(seen.window, { from: '2026-01-01', to: '2026-01-10' })
+    assert.match(custom.body, /<option value="custom" selected>2026-01-01 to 2026-01-10<\/option>/)
+    assert.match(custom.body, /<summary>Owner: pm@example\.com · Status: contacted · <span class="linkish">Update<\/span><\/summary>/)
+    assert.doesNotMatch(custom.body, /snoozed client/, 'no snoozed line when none are hidden')
 })
