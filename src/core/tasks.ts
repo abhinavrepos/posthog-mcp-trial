@@ -259,12 +259,15 @@ function rangeOf(v: unknown): [string, string] | undefined {
     // Seven days of margin before: the rescue queue's trend reads the same periods a week earlier.
     return [shift(ws.map((w) => w.from).sort()[0], -7), ws.map((w) => w.to).sort().at(-1)!]
 }
-export function cached<T>(kind: string, p: object, compute: () => Promise<T>): Promise<T> {
+export function cached<T>(kind: string, p: object, compute: () => Promise<T>, lookbackDays = 0): Promise<T> {
     const key = kind + JSON.stringify(p), hit = answers.get(key)
     if (hit && Date.now() - hit.at < 600_000) return hit.value as Promise<T>
     const value = compute()
     const entry: { at: number; value: Promise<unknown>; range?: [string, string] } = { at: Date.now(), value }
-    value.then((v) => { entry.range = rangeOf(v) }, () => answers.delete(key))
+    value.then((v) => {
+        entry.range = rangeOf(v)
+        if (entry.range && lookbackDays) entry.range[0] = [entry.range[0], shift(entry.range[1], -lookbackDays)].sort()[0]
+    }, () => answers.delete(key))
     if (answers.size >= 500) answers.delete(answers.keys().next().value!)
     answers.set(key, entry)
     return value

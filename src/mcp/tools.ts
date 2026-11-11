@@ -470,7 +470,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
         })
     )
     registerSurveyTools(server, caller)
-    if (appEvents()) registerDashboardTools(server, caller && { who: caller.who, email: caller.email, dashboardRole: caller.dashboardRole ?? 'view', admin: !!caller.admin })
+    if (appEvents()) registerDashboardTools(server, caller && { who: caller.who, email: caller.email, dashboardRole: caller.dashboardRole ?? 'view', surveyRole: caller.surveyRole, admin: !!caller.admin })
 }
 
 // The app's own events (APP_EVENTS_FILE): what they are, one session as a story, where people fail.

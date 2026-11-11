@@ -8,7 +8,7 @@ export const SIGNALS = {
     key_baseline_days: 56, key_completed_ratio: .75, key_weight: 4,
     export_recent_days: 28, export_baseline_days: 84, export_share_delta: .15, export_share_ratio: 1.5,
     export_min: 10, export_days: 3, export_done_drop: .25, export_after_error: 3, export_weight: 3,
-    close_days: 180, close_months: 3, close_last_days: 5, close_first_days: 3, close_weight: 3,
+    close_days: 180, close_months: 3, close_last_days: 5, close_first_days: 3, close_weight: 3, close_concentration: 2,
     giving_recent_days: 14, giving_baseline_days: 56, giving_rate: .40, giving_min: 4, giving_delta: .20, giving_weight: 3,
 } as const
 export type SignalKind = 'key_person_gap' | 'work_moving_out' | 'recurring_close_error' | 'giving_up'
@@ -17,6 +17,7 @@ export interface Signal {
     evidence: Record<string, number | number[]>
     tasks?: string[]
     next_close_start?: string
+    task_id?: string; dialog?: string; template?: string
 }
 export interface ClientSignals { coverage: Coverage; to: string; signals: Signal[] }
 const shift = (d: string, n: number) => new Date(Date.parse(d) + n * 86400000).toISOString().slice(0, 10)
@@ -123,18 +124,28 @@ function compute(p: { to?: string; client?: string }): ClientSignals {
         }
     }
     const errors = query<{ day: string; client: string; dialog: string; op: string; template: string; chains: number; unrecovered: number }>(`SELECT * FROM errors_daily WHERE day BETWEEN ? AND ?${suffix}`, from, to, ...args)
-    if (cover.complete) {
-        const groups = new Map<string, { row: typeof errors[number]; months: Set<number> }>()
+    // Recurring close errors count closes in whatever older history is processed: a missing day can only
+    // hide an occurrence, never invent one. Only the recent 28 days must be complete, so the finding is current.
+    if (ready(28)) {
+        // Concentrated at close: per processed day, the error must be at least SIGNALS.close_concentration times as
+        // frequent inside close windows as outside them (an error that happens every day is not a close problem).
+        const groups = new Map<string, { row: typeof errors[number]; months: Set<number>; inClose: number; outside: number }>()
         for (const row of errors) {
+            if (!row.chains) continue
             const month = closeMonth(row.day)
-            if (!month || !row.chains) continue
             const key = JSON.stringify([row.client, row.dialog, row.op, row.template])
-            const g = groups.get(key) || { row, months: new Set<number>() }; g.months.add(month); groups.set(key, g)
+            const g = groups.get(key) || { row, months: new Set<number>(), inClose: 0, outside: 0 }
+            if (month) { g.months.add(month); g.inClose += row.chains } else g.outside += row.chains
+            groups.set(key, g)
         }
+        const processed = query<{ day: string }>('SELECT day FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0', from, to).map(r => r.day)
+        const closeDays = processed.filter(d => closeMonth(d)).length, otherDays = processed.length - closeDays
+        const concentrated = (g: { inClose: number; outside: number }) => !g.outside || !otherDays || !closeDays
+            || atLeast((g.inClose / closeDays) / (g.outside / otherDays), SIGNALS.close_concentration)
         const dialogs = new Map(query<{ dialog: string; name: string }>('SELECT * FROM dialog_names').map(r => [r.dialog, r.name]))
-        for (const { row, months } of groups.values()) if (months.size >= SIGNALS.close_months)
+        for (const g of groups.values()) if (g.months.size >= SIGNALS.close_months && concentrated(g)) { const { row, months } = g
             add('recurring_close_error', row.client, `The same error at ${months.size} month-ends: "${row.template}" on ${dialogs.get(row.dialog) || row.dialog}`, SIGNALS.close_weight,
-                { months: [...months].sort(), month_count: months.size }, { next_close_start: nextClose(to) })
+                { months: [...months].sort(), month_count: months.size }, { next_close_start: nextClose(to), task_id: safe(`t_${row.dialog}`), dialog: safe(row.dialog), template: safe(row.template) }) }
     }
     if (givingReady) {
         const recent = shift(to, 1 - SIGNALS.giving_recent_days), begin = shift(recent, -SIGNALS.giving_baseline_days)
@@ -147,7 +158,10 @@ function compute(p: { to?: string; client?: string }): ClientSignals {
         }
         for (const [client, s] of sums) if (s.nu >= SIGNALS.giving_min && atLeast(s.nu / s.nc, SIGNALS.giving_rate) && atLeast(s.nu / s.nc, (s.bc ? s.bu / s.bc : 0) + SIGNALS.giving_delta))
             add('giving_up', client, `After an error, users gave up ${s.nu} of ${s.nc} times (was ${s.bu} of ${s.bc}).`, SIGNALS.giving_weight,
-                { unrecovered: s.nu, chains: s.nc, baseline_unrecovered: s.bu, baseline_chains: s.bc })
+                { unrecovered: s.nu, chains: s.nc, baseline_unrecovered: s.bu, baseline_chains: s.bc }, (() => {
+                    const row = errors.filter(r => r.client === client && r.day >= recent).sort((a,b) => b.unrecovered - a.unrecovered || a.dialog.localeCompare(b.dialog))[0]
+                    return row ? { task_id: safe(`t_${row.dialog}`), dialog: safe(row.dialog) } : {}
+                })())
     }
     return { coverage: cover, to, signals: out.sort((a, b) => b.weight - a.weight || a.client.localeCompare(b.client) || a.kind.localeCompare(b.kind)) }
 }

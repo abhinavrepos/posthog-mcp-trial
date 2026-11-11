@@ -13,7 +13,7 @@ export function serverInstructions(withPosthog = posthogMcpActive(), surveyRole:
     const client = p.clientFromDistinctId ? `part ${p.clientFromDistinctId} of the distinct id` : `the event property ${p.client}`
     const app = appEvents()?.app || 'the app'
     const surveys = surveyToolNames(surveyRole)
-    const dashboards = dashboardToolNames(dashboardRole)
+    const dashboards = dashboardToolNames(dashboardRole, surveyRole)
     return `Replays are private: never call PostHog's session-recording-*, query-session-recordings-list or vision-* tools. Use get_replay_link; give the person the link, never view replay content.
 
 Lens (${config.mcp.name}) = ${app} clients/users, tasks and flows, trades, dialogs/buttons, sessions, Jira tickets, releases, client risk and app errors.
@@ -29,7 +29,7 @@ Lens tools:
 - releases: list_releases, release_outcomes; one ticket: ticket_evidence; complaints after shipping: client_feedback
 - agreed verdict: record_verdict; ticket link: correct_ticket_link; sync: refresh_releases${appEvents() ? `
 - reval_brief first for PM questions; ${app}: describe_app_events vocabulary; top_pains; dialog_friction failures; message_doctor messages; session_story; attempt_timings waits; find_trade ids; client_signals risk; discover_workflows, workflow_completion` : ''}${dashboards.length ? `
-- weekly client rescue: rescue_queue${dashboards.includes('set_rescue_status') ? ', set_rescue_status' : ''}; tasks: task_map, flow_time, find_task; pins: ${dashboards.filter((t) => /pin|share|list/.test(t)).join(', ') || 'none'}` : appEvents() ? `
+- weekly: monday_brief; rescue_queue${dashboards.includes('draft_rescue_survey') ? ', draft_rescue_survey' : ''}${dashboards.includes('set_rescue_status') ? ', set_rescue_status' : ''}; tasks: task_map, flow_time, find_task; pins: ${dashboards.filter((t) => /pin|share|list/.test(t)).join(', ') || 'none'}` : appEvents() ? `
 - dashboards (task map, flow time): this person has no access; a Lens admin grants it` : ''}${surveys.length ? `
 - in-app surveys for ${app} users (only here, never PostHog): ${surveys.map((t) => (t === 'launch_survey' ? 'launch_survey (two calls: show its rules, get the Jira ticket and the person\'s acknowledgement)' : t)).join(', ')}${surveyRole === 'launch' ? '' : '. Other survey actions need a higher survey role from a Lens admin'}` : surveyToolNames().length ? `
 - in-app surveys: this person has no survey access in Lens; a Lens admin grants it (never use PostHog for surveys)` : ''}`

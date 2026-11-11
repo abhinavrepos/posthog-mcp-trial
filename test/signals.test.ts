@@ -141,3 +141,51 @@ test('median active-day gap of exactly three days qualifies', async () => {
     const s = (await signals()).find(s => s.kind === 'key_person_gap')
     assert.equal(s?.evidence.median_gap_days, 3)
 })
+
+test('all four client signals merge into rescue with prescribed weights and no user identities', async () => {
+    const { rescueQueue } = await import('../src/core/rescue.ts')
+    const window = {from:shift(to,-27),to},baseline={from:shift(to,-55),to:shift(to,-28)}
+    for (const [seed,kind,weight] of [
+        [()=>keyPeople(),'key_person_gap',4],
+        [()=>exports(),'work_moving_out',3],
+        [()=>{for(const day of ['2026-03-29','2026-04-28','2026-05-28']) error(day,1,0)},'recurring_close_error',3],
+        [()=>{error(to,10,4);error(shift(to,-14),10,2)},'giving_up',3],
+    ] as const) {
+        reset();seed();forgetAnswers()
+        const result=await rescueQueue({window,baseline})
+        const client=result.clients.find(c=>c.client==='ACME')!
+        assert.ok(client,kind); assert.ok(client.reasons.some(r=>r.kind===kind),kind)
+        assert.equal(client.score,weight)
+        assert.doesNotMatch(JSON.stringify(result),/private-person|secret.example/)
+        if(kind==='recurring_close_error') assert.match(client.next_step,/Invalid date.*2026-06-26/)
+    }
+})
+
+test('backfilled close captures invalidate rescue answers outside the task comparison window', async () => {
+    reset()
+    const { rescueQueue } = await import('../src/core/rescue.ts')
+    const params={window:{from:shift(to,-27),to},baseline:{from:shift(to,-55),to:shift(to,-28)}}
+    error('2026-02-28',1,0);error('2026-03-28',1,0)
+    assert.equal((await rescueQueue(params)).clients.length,0)
+    storeAttempts('2026-01-29',[])
+    error('2026-01-29',1,0)
+    assert.equal((await rescueQueue(params)).clients[0].reasons[0].kind,'recurring_close_error')
+})
+test('recurring close errors count processed older history; only the recent 28 days must be complete', async () => {
+    reset()
+    for (const day of ['2026-01-30', '2026-02-27', '2026-03-27']) error(day, 1, 0)
+    // An unprocessed day long before the recent month does not hide closes seen in processed history.
+    db.prepare('DELETE FROM task_ingest WHERE day=?').run('2026-02-10'); forgetAnswers()
+    assert.equal((await signals())[0]?.kind, 'recurring_close_error')
+    // An unprocessed day inside the recent 28 days withholds it: the finding must be current.
+    db.prepare('DELETE FROM task_ingest WHERE day=?').run(shift(to, -3)); forgetAnswers()
+    assert.equal((await signals()).length, 0)
+})
+test('a recurring error is a close problem only when concentrated at month-ends (>= 2x per day)', async () => {
+    reset()
+    for (const day of ['2026-01-30', '2026-02-27', '2026-03-27']) error(day, 1, 0)
+    // The same error on many ordinary days too: per day it is no more frequent at close, so no close signal.
+    for (let d = '2026-01-05'; d <= '2026-03-20'; d = shift(d, 1)) if (!['30', '31', '01', '02', '03', '27', '28', '29', '26'].includes(d.slice(8))) error(d, 1, 0)
+    forgetAnswers()
+    assert.ok(!(await signals()).some((s: any) => s.kind === 'recurring_close_error'), 'everyday errors are not close errors')
+})

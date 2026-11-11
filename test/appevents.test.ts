@@ -20,7 +20,7 @@ const { db } = await import('../src/core/db.ts')
 const ae = await import('../src/core/appevents.ts')
 const { clientExpr, P } = await import('../src/core/props.ts')
 const { registerTools, APP_EVENT_TOOLS, CORE_TOOLS } = await import('../src/mcp/tools.ts')
-const { DASHBOARD_TOOLS } = await import('../src/mcp/dashboardtools.ts')
+const { DASHBOARD_TOOLS, dashboardToolNames } = await import('../src/mcp/dashboardtools.ts')
 const { SURVEY_TOOLS } = await import('../src/mcp/surveytools.ts')
 const { serverInstructions, INSTRUCTIONS_LIMIT } = await import('../src/mcp/instructions.ts')
 after(() => {
@@ -332,7 +332,7 @@ describe('the MCP server with app events', async () => {
         const names = (await client.listTools()).tools.map((t) => t.name)
         // Dashboard tools (task map, flow time) and survey tools are listed on their own.
         const appNames = names.filter((name) => !CORE_TOOLS.includes(name) && !DASHBOARD_TOOLS.includes(name) && !SURVEY_TOOLS.includes(name))
-        assert.deepEqual(names.filter((n) => DASHBOARD_TOOLS.includes(n)).sort(), [...DASHBOARD_TOOLS].sort())
+        assert.deepEqual(names.filter((n) => DASHBOARD_TOOLS.includes(n)).sort(), dashboardToolNames().sort())
         assert.equal(APP_EVENT_TOOLS[0], 'reval_brief')
         assert.equal(appNames[0], 'reval_brief')
         assert.equal(new Set(APP_EVENT_TOOLS).size, APP_EVENT_TOOLS.length)

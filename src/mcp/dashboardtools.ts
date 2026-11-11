@@ -3,6 +3,11 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { appEvents } from '../core/appevents.ts'
 import { config } from '../core/config.ts'
+import { mondayBrief } from '../core/briefing.ts'
+import { draftRescueSurvey } from '../core/rescuesurveys.ts'
+import { saveSurvey } from '../core/surveys.ts'
+import { surveysActive } from '../core/config.ts'
+import { canSurvey, type SurveyRole } from '../service/access.ts'
 import { rescueQueue, setRescueAction, rescueClients, RESCUE_STATUSES } from '../core/rescue.ts'
 import { taskMap, flowTime, findTasks, ingestStatus } from '../core/tasks.ts'
 import { createDashboard, shareDashboard, listDashboards, getDashboard, canManage } from '../core/dashboards.ts'
@@ -11,11 +16,11 @@ import { parseTimeWindow } from '../core/timewindow.ts'
 import type { FlowTimeParams, TaskMapParams, Window } from '../core/taskstypes.ts'
 import type { ChatCaller, DashboardRole } from '../service/access.ts'
 
-export const DASHBOARD_TOOLS = ['rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'share_dashboard']
-export const dashboardToolNames = (role: DashboardRole = 'share'): string[] =>
-    !appEvents() || role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => role === 'share' || !['pin_dashboard', 'share_dashboard', 'set_rescue_status'].includes(t))
-const realDeps = { rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
-type Caller = Pick<ChatCaller, 'who' | 'email' | 'dashboardRole' | 'admin'>
+export const DASHBOARD_TOOLS = ['monday_brief', 'draft_rescue_survey', 'rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'share_dashboard']
+export const dashboardToolNames = (role: DashboardRole = 'share', surveyRole: SurveyRole = 'launch'): string[] =>
+    !appEvents() || role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => (t !== 'draft_rescue_survey' || surveysActive() && canSurvey(surveyRole, 'edit')) && (role === 'share' || !['pin_dashboard', 'share_dashboard', 'set_rescue_status'].includes(t)))
+const realDeps = { mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
+type Caller = Pick<ChatCaller, 'who' | 'email' | 'dashboardRole' | 'admin'> & { surveyRole?: SurveyRole }
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
 const json = (value: unknown) => text(JSON.stringify(value, null, 2))
 const page = (id?: string) => `${config.service.publicUrl.replace(/\/$/, '')}/replays/dashboards${id ? '/' + id : ''}`
@@ -51,9 +56,9 @@ const filters = {
     only_flagged: z.boolean().default(true).describe('Only tasks needing attention in the task map.'),
 }
 
-export function registerDashboardTools(server: McpServer, caller: Caller = { who: 'mcp', dashboardRole: 'share', admin: false }, deps: Partial<typeof realDeps> = {}): void {
+export function registerDashboardTools(server: McpServer, caller: Caller = { who: 'mcp', dashboardRole: 'share', surveyRole: 'launch', admin: false }, deps: Partial<typeof realDeps> = {}): void {
     const d = { ...realDeps, ...deps }
-    const allowed = new Set(dashboardToolNames(caller.admin ? 'share' : caller.dashboardRole))
+    const allowed = new Set(dashboardToolNames(caller.admin ? 'share' : caller.dashboardRole, caller.admin ? 'launch' : caller.surveyRole || 'none'))
     const reg = ((name: string, ...rest: unknown[]) => allowed.has(name) ? (server.registerTool as (...a: unknown[]) => unknown)(name, ...rest) : undefined) as typeof server.registerTool
     const safe = <T>(fn: (input: T) => Promise<ReturnType<typeof text>>) => async (input: T) => {
         try { return await fn(input) } catch (e) { return text((e as Error).message) }
@@ -89,6 +94,16 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         if (flagged !== undefined) q.set('only_flagged', String(flagged))
         return `${page()}?${q}`
     }
+    reg('monday_brief', {
+        description: 'What changed at my clients since last week, and what needs me today? A saved weekly briefing with actions and verified recoveries.', inputSchema: {},
+    }, safe(async () => json({ ...await d.mondayBrief({ by: caller.email || caller.who }), open: page() + '?view=briefing' })))
+    reg('draft_rescue_survey', {
+        description: 'Ask an affected client a short in-app question by creating a targeted draft to review and launch on the Surveys page.', inputSchema: { client: z.string() },
+    }, safe(async ({ client }) => {
+        const matches = d.rescueClients(client)
+        if (matches.length !== 1) return json({ message: 'Choose a client id.', candidates: matches })
+        return json(await d.draftRescueSurvey(matches[0].id, caller.email || caller.who, d))
+    }))
     reg('rescue_queue', {
         description: 'Which clients need someone this week, and why? Ranked rescue queue with evidence, next steps, owner and status from processed Lens history.',
         inputSchema: { when: filters.when, compared_with: filters.compared_with, min_attempts: z.number().int().min(1).max(100000).optional(), include_snoozed: z.boolean().optional(), limit: z.number().int().min(1).max(50).default(10) },

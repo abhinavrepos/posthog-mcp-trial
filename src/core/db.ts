@@ -240,6 +240,10 @@ const MIGRATIONS: string[] = [
         updated_by TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );`,
+    `ALTER TABLE rescue_actions ADD COLUMN reasons_at_action TEXT;
+    ALTER TABLE rescue_actions ADD COLUMN acted_on TEXT;
+    CREATE TABLE briefing_snapshots (id INTEGER PRIMARY KEY, "by" TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL);
+    CREATE UNIQUE INDEX briefing_person_day ON briefing_snapshots ("by", substr(created_at,1,10));`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */
