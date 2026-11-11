@@ -234,12 +234,14 @@ ${pinsHtml(listDashboards(v.email, admin), v, admin)}${share ? dialogs(pin, !!ma
 
 function rescueParams(q: URLSearchParams): RescueParams {
     const p: RescueParams = {}
-    if (q.has('from') || q.has('to')) p.window = windowOf({ from: q.get('from'), to: q.get('to') })
-    else if (q.has('days')) {
+    // A chosen period (days) replaces explicit dates; "custom" keeps them.
+    const days = q.get('days'), period = !!days && days !== 'custom'
+    if (!period && (q.has('from') || q.has('to'))) p.window = windowOf({ from: q.get('from'), to: q.get('to') })
+    else if (period) {
         const to = ingestStatus().last_day || shift(new Date().toISOString().slice(0, 10), -1)
         p.window = { from: shift(to, 1 - integer(q.get('days'), 1, 366, 'Days')), to }
     }
-    if (q.has('baseline_from') || q.has('baseline_to')) p.baseline = windowOf({ from: q.get('baseline_from'), to: q.get('baseline_to') })
+    if (!period && (q.has('baseline_from') || q.has('baseline_to'))) p.baseline = windowOf({ from: q.get('baseline_from'), to: q.get('baseline_to') })
     if (q.has('min_attempts')) p.min_attempts = integer(q.get('min_attempts'), 1, 100000, 'Minimum attempts')
     if (q.has('include_snoozed')) {
         if (!['true', 'false', '1', '0'].includes(q.get('include_snoozed')!)) bad('Show snoozed must be true or false.')
@@ -254,15 +256,21 @@ function rescueHtml(r: RescueQueue, url: URL, v: Viewer, share: boolean): string
     if (!['any', 'unassigned', 'mine', ...RESCUE_STATUSES].includes(status)) bad('Invalid status.')
     const clients = r.clients.filter(c => (level === 'all' || c.level === level) && (status === 'any' || status === 'unassigned' && !c.action?.owner || status === 'mine' && c.action?.owner === v.email.toLowerCase() || (c.action?.status || 'open') === status))
     const options = (values: readonly string[], selected: string) => values.map(x => `<option value="${esc(x)}" ${x === selected ? 'selected' : ''}>${esc(x.replaceAll('_', ' '))}</option>`).join('')
-    return `<p>${r.coverage.complete ? `${r.clients.length} clients need someone this week` : 'Waiting for processed history'}</p>
+    return `<p>${r.coverage.complete ? `${r.clients.length} client${r.clients.length === 1 ? ' needs' : 's need'} someone` : 'Waiting for processed history'}</p>
 ${!r.coverage.complete ? `<div class="card" role="status">${esc(r.coverage.text)}<details><summary>Unprocessed days</summary>${r.coverage.unprocessed.map(esc).join(', ')}</details></div>` : ''}
 <p class="muted">Data through ${esc(r.data_through || 'not yet available')} · ${esc(r.window.from)} to ${esc(r.window.to)} · compared with ${esc(r.baseline.from)} to ${esc(r.baseline.to)}</p>
 <form class="card rescue-filters" method="get"><input type="hidden" name="view" value="rescue">
-${['from', 'to', 'baseline_from', 'baseline_to', 'days', 'min_attempts'].filter(k => q.has(k)).map(k => `<input type="hidden" name="${k}" value="${esc(q.get(k))}">`).join('')}
+${['from', 'to', 'baseline_from', 'baseline_to', 'min_attempts'].filter(k => q.has(k)).map(k => `<input type="hidden" name="${k}" value="${esc(q.get(k))}">`).join('')}
+<label>Period <select name="days">${(() => {
+    // Explicit dates (e.g. from a chat link) show as "custom"; choosing a period replaces them.
+    const len = Math.round((Date.parse(r.window.to) - Date.parse(r.window.from)) / 86400000) + 1
+    const custom = q.has('from') && !/^[0-9]+$/.test(q.get('days') || '')
+    return (custom ? `<option value="custom" selected>${esc(r.window.from)} to ${esc(r.window.to)}</option>` : '') + [14, 28, 56].map(d => `<option value="${d}" ${!custom && d === len ? 'selected' : ''}>Last ${d} days</option>`).join('')
+})()}</select></label>
 <label>Level <select name="level">${options(['all', 'urgent', 'watch'], level)}</select></label>
 <label>Status <select name="status">${options(['any', 'unassigned', 'mine', ...RESCUE_STATUSES], status)}</select></label>
 <label><input type="checkbox" name="include_snoozed" value="true" ${q.get('include_snoozed') === 'true' || q.get('include_snoozed') === '1' ? 'checked' : ''}> Show snoozed</label><button type="submit">Apply</button></form>
-<p>${r.hidden_snoozed} snoozed clients hidden</p>
+${r.hidden_snoozed ? `<p class="muted">${r.hidden_snoozed} snoozed client${r.hidden_snoozed === 1 ? '' : 's'} hidden (expected declines). Tick Show snoozed to see them.</p>` : ''}
 ${share ? `<datalist id="rescue-people">${knownPeople().map(e => `<option value="${esc(e)}"></option>`).join('')}</datalist>` : ''}
 <div data-page-list="rescue-pager" data-noun="clients">${clients.map(c => {
     const a = c.action, link = new URLSearchParams({ view: 'task_map', client: c.client, from: r.window.from, to: r.window.to, baseline_from: r.baseline.from, baseline_to: r.baseline.to })
@@ -270,14 +278,14 @@ ${share ? `<datalist id="rescue-people">${knownPeople().map(e => `<option value=
     return `<article class="card rescue-client"><h2>${esc(c.client_name)} <span class="rescue-level ${c.level}">${c.level}</span></h2><p>Trend: ${esc(c.trend)}</p>
 <ul>${c.reasons.slice(0, 3).map(reason => `<li>${esc(reason.text)}</li>`).join('')}</ul><p>${esc(c.next_step)}</p>
 <p><a href="${ROOT}?${esc(link)}">Open task map for this client</a>${c.critical_task ? ` · <a href="${ROOT}?${esc(flow)}">Flow time</a>` : ''}</p>
-${share ? `<form class="rescue-action" data-client="${esc(c.client)}">
+${share ? `<details class="rescue-edit"${a ? '' : ''}><summary>Owner: ${esc(a?.owner || 'unassigned')} · Status: ${esc((a?.status || 'open').replaceAll('_', ' '))}${a?.due ? ` · Due ${esc(a.due)}` : ''} · <span class="linkish">Update</span></summary><form class="rescue-action" data-client="${esc(c.client)}">
 <label>Owner <input type="email" name="owner" list="rescue-people" value="${esc(a?.owner)}" placeholder="Email"></label>
 <label>Status <select name="status">${options(RESCUE_STATUSES, a?.status || 'open')}</select></label>
 <label>Due <input type="date" name="due" value="${esc(a?.due)}"></label>
 <label>Note <textarea name="note" maxlength="500">${esc(a?.note)}</textarea></label>
 <label class="snooze-field" ${a?.status !== 'expected' ? 'hidden' : ''}>Snooze until <input type="date" name="snooze_until" value="${esc(a?.snooze_until)}"></label>
-<button type="submit">Save</button><span role="status" aria-live="polite"></span></form>` : `<p>Owner: ${esc(a?.owner || 'Unassigned')} · Status: ${esc(a?.status || 'open')}${a?.due ? ` · Due: ${esc(a.due)}` : ''}</p>${a?.note ? `<p>${esc(a.note)}</p>` : ''}`}</article>`
-}).join('') || '<p class="card">No clients match these filters.</p>'}</div><div id="rescue-pager"></div><p class="muted">${esc(r.note)}</p>`
+<button type="submit">Save</button><span role="status" aria-live="polite"></span></form></details>${a?.note ? `<p class="muted">${esc(a.note)}</p>` : ''}` : `<p>Owner: ${esc(a?.owner || 'Unassigned')} · Status: ${esc(a?.status || 'open')}${a?.due ? ` · Due: ${esc(a.due)}` : ''}</p>${a?.note ? `<p>${esc(a.note)}</p>` : ''}`}</article>`
+}).join('') || `<p class="card">${!r.coverage.complete ? 'Flags appear once both periods are processed.' : r.clients.length ? 'No clients match these filters.' : 'No client needs someone in this period. A shorter period shows recent changes sooner.'}</p>`}</div><div id="rescue-pager"></div><p class="muted">${esc(r.note)}</p>`
 }
 
 function filters(kind: DashboardKind, p: TaskMapParams | FlowTimeParams, url: URL, tasks: Awaited<ReturnType<Deps['findTasks']>>, clients: TaskMap['clients'], savedRelative?: boolean) {
