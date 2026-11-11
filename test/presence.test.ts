@@ -69,6 +69,11 @@ describe('the query', () => {
         const sql = timedEvents(q)
         assert.match(sql, /client = \{client\}/)
         assert.match(sql, /user = \{user\}/)
+        const inner = sql.slice(sql.indexOf('FROM events'), sql.indexOf(') WHERE day'))
+        assert.match(inner, /client = \{client\}/)
+        assert.match(inner, /user = \{user\}/)
+        assert.match(inner, /timestamp >= toDateTime\(\{from\}, \{tz\}\)/)
+        assert.match(sql.slice(sql.indexOf(') WHERE day')), /day <= toDate\(\{to\}\)$/)
         assert.ok(!sql.includes('acme'), 'the client is bound, not pasted')
         assert.ok(!sql.includes('x@y.z'))
         const all = timedEvents({ ...q, client: undefined, user: undefined })
@@ -91,22 +96,50 @@ function fake(answers: { match: RegExp; rows: Record<string, unknown>[] }[]) {
 }
 
 describe('the report', () => {
-    test('splits time into active and idle, in seconds, and passes the settings as values', async () => {
+    // Two hours of the same session, a second session, another day and another client.
+    const rows = [
+        { client: 'acme', user: 'a', sid: 's1', day: '2026-10-30', hour: 9, actions: 2, first: '2026-10-30 09:00:00', last: '2026-10-30 09:59:00', open_ms: 60_400, active_ms: 30_200 },
+        { client: 'acme', user: 'a', sid: 's1', day: '2026-10-30', hour: 10, actions: 1, first: '2026-10-30 10:00:00', last: '2026-10-30 10:00:00', open_ms: 400, active_ms: 400 },
+        { client: 'acme', user: 'b', sid: 's2', day: '2026-10-30', hour: 9, actions: 3, first: '2026-10-30 09:30:00', last: '2026-10-30 09:40:00', open_ms: 120_000, active_ms: 60_000 },
+        { client: 'acme', user: 'a', sid: 's3', day: '2026-10-31', hour: 9, actions: 1, first: '2026-10-31 09:00:00', last: '2026-10-31 09:00:00', open_ms: 0, active_ms: 0 },
+        { client: 'beta', user: 'a', sid: 's4', day: '2026-10-31', hour: 11, actions: 2, first: '2026-10-31 11:00:00', last: '2026-10-31 11:01:00', open_ms: 60_000, active_ms: 30_000 },
+    ]
+    const answers = [
+        { match: /GROUP BY client, user, sid, day, hour/, rows },
+        { match: /argMax/, rows: [{ client: 'acme', client_name: 'Acme' }, { client: 'beta', client_name: 'Beta' }] },
+    ]
+
+    test('derives every report section from grouped rows with one window and at most two sequential queries', async () => {
         const q = parse({ from: '2026-10-30', to: '2026-10-31', tz: 'Asia/Kolkata', gap: '30' }) as PresenceQuery
-        const { run, calls } = fake([
-            { match: /count\(\) AS actions/, rows: [{ clients: 2, people: 3, sessions: 4, actions: 50, open_ms: 3_600_400, active_ms: 1_200_400 }] },
-            { match: /GROUP BY day, hour/, rows: [{ day: '2026-10-31', hour: 9, people: 2, open_ms: 60_000, active_ms: 30_000 }] },
-            { match: /GROUP BY day ORDER BY day/, rows: [{ day: '2026-10-31', clients: 2, people: 3, sessions: 4, open_ms: 3_600_400, active_ms: 1_200_400 }] },
-            { match: /GROUP BY client/, rows: [{ client: 'acme', client_name: 'Acme', people: 2, sessions: 3, first: '2026-10-31 08:00:00', last: '2026-10-31 10:00:00', open_ms: 2_000_000, active_ms: 2_500_000 }] },
+        const { run, calls } = fake(answers)
+        let running = false
+        const r = await presenceReport(q, SETTINGS, async (sql, values) => {
+            assert.equal(running, false, 'queries must be sequential')
+            running = true
+            await Promise.resolve()
+            const result = await run(sql, values)
+            running = false
+            return result
+        })
+        assert.deepEqual(r.totals, { clients: 2, people: 2, sessions: 4, actions: 9, open_s: 241, active_s: 121, idle_s: 120 })
+        assert.deepEqual(r.days, [
+            { day: '2026-10-30', clients: 1, people: 2, sessions: 2, open_s: 181, active_s: 91, idle_s: 90 },
+            { day: '2026-10-31', clients: 2, people: 1, sessions: 2, open_s: 60, active_s: 30, idle_s: 30 },
         ])
-        const r = await presenceReport(q, SETTINGS, run)
-        assert.deepEqual(r.totals, { clients: 2, people: 3, sessions: 4, actions: 50, open_s: 3600, active_s: 1200, idle_s: 2400 })
-        assert.deepEqual(r.hours, [{ day: '2026-10-31', hour: 9, people: 2, open_s: 60, active_s: 30, idle_s: 30 }])
-        // Active can never be more than the time in the app.
-        assert.equal(r.clients[0].active_s, 2000)
-        assert.equal(r.clients[0].idle_s, 0)
-        assert.equal(r.people, undefined, 'people only for one client')
-        assert.equal(calls.length, 4)
+        assert.deepEqual(r.hours, [
+            { day: '2026-10-30', hour: 9, people: 2, open_s: 180, active_s: 90, idle_s: 90 },
+            { day: '2026-10-30', hour: 10, people: 1, open_s: 0, active_s: 0, idle_s: 0 },
+            { day: '2026-10-31', hour: 9, people: 1, open_s: 0, active_s: 0, idle_s: 0 },
+            { day: '2026-10-31', hour: 11, people: 1, open_s: 60, active_s: 30, idle_s: 30 },
+        ])
+        assert.deepEqual(r.clients, [
+            { client_id: 'acme', client_name: 'Acme', people: 2, sessions: 3, first: '2026-10-30T09:00:00.000Z', last: '2026-10-31T09:00:00.000Z', open_s: 181, active_s: 91, idle_s: 90 },
+            { client_id: 'beta', client_name: 'Beta', people: 1, sessions: 1, first: '2026-10-31T11:00:00.000Z', last: '2026-10-31T11:01:00.000Z', open_s: 60, active_s: 30, idle_s: 30 },
+        ])
+        assert.equal(r.people, undefined)
+        assert.equal(calls.length, 2)
+        assert.equal(calls.filter(c => /leadInFrame/.test(c.query)).length, 1)
+        assert.ok(!calls[0].query.includes('client_name'))
         for (const c of calls) {
             assert.equal(c.values.gap_ms, 30_000)
             assert.equal(c.values.tz, 'Asia/Kolkata')
@@ -114,14 +147,44 @@ describe('the report', () => {
         }
     })
 
-    test('one client adds its people; the client list still covers every client', async () => {
-        const q = parse({ tz: 'UTC', client: 'acme' }) as PresenceQuery
-        const { run, calls } = fake([{ match: /GROUP BY user/, rows: [{ user: 'a@acme.example', sessions: 2, first: '2026-11-01 08:00:00', last: '2026-11-01 09:00:00', open_ms: 120_000, active_ms: 90_000 }] }])
+    test('client and person selections leave the client list complete and count distinct sessions', async () => {
+        const q = parse({ from: '2026-10-30', to: '2026-10-31', tz: 'UTC', client: 'acme' }) as PresenceQuery
+        const { run, calls } = fake(answers)
         const r = await presenceReport(q, SETTINGS, run)
-        assert.deepEqual(r.people, [{ user: 'a@acme.example', sessions: 2, first: '2026-11-01T08:00:00.000Z', last: '2026-11-01T09:00:00.000Z', open_s: 120, active_s: 90, idle_s: 30 }])
-        const clientList = calls.find((c) => /GROUP BY client/.test(c.query))!
-        assert.ok(!clientList.query.includes('{client}'), 'the client list is not filtered to the picked client')
-        assert.ok(calls.filter((c) => !/GROUP BY client/.test(c.query)).every((c) => c.query.includes('client = {client}')))
+        assert.deepEqual(r.people, [
+            { user: 'b', sessions: 1, first: '2026-10-30T09:30:00.000Z', last: '2026-10-30T09:40:00.000Z', open_s: 120, active_s: 60, idle_s: 60 },
+            { user: 'a', sessions: 2, first: '2026-10-30T09:00:00.000Z', last: '2026-10-31T09:00:00.000Z', open_s: 61, active_s: 31, idle_s: 30 },
+        ])
+        assert.equal(r.totals.sessions, 3)
+        assert.equal(r.totals.clients, 1)
+        assert.equal(r.clients.length, 2)
+        assert.equal(calls.length, 2)
+        const person = await presenceReport({ ...q, user: 'a' }, SETTINGS, run)
+        assert.deepEqual(person.totals, { clients: 1, people: 1, sessions: 2, actions: 4, open_s: 61, active_s: 31, idle_s: 30 })
+        assert.deepEqual(person.clients, r.clients)
+        assert.deepEqual(person.people, [r.people![1]])
+    })
+
+    test('clamps active time to open time and falls back to the client id for a missing name', async () => {
+        const { run } = fake([{ match: /GROUP BY client, user, sid/, rows: [{ ...rows[0], open_ms: 2000, active_ms: 2500 }] }])
+        const r = await presenceReport(parse({ tz: 'UTC', client: 'acme' }) as PresenceQuery, SETTINGS, run)
+        assert.equal(r.clients[0].client_name, 'acme')
+        for (const t of [r.totals, ...r.days, ...r.hours, ...r.clients, ...r.people!]) {
+            assert.equal(t.active_s, 2)
+            assert.equal(t.idle_s, 0)
+        }
+        assert.equal(r.truncated, undefined)
+        assert.equal(r.warning, undefined)
+    })
+
+    test('the safety limit returns a bounded partial report and says so', async () => {
+        const { run, calls } = fake([{ match: /GROUP BY client, user, sid/, rows: Array(200_001).fill(rows[0]) }])
+        const r = await presenceReport(parse({ tz: 'UTC' }) as PresenceQuery, SETTINGS, run)
+        assert.equal(r.truncated, true)
+        assert.match(r.warning!, /partial.*shorter/)
+        assert.equal(r.totals.actions, 400_000)
+        assert.equal(calls.length, 2)
+        assert.match(calls[0].query, /LIMIT 200001$/)
     })
 
     test('an empty period is all zeros, not an error', async () => {
@@ -131,10 +194,13 @@ describe('the report', () => {
     })
 
     test('the session log', async () => {
-        const { run, calls } = fake([{ match: /GROUP BY sid/, rows: [{ sid: 's1', user: 'a@acme.example', client: 'acme', client_name: 'Acme', start: '2026-11-01 08:00:00', end: '2026-11-01 08:06:50', actions: 5, open_ms: 410_000, active_ms: 160_000 }] }])
+        const { run, calls } = fake([{ match: /argMax\(toString/, rows: [{ client: 'acme', client_name: 'Acme' }] }, { match: /GROUP BY sid/, rows: [{ sid: 's1', user: 'a@acme.example', client: 'acme', start: '2026-11-01 08:00:00', end: '2026-11-01 08:06:50', actions: 5, open_ms: 410_000, active_ms: 160_000 }] }])
         const s = await presenceSessions(parse({ tz: 'UTC', client: 'acme' }) as PresenceQuery, SETTINGS, 1000, run)
         assert.deepEqual(s, [{ session_id: 's1', user: 'a@acme.example', client_id: 'acme', client_name: 'Acme', start: '2026-11-01T08:00:00.000Z', end: '2026-11-01T08:06:50.000Z', actions: 5, open_s: 410, active_s: 160, idle_s: 250 }])
         assert.equal(calls[0].values.limit, 1000)
+        assert.match(calls[0].query.slice(calls[0].query.indexOf('FROM events'), calls[0].query.indexOf(') WHERE day')), /client = \{client\}/)
+        assert.ok(!calls[0].query.includes('client_name'), 'no names through the window sort')
+        assert.deepEqual(calls[1].values.clients, ['acme'])
     })
 })
 
@@ -154,10 +220,10 @@ describe('row limits', () => {
         await presenceSessions(q, SETTINGS, 1000, run)
         await liveNow('UTC', 60, SETTINGS, NOW, run)
         await personDay({ ...q, to: q.from, user: 'a@acme.example' }, SETTINGS, run)
-        assert.equal(seen.length, 12)
+        assert.equal(seen.length, 10)
         for (const query of seen) assert.match(query, /LIMIT (\d+|\{limit\})\s*$/, query.slice(0, 80))
         // 92 days of 24 hours must fit.
-        const hours = seen.find((x) => /GROUP BY day, hour/.test(x))!
+        const hours = seen.find((x) => /GROUP BY client, user, sid, day, hour/.test(x))!
         assert.ok(Number(/LIMIT (\d+)\s*$/.exec(hours)![1]) >= 92 * 24)
     })
 })
@@ -196,6 +262,7 @@ describe('live now', () => {
         const todayCall = calls.find((c) => /user IN \{users\}/.test(c.query))!
         assert.deepEqual(todayCall.values.users, ['a@acme.example', 'b@beta.example'])
         assert.equal(todayCall.values.from, '2026-11-01')
+        assert.match(todayCall.query.slice(todayCall.query.indexOf('FROM events'), todayCall.query.indexOf(') WHERE day')), /user IN \{users\}/)
     })
 })
 
@@ -216,6 +283,7 @@ describe("one person's day", () => {
     test('builds the day: actions in order, sessions with their recordings, totals', async () => {
         const q = { ...(parse({ tz: 'UTC', from: '2026-11-01', client: 'acme' }) as PresenceQuery), user: 'a@acme.example' }
         const { run, calls } = fake([
+            { match: /argMax\(toString/, rows: [{ client: 'acme', client_name: 'Acme' }] },
             { match: /ORDER BY ts LIMIT/, rows: [
                 { ts: '2026-11-01 09:00:00', sid: 's1', client: 'acme', client_name: 'Acme', event: '$pageview', etype: '', chain: '', screen: '/dashboard', gap: 30_000 },
                 { ts: '2026-11-01 09:00:30', sid: 's1', client: 'acme', client_name: 'Acme', event: '$autocapture', etype: 'click', chain: 'button:text="Run"', screen: '/dashboard', gap: 600_000 },
@@ -229,6 +297,9 @@ describe("one person's day", () => {
             { match: /raw_session_replay_events/, rows: [{ session_id: 's1', start: '2026-11-01 08:59:58' }] },
         ])
         const d = await personDay(q, SETTINGS, run, 5000)
+        const detail = calls.find((c) => /ORDER BY ts LIMIT/.test(c.query))!
+        assert.deepEqual(detail.values.sids, ['s2', 's1'], 'actions only for this person\'s sessions')
+        assert.ok(calls.indexOf(detail) > calls.findIndex((c) => /GROUP BY sid/.test(c.query)), 'sessions first, then actions')
         assert.deepEqual(d.actions.map((a) => [a.t.slice(11, 19), a.label, a.gap_s, a.last]), [
             ['09:00:00', 'Opened /dashboard', 30, false],
             ['09:00:30', 'Clicked "Run"', 600, false],
@@ -241,7 +312,7 @@ describe("one person's day", () => {
         assert.equal(d.truncated, false)
         // The person and the client are bound values, and the recording lookup only asks for this person's sessions.
         const main = calls.find((c) => /ORDER BY ts LIMIT/.test(c.query))!
-        assert.match(main.query, /user = \{user\}/)
+        assert.match(main.query.slice(main.query.indexOf('FROM events'), main.query.indexOf(') WHERE day')), /user = \{user\}/)
         assert.equal(main.values.user, 'a@acme.example')
         assert.equal(main.values.limit, 5001)
         assert.deepEqual(calls.find((c) => /raw_session_replay_events/.test(c.query))!.values.ids, ['s2', 's1'])
@@ -259,7 +330,7 @@ describe("one person's day", () => {
 
     test('a very busy day is cut at the limit, and says so', async () => {
         const rows = Array.from({ length: 4 }, (_, i) => ({ ts: `2026-11-01 09:00:0${i}`, sid: 's1', client: 'acme', client_name: 'Acme', event: 'x', etype: '', chain: '', screen: '', gap: 1000 }))
-        const { run } = fake([{ match: /ORDER BY ts LIMIT/, rows }])
+        const { run } = fake([{ match: /ORDER BY ts LIMIT/, rows }, { match: /GROUP BY sid ORDER BY start DESC/, rows: [{ sid: 's1', user: 'a@acme.example', client: 'acme', start: '2026-11-01 09:00:00', end: '2026-11-01 09:00:03', actions: 4, open_ms: 3000, active_ms: 3000 }] }])
         const d = await personDay({ ...(parse({ tz: 'UTC' }) as PresenceQuery), user: 'a@acme.example' }, SETTINGS, run, 3)
         assert.equal(d.actions.length, 3)
         assert.equal(d.truncated, true)

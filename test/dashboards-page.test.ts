@@ -91,6 +91,24 @@ test('realistic map and flow render escaped data, flags, charts, paths, errors a
     scriptsParse(flow.body)
 })
 
+test('flow page renders 100 attempts for the shared 25-row pager', async () => {
+    const many = { ...deps, async flowTime(p: FlowTimeParams) {
+        const result = await deps.flowTime(p)
+        result.slowest = Array.from({ length: p.slowest_limit ?? 10 }, (_, i) => ({ ...result.slowest[0], session_id: `attempt-${i}`, user: `person-${i}` }))
+        return result
+    } }
+    const page = await request('?view=flow_time&task=t_save', viewer(), 'GET', undefined, many)
+    assert.equal(flowParams?.slowest_limit, 100)
+    const rows = page.body.match(/<tbody data-page-list="slowest-pager"[^>]*>([\s\S]*?)<\/tbody>/)![1]
+    assert.equal([...rows.matchAll(/<tr>/g)].length, 100)
+    assert.match(page.body, /size:25/)
+    scriptsParse(page.body)
+    const api = await request('/api/flow-time?task=t_save&slowest_limit=100')
+    assert.equal(api.status, 200)
+    assert.equal(flowParams?.slowest_limit, 100)
+    assert.equal((await request('/api/flow-time?task=t_save&slowest_limit=101')).status, 400)
+})
+
 test('query params reach the core with previous, year and custom comparisons', async () => {
     assert.equal((await request('/api/task-map?from=2026-01-01&to=2026-01-28&client=acme&task=t_save&min_attempts=8')).status, 200)
     assert.deepEqual(mapParams, { window, client: 'acme', task: 't_save', min_attempts: 8, baseline: { from: '2025-12-04', to: '2025-12-31' } })
@@ -149,6 +167,7 @@ test('pin lifecycle: shares, ownership, view restrictions and administrator over
     const flowPage = await request('/' + own.data.id, owner)
     assert.equal(flowPage.status, 200)
     assert.equal(flowParams?.task, 't_save')
+    assert.equal(flowParams?.slowest_limit, 100, 'old pins request the full page limit')
     const changedClient = await request('/' + own.data.id + '?client=another', owner)
     assert.equal(changedClient.status, 200)
     assert.equal(flowParams?.task, 't_save')

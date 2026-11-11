@@ -149,6 +149,24 @@ test('flow series, paths, histogram interpolation, week selection, errors, repla
     const status = ingestStatus(); assert.equal(status.days_done, 2); assert.equal(status.attempts, 6)
 })
 
+test('flow slowest limits are bounded, ordered and cached separately', async () => {
+    reset()
+    storeAttempts(now, Array.from({ length: 120 }, (_, i) => ({
+        ...attempt(now, 't_DlgSave', i % 2 ? 'failed' : 'done', i + 1), session_id: `slow-${i}`,
+    })))
+    const p = { task: 't_DlgSave', window: { from: now, to: now } }
+    const defaults = await flowTime(p)
+    assert.equal(defaults.slowest.length, 10)
+    const expanded = await flowTime({ ...p, slowest_limit: 100 })
+    assert.deepEqual(expanded.slowest.map(a => a.duration_s), Array.from({ length: 100 }, (_, i) => 120 - i))
+    assert.equal((await flowTime({ ...p, slowest_limit: 3 })).slowest.length, 3)
+    assert.equal(await flowTime(p), defaults)
+    assert.equal(await flowTime({ ...p, slowest_limit: 100 }), expanded)
+    for (const slowest_limit of [0, -1, 101, 1.5, NaN, Infinity]) {
+        await assert.rejects(flowTime({ ...p, slowest_limit }), /slowest_limit/)
+    }
+})
+
 test('parameter validation is clear', async () => {
     for (const window of [{ from: '2026-02-30', to: now }, { from: now, to: before }, { from: day(401), to: now }]) await assert.rejects(taskMap({ window }), /Dates|Window/)
     await assert.rejects(flowTime({ task: 'invalid', window: { from: now, to: now } }), /task id/)

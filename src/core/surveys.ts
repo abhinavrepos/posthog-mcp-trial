@@ -857,6 +857,7 @@ export interface Results {
         recent?: { at: string; client: string; text: string }[]
     }[]
     by_client: { client: string; shown: number; answered: number; dismissed: number }[]
+    by_client_truncated?: boolean
     by_day: { day: string; shown: number; answered: number }[]
     conflicts: Conflict[] // users this survey shares with earlier running surveys
     conflict_summary?: string
@@ -869,6 +870,130 @@ const RECENT_TEXT = 30
 const SUBMISSION = `coalesce(nullIf(toString(properties.$survey_submission_id), ''), toString(uuid))`
 const ANSWERED = `uniqIf(${SUBMISSION}, event = 'survey sent')`
 
+// Resolve each question from the latest event, which holds the SDK's cumulative answers.
+// A UUID breaks timestamp ties, and also gives answer pages a stable order.
+function questionSource(s: PostHogSurvey, index: number, days: number) {
+    const q = s.questions[index]
+    const keys = [q.id ? `$survey_response_${q.id}` : '', index === 0 ? '$survey_response' : `$survey_response_${index}`].filter(Boolean)
+    const values: Record<string, unknown> = { id: s.id, days, question_text: q.question }
+    const present = (raw: string) => `nullIf(nullIf(nullIf(${raw}, ''), 'null'), '""')`
+    const direct = keys.map((key, i) => {
+        values[`key${i}`] = key
+        return present(`JSONExtractRaw(properties, {key${i}})`)
+    })
+    const fallback = `JSONExtractRaw(arrayFirst(x -> JSONExtractString(x, 'question') = {question_text} AND isNotNull(${present("JSONExtractRaw(x, 'response')")}), JSONExtractArrayRaw(properties, '$survey_questions')), 'response')`
+    const raw = `coalesce(${[...direct, present(fallback)].join(', ')})`
+    // Wrap nullable answers in a tuple: argMax otherwise skips an empty latest answer and
+    // resurrects an older event. Keep only this question in aggregate memory, not all properties.
+    const source = `SELECT submission, last_at, client, ifNull(answer_raw, '') AS raw,
+            if(startsWith(raw, '"'), JSONExtractString(raw), raw) AS value
+        FROM (
+            SELECT ${SUBMISSION} AS submission, max(timestamp) AS last_at,
+                argMax(toString(${clientExpr()}), tuple(timestamp, uuid)) AS client,
+                tupleElement(argMax(tuple(${raw}), tuple(timestamp, uuid)), 1) AS answer_raw
+            FROM events WHERE timestamp > now() - toIntervalDay({days})
+                AND event = 'survey sent' AND toString(properties.$survey_id) = {id}
+            GROUP BY submission
+        ) WHERE answer_raw IS NOT NULL`
+    return { source, values }
+}
+
+export interface SurveyAnswers {
+    answers: { text: string; client: string; at: string }[]
+    total: number
+    next?: string // pass as `after` for the next page; absent on the last page
+}
+
+// PostHog refuses OFFSET on API-key queries, so pages continue after the last answer seen
+// (newest first, by time then submission id).
+const cursorOf = (at: string, submission: string) => Buffer.from(JSON.stringify([at, submission])).toString('base64url')
+function parseCursor(after: unknown): { at: string; submission: string } | null {
+    if (!after || typeof after !== 'string' || after.length > 600) return null
+    try {
+        const [at, submission] = JSON.parse(Buffer.from(after, 'base64url').toString())
+        if (typeof at !== 'string' || typeof submission !== 'string' || Number.isNaN(Date.parse(at))) return null
+        return { at, submission }
+    } catch {
+        return null
+    }
+}
+
+async function answerPage(s: PostHogSurvey, index: number, days: number, after: string | undefined, limit: number): Promise<SurveyAnswers> {
+    const { source, values } = questionSource(s, index, days)
+    const c = parseCursor(after)
+    const where = c ? `WHERE last_at < toDateTime64({after_at}, 6, 'UTC') OR (last_at = toDateTime64({after_at}, 6, 'UTC') AND submission < {after_sub})` : ''
+    const [counts, rows] = await Promise.all([
+        hogql(`SELECT count() AS total FROM (${source}) LIMIT 1`, values),
+        hogql(`SELECT value AS text, client, last_at AS at, submission FROM (${source}) ${where}
+            ORDER BY last_at DESC, submission DESC LIMIT {limit}`, { ...values, limit: limit + 1, ...(c ? { after_at: c.at, after_sub: c.submission } : {}) }),
+    ])
+    const page = rows.slice(0, limit)
+    const last = page.at(-1)
+    return {
+        answers: page.map((r) => ({ text: String(r.text), client: String(r.client), at: String(r.at) })),
+        total: Number(counts[0]?.total || 0),
+        ...(rows.length > limit && last ? { next: cursorOf(String(last.at), String(last.submission)) } : {}),
+    }
+}
+
+/** Written answers over all submissions, newest first. An index is accepted for older questions without an id. */
+export async function surveyAnswers(id: string, question: string, after?: string, limit = 50, days = 90): Promise<SurveyAnswers> {
+    const s = await getSurvey(id)
+    const index = s.questions.findIndex((q) => q.id === question)
+    const at = index >= 0 ? index : s.questions.findIndex((q, i) => !q.id && String(i) === question)
+    if (at < 0) throw new RangeError('Question not found.')
+    const n = Number(limit)
+    return answerPage(s, at, days, after, Number.isFinite(n) ? Math.min(200, Math.max(1, Math.floor(n))) : 50)
+}
+
+async function questionResults(s: PostHogSurvey, index: number, days: number): Promise<Results['questions'][number]> {
+    const q = s.questions[index]
+    const out: Results['questions'][number] = { id: q.id, text: q.question, type: q.type, answers: 0 }
+    if (q.type !== 'rating' && q.type !== 'single_choice' && q.type !== 'multiple_choice') {
+        const page = await answerPage(s, index, days, undefined, RECENT_TEXT)
+        out.answers = page.total
+        out.recent = page.answers.map((a) => ({ ...a, text: a.text.slice(0, 2000) }))
+        return out
+    }
+    const { source, values } = questionSource(s, index, days)
+    if (q.type === 'rating') {
+        const thumbs = kindOf(q) === 'thumbs'
+        const bins = thumbs ? [1, 2] : Array.from({ length: (q.scale ?? 5) + (q.scale === 10 ? 1 : 0) }, (_, k) => q.scale === 10 ? k : k + 1)
+        const rows = await hogql(`SELECT count() AS answers, count(number) AS numeric_answers, avg(number) AS average,
+            countIf(number >= 9) AS promoters, countIf(number <= 6) AS detractors,
+            ${bins.map((n) => `countIf(number = ${n}) AS bin_${n}`).join(', ')}
+            FROM (SELECT if(isFinite(toFloat(value)), toFloat(value), NULL) AS number FROM (${source})) LIMIT 1`, values)
+        const r = rows[0] || {}
+        out.answers = Number(r.answers || 0)
+        out.distribution = Object.fromEntries(bins.map((n) => [thumbs ? n === 1 ? 'Thumbs up' : 'Thumbs down' : String(n), Number(r[`bin_${n}`] || 0)]))
+        const total = Number(r.numeric_answers || 0)
+        if (!thumbs && total) {
+            out.average = Math.round(Number(r.average) * 100) / 100
+            if (q.scale === 10) {
+                const pro = Number(r.promoters), det = Number(r.detractors)
+                out.nps = { score: Math.round((pro - det) / total * 100), promoters: pro, passives: total - pro - det, detractors: det }
+            }
+        }
+    } else {
+        const counts = await hogql(`SELECT count() AS answers FROM (${source}) LIMIT 1`, values)
+        out.answers = Number(counts[0]?.answers || 0)
+        out.distribution = Object.fromEntries((q.choices || []).map((c) => [c, 0]))
+        // "Other" choices can have arbitrarily many distinct labels. Page the aggregates too:
+        // never rely on HogQL's implicit 100-row limit or cap the underlying submissions.
+        // Keyset pages (PostHog refuses OFFSET on API-key queries): continue after the last label.
+        for (let after: string | null = null; ;) {
+            const rows: Record<string, unknown>[] = await hogql(`SELECT label, count() AS n FROM (
+                    SELECT if(startsWith(choice, '"'), JSONExtractString(choice), choice) AS label
+                    FROM (SELECT arrayJoin(if(startsWith(raw, '['), JSONExtractArrayRaw(raw), [raw])) AS choice FROM (${source}))
+                ) ${after === null ? '' : 'WHERE label > {after}'} GROUP BY label ORDER BY label LIMIT 1000`, { ...values, ...(after === null ? {} : { after }) })
+            for (const r of rows) out.distribution[String(r.label)] = Number(r.n)
+            if (rows.length < 1000) break
+            after = String(rows[rows.length - 1].label)
+        }
+    }
+    return out
+}
+
 export async function surveyResults(id: string, days = 90): Promise<Results> {
     const s = await getSurvey(id)
     const view = viewOf(s)
@@ -876,7 +1001,7 @@ export async function surveyResults(id: string, days = 90): Promise<Results> {
     const conflicts = chain && view.status !== 'archived' && view.status !== 'stopped' ? conflictsFor(chain, view.status === 'running' ? s : { id: s.id }, await listSurveys()) : []
     const client = clientExpr()
     const values = { id: s.id, days, chain: view.chain_id ? `lens_chain:${view.chain_id}` : '' }
-    const [counts, perClient, perDay, sent] = await Promise.all([
+    const [counts, perClient, perDay, questions] = await Promise.all([
         hogql(
             `SELECT event, if(event = 'survey sent', uniq(${SUBMISSION}), count()) AS n FROM events WHERE timestamp > now() - toIntervalDay({days})
              AND ((event IN ('survey shown', 'survey sent', 'survey dismissed') AND toString(properties.$survey_id) = {id}) OR (event = {chain} AND {chain} != ''))
@@ -886,7 +1011,7 @@ export async function surveyResults(id: string, days = 90): Promise<Results> {
         hogql(
             `SELECT toString(${client}) AS client, countIf(event = 'survey shown') AS shown, ${ANSWERED} AS answered, countIf(event = 'survey dismissed') AS dismissed
              FROM events WHERE timestamp > now() - toIntervalDay({days}) AND event IN ('survey shown', 'survey sent', 'survey dismissed') AND toString(properties.$survey_id) = {id}
-             GROUP BY client ORDER BY shown DESC LIMIT 100`,
+             GROUP BY client ORDER BY shown DESC, client LIMIT 5001`,
             values
         ),
         hogql(
@@ -895,50 +1020,9 @@ export async function surveyResults(id: string, days = 90): Promise<Results> {
              GROUP BY day ORDER BY day LIMIT 400`,
             values
         ),
-        hogql(
-            // The latest event of each submission holds all its answers so far.
-            `SELECT max(timestamp) AS last_at, any(toString(${client})) AS client, argMax(properties, timestamp) AS props
-             FROM events WHERE timestamp > now() - toIntervalDay({days}) AND event = 'survey sent' AND toString(properties.$survey_id) = {id}
-             GROUP BY ${SUBMISSION} ORDER BY last_at DESC LIMIT 5000`,
-            values
-        ),
+        Promise.all((s.questions || []).map((_, i) => questionResults(s, i, days))),
     ])
     const n = (e: string) => Number(counts.find((r) => r.event === e)?.n || 0)
-    const answers = sent.map((r) => ({ at: String(r.last_at), client: String(r.client), props: (typeof r.props === 'string' ? JSON.parse(r.props) : r.props) as Record<string, unknown> }))
-    const questions = (s.questions || []).map((q, i) => {
-        // posthog-js sends $survey_response_<question id> and $survey_questions [{id, question, response}];
-        // older versions $survey_response, _1, _2… A question whose id changed is found by its text.
-        const keys = [q.id ? `$survey_response_${q.id}` : '', i === 0 ? '$survey_response' : `$survey_response_${i}`].filter(Boolean)
-        const has = (v: unknown) => v !== undefined && v !== null && v !== ''
-        const pick = (props: Record<string, unknown>) => {
-            const direct = keys.map((k) => props[k]).find(has)
-            if (has(direct)) return direct
-            const list = Array.isArray(props.$survey_questions) ? (props.$survey_questions as { question?: string; response?: unknown }[]) : []
-            return list.find((x) => x?.question === q.question && has(x.response))?.response
-        }
-        const got = answers.map((a) => ({ ...a, v: pick(a.props) })).filter((a) => has(a.v))
-        const out: Results['questions'][number] = { id: q.id, text: q.question, type: q.type, answers: got.length }
-        if (kindOf(q) === 'thumbs') {
-            // PostHog's thumbs: 1 is up, 2 is down.
-            const nums = got.map((a) => Number(a.v))
-            out.distribution = { 'Thumbs up': nums.filter((x) => x === 1).length, 'Thumbs down': nums.filter((x) => x === 2).length }
-        } else if (q.type === 'rating') {
-            const nums = got.map((a) => Number(a.v)).filter(Number.isFinite)
-            out.distribution = Object.fromEntries(Array.from({ length: (q.scale ?? 5) + (q.scale === 10 ? 1 : 0) }, (_, k) => q.scale === 10 ? k : k + 1).map((k) => [String(k), nums.filter((x) => x === k).length]))
-            if (nums.length) out.average = Math.round((nums.reduce((a, b) => a + b, 0) / nums.length) * 100) / 100
-            if (q.scale === 10 && nums.length) {
-                const pro = nums.filter((x) => x >= 9).length, det = nums.filter((x) => x <= 6).length
-                out.nps = { score: Math.round(((pro - det) / nums.length) * 100), promoters: pro, passives: nums.length - pro - det, detractors: det }
-            }
-        } else if (q.type === 'single_choice' || q.type === 'multiple_choice') {
-            const dist: Record<string, number> = Object.fromEntries((q.choices || []).map((c) => [c, 0]))
-            for (const a of got) for (const c of Array.isArray(a.v) ? a.v : [a.v]) dist[String(c)] = (dist[String(c)] || 0) + 1
-            out.distribution = dist
-        } else {
-            out.recent = got.slice(0, RECENT_TEXT).map((a) => ({ at: a.at, client: a.client, text: String(a.v).slice(0, 2000) }))
-        }
-        return out
-    })
     const shown = n('survey shown')
     const answered = n('survey sent')
     return {
@@ -950,7 +1034,8 @@ export async function surveyResults(id: string, days = 90): Promise<Results> {
         answered,
         response_rate: shown ? Math.round((answered / shown) * 1000) / 10 : null,
         questions,
-        by_client: perClient.map((r) => ({ client: String(r.client), shown: Number(r.shown), answered: Number(r.answered), dismissed: Number(r.dismissed) })),
+        by_client_truncated: perClient.length > 5000,
+        by_client: perClient.slice(0, 5000).map((r) => ({ client: String(r.client), shown: Number(r.shown), answered: Number(r.answered), dismissed: Number(r.dismissed) })),
         by_day: perDay.map((r) => ({ day: String(r.day), shown: Number(r.shown), answered: Number(r.answered) })),
         conflicts,
         ...(chain ? { conflict_summary: conflictSummary(chain, conflicts), queue: queueAlert(chain, conflicts) } : {}),

@@ -4,7 +4,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config, surveysActive } from '../core/config.ts'
-import { archiveSurvey, conflictsFor, estimateReach, getSurvey, launchSurvey, listSurveys, queueAlert, stopSurvey, surveyOverview, surveyResults, viewOf } from '../core/surveys.ts'
+import { archiveSurvey, conflictsFor, estimateReach, getSurvey, launchSurvey, listSurveys, queueAlert, stopSurvey, surveyAnswers, surveyOverview, surveyResults, viewOf } from '../core/surveys.ts'
 import { ACKNOWLEDGEMENT, checkTicket, jiraTicketUrl, launchesOf, launchRules, recordLaunch } from '../core/launches.ts'
 import { jiraConfigured } from '../core/config.ts'
 import { audit, canSurvey, canUseSurveys, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
@@ -55,10 +55,21 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
     if (!surveysActive()) return (json(res, 503, { error: config.surveys.enabled ? 'Surveys need POSTHOG_SURVEY_API_KEY. Run the installer again; it makes the key.' : 'Surveys are switched off (FEATURE_SURVEYS=off).' }), true)
     try {
         if (p === '/replays/surveys/api/list' && req.method === 'GET') return (json(res, 200, { surveys: await surveyOverview(days(url, 30)) }), true)
-        const m = /^\/replays\/surveys\/api\/survey\/([0-9a-f-]{8,64})(?:\/(launch|stop|archive|reach|launch-check))?$/i.exec(p)
+        const m = /^\/replays\/surveys\/api\/survey\/([0-9a-f-]{8,64})(?:\/(launch|stop|archive|reach|launch-check|answers))?$/i.exec(p)
         if (m && !m[2] && req.method === 'GET') {
             const r = await surveyResults(m[1], days(url, 90))
             return (json(res, 200, { ...r, launches: launchesOf(m[1]).map((l) => ({ ...l, ticket_url: jiraTicketUrl(l.ticket) })) }), true)
+        }
+        if (m && m[2] === 'answers' && req.method === 'GET') {
+            const question = url.searchParams.get('question')
+            if (!question) return (json(res, 400, { error: 'Choose a question.' }), true)
+            try {
+                const result = await surveyAnswers(m[1], question, url.searchParams.get('after') || undefined, Number(url.searchParams.get('limit') ?? 50), days(url, 90))
+                return (json(res, 200, result), true)
+            } catch (e) {
+                if (e instanceof RangeError) return (json(res, 400, { error: e.message }), true)
+                throw e
+            }
         }
         if (m && m[2] === 'launch-check' && req.method === 'GET') return (json(res, 200, await launchCheck(m[1])), true)
         if (m && m[2] === 'reach' && req.method === 'GET') {
@@ -67,7 +78,7 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
             if (chain?.managedBy !== 'lens') return (json(res, 400, { error: 'Only surveys made in Lens have steps to count.' }), true)
             return (json(res, 200, await estimateReach(chain, days(url, 14))), true)
         }
-        if (m && m[2] && req.method === 'POST') {
+        if (m && m[2] && ['launch', 'stop', 'archive'].includes(m[2]) && req.method === 'POST') {
             if (!canSurvey(v.role === 'admin' ? 'launch' : v.surveys, 'launch')) return (json(res, 403, { error: 'Launching, stopping and archiving surveys needs the "Also launch and stop surveys" survey role. Ask an admin.' }), true)
             if (m[2] === 'launch') {
                 // The safeguard: the acknowledgement, word for word, and the Jira ticket this launch is for.
@@ -212,7 +223,7 @@ async function show(id){current=id;$('list').querySelectorAll('.item').forEach(b
   const facts=[['Clients',(s.clients==='all'?'Every client':s.clients.join(', '))+(s.sample_percent<100?' · '+s.sample_percent+'% of their users':'')],['Shows',s.show==='every_time'?'Every time the steps happen':'Once per user'],['Steps must happen within',s.within_minutes?s.within_minutes+' minutes':'No limit (same page)'],
     ['Starts over when',s.reset_on.length?s.reset_on.join('; '):'Never (a page reload starts over)'],['Days between any two surveys',s.days_between_surveys||'None'],['Protecting users',s.pacing?'At most '+s.pacing.per_user+' running at once · '+s.pacing.gap_hours+' h apart at least · '+s.pacing.quiet_days_after_close+' quiet days after a close':'PostHog rules only'],['Only on pages containing',s.url_contains||'Any page'],['Stops after',s.max_responses?num(s.max_responses)+' answers':'No limit'],
     ['Made',new Date(s.created).toLocaleString()+(s.created_by?' by '+s.created_by:'')+(s.made_by_lens?' (Lens)':' (in PostHog)')],['Running since',s.started?new Date(s.started).toLocaleString():'Not launched'+(s.stopped?'':'')]].concat(s.stopped?[['Stopped',new Date(s.stopped).toLocaleString()]]:[]).concat(launched?[['Launched under',launched.ticket+(launched.ticket_summary?' · '+launched.ticket_summary:'')+' · by '+launched.launched_by+' ('+launched.via+'), '+new Date(launched.at).toLocaleString()]]:[])
-  const qs=r.questions.map((q,i)=>'<div class="q"><h3>'+esc(q.text)+'</h3><p class="small muted">'+num(q.answers)+' answers'+(q.average!=null?' · average '+q.average:'')+(q.nps?' · NPS '+q.nps.score+' ('+q.nps.promoters+' promoters, '+q.nps.passives+' passives, '+q.nps.detractors+' detractors)':'')+'</p>'+(q.distribution?'<div id="dist-'+i+'"></div><div id="dist-pager-'+i+'"></div>':'')+(q.recent?'<p class="small muted">Latest written answers (up to 30).</p><div id="answers-'+i+'"></div><div id="answers-pager-'+i+'"></div>':'')+'</div>').join('')
+  const qs=r.questions.map((q,i)=>'<div class="q"><h3>'+esc(q.text)+'</h3><p class="small muted">'+num(q.answers)+' answers'+(q.average!=null?' · average '+q.average:'')+(q.nps?' · NPS '+q.nps.score+' ('+q.nps.promoters+' promoters, '+q.nps.passives+' passives, '+q.nps.detractors+' detractors)':'')+'</p>'+(q.distribution?'<div id="dist-'+i+'"></div><div id="dist-pager-'+i+'"></div>':'')+(q.recent?'<p class="small muted">Written answers, newest first.</p><div id="answers-'+i+'"></div><div id="answers-pager-'+i+'"></div><p class="small muted" id="answers-status-'+i+'" role="status" aria-live="polite"></p><button type="button" class="ghost" id="answers-more-'+i+'" aria-controls="answers-'+i+'">Show more</button>':'')+'</div>').join('')
   $('detail').innerHTML='<div class="card"><div class="head"><h2><span class="chip '+esc(s.status)+'">'+esc(STATUS[s.status])+'</span>'+esc(s.name)+'</h2><div class="acts">'+acts+'</div></div>'+(s.description?'<p class="muted">'+esc(s.description)+'</p>':'')+'<p id="a-msg" class="small" role="status" aria-live="polite"></p>'
     +'<h2>When it shows</h2>'+chain(s)+(r.queue?'<div class="conf'+(r.queue.level==='clear'?' ok':'')+'" role="'+(r.queue.level==='clear'?'status':'alert')+'"><b>'+(r.queue.level==='clear'?'No overlap with other surveys.':'Notice for whoever runs this survey')+'</b> '+esc(r.queue.alert)+(r.conflicts.length?'<ul id="conflict-rows"></ul><div id="conflict-pager"></div>':'')+'</div>':'')+'<div class="facts">'+facts.map(([k,x])=>'<div><span>'+esc(k)+'</span>'+esc(x)+'</div>').join('')+'</div>'
     +(s.made_by_lens?'<p style="margin-top:10px"><button type="button" id="a-reach" class="ghost">How many would have seen it? (last 14 days)</button></p><div id="reach" aria-live="polite"></div>':'')+'</div>'
@@ -221,11 +232,19 @@ async function show(id){current=id;$('list').querySelectorAll('.item').forEach(b
     +(r.chain_completed!=null&&r.chain_completed>r.shown?'<p class="small muted">Steps can complete without the survey showing: the user already answered or dismissed it, saw another survey recently, or the page stayed busy.</p>':'')
     +perDay(r.by_day)+'</div>'
     +'<div class="card"><h2>Answers</h2>'+(qs||'<p class="muted">No questions.</p>')+'</div>'
-    +'<div class="card"><h2>By client</h2><p class="small muted">Up to 100 clients, ordered by times shown.</p>'+(r.by_client.length?'<table><caption class="sr-only">Survey results by client</caption><thead><tr><th scope="col">Client</th><th scope="col" class="n">Shown</th><th scope="col" class="n">Answered</th><th scope="col" class="n">Dismissed</th></tr></thead><tbody id="client-rows"></tbody></table><div id="client-pager"></div>':'<p class="small muted">No activity yet. Results appear here after users see the survey.</p>')+'</div>'
+    +'<div class="card"><h2>By client</h2><p class="small muted">Ordered by times shown.'+(r.by_client_truncated?' Showing the first 5,000 clients.':'')+'</p>'+(r.by_client.length?'<table><caption class="sr-only">Survey results by client</caption><thead><tr><th scope="col">Client</th><th scope="col" class="n">Shown</th><th scope="col" class="n">Answered</th><th scope="col" class="n">Dismissed</th></tr></thead><tbody id="client-rows"></tbody></table><div id="client-pager"></div>':'<p class="small muted">No activity yet. Results appear here after users see the survey.</p>')+'</div>'
   if($('conflict-pager'))makePager({mount:$('conflict-pager'),noun:'overlapping surveys',size:25,draw:items=>{$('conflict-rows').innerHTML=items.map(c=>'<li><a href="#'+esc(c.survey_id)+'">'+esc(c.name)+'</a>: '+esc(c.text.replace(/^[^:]*: /,''))+' ('+esc(c.clients==='all'?'every client':c.clients.join(', '))+')</li>').join('')}}).set(r.conflicts)
   r.questions.forEach((q,i)=>{
     if(q.distribution)makePager({mount:$('dist-pager-'+i),noun:'answer choices',label:'Question '+(i+1)+' answer choices',size:25,draw:items=>{$('dist-'+i).innerHTML=bars(Object.fromEntries(items))}}).set(Object.entries(q.distribution))
-    if(q.recent)makePager({mount:$('answers-pager-'+i),noun:'answers',label:'Question '+(i+1)+' written answers',size:25,draw:items=>{$('answers-'+i).innerHTML=items.map(a=>'<div class="ans">'+esc(a.text)+'<small>'+esc(a.client)+' · '+esc(new Date(a.at).toLocaleString())+'</small></div>').join('')||'<p class="small muted">No written answers yet. Check back after users answer.</p>'}}).set(q.recent)
+    if(q.recent){
+      const box=$('answers-'+i),status=$('answers-status-'+i),button=$('answers-more-'+i);let loaded=[],loading=false,next=''
+      const pager=makePager({mount:$('answers-pager-'+i),noun:'answers',label:'Question '+(i+1)+' written answers',size:25,draw:items=>{box.innerHTML=items.map(a=>'<div class="ans">'+esc(a.text)+'<small>'+esc(a.client)+' · '+esc(new Date(a.at).toLocaleString())+'</small></div>').join('')||'<p class="small muted">No written answers yet.</p>'}})
+      const more=async()=>{if(loading)return;loading=true;button.disabled=true;status.textContent='Loading answers…'
+        try{const page=await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'/answers?question='+encodeURIComponent(q.id||String(i))+'&days=90&limit=50'+(next?'&after='+encodeURIComponent(next):''));if(box!==$('answers-'+i))return
+          loaded=loaded.concat(page.answers);pager.set(loaded,true);status.textContent=num(loaded.length)+' of '+num(page.total)+' answers loaded.';next=page.next||'';button.hidden=!next
+        }catch(e){if(box!==$('answers-'+i))return;status.textContent=e.message+' Try again.'}finally{loading=false;button.disabled=false}}
+      button.onclick=more;more()
+    }
   })
   if($('client-pager'))makePager({mount:$('client-pager'),noun:'clients',size:25,draw:items=>{$('client-rows').innerHTML=items.map(c=>'<tr><td>'+esc(c.client)+'</td><td class="n">'+num(c.shown)+'</td><td class="n">'+num(c.answered)+'</td><td class="n">'+num(c.dismissed)+'</td></tr>').join('')}}).set(r.by_client)
   if($('daily-pager'))makePager({mount:$('daily-pager'),noun:'days',size:25,draw:items=>{$('daily-rows').innerHTML=items.map(d=>'<tr><td>'+esc(d.day)+'</td><td>'+num(d.shown)+'</td><td>'+num(d.answered)+'</td></tr>').join('')}}).set(r.by_day)

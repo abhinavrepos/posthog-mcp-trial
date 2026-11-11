@@ -207,10 +207,10 @@ async function loadNow(){try{const r=await api('/replays/live/api/now?tz='+encod
 let R=null,SESS=[],sortKey='open_s',sortDir=-1,busy=0,sbusy=0;
 const pageKeys={};function keepPage(id,key){const keep=pageKeys[id]===key;pageKeys[id]=key;return keep}
 async function load(){syncUrl();const my=++busy;$('report').classList.add('loading');$('report').setAttribute('aria-busy','true');$('live-status').removeAttribute('role');$('live-status').textContent='Loading activity…';
- try{const r=await api('/replays/live/api/time?'+params(false));if(my!==busy)return;R=r;render();
+ try{const r=await api('/replays/live/api/time?'+params(false));if(my!==busy)return;R=r;render();if(r.warning){const st=$('live-status');st.setAttribute('role','alert');st.textContent=r.warning}
   if(S.client)await loadSessions();else $('sessions-card').classList.add('hidden')}
  catch(e){if(my!==busy)return;$('tiles').innerHTML='';const t=el('div','tile err',e.message+' Change the filters or try again.');t.setAttribute('role','alert');$('tiles').appendChild(t)}
- finally{if(my===busy){$('report').classList.remove('loading');$('report').setAttribute('aria-busy','false');$('live-status').textContent=''}}}
+ finally{if(my===busy){$('report').classList.remove('loading');$('report').setAttribute('aria-busy','false');if(!(R&&R.warning))$('live-status').textContent=''}}}
 async function loadSessions(){const my=++sbusy,key=params(true).toString();$('sessions-card').setAttribute('aria-busy','true');try{const r=await api('/replays/live/api/sessions?'+key);if(my!==sbusy||key!==params(true).toString())return;SESS=r.sessions;renderSessions()}finally{if(my===sbusy)$('sessions-card').setAttribute('aria-busy','false')}}
 
 function render(){fillClients();renderTiles();renderChart();renderHeat();renderList()}

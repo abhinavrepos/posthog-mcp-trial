@@ -343,6 +343,8 @@ function series(w: Window, task: string, granularity: 'day' | 'week', client?: s
 async function computeFlowTime(p: FlowTimeParams): Promise<FlowTime> {
     const days = validWindow(p.window), f = filters(p.task, p.client), granularity = p.granularity ?? (days > 31 ? 'week' : 'day')
     if (granularity !== 'day' && granularity !== 'week') throw new Error('granularity must be day or week')
+    const slowestLimit = p.slowest_limit ?? 10
+    if (!Number.isInteger(slowestLimit) || slowestLimit < 1 || slowestLimit > 100) throw new Error('slowest_limit must be an integer from 1 to 100')
     const cat = one<{ task_id: string; name: string; dialog: string }>('SELECT task_id, name, dialog FROM task_catalog WHERE task_id = ?', p.task)
     const summary = total(aggregates(p.window, p.task, p.client)), allSummary = p.client === undefined ? summary : total(aggregates(p.window, p.task))
     const users = one<{ n: number }>(`SELECT count(DISTINCT json_array(client, user)) AS n FROM task_users_daily WHERE day BETWEEN ? AND ?${f.sql}`, p.window.from, p.window.to, ...f.args)!.n
@@ -352,7 +354,7 @@ async function computeFlowTime(p: FlowTimeParams): Promise<FlowTime> {
         if (!a) paths.set(r.path, a = { path: r.path, attempts: 0, done: 0, hist: emptyHist() })
         a.attempts += r.attempts; a.done += r.done; merge(a.hist, histogram(r.hist))
     }
-    const slow = all<TaskAttempt & { path: string }>(`SELECT * FROM task_attempts WHERE day BETWEEN ? AND ?${f.sql} ORDER BY duration_s DESC, session_id, started_at LIMIT 10`, p.window.from, p.window.to, ...f.args)
+    const slow = all<TaskAttempt & { path: string }>(`SELECT * FROM task_attempts WHERE day BETWEEN ? AND ?${f.sql} ORDER BY duration_s DESC, session_id, started_at LIMIT ?`, p.window.from, p.window.to, ...f.args, slowestLimit)
     return { coverage: coverage(p.window), params: { ...p, granularity }, task: cat || { task_id: p.task, dialog: p.task.slice(2), name: label(p.task.slice(2)) },
         client_name: p.client === undefined ? undefined : one<{ name: string }>('SELECT name FROM client_names WHERE client = ?', p.client)?.name || p.client,
         summary: { ...summary, users }, all_clients: { median_s: allSummary.median_s, p90_s: allSummary.p90_s, done_rate: allSummary.done_rate },
