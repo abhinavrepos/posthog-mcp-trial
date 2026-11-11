@@ -55,7 +55,7 @@ test('registered tools follow none, view and share roles', async () => {
             } else assert.deepEqual((await c.client.listTools()).tools.map(t => t.name).sort(), dashboardToolNames(role).sort())
         } finally { await c.close() }
     }
-    assert.equal(dashboardToolNames('view').length, 7)
+    assert.equal(dashboardToolNames('view').length, 9)
     assert.equal(dashboardToolNames('share').length, DASHBOARD_TOOLS.length)
 })
 
@@ -225,4 +225,23 @@ test('monday briefing tool returns saved briefing and link; draft tool follows s
             }
         } finally { await c.close() }
     }
+})
+
+test('client story and handover tools use local client resolution for view roles, disambiguate, and never resolve with PostHog',async()=>{
+    let observed: unknown
+    const overrides={rescueClients:(name: string)=>name==='ambiguous'?[{id:'a',name:'A'},{id:'b',name:'B'}]:[{id:'acme',name:'Acme'}],
+        resolveClient:async(): Promise<never>=>{throw Error('Must use local resolution')},
+        clientStory:async(p: {client: string;weeks?: number})=>{observed=p;return {client:p.client,client_name:'Acme',coverage:{complete:true,unprocessed:[]},weeks:[],events:[],summary:'Changed. Doing. Unknown.',surveys:[],unknown:'Unknown'}},
+        handoverPack:async(client: string)=>{assert.equal(client,'acme');return '# Handover: Acme\nCounts only'}}
+    const c=await chat('view',true,overrides)
+    try {
+        const result=await c.client.callTool({name:'client_story',arguments:{client:'Acme',weeks:12}})
+        const output=JSON.parse((result.content as {text:string}[])[0].text)
+        assert.deepEqual(observed,{client:'acme',weeks:12});assert.match(output.open,/view=story/)
+        assert.equal(output.client,'acme')
+        const handover=await c.client.callTool({name:'handover_pack',arguments:{client:'Acme'}})
+        assert.match((handover.content as {text:string}[])[0].text,/# Handover: Acme/)
+        const ambiguous=await c.client.callTool({name:'client_story',arguments:{client:'ambiguous'}})
+        assert.equal(JSON.parse((ambiguous.content as {text:string}[])[0].text).candidates.length,2)
+    } finally {await c.close()}
 })

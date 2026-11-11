@@ -88,7 +88,7 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
                 if (!ticket.ok) return (json(res, 400, { error: ticket.error }), true)
                 const check = await launchCheck(m[1])
                 const s = await launchSurvey(m[1])
-                recordLaunch({ survey_id: s.id, survey_name: s.name, ticket: ticket.key, ticket_summary: ticket.summary ?? null, launched_by: v.email, via: 'Surveys page', rules: check.rules })
+                recordLaunch({ survey_id: s.id, survey_name: s.name, ticket: ticket.key, ticket_summary: ticket.summary ?? null, launched_by: v.email, via: 'Surveys page', rules: check.rules, clients: s.conditions?.lensChain?.audience?.clients || [] })
                 audit(v.email, 'survey.launched', { survey: s.id, name: s.name, ticket: ticket.key })
                 return (json(res, 200, { ok: true, ticket: ticket.key }), true)
             }

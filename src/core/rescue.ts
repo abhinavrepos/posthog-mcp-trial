@@ -107,6 +107,11 @@ async function compute(window: Window, baseline: Window, min: number): Promise<R
     }
     return out.sort((a, b) => b.score - a.score || a.client.localeCompare(b.client))
 }
+/** Shared weekly evidence, without mutable actions or recovery checks. */
+export function rescueWindow(window: Window, baseline: Window): Promise<RescueClient[]> {
+    return cached('rescue-window', { window, baseline }, async () =>
+        coverage(window, baseline).complete ? compute(window, baseline, RESCUE.default_min) : [], 186)
+}
 async function answer(p: RescueParams): Promise<RescueQueue> {
     const through = dataThrough(), to = through || shift(today(), -1), window = p.window || { from: shift(to, -27), to }
     validWindow(window)

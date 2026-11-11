@@ -1,3 +1,5 @@
+import { rescuePrivacy } from '../core/rescueprivacy.ts'
+import { clientStory, handoverPack } from '../core/story.ts'
 // Chat views and pinned dashboards use the same filters as the Dashboards page.
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -16,10 +18,10 @@ import { parseTimeWindow } from '../core/timewindow.ts'
 import type { FlowTimeParams, TaskMapParams, Window } from '../core/taskstypes.ts'
 import type { ChatCaller, DashboardRole } from '../service/access.ts'
 
-export const DASHBOARD_TOOLS = ['monday_brief', 'draft_rescue_survey', 'rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'share_dashboard']
+export const DASHBOARD_TOOLS = ['client_story', 'handover_pack', 'monday_brief', 'draft_rescue_survey', 'rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'share_dashboard']
 export const dashboardToolNames = (role: DashboardRole = 'share', surveyRole: SurveyRole = 'launch'): string[] =>
     !appEvents() || role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => (t !== 'draft_rescue_survey' || surveysActive() && canSurvey(surveyRole, 'edit')) && (role === 'share' || !['pin_dashboard', 'share_dashboard', 'set_rescue_status'].includes(t)))
-const realDeps = { mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
+const realDeps = { clientStory, handoverPack, mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
 type Caller = Pick<ChatCaller, 'who' | 'email' | 'dashboardRole' | 'admin'> & { surveyRole?: SurveyRole }
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
 const json = (value: unknown) => text(JSON.stringify(value, null, 2))
@@ -94,6 +96,22 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         if (flagged !== undefined) q.set('only_flagged', String(flagged))
         return `${page()}?${q}`
     }
+    reg('client_story', {
+        description: 'One client story: weekly work counts, changes, signals, actions, surveys and unknowns from local Lens history only.',
+        inputSchema: { client: z.string(), weeks: z.number().int().min(1).max(52).optional() }, annotations: { readOnlyHint: true },
+    }, safe(async ({ client, weeks }) => {
+        const matches = d.rescueClients(client)
+        if (matches.length !== 1) return json(await rescuePrivacy({ message: 'Choose a client id.', candidates: matches }))
+        return json(await rescuePrivacy({ ...await d.clientStory({ client: matches[0].id, weeks }), open: page() + '?' + new URLSearchParams({ view: 'story', client: matches[0].id }) }))
+    }))
+    reg('handover_pack', {
+        description: 'Copyable Markdown handover for a client: established tasks, recent changes, actions and owners, surveys, replay links and unknowns. No user identities.',
+        inputSchema: { client: z.string() }, annotations: { readOnlyHint: true },
+    }, safe(async ({ client }) => {
+        const matches = d.rescueClients(client)
+        if (matches.length !== 1) return json(await rescuePrivacy({ message: 'Choose a client id.', candidates: matches }))
+        return text(await d.handoverPack(matches[0].id))
+    }))
     reg('monday_brief', {
         description: 'What changed at my clients since last week, and what needs me today? A saved weekly briefing with actions and verified recoveries.', inputSchema: {},
     }, safe(async () => json({ ...await d.mondayBrief({ by: caller.email || caller.who }), open: page() + '?view=briefing' })))

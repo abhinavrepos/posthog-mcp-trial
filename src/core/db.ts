@@ -244,6 +244,13 @@ const MIGRATIONS: string[] = [
     ALTER TABLE rescue_actions ADD COLUMN acted_on TEXT;
     CREATE TABLE briefing_snapshots (id INTEGER PRIMARY KEY, "by" TEXT NOT NULL, created_at TEXT NOT NULL, payload TEXT NOT NULL);
     CREATE UNIQUE INDEX briefing_person_day ON briefing_snapshots ("by", substr(created_at,1,10));`,
+    `CREATE TABLE client_surveys (
+        survey_id TEXT NOT NULL, client TEXT NOT NULL, name TEXT NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL, status TEXT NOT NULL,
+        PRIMARY KEY(survey_id,client)
+    );
+    CREATE INDEX client_surveys_client ON client_surveys(client,created_at);
+    ALTER TABLE survey_launches ADD COLUMN clients TEXT NOT NULL DEFAULT '[]';`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

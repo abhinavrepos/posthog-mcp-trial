@@ -99,3 +99,35 @@ test('quiet review respects action updates, caps new clients at five and scans a
     assert.doesNotMatch(JSON.stringify(brief),/private-user|hidden.example/)
     assert.doesNotMatch((db.prepare('SELECT payload FROM briefing_snapshots').get() as any).payload,/private-user|hidden.example/)
 })
+
+test('portfolio grid uses 28-day rescue reasons, includes signal-only and quiet clients, orders by score and sanitizes labels',async()=>{
+    reset()
+    // A stop in the 28-day view, and another client with a stronger baseline.
+    row('2026-05-01','risk-a',8);row('2026-05-01','risk-b',40)
+    for(let i=0;i<14;i++) row(shift('2026-06-15',-i),'quiet',1)
+    for(const d of ['2026-03-29','2026-04-28','2026-05-28']) tasksDb.prepare('INSERT INTO errors_daily VALUES (?,?,?,?,?,?,?)').run(d,'signal-only','Hedge','save','Bad private-user@hidden.example',1,0)
+    tasksDb.prepare('INSERT INTO user_daily VALUES (?,?,?,?,?)').run('2026-06-15','quiet','private-user@hidden.example',1,0)
+    forgetAnswers()
+    const b=await mondayBrief({by:'grid@example.com',now:new Date('2026-06-16')})
+    assert.deepEqual(b.grid!.slice(0,2).map(r=>r.client),['risk-b','risk-a'])
+    assert.ok(b.grid!.some(r=>r.client==='signal-only'))
+    assert.ok(b.grid!.some(r=>r.client==='quiet'))
+    const risk=b.grid!.find(r=>r.client==='risk-b')!
+    assert.deepEqual(risk.cells.map(c=>c.column),['missing','users_lost','failing','slower','work_moving_out','recurring_close_error','giving_up','trend'])
+    assert.match(risk.cells[0].label,/Yes: Stopped doing Hedge/)
+    assert.match(risk.open,/view=story/)
+    assert.doesNotMatch(JSON.stringify(b),/private-user|hidden.example/)
+})
+
+
+test('older saved briefings gain a portfolio grid without replacing personal sections',async()=>{
+    reset();row('2026-05-01','risk',8)
+    const now=new Date('2026-06-16')
+    const b=await mondayBrief({by:'legacy@example.com',now})
+    const {grid: _grid,...legacy}=b
+    db.prepare('UPDATE briefing_snapshots SET payload=? WHERE "by"=?').run(JSON.stringify(legacy),'legacy@example.com')
+    const upgraded=await mondayBrief({by:'legacy@example.com',now})
+    assert.ok(Array.isArray(upgraded.grid));assert.deepEqual(upgraded.sections,legacy.sections)
+    assert.deepEqual(upgraded.queue_scores,legacy.queue_scores)
+    assert.equal((db.prepare('SELECT count(*) AS n FROM briefing_snapshots').get() as any).n,1)
+})

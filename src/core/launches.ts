@@ -35,11 +35,11 @@ export async function checkTicket(raw: unknown): Promise<{ ok: true; key: string
     }
 }
 
-export interface Launch { survey_id: string; survey_name: string; ticket: string; ticket_summary: string | null; launched_by: string; via: string; rules: string[]; at: string }
+export interface Launch { survey_id: string; survey_name: string; ticket: string; ticket_summary: string | null; launched_by: string; via: string; rules: string[]; at: string; clients?: string[] | 'all' }
 
 export function recordLaunch(l: Omit<Launch, 'at'>): void {
-    run('INSERT INTO survey_launches (survey_id, survey_name, ticket, ticket_summary, launched_by, via, rules, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        l.survey_id, l.survey_name, l.ticket, l.ticket_summary, l.launched_by, l.via, JSON.stringify(l.rules), new Date().toISOString())
+    run('INSERT INTO survey_launches (survey_id, survey_name, ticket, ticket_summary, launched_by, via, rules, at, clients) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        l.survey_id, l.survey_name, l.ticket, l.ticket_summary, l.launched_by, l.via, JSON.stringify(l.rules), new Date().toISOString(), JSON.stringify(l.clients || []))
 }
 
 export function launchesOf(surveyId: string): Launch[] {

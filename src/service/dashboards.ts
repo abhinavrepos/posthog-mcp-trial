@@ -1,6 +1,7 @@
+import { clientStory, handoverPack, type ClientStory } from '../core/story.ts'
 // Dashboard pages use the task-history contract; no PostHog queries live here.
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { mondayBrief, type MondayBrief } from '../core/briefing.ts'
+import { mondayBrief, GRID_COLUMNS, type MondayBrief } from '../core/briefing.ts'
 import { draftRescueSurvey } from '../core/rescuesurveys.ts'
 import { saveSurvey } from '../core/surveys.ts'
 import { surveysActive } from '../core/config.ts'
@@ -12,7 +13,7 @@ import { can, canSurvey, canDashboard, canUseDashboards, type Viewer } from './a
 import { PAGE_CSS, headerHtml, APP_NAME, PAGER_JS } from './replays.ts'
 
 const ROOT = '/replays/dashboards'
-const defaults = { mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, taskMap, flowTime, findTasks, ingestStatus }
+const defaults = { clientStory, handoverPack, mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, taskMap, flowTime, findTasks, ingestStatus }
 type Deps = typeof defaults
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 const num = (n: number) => n.toLocaleString('en-US')
@@ -111,6 +112,10 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
         if (api) {
             const method = req.method || 'GET'
             if (method === 'GET') {
+                if (path === 'story' || path === 'handover-pack') {
+                    const client = text(url.searchParams.get('client'), 'client', 256)
+                    json(res, 200, path === 'story' ? await deps.clientStory({ client, weeks: integer(url.searchParams.get('weeks') ?? '26', 1, 52, 'Weeks') }) : { markdown: await deps.handoverPack(client) }); return true
+                }
                 if (path === 'briefing') { json(res, 200, await deps.mondayBrief({ by: v.email })); return true }
                 if (path === 'rescue') { json(res, 200, await deps.rescueQueue(rescueParams(url.searchParams))); return true }
                 if (path === 'task-map') { json(res, 200, await deps.taskMap(queryParams('task_map', url.searchParams) as TaskMapParams)); return true }
@@ -173,6 +178,12 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
         if (suffix && !pin) throw new HttpError(404, 'Dashboard not found.')
         if (pin && !canOpen(pin, v.email, admin)) throw new HttpError(403, 'This dashboard has not been shared with you.')
         const selected = url.searchParams.get('view') || pin?.kind || 'briefing'
+        if (selected === 'story' && !pin) {
+            const client = text(url.searchParams.get('client'), 'client', 256)
+            const story = await deps.clientStory({ client, weeks: integer(url.searchParams.get('weeks') ?? '26', 1, 52, 'Weeks') })
+            html(res, 200, v, rescueNav('story') + storyHtml(story, await deps.handoverPack(client)))
+            return true
+        }
         if (selected === 'briefing' && !pin) {
             const brief = await deps.mondayBrief({ by: v.email })
             html(res, 200, v, `${rescueNav('briefing')}<h1>Monday briefing</h1>${briefingHtml(brief, share)}${pinsHtml(listDashboards(v.email, admin), v, admin)}`)
@@ -295,7 +306,7 @@ ${share ? `<datalist id="rescue-people">${knownPeople().map(e => `<option value=
     const flow = new URLSearchParams({ view: 'flow_time', client: c.client, task: c.critical_task?.task_id || '', from: r.window.from, to: r.window.to })
     return `<article class="card rescue-client"><h2>${esc(c.client_name)} <span class="rescue-level ${c.level}">${c.level}</span></h2><p>Trend: ${esc(c.trend)}</p>
 <ul>${c.reasons.slice(0, 3).map(reason => `<li>${esc(reason.text)}</li>`).join('')}</ul><p>${esc(c.next_step)}</p>${c.recovery_text ? `<p>${esc(c.recovery_text)}</p>` : ''}
-<p><a href="${ROOT}?${esc(link)}">Open task map for this client</a>${c.critical_task ? ` · <a href="${ROOT}?${esc(flow)}">Flow time</a>` : ''}</p>
+<p><a href="${esc(storyLink(c.client))}">Client story</a> · <a href="${ROOT}?${esc(link)}">Open task map for this client</a>${c.critical_task ? ` · <a href="${ROOT}?${esc(flow)}">Flow time</a>` : ''}</p>
 ${(can(v.role, 'admin') || canSurvey(v.surveys, 'edit')) && surveysOn ? `<button type="button" data-ask-client="${esc(c.client)}">Ask them</button>` : ''}
 ${share ? `<details class="rescue-edit"${a ? '' : ''}><summary>Owner: ${esc(a?.owner || 'unassigned')} · Status: ${esc((a?.status || 'open').replaceAll('_', ' '))}${a?.due ? ` · Due ${esc(a.due)}` : ''} · <span class="linkish">Update</span></summary><form class="rescue-action" data-client="${esc(c.client)}">
 <label>Owner <input type="email" name="owner" list="rescue-people" value="${esc(a?.owner)}" placeholder="Email"></label>
@@ -307,9 +318,26 @@ ${share ? `<details class="rescue-edit"${a ? '' : ''}><summary>Owner: ${esc(a?.o
 }).join('') || `<p class="card">${!r.coverage.complete ? 'Flags appear once both periods are processed.' : r.clients.length ? 'No clients match these filters.' : 'No client needs someone in this period. A shorter period shows recent changes sooner.'}</p>`}</div><div id="rescue-pager"></div><p class="muted">${esc(r.note)}</p>`
 }
 
+const storyLink = (client: string) => ROOT + '?' + new URLSearchParams({ view: 'story', client })
+function gridHtml(b: MondayBrief): string {
+    return `<section class="card"><h2>All clients at a glance</h2><p class="muted">Current 28-day rescue view plus quiet review. Marks indicate observed flags; unflagged cells do not prove all is well.</p><div class="table-wrap"><table><caption>Client portfolio</caption><thead><tr><th scope="col">Client</th>${GRID_COLUMNS.map(([,label]) => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody data-page-list="portfolio-pager" data-noun="clients">${(b.grid || []).map(r => `<tr><th scope="row"><a href="${esc(r.open)}">${esc(r.client_name)}</a></th>${r.cells.map(c => `<td><span role="img" aria-label="${esc(c.label)}" title="${esc(c.label)}">${esc(c.mark)}</span></td>`).join('')}</tr>`).join('') || '<tr><td colspan="9">No clients flagged in processed history.</td></tr>'}</tbody></table><div id="portfolio-pager"></div></div></section>`
+}
+function storyHtml(s: ClientStory, pack: string): string {
+    const columns = ['attempts', 'done', 'users', 'errors', 'exports'] as const
+    const max = Math.max(1, ...s.weeks.flatMap(w => columns.map(k => w[k])))
+    const colours = ['#536b84','#28705b','#856233','#a54938','#755d8a']
+    return `<h1>${esc(s.client_name)}</h1><p>${esc(s.summary)}</p>${coverageHtml(s.coverage, false)}
+<section class="card"><h2>Weekly work</h2><p class="muted">UTC calendar weeks; the last week may be partial. Missing history can lower counts. Lines: attempts, done, users, errors, exports; exact counts in the table below.</p>
+<div class="actions">${columns.map((k,i) => `<span><svg width="24" height="12" aria-hidden="true"><line x1="0" y1="6" x2="24" y2="6" stroke="${colours[i]}" stroke-width="2" stroke-dasharray="${i ? `${i*3} 3` : 'none'}"/></svg> ${k}</span>`).join('')}</div>
+<svg viewBox="0 0 720 180" role="img" aria-labelledby="story-chart-title" style="width:100%;max-height:220px"><title id="story-chart-title">Weekly attempts, done, distinct users, error chains and export submits; see table for values</title><text x="20" y="14" font-size="11">${max}</text><text x="20" y="178" font-size="11">${esc(s.weeks[0]?.week_start)}</text><text x="700" y="178" text-anchor="end" font-size="11">${esc(s.weeks.at(-1)?.week_start)}</text>${columns.map((k,i) => `<polyline fill="none" stroke="${colours[i]}" stroke-width="2" stroke-dasharray="${i ? `${i*3} 3` : 'none'}" points="${s.weeks.map((w,n) => `${20+n*680/Math.max(1,s.weeks.length-1)},${160-w[k]*140/max}`).join(' ')}"/>`).join('')}</svg>
+<details><summary>Weekly counts table</summary><div class="table-wrap"><table><caption>Weekly work counts (chart alternative)</caption><thead><tr><th scope="col">Week start</th>${[...columns,'unrecovered','productive_done'].map(k => `<th scope="col">${esc(k.replaceAll('_',' '))}</th>`).join('')}</tr></thead><tbody>${s.weeks.map(w => `<tr><th scope="row">${esc(w.week_start)}</th>${[...columns,'unrecovered','productive_done'].map(k => `<td>${esc(w[k as keyof typeof w])}</td>`).join('')}</tr>`).join('')}</tbody></table></div></details></section>
+<section class="card"><h2>Timeline</h2><p class="muted">Weekly reviews compare trailing 28-day rescue periods. First observed does not establish when a change began; a cleared flag does not establish recovery.</p><ol data-page-list="story-pager" data-noun="events">${s.events.map(e => `<li>${date(e.date)} — ${esc(e.text)}</li>`).join('') || '<li>No events recorded in this period.</li>'}</ol><div id="story-pager"></div></section>
+<section class="card"><h2>Handover pack</h2><button type="button" id="copy-handover">Copy handover pack</button><p id="copy-status" role="status" aria-live="polite"></p><pre id="handover-pack" style="white-space:pre-wrap;overflow-wrap:anywhere">${esc(pack)}</pre></section>`
+}
+
 function briefingHtml(b: MondayBrief, share: boolean): string {
-    const card = (item: NonNullable<MondayBrief['sections']['quiet_review']>) => `<article class="card"><h3><a href="${esc(item.open)}">${esc(item.client_name)}</a></h3><p>${esc(item.text)}</p></article>`
-    return `<p>${esc(b.headline)}</p><p class="muted">${esc(b.period.from)} to ${esc(b.period.to)}</p>${(['new_or_worse', 'close_soon', 'overdue', 'recovered'] as const).map(k => `<section class="card"><h2>${({new_or_worse:'New or worse',close_soon:'Close soon',overdue:'Overdue',recovered:'Recovered'})[k]}</h2>${b.sections[k].map(card).join('') || '<p class="muted">Nothing to review here.</p>'}</section>`).join('')}<section class="card"><h2>Quiet review</h2>${b.sections.quiet_review ? card(b.sections.quiet_review) + (share ? `<button type="button" data-review-client="${esc(b.sections.quiet_review.client)}">Mark reviewed</button>` : '') : '<p class="muted">No steady low-use client to review.</p>'}</section>`
+    const card = (item: NonNullable<MondayBrief['sections']['quiet_review']>) => `<article class="card"><h3><a href="${esc(item.open)}">${esc(item.client_name)}</a> · <a href="${esc(storyLink(item.client))}">Client story</a></h3><p>${esc(item.text)}</p></article>`
+    return `<p>${esc(b.headline)}</p><p class="muted">${esc(b.period.from)} to ${esc(b.period.to)}</p>${gridHtml(b)}${(['new_or_worse', 'close_soon', 'overdue', 'recovered'] as const).map(k => `<section class="card"><h2>${({new_or_worse:'New or worse',close_soon:'Close soon',overdue:'Overdue',recovered:'Recovered'})[k]}</h2>${b.sections[k].map(card).join('') || '<p class="muted">Nothing to review here.</p>'}</section>`).join('')}<section class="card"><h2>Quiet review</h2>${b.sections.quiet_review ? card(b.sections.quiet_review) + (share ? `<button type="button" data-review-client="${esc(b.sections.quiet_review.client)}">Mark reviewed</button>` : '') : '<p class="muted">No steady low-use client to review.</p>'}</section>`
 }
 
 function filters(kind: DashboardKind, p: TaskMapParams | FlowTimeParams, url: URL, tasks: Awaited<ReturnType<Deps['findTasks']>>, clients: TaskMap['clients'], savedRelative?: boolean) {
@@ -350,7 +378,7 @@ function chips(flags: Flag[]) { return flags.map(f => `<span class="flag ${f ===
 function showAll(q: URLSearchParams) { return q.get('attention') === '0' || q.get('only_flagged') === 'false' }
 // Clients that need attention first; with "only what needs attention", the rest fold away.
 function clientList(map: TaskMap, link: (client: string) => string, attention: boolean): string {
-    const item = (c: TaskMap['clients'][number]) => `<div class="client">${c.client ? `<a href="${esc(link(c.client))}">${esc(c.client_name || c.client)}</a>` : '<b>Unknown client</b>'}<div>${c.missing ? `<span class="flag attention">Missing ${esc(num(c.missing))}</span>` : ''} ${c.slower ? `<span class="flag attention">Slower ${esc(num(c.slower))}</span>` : ''} ${(['dropped', 'failing'] as Flag[]).map(flag => { const count = map.rows.filter(r => r.client === c.client && r.flags.includes(flag)).length; return count ? `<span class="flag attention">${esc(FLAG[flag][0])} ${esc(num(count))}</span>` : '' }).join(' ')}</div><small class="muted">${esc(num(c.attempts_now))} attempts now · ${esc(num(c.attempts_before))} before</small></div>`
+    const item = (c: TaskMap['clients'][number]) => `<div class="client">${c.client ? `<a href="${esc(link(c.client))}">${esc(c.client_name || c.client)}</a> · <a href="${esc(storyLink(c.client))}">Story</a>` : '<b>Unknown client</b>'}<div>${c.missing ? `<span class="flag attention">Missing ${esc(num(c.missing))}</span>` : ''} ${c.slower ? `<span class="flag attention">Slower ${esc(num(c.slower))}</span>` : ''} ${(['dropped', 'failing'] as Flag[]).map(flag => { const count = map.rows.filter(r => r.client === c.client && r.flags.includes(flag)).length; return count ? `<span class="flag attention">${esc(FLAG[flag][0])} ${esc(num(count))}</span>` : '' }).join(' ')}</div><small class="muted">${esc(num(c.attempts_now))} attempts now · ${esc(num(c.attempts_before))} before</small></div>`
     const sorted = map.clients.slice().sort((a, b) => b.score - a.score)
     const flagged = sorted.filter(c => c.score > 0), rest = sorted.filter(c => c.score <= 0)
     const group = (list: typeof sorted, id: string) => list.length ? `<div data-page-list="${id}" data-noun="clients">${list.map(item).join('')}</div><div id="${id}"></div>` : ''
@@ -436,6 +464,7 @@ const openDialog=(dialog,opener)=>{dialog.querySelectorAll('[role=alert]').forEa
 document.querySelectorAll('dialog').forEach(d=>d.addEventListener('close',()=>{if(d._opener)d._opener.focus()}))
 document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openDialog($(b.dataset.open),b))
 document.querySelectorAll('[data-page-list]').forEach(list=>{const items=[...list.children];if(!items.length||items[0].querySelector('td[colspan]'))return;const pg=makePager({mount:$(list.dataset.pageList),noun:list.dataset.noun,size:25,draw:slice=>list.replaceChildren(...slice)});pg.set(items)})
+if($('copy-handover'))$('copy-handover').onclick=async()=>{try{await navigator.clipboard.writeText($('handover-pack').textContent);$('copy-status').textContent='Copied'}catch{$('copy-status').textContent='Copy the text below to share the handover pack.'}}
 document.querySelectorAll('.rescue-action').forEach(form=>{const update=()=>{form.querySelector('.snooze-field').hidden=form.elements.status.value!=='expected';form.elements.snooze_until.required=form.elements.status.value==='expected'};form.elements.status.onchange=update;update();form.onsubmit=run(async()=>{const body=Object.fromEntries(new FormData(form));await api('rescue/'+encodeURIComponent(form.dataset.client)+location.search,'POST',body);form.querySelector('[role=status]').textContent='Saved'})})
 document.querySelectorAll('[data-ask-client]').forEach(b=>b.onclick=run(async()=>{const d=await api('rescue/'+encodeURIComponent(b.dataset.askClient)+'/ask','POST',{});$('message').textContent=d.message+' ';const a=document.createElement('a');a.href=d.open;a.textContent='Surveys page';$('message').append(a)}))
 document.querySelectorAll('[data-review-client]').forEach(b=>b.onclick=run(async()=>{await api('rescue/'+encodeURIComponent(b.dataset.reviewClient),'POST',{note:'Quiet review completed: checked whether their work is going well.'});b.textContent='Reviewed'}))
