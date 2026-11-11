@@ -395,10 +395,12 @@ test('version 1 database upgrades in place preserving task history', async () =>
     old.prepare('INSERT INTO client_names VALUES (?,?)').run('OLD', 'Old client')
     old.prepare('INSERT INTO task_ingest VALUES (?,1,2,0,0,1,?)').run(now, now)
     old.prepare('INSERT INTO task_daily VALUES (?,?,?,?,?,?,?,?,?)').run(now, 'OLD', 't_DlgOld', 2, 1, 1, 0, 1, JSON.stringify(DURATION_BUCKETS.map(() => 0)))
+    old.prepare('INSERT INTO task_users_daily VALUES (?,?,?,?)').run(now, 'OLD', 't_DlgOld', 'C1PRD|01|OLD|USER7')
     old.close()
     child(`const {tasksDb: db} = await import(${JSON.stringify(url)});
         const assert = (await import('node:assert/strict')).default;
-        assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4);
+        assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5);
+        assert.deepEqual(db.prepare('SELECT user FROM known_users').all().map((r) => r.user), ['C1PRD|01|OLD|USER7']);
         assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name='daily_client_day'").get());
         assert.equal(db.prepare("SELECT name FROM client_names WHERE client='OLD'").get().name, 'Old client');
         assert.equal(db.prepare('SELECT count(*) AS n FROM task_ingest').get().n, 1);

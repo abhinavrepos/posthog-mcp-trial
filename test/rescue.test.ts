@@ -15,7 +15,7 @@ after(() => { tasksDb.close(); db.close(); rmSync(dir, { recursive: true, force:
 const shift = (s: string, n: number) => new Date(Date.parse(s) + n * 86400000).toISOString().slice(0, 10)
 const baseline = { from: '2026-01-08', to: '2026-02-04' }, window = { from: '2026-02-05', to: '2026-03-04' }
 function reset() {
-    for (const t of ['task_attempts', 'task_daily', 'task_paths_daily', 'task_users_daily', 'task_catalog', 'task_finishes_daily', 'task_ingest', 'dialog_names', 'client_names']) tasksDb.exec(`DELETE FROM ${t}`)
+    for (const t of ['task_attempts', 'task_daily', 'task_paths_daily', 'task_users_daily', 'known_users', 'task_catalog', 'task_finishes_daily', 'task_ingest', 'dialog_names', 'client_names']) tasksDb.exec(`DELETE FROM ${t}`)
     db.exec('DELETE FROM rescue_actions; DELETE FROM audit')
     forgetAnswers()
     for (let d = '2026-01-01'; d <= window.to; d = shift(d, 1)) storeAttempts(d, [])

@@ -20,18 +20,20 @@ const PARTS: Record<string, [number, number]> = {
 }
 
 /** Offset of `tz` from UTC at `at`, in ms (positive east of UTC). */
+// Building an Intl.DateTimeFormat is slow; one per time zone is reused.
+const formats = new Map<string, Intl.DateTimeFormat>()
+function formatFor(tz: string): Intl.DateTimeFormat {
+    let f = formats.get(tz)
+    if (!f) {
+        f = new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        if (formats.size > 500) formats.clear()
+        formats.set(tz, f)
+    }
+    return f
+}
 function tzOffset(at: Date, tz: string): number {
     const parts = Object.fromEntries(
-        new Intl.DateTimeFormat('en-US', {
-            timeZone: tz,
-            hourCycle: 'h23',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-        })
+        formatFor(tz)
             .formatToParts(at)
             .map((p) => [p.type, p.value])
     )
@@ -56,7 +58,7 @@ function localDate(at: Date, tz: string): { y: number; m: number; d: number; dow
 function validTz(tz?: string): string {
     if (!tz) return 'UTC'
     try {
-        new Intl.DateTimeFormat('en-US', { timeZone: tz })
+        formatFor(tz)
         return tz
     } catch {
         return 'UTC'
