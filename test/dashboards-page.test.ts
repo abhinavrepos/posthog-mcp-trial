@@ -232,3 +232,16 @@ test('empty states and core failures produce useful pages and sanitized JSON', a
     const danger = { ...deps, async flowTime(p: FlowTimeParams) { const f = await deps.flowTime(p); f.slowest[0].replay_url = 'javascript:alert(1)'; return f } }
     assert.doesNotMatch((await request('?view=flow_time&task=t_save', viewer(), 'GET', undefined, danger)).body, /href="javascript:/)
 })
+
+test('events without a client: listed as "Unknown client", never selected in the client filter', async () => {
+    const unknown = { client: '', client_name: '', attempts_now: 7278, attempts_before: 0, tasks_now: 3, tasks_before: 0, missing: 0, slower: 0, score: 0 }
+    const withUnknown = { ...deps, async taskMap(p: TaskMapParams) { const m = await deps.taskMap(p); return { ...m, clients: [unknown, ...m.clients] } } }
+    const r = await request('?view=task_map&from=2026-01-01&to=2026-01-28&attention=0', viewer('share'), 'GET', undefined, withUnknown)
+    assert.equal(r.status, 200)
+    const select = /<select name="client"[^]*?<\/select>/.exec(r.body)![0]
+    assert.equal([...select.matchAll(/<option value=""/g)].length, 1, 'only "All clients" has the empty value')
+    assert.match(select, /<option value="" ?(selected)?>All clients|<option value="">All clients/)
+    assert.doesNotMatch(select, /Unknown client/)
+    assert.doesNotMatch(select, /value="" selected[^>]*>(?!All clients)/)
+    assert.match(r.body, /<b>Unknown client<\/b>/)
+})

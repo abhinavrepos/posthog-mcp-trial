@@ -222,6 +222,9 @@ is_addresses() {
 }
 is_file() { local f="$1"; [[ "$f" = /* ]] || f="$APP_DIR/$f"; [ -f "$f" ] && python3 -c 'import json,sys; l=json.load(open(sys.argv[1])); assert isinstance(l,list) and all(x["path"].startswith("/") and x["name"] for x in l)' "$f" 2>/dev/null || { warn "not found, or not a JSON list like config/screens.example.json"; return 1; }; }
 is_appevents() { local f="$1"; [[ "$f" = /* ]] || f="$APP_DIR/$f"; [ -f "$f" ] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d,dict) and d' "$f" 2>/dev/null || { warn "not found, or not a JSON object like config/app-events.reval.json"; return 1; }; }
+is_part() { [[ "$1" =~ ^[0-9]$ ]] || { warn "a number from 0 to 9 (0: the client comes from PROP_CLIENT_ID)"; return 1; }; }
+is_sep() { [ "${#1}" = 1 ] && [[ "$1" != [[:space:]\'\"\\] ]] || { warn "one character, e.g. | (not a space, quote or backslash)"; return 1; }; }
+is_mcpname() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] && [ "$1" != posthog ] || { warn "1-64 lowercase letters, digits or hyphens, not posthog"; return 1; }; }
 is_jql() { [ -n "$1" ]; }
 hosts_of() { local u h out=""; for u in ${1//,/ }; do h="${u#*://}"; h="${h%%/*}"; h="${h%%:*}"; out="${out:+$out,}$h"; done; echo "$out"; }
 # On EC2 the instance metadata service (IMDSv2) knows the public IP; elsewhere ask ipify, then use the
@@ -286,6 +289,8 @@ collect_answers() {
     setting PROP_CLIENT_NAME client_name
     setting PROP_APP_VERSION app_version
     setting PROP_PERSON_EMAIL email
+    setting CLIENT_FROM_DISTINCT_ID 0 is_part
+    setting DISTINCT_ID_SEPARATOR "|" is_sep
     setting APP_EVENTS_FILE "" is_appevents
     setting SCREENS_FILE "" is_file
     setting JIRA_BASE_URL "" is_url
@@ -300,11 +305,13 @@ collect_answers() {
     fi
     setting ANTHROPIC_API_KEY ""
     setting FEATURE_LENS_MCP on is_onoff
+    setting LENS_MCP_NAME lens is_mcpname
     setting SURVEY_ENGINE on is_onoff
     setting SURVEY_BRAND "Survey by ION"
     # on: PostHog's own survey screens and API answer only Lens (surveys are managed in Lens).
     setting SURVEY_UI_LOCK on is_onoff
     setting FEATURE_POSTHOG_MCP on is_onoff
+    setting POSTHOG_MCP_VIA_LENS on is_onoff
     # Empty, or the address of the one this installer runs: PostHog's MCP server on this machine.
     setting POSTHOG_MCP_URL "" is_url
     setting POSTHOG_MCP_API_KEY ""
@@ -680,9 +687,9 @@ open(path, "w").write("\n".join(lines) + "\n")
 PY
 }
 
-APP_KEYS=(PROP_CLIENT_ID PROP_CLIENT_NAME PROP_APP_VERSION PROP_PERSON_EMAIL APP_EVENTS_FILE SCREENS_FILE JIRA_BASE_URL JIRA_EMAIL JIRA_API_TOKEN
-    JIRA_RCI_ISSUE_TYPE JIRA_RISK_ISSUE_TYPE RELEASES_JIRA_PROJECT RELEASES_SUPPORT_JQL ANTHROPIC_API_KEY FEATURE_LENS_MCP
-    FEATURE_POSTHOG_MCP POSTHOG_MCP_URL POSTHOG_MCP_API_KEY SERVICE_PUBLIC_URL CLIP_ALLOWED_HOSTS STATUS_PASSWORD
+APP_KEYS=(PROP_CLIENT_ID PROP_CLIENT_NAME PROP_APP_VERSION PROP_PERSON_EMAIL CLIENT_FROM_DISTINCT_ID DISTINCT_ID_SEPARATOR APP_EVENTS_FILE SCREENS_FILE JIRA_BASE_URL JIRA_EMAIL JIRA_API_TOKEN
+    JIRA_RCI_ISSUE_TYPE JIRA_RISK_ISSUE_TYPE RELEASES_JIRA_PROJECT RELEASES_SUPPORT_JQL ANTHROPIC_API_KEY FEATURE_LENS_MCP LENS_MCP_NAME
+    FEATURE_POSTHOG_MCP POSTHOG_MCP_VIA_LENS POSTHOG_MCP_URL POSTHOG_MCP_API_KEY SERVICE_PUBLIC_URL CLIP_ALLOWED_HOSTS STATUS_PASSWORD
     FEATURE_SURVEYS POSTHOG_SURVEY_API_KEY POSTHOG_SURVEY_GATE SURVEY_BRAND)
 step_settings() {
     CURRENT=settings; step "Writing .secrets.env"
