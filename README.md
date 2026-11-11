@@ -599,6 +599,29 @@ The local `.mcp.json` server has the same tools. It uses HTTP when Lens runs as 
 | `deploy/offline/` | the three scripts for a machine without internet: `build-images.sh` (every image into your ECR), `fresh-install.sh`, `upgrade.sh`; `ecr.sh`: the machine takes images from there; `no-internet.sh`: outside calls fail at once ([README](deploy/offline/README.md)) |
 | `deploy/lens/` | PostHog Lens as a container: `Dockerfile`, `lens.sh` (serve, doctor, mcp-config, test), Chrome's seccomp profile |
 
+## Speed
+
+Measured on the 22 GB / 4-CPU test machine (PostHog and Lens together), first answer → repeat:
+
+| | Before | Now |
+|---|---|---|
+| Heaviest chat tools (brief, pains, friction, workflows, message doctor, client signals) | 2-62 s, several failing | ~10 ms (pre-warmed) |
+| Other analysis tools (timings, app events) | 4-32 s | 2-3 s, then ~10 ms |
+| Dashboards (task map, flow time) | 0.4-2.3 s, then 15-47 ms | 0.3-1.4 s, then ~15 ms |
+| Survey list / results | 1.1 s / 3 s every time | ~13 ms / 3.6 s, then ~13 ms |
+| SQL through PostHog's tools in chat | 3-30 s | ~1 s |
+
+How: read-only analysis answers are kept for two minutes and shared by identical questions
+(`LENS_TOOL_CACHE_SECONDS`); the heaviest six are refreshed in the background every 15 minutes
+(`LENS_PREWARM_MINUTES`, `LENS_PREWARM_TOOLS`) and the survey list every 4; at most
+`POSTHOG_CONNECTIONS` (4) PostHog queries run at once, retried when PostHog is busy; the history
+build reads events as sorted keys then rows (28 MB a query instead of up to 800 MB); Lens pages and
+JSON are compressed. On the PostHog side `deploy/posthog/tune.sh` (install step `TUNE`, see
+`deploy/posthog/TUNING.md`) caches fingerprinted static files for a year, runs the web app with fewer,
+recycled workers on small machines and gives ClickHouse the memory that frees, with large sorts
+spilling to disk instead of failing. Every change is measured on real data; the unit tests also send
+real HTTP to a stand-in PostHog.
+
 ## Install on a fresh machine
 
 This branch is for **Amazon Linux 2023** (the `ticket-triage` branch is the same project for Ubuntu
