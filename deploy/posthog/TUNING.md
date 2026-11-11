@@ -32,7 +32,7 @@ The changes and their limits
   override. A missing recognizable site block is a preflight error.
 * Web memory: PostHog's docker-server delegates GRANIAN_* variables to the
   Granian CLI. Defaults are two workers below 32 GiB total RAM, three at/above
-  it, with worker lifetime recycling every hour. Fewer ~1.6 GB workers should
+  it. Worker recycling (LENS_PH_WORKER_LIFETIME) is off by default: Granian restarts all workers at once and PostHog's web app takes minutes to start, so hourly recycling produced minutes of 502s every hour on the test box. Fewer ~1.6 GB workers should
   reduce memory pressure, at the cost of maximum simultaneous request capacity.
   Recycling costs startup CPU. Current Granian has lifetime/RSS controls, not a
   max-requests control; the installed image must advertise --workers-lifetime.

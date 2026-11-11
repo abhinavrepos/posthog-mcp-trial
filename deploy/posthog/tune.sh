@@ -78,7 +78,7 @@ subprocess.run(['docker', 'run', '--rm', '-i', '--entrypoint', 'sh', cfg['proxy'
     'cat > /tmp/Caddyfile && caddy validate --config /tmp/Caddyfile --adapter caddyfile'], input=text, text=True, check=True)
 # Version check against the installed image, not an assumed current Granian release.
 help_text = subprocess.check_output(['docker', 'run', '--rm', '--entrypoint', 'granian', cfg['web']['image'], '--help'], text=True)
-if '--workers-lifetime' not in help_text: raise SystemExit('Installed Granian lacks worker lifetime recycling; no changes applied')
+if 'GRANIAN_WORKERS_LIFETIME' in json.loads((out / 'docker-compose.lens-tuning.yml').read_text())['services']['web']['environment'] and '--workers-lifetime' not in help_text: raise SystemExit('Installed Granian lacks worker lifetime recycling; no changes applied')
 PY
     if [ -f "$OVERRIDE" ] && cmp -s "$stage/new/$OVERRIDE" "$OVERRIDE" && diff -qr "$stage/new" lens-tuning >/dev/null && grep -q "$OVERRIDE" .env; then
         echo 'Lens tuning is already current'; exit 0
