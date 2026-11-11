@@ -38,20 +38,16 @@ The changes and their limits
   max-requests control; the installed image must advertise --workers-lifetime.
 * ClickHouse: separate config.d/users.d files merge with the upstream hobby
   files, preserving Kafka, storage, access, cluster, and ingestion settings.
-  Default per-query tracked memory is 128 MiB (134,217,728 bytes), threads two,
-  block rows 8192, sort/group spill 24 MiB. Independent spill ratios are derived
-  from spill/server budgets: HogQL explicitly sets the absolute group-by setting
-  to zero on some versions, so an absolute profile default alone is insufficient.
-  Mark cache is 64 MiB; uncompressed cache 16 MiB. The total tracked server budget
-  is RAM/8, bounded to 768–1536 MiB, and also limited by a RAM ratio of 0.25.
-  These are tracked-memory limits, not hard RSS/cgroup limits. Some allocations
-  are untracked and a block can overshoot: live measurement is still required.
-  Hard profile constraints prevent requests raising query memory/threads or
-  disabling those limits with zero. Explicit SETTINGS outside these constraints
-  fail rather than silently bypassing the budget. Large joins, huge single
-  aggregate states, and ingestion/migrations may need higher overrides; spill
-  only helps algorithms that support it, and consumes disk I/O/space. No partial
-  result overflow modes are enabled.
+  The server's tracked budget is RAM/7 (bounded 1024–8192 MiB; about 3 GiB on a
+  22 GiB box), using the memory the smaller web pool frees. One query may use 60%
+  of it; sorts and group-bys spill to disk at a quarter of it (absolute and ratio
+  settings: HogQL sets the absolute group-by threshold to zero on some versions).
+  Mark cache 256 MiB; uncompressed cache off. Threads are left to PostHog.
+  No profile constraints are written: ClickHouse rejects (does not clamp) a query
+  whose SETTINGS exceed a constraint, and PostHog sends its own per-query
+  settings, so constraints could break PostHog's own screens. These are tracked
+  limits, not hard RSS limits; spill only helps algorithms that support it and
+  uses disk I/O.
 * Lens HTTP: complete HTML/JSON bodies from 1 KiB through 4 MiB use asynchronous
   Brotli/gzip quality 4 according to Accept-Encoding weights. Identity fallback,
   Vary, lengths, and weak ETags are handled. SSE headers/writes/flushes, streaming
