@@ -301,6 +301,13 @@ test('rescue period: a chosen period replaces explicit dates, custom keeps them,
     await request('?view=rescue&from=2026-01-01&to=2026-01-10&baseline_from=2025-12-01&baseline_to=2025-12-10&days=14', viewer('share'), 'GET', undefined, spy as any)
     assert.equal(Math.round((Date.parse(seen.window.to) - Date.parse(seen.window.from)) / 86400000) + 1, 14, 'the chosen period wins')
     assert.equal(seen.baseline, undefined, 'and the explicit comparison is dropped with it')
+    // With today read (but never complete) and the last complete day three days ago, the period ends there.
+    const { storeAttempts, dataThrough } = await import('../src/core/tasks.ts')
+    const dayAgo = (n: number) => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10)
+    storeAttempts(dayAgo(3), []); storeAttempts(dayAgo(0), [])
+    await request('?view=rescue&days=14', viewer('share'), 'GET', undefined, spy as any)
+    assert.equal(dataThrough(), dayAgo(3))
+    assert.equal(seen.window.to, dayAgo(3), 'ends at the last fully processed day, never today')
     const custom = await request('?view=rescue&from=2026-01-01&to=2026-01-10&days=custom', viewer('share'), 'GET', undefined, spy as any)
     assert.deepEqual(seen.window, { from: '2026-01-01', to: '2026-01-10' })
     assert.match(custom.body, /<option value="custom" selected>2026-01-01 to 2026-01-10<\/option>/)
