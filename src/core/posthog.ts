@@ -3,12 +3,12 @@
 // Every HogQL query takes its values as {placeholders} bound through `values`. Ticket text is
 // untrusted, so nothing from a ticket is ever concatenated into a query string.
 import { config, requirePosthog } from './config.ts'
-import { Agent } from 'undici'
 
-// A small reused pool (keep-alive): ClickHouse on a small box cannot run many heavy reads together, but
-// two was too few once recording downloads, the history build and chat share it. POSTHOG_CONNECTIONS: 1-16.
-const POOL = Math.min(16, Math.max(1, Math.floor(Number(process.env.POSTHOG_CONNECTIONS) || 4)))
-const dispatcher = new Agent({ connections: POOL, pipelining: 1, keepAliveTimeout: 30_000 })
+// How many HogQL queries Lens runs at once (POSTHOG_CONNECTIONS, 1-16, default 4): ClickHouse on a small box
+// cannot run many heavy reads together, but chat, pages and the history build share these. Connections
+// are reused by Node's own fetch (keep-alive). Do not pass an Agent from the npm undici package to the
+// built-in fetch: their versions differ and every request then fails ("fetch failed").
+const MAX_READS = Math.min(16, Math.max(1, Math.floor(Number(process.env.POSTHOG_CONNECTIONS) || 4)))
 
 export class PostHogError extends Error {
     constructor(
@@ -23,7 +23,6 @@ async function api<T>(path: string, init: RequestInit = {}, timeoutMs = 30_000):
     requirePosthog()
     const res = await fetch(`${config.posthog.host}${path}`, {
         ...init,
-        dispatcher,
         headers: {
             authorization: `Bearer ${config.posthog.personalApiKey}`,
             'content-type': 'application/json',
@@ -132,7 +131,7 @@ function retryable(error: unknown): boolean {
 let activeReads = 0
 const readers: (() => void)[] = []
 async function readSlot<T>(work: () => Promise<T>): Promise<T> {
-    if (activeReads >= 2) {
+    if (activeReads >= MAX_READS) {
         if (readers.length >= 64) throw new PostHogError('PostHog read queue is busy', 503)
         await new Promise<void>((resolve) => readers.push(resolve))
     } else activeReads++
