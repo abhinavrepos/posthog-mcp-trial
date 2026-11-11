@@ -128,7 +128,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         ready()
         const r = await resolve(input, true)
         if (r.reply) return r.reply
-        const p: FlowTimeParams = { window: windowFor(input.when, 90), task: r.task!, client: r.client }
+        const p: FlowTimeParams = { window: windowFor(input.when, 90), task: r.task!, client: r.client, slowest_limit: 10 }
         const result = await d.flowTime(p)
         const points = result.series.filter(point => point.median_s !== null)
         const third = Math.max(1, Math.floor(points.length / 3))

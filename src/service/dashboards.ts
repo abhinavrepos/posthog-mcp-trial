@@ -57,12 +57,13 @@ function paramsOf(kind: DashboardKind, raw: unknown, relative = false): TaskMapP
     }
     if (!out.task) bad('Choose a task to see flow time.')
     if (p.granularity !== undefined && p.granularity !== 'day' && p.granularity !== 'week') bad('Granularity must be day or week.')
-    return { window: out.window, task: out.task!, ...(out.client ? { client: out.client } : {}), granularity: p.granularity as 'day' | 'week' | undefined }
+    return { window: out.window, task: out.task!, ...(out.client ? { client: out.client } : {}), granularity: p.granularity as 'day' | 'week' | undefined,
+        ...(p.slowest_limit !== undefined ? { slowest_limit: integer(p.slowest_limit, 1, 100, 'Slowest limit') } : {}) }
 }
 function queryParams(kind: DashboardKind, q: URLSearchParams): TaskMapParams | FlowTimeParams {
     const p: Record<string, unknown> = {}
     p.window = q.has('from') || q.has('to') ? { from: q.get('from'), to: q.get('to') } : { last_days: integer(q.get('days') ?? '28', 1, 366, 'Days') }
-    for (const k of ['client', 'task', 'granularity', 'min_attempts']) if (q.has(k) && q.get(k) !== '') p[k] = q.get(k)
+    for (const k of ['client', 'task', 'granularity', 'min_attempts', 'slowest_limit']) if (q.has(k) && q.get(k) !== '') p[k] = q.get(k)
     if (kind === 'task_map') {
         const w = windowOf(p.window, true), compare = q.get('compare') || 'previous'
         if (!['previous', 'year', 'custom'].includes(compare)) bad('Comparison must be previous, year or custom.')
@@ -150,7 +151,7 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
         const selected = url.searchParams.get('view') || pin?.kind || 'task_map'
         if (selected !== 'task_map' && selected !== 'flow_time') bad('View must be task_map or flow_time.')
         const kind: DashboardKind = pin?.kind || selected as DashboardKind
-        const override = ['from', 'to', 'days', 'task', 'client', 'compare', 'granularity', 'min_attempts'].some(k => url.searchParams.has(k))
+        const override = ['from', 'to', 'days', 'task', 'client', 'compare', 'granularity', 'min_attempts', 'slowest_limit'].some(k => url.searchParams.has(k))
         let params: TaskMapParams | FlowTimeParams | undefined
         if (pin) {
             const saved = paramsOf(kind, pin.params, true)
@@ -163,7 +164,7 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
                     if (!q.has('from')) q.set('from', saved.window.from)
                     if (!q.has('to')) q.set('to', saved.window.to)
                 }
-                for (const k of ['client', 'task', 'granularity', 'min_attempts'] as const) {
+                for (const k of ['client', 'task', 'granularity', 'min_attempts', 'slowest_limit'] as const) {
                     const value = (saved as unknown as Record<string, unknown>)[k]
                     if (!q.has(k) && value !== undefined) q.set(k, String(value))
                 }
@@ -179,7 +180,7 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
         try {
             if (params) {
                 if (kind === 'task_map') map = await deps.taskMap(params as TaskMapParams)
-                else flow = await deps.flowTime(params as FlowTimeParams)
+                else flow = await deps.flowTime({ ...params as FlowTimeParams, slowest_limit: 100 })
             }
         } catch { coreError = '<div class="card" role="alert">Task history could not be loaded. Try again shortly or ask an admin to check history processing.</div>' }
         const filterParams = params || queryParams('task_map', url.searchParams)

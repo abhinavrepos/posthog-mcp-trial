@@ -102,6 +102,7 @@ export interface FlowTimeParams {
     window: Window
     client?: string // one client; none: every client
     granularity?: 'day' | 'week' // default week when the window is longer than 31 days
+    slowest_limit?: number // default 10; integer from 1 to 100
 }
 export interface FlowPoint {
     period: string // YYYY-MM-DD (start of day or ISO week)
@@ -140,7 +141,7 @@ export interface FlowTime {
     series: FlowPoint[] // this client (or all)
     series_all?: FlowPoint[] // every client, when a client is chosen
     paths: FlowPath[] // most common first, at most 8
-    slowest: SlowAttempt[] // at most 10, done or not
+    slowest: SlowAttempt[] // at most slowest_limit (default 10, max 100), done or not
     top_errors: { template: string; count: number }[] // at most 5
     data_through: string | null
     note: string

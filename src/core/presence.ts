@@ -97,24 +97,26 @@ const USER = `coalesce(nullIf(toString(${P.email}), ''), distinct_id)`
 
 /** Every action in the range, with the time until the next action in its session (`gap`, ms).
  * `detail` adds what each action was (event, screen, element), for one person's timeline. */
-export function timedEvents(q: PresenceQuery, detail = false): string {
+export function timedEvents(q: PresenceQuery, detail = false, options: { names?: boolean; users?: boolean; sessions?: boolean } = {}): string {
+    const name = options.names === false ? '' : `, toString(${P.clientName}) AS client_name`
+    const nameColumn = options.names === false ? '' : ', client_name'
     const more = detail ? ', event, etype, chain, screen' : ''
     const moreInner = detail
         ? `, event, toString(properties.$event_type) AS etype, if(event = '$autocapture', elements_chain, '') AS chain, toString(properties.$pathname) AS screen`
         : ''
-    // The window looks one day either side of the range, so gaps that cross midnight in any timezone
-    // are found; the outer WHERE keeps only the days asked for.
-    return `SELECT client, client_name, user, sid, ts, day, hour, gap${more} FROM (
-        SELECT toString(${P.client}) AS client, toString(${P.clientName}) AS client_name, ${USER} AS user,
+    // Earlier actions cannot affect a forward gap. Start at local midnight, keeping the original
+    // following-day margin for the next action across midnight; the outer WHERE keeps the range.
+    return `SELECT client${nameColumn}, user, sid, ts, day, hour, gap${more} FROM (
+        SELECT toString(${P.client}) AS client${name}, ${USER} AS user,
                toString(properties.$session_id) AS sid, timestamp AS ts${moreInner},
                toDate(toTimeZone(timestamp, {tz})) AS day, toHour(toTimeZone(timestamp, {tz})) AS hour,
                least(greatest(dateDiff('millisecond', timestamp,
                    leadInFrame(timestamp, 1, timestamp) OVER (PARTITION BY properties.$session_id ORDER BY timestamp ASC ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING)), 0), ${SESSION_TIMEOUT_MS}) AS gap
         FROM events
-        WHERE timestamp >= toDateTime({from}) - toIntervalDay(1) AND timestamp < toDateTime({to}) + toIntervalDay(2)
+        WHERE timestamp >= toDateTime({from}, {tz}) AND timestamp < toDateTime({to}) + toIntervalDay(2)
           AND notEmpty(toString(${P.client})) AND notEmpty(toString(properties.$session_id))
-          AND event NOT IN {ignore}
-    ) WHERE day >= toDate({from}) AND day <= toDate({to})${q.client ? ' AND client = {client}' : ''}${q.user ? ' AND user = {user}' : ''}`
+          AND event NOT IN {ignore}${q.client ? ' AND client = {client}' : ''}${q.user ? ' AND user = {user}' : ''}${options.users ? ' AND user IN {users}' : ''}${options.sessions ? ' AND toString(properties.$session_id) IN {sids}' : ''}
+    ) WHERE day >= toDate({from}) AND day <= toDate({to})`
 }
 
 const TIME = `sum(gap) AS open_ms, sum(least(gap, {gap_ms})) AS active_ms`
@@ -137,6 +139,8 @@ const iso = (v: unknown) => (v ? new Date(String(v)).toISOString() : undefined)
 
 export interface PresenceReport {
     query: PresenceQuery
+    truncated?: boolean // the report covers only the first grouped rows when the safety limit is reached
+    warning?: string
     totals: Time & { clients: number; people: number; sessions: number; actions: number }
     days: (Time & { day: string; clients: number; people: number; sessions: number })[]
     hours: (Time & { day: string; hour: number; people: number })[]
@@ -144,41 +148,79 @@ export interface PresenceReport {
     people?: (Time & { user: string; sessions: number; first: string; last: string })[]
 }
 
-/** Totals, days, hours and clients for the range; plus the people when one client is picked. */
+// One row per session/hour keeps exact distinct counts without returning individual actions.
+const REPORT_ROW_LIMIT = 200_000
+
+type Bucket = {
+    open_ms: number; active_ms: number; actions: number
+    clients: Set<string>; people: Set<string>; sessions: Set<string>
+    first: string; last: string
+}
+const bucket = (): Bucket => ({ open_ms: 0, active_ms: 0, actions: 0, clients: new Set(), people: new Set(), sessions: new Set(), first: '', last: '' })
+function add(b: Bucket, r: Row) {
+    b.open_ms += Number(r.open_ms || 0)
+    b.active_ms += Number(r.active_ms || 0)
+    b.actions += Number(r.actions || 0)
+    b.clients.add(String(r.client))
+    b.people.add(String(r.user))
+    b.sessions.add(String(r.sid))
+    const first = iso(r.first)!, last = iso(r.last)!
+    if (!b.first || first < b.first) b.first = first
+    if (!b.last || last > b.last) b.last = last
+}
+function at(map: Map<string, Bucket>, key: string): Bucket {
+    let b = map.get(key)
+    if (!b) map.set(key, b = bucket())
+    return b
+}
+
+/** One window for the whole range. The client picker covers every client, even with filters. */
 export async function presenceReport(q: PresenceQuery, settings = presenceSettings(), run: Run = hogql): Promise<PresenceReport> {
-    const base = timedEvents(q)
     const v = values(q, settings)
-    // The client list ignores the client and person filters, so the page can always offer every client.
-    const all = timedEvents({ ...q, client: undefined, user: undefined })
-    const [totals, days, hours, clients, people] = await Promise.all([
-        run(`SELECT uniq(client) AS clients, uniq(user) AS people, uniq(sid) AS sessions, count() AS actions, ${TIME} FROM (${base}) LIMIT 1`, v),
-        run(`SELECT toString(day) AS day, uniq(client) AS clients, uniq(user) AS people, uniq(sid) AS sessions, ${TIME} FROM (${base}) GROUP BY day ORDER BY day LIMIT 1000`, v),
-        run(`SELECT toString(day) AS day, hour, uniq(user) AS people, ${TIME} FROM (${base}) GROUP BY day, hour ORDER BY day, hour LIMIT 10000`, v),
-        run(
-            `SELECT client, argMax(client_name, ts) AS client_name, uniq(user) AS people, uniq(sid) AS sessions, min(ts) AS first, max(ts) AS last, ${TIME}
-             FROM (${all}) GROUP BY client ORDER BY open_ms DESC LIMIT 2000`,
-            v
-        ),
-        q.client
-            ? run(`SELECT user, uniq(sid) AS sessions, min(ts) AS first, max(ts) AS last, ${TIME} FROM (${base}) GROUP BY user ORDER BY open_ms DESC LIMIT 2000`, v)
-            : Promise.resolve(undefined),
-    ])
-    const t = totals[0] || {}
+    const all = timedEvents({ ...q, client: undefined, user: undefined }, false, { names: false })
+    const rows = await run(
+        `SELECT client, user, sid, toString(day) AS day, hour, count() AS actions, min(ts) AS first, max(ts) AS last, ${TIME}
+         FROM (${all}) GROUP BY client, user, sid, day, hour ORDER BY day, hour, client, user, sid LIMIT ${REPORT_ROW_LIMIT + 1}`, v)
+    // Look up names after aggregation: no display strings pass through the window sort.
+    const clientIds = [...new Set(rows.slice(0, REPORT_ROW_LIMIT).map((r) => String(r.client)))]
+    const names = clientIds.length ? await run(
+        `SELECT toString(${P.client}) AS client, argMax(toString(${P.clientName}), timestamp) AS client_name
+         FROM events WHERE timestamp >= toDateTime({from}, {tz})
+           AND timestamp < toDateTime({to}, {tz}) + toIntervalDay(1)
+           AND client IN {clients} AND notEmpty(toString(properties.$session_id)) AND event NOT IN {ignore}
+         GROUP BY client LIMIT ${REPORT_ROW_LIMIT}`, { ...v, clients: clientIds }) : []
+    const nameOf = new Map(names.map((r) => [String(r.client), String(r.client_name || r.client)]))
+    const total = bucket()
+    const days = new Map<string, Bucket>(), hours = new Map<string, Bucket>()
+    const clients = new Map<string, Bucket>(), people = new Map<string, Bucket>()
+    for (const r of rows.slice(0, REPORT_ROW_LIMIT)) {
+        add(at(clients, String(r.client)), r)
+        if ((q.client && r.client !== q.client) || (q.user && r.user !== q.user)) continue
+        add(total, r)
+        add(at(days, String(r.day)), r)
+        add(at(hours, JSON.stringify([String(r.day), Number(r.hour)])), r)
+        if (q.client) add(at(people, String(r.user)), r)
+    }
+    const counts = (b: Bucket) => ({ clients: b.clients.size, people: b.people.size, sessions: b.sessions.size })
+    // Round only after summing milliseconds, matching the former SQL aggregates.
+    const duration = (b: Bucket) => time({ open_ms: b.open_ms, active_ms: b.active_ms })
+    const byTime = ([, a]: [string, Bucket], [, b]: [string, Bucket]) => b.open_ms - a.open_ms
     return {
         query: q,
-        totals: { clients: Number(t.clients || 0), people: Number(t.people || 0), sessions: Number(t.sessions || 0), actions: Number(t.actions || 0), ...time(t) },
-        days: days.map((r) => ({ day: String(r.day), clients: Number(r.clients), people: Number(r.people), sessions: Number(r.sessions), ...time(r) })),
-        hours: hours.map((r) => ({ day: String(r.day), hour: Number(r.hour), people: Number(r.people), ...time(r) })),
-        clients: clients.map((r) => ({
-            client_id: String(r.client),
-            client_name: String(r.client_name || r.client),
-            people: Number(r.people),
-            sessions: Number(r.sessions),
-            first: iso(r.first)!,
-            last: iso(r.last)!,
-            ...time(r),
+        ...(rows.length > REPORT_ROW_LIMIT ? { truncated: true, warning: 'Report is partial. Pick a shorter date range.' } : {}),
+        totals: { ...counts(total), actions: total.actions, ...duration(total) },
+        days: [...days].sort(([a], [b]) => a.localeCompare(b)).map(([day, b]) => ({ day, ...counts(b), ...duration(b) })),
+        hours: [...hours].map(([key, b]) => {
+            const [day, hour] = JSON.parse(key) as [string, number]
+            return { day, hour, people: b.people.size, ...duration(b) }
+        }).sort((a, b) => a.day.localeCompare(b.day) || a.hour - b.hour),
+        clients: [...clients].sort(byTime).slice(0, 2000).map(([client, b]) => ({
+            client_id: client, client_name: nameOf.get(client) || client, people: b.people.size,
+            sessions: b.sessions.size, first: b.first, last: b.last, ...duration(b),
         })),
-        people: people?.map((r) => ({ user: String(r.user), sessions: Number(r.sessions), first: iso(r.first)!, last: iso(r.last)!, ...time(r) })),
+        people: q.client ? [...people].sort(byTime).slice(0, 2000).map(([user, b]) => ({
+            user, sessions: b.sessions.size, first: b.first, last: b.last, ...duration(b),
+        })) : undefined,
     }
 }
 
@@ -194,16 +236,29 @@ export interface SessionRow extends Time {
 
 /** The session log: every session in the range for one client (and optionally one person). */
 export async function presenceSessions(q: PresenceQuery, settings = presenceSettings(), limit = 1000, run: Run = hogql): Promise<SessionRow[]> {
+    const v = values(q, settings)
+    // No display strings through the window sort; names are looked up for the few clients found.
     const rows = await run(
-        `SELECT sid, any(user) AS user, any(client) AS client, argMax(client_name, ts) AS client_name, min(ts) AS start, max(ts) AS end, count() AS actions, ${TIME}
-         FROM (${timedEvents(q)}) GROUP BY sid ORDER BY start DESC LIMIT {limit}`,
-        { ...values(q, settings), limit }
+        `SELECT sid, any(user) AS user, any(client) AS client, min(ts) AS start, max(ts) AS end, count() AS actions, ${TIME}
+         FROM (${timedEvents(q, false, { names: false })}) GROUP BY sid ORDER BY start DESC LIMIT {limit}`,
+        { ...v, limit }
     )
+    const clientIds = [...new Set(rows.map((r) => String(r.client)))]
+    const names = clientIds.length
+        ? await run(
+              `SELECT toString(${P.client}) AS client, argMax(toString(${P.clientName}), timestamp) AS client_name
+               FROM events WHERE timestamp >= toDateTime({from}, {tz}) AND timestamp < toDateTime({to}, {tz}) + toIntervalDay(1)
+                 AND client IN {clients} AND notEmpty(toString(properties.$session_id)) AND event NOT IN {ignore}
+               GROUP BY client LIMIT 2000`,
+              { ...v, clients: clientIds }
+          )
+        : []
+    const nameOf = new Map(names.map((r) => [String(r.client), String(r.client_name || '')]))
     return rows.map((r) => ({
         session_id: String(r.sid),
         user: String(r.user),
         client_id: String(r.client),
-        client_name: String(r.client_name || r.client),
+        client_name: nameOf.get(String(r.client)) || String(r.client),
         start: iso(r.start)!,
         end: iso(r.end)!,
         actions: Number(r.actions),
@@ -239,7 +294,7 @@ export async function liveNow(tz: string, gap_s: number, settings = presenceSett
     const sids = live.map((r) => String(r.sid)).filter(Boolean)
     const q: PresenceQuery = { from: today, to: today, tz, gap_s }
     const [todayRows, starts] = await Promise.all([
-        run(`SELECT client, user, min(ts) AS first, ${TIME} FROM (${timedEvents(q)}) WHERE user IN {users} GROUP BY client, user LIMIT 1000`, { ...values(q, settings), users }),
+        run(`SELECT client, user, min(ts) AS first, ${TIME} FROM (${timedEvents(q, false, { names: false, users: true })}) GROUP BY client, user LIMIT 1000`, { ...values(q, settings), users }),
         run(
             `SELECT toString(properties.$session_id) AS sid, min(timestamp) AS start FROM events
              WHERE timestamp > now() - toIntervalDay(1) AND toString(properties.$session_id) IN {sids} GROUP BY sid LIMIT 1000`,
@@ -322,11 +377,13 @@ export interface PersonDay {
  * can be turned into a clip. */
 export async function personDay(q: PresenceQuery & { user: string }, settings = presenceSettings(), run: Run = hogql, limit = 5000): Promise<PersonDay> {
     const v = values(q, settings)
-    const [rows, sessions] = await Promise.all([
-        run(`SELECT ts, sid, client, client_name, event, etype, chain, screen, gap FROM (${timedEvents(q, true)}) ORDER BY ts LIMIT {limit}`, { ...v, limit: limit + 1 }),
-        presenceSessions(q, settings, 1000, run),
-    ])
+    // Sessions first (light), then the actions of only those sessions, one query at a time: the
+    // detailed columns (element chains) never pass through the window for anyone else.
+    const sessions = await presenceSessions(q, settings, 1000, run)
     const ids = sessions.map((x) => x.session_id).filter(Boolean)
+    const rows = ids.length
+        ? await run(`SELECT ts, sid, client, event, etype, chain, screen, gap FROM (${timedEvents(q, true, { names: false, sessions: true })}) ORDER BY ts LIMIT {limit}`, { ...v, limit: limit + 1, sids: ids })
+        : []
     const recs = ids.length
         ? await run(
               `SELECT session_id, min(min_first_timestamp) AS start FROM raw_session_replay_events
@@ -351,7 +408,7 @@ export async function personDay(q: PresenceQuery & { user: string }, settings = 
     return {
         user: q.user,
         client_id: String(first.client || q.client || ordered[0]?.client_id || ''),
-        client_name: String(first.client_name || ordered[0]?.client_name || q.client || ''),
+        client_name: String(ordered[0]?.client_name || q.client || ''),
         day: q.from,
         tz: q.tz,
         gap_s: q.gap_s,
