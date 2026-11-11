@@ -780,6 +780,15 @@ kept unchanged.
    project, that your events carry the client and release properties, Jira login, secrets, HTTPS.
 3. `scripts/stack.sh start service`.
 
+### Connecting GitHub Copilot (for PMs)
+
+Each person opens **Chat** in Lens and clicks **Connect Copilot**. Lens makes their personal key and
+shows two buttons, **Add Lens to VS Code** and **Add PostHog to VS Code**. Each opens VS Code, which
+asks to install the server. One key serves both (`/mcp` and `/posthog-mcp`), and Copilot gets that
+person's access. Then: Copilot Chat → Agent mode → ask. On Copilot Business or Enterprise, the
+organisation must allow the "MCP servers in Copilot" policy. The page also gives a hand-made
+`mcp.json` (key kept in VS Code's secret storage) and the Claude Code commands.
+
 ### Using PostHog's MCP server next to this one
 
 Claude Code and GitHub Copilot can connect both servers at once. Routing rules lead the Lens
