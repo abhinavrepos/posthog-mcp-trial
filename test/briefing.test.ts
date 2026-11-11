@@ -84,6 +84,19 @@ test('Ask them saves targeted valid drafts with task and export questions, notes
     await assert.rejects(draftRescueSurvey('acme','pm@example.com',{...deps,surveysActive:()=>false}),/switched off/)
     await assert.rejects(draftRescueSurvey('unknown','pm@example.com',deps),/no current rescue/)
 })
+test('Ask them twice for the same problem gets a new draft name, since PostHog keeps names unique', async () => {
+    reset()
+    const names: string[] = [], taken = new Set(['[Rescue] Acme – Hedge Designation'])
+    const client = { client:'acme',client_name:'Acme',score:5,level:'watch' as const,trend:'new' as const,reasons:[{kind:'missing' as const,task_id:'t_Hedge',task_name:'Hedge Designation',text:'Stopped',now:0,before:5}],next_step:'Ask' }
+    const queue = {coverage:{complete:true,unprocessed:[]},window:{from:'2026-06-01',to:'2026-06-28'},baseline:{from:'2026-05-04',to:'2026-05-31'},data_through:'2026-06-28',clients:[client],hidden_snoozed:0,note:''}
+    const deps = { surveysActive:()=>true,rescueQueue:async()=>queue,setRescueAction:async()=>({} as any),
+        saveSurvey:async(spec: any)=>{names.push(spec.name);if(taken.has(spec.name))throw new Error('PostHog surveys POST → 400: There is already a survey with this name.');taken.add(spec.name);return {survey:{id:'d'+names.length} as any,compiled:{problems:[]} as any}} }
+    await draftRescueSurvey('acme','pm@example.com',deps)
+    await draftRescueSurvey('acme','pm@example.com',deps)
+    const day = new Date().toISOString().slice(0,10)
+    assert.deepEqual(names,['[Rescue] Acme – Hedge Designation',`[Rescue] Acme – Hedge Designation · ${day}`,'[Rescue] Acme – Hedge Designation',`[Rescue] Acme – Hedge Designation · ${day}`,`[Rescue] Acme – Hedge Designation · ${day} (2)`])
+    await assert.rejects(draftRescueSurvey('acme','pm@example.com',{...deps,saveSurvey:async()=>{throw new Error('PostHog down')}}),/PostHog down/)
+})
 
 test('quiet review respects action updates, caps new clients at five and scans all JSON for user identities', async () => {
     reset()
