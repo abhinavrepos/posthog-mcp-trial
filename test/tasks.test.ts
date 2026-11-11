@@ -185,20 +185,28 @@ test('ingest: one session query, 50,000-event keyset pages with timestamp ties, 
         const e = i < 3 ? [raw(0, 'DlgSave'), submit(1), reply(2)][i] : raw(3, 'DlgList')
         return { ...e, sid: ids[0].sid, event_uuid: `u${String(i).padStart(5, '0')}`, ctime: 0, client_name: 'Acme' }
     })
-    let sessionQueries = 0, eventQueries = 0
+    let sessionQueries = 0, keyQueries = 0, rowQueries = 0
     const fake = async (sql: string, values: Record<string, unknown> = {}) => {
         assert.match(sql, /LIMIT \d+/)
         assert.equal(sql.includes(now), false, 'dates must be bound')
         assert.match(sql, /\$session_id/, 'sessions matched on the $session_id column')
         if (sql.includes('GROUP BY sid')) { sessionQueries++; return ids }
-        eventQueries++
+        if (sql.includes('{end_sid}')) {
+            // the wide read: a bounded range, never sorted by ClickHouse; rows come back in any order
+            rowQueries++
+            assert.doesNotMatch(sql, /ORDER BY/, 'wide rows are not sorted in ClickHouse')
+            assert.deepEqual([values.end_sid, values.end_uuid], [ids[0].sid, page1.at(-1)!.event_uuid])
+            return [...page1].reverse()
+        }
+        keyQueries++
+        assert.match(sql, /SELECT \$session_id AS sid, timestamp AS ts, toString\(uuid\) AS event_uuid FROM events/, 'the sorted read has only the keys')
         assert.match(sql, /ORDER BY \$session_id, timestamp, toString\(uuid\) LIMIT 50000/)
-        if (values.uuid === '') return page1
+        if (values.uuid === '') return page1.map(({ sid, ts, event_uuid }) => ({ sid, ts, event_uuid }))
         assert.deepEqual([values.sid, values.uuid], [ids[0].sid, page1.at(-1)!.event_uuid], 'continues after the last row')
         return []
     }
     await ingestDay(now, fake)
-    assert.deepEqual([sessionQueries, eventQueries], [1, 2], 'a full Reval-size day costs a handful of queries')
+    assert.deepEqual([sessionQueries, keyQueries, rowQueries], [1, 2, 1], 'a full Reval-size day costs a handful of queries')
     assert.equal(ingestStatus().attempts, 1)
     assert.match(findTasks('')[0].name, /Save → 'Trade Id … Updated'/)
     await ingestDay(now, fake)

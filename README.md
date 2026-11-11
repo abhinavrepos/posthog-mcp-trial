@@ -307,8 +307,9 @@ path is the dialogs opened on the way.
 
 **How it scales.** Lens builds a task history in the background (`src/core/tasks.ts`, its own SQLite
 file `run/tasks.db`): every 10 minutes it re-reads today and yesterday and catches up older days (20 a
-run, newest first, up to 400 days). A day is read in about 4 PostHog queries (one for its sessions, then
-50,000-event pages), retried with growing waits when PostHog is busy or rate-limited, and stored in one
+run, newest first, up to 400 days). A day is read in about 7 PostHog queries (one for its sessions, then
+50,000-event pages, each read as its sorted keys first and then its rows unsorted, so ClickHouse
+never sorts wide rows: under 30 MB a query instead of up to 800 MB), retried with growing waits when PostHog is busy or rate-limited, and stored in one
 transaction, so a re-run replaces it. The dashboards read daily summaries (per client, task and path,
 with duration histograms for the median and p90), never raw events, and keep each answer until the
 next stored day. Measured on the test machine: a full Reval-size day (111,808 events, 2,750 sessions)
