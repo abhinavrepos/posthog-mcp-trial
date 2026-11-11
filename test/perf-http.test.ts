@@ -134,10 +134,11 @@ test('only fingerprinted PostHog static paths get immutable caching', () => {
     assert.match(caddy, /max-age=31536000, immutable/)
     const pattern = caddy.split('\n').find(x => x.includes('path_regexp'))!.trim().split(' ').at(-1)!
     const match = new RegExp(pattern)
-    assert.ok(match.test('/static/assets/main.aabbccdd11223344.js'))
-    assert.ok(match.test('/static/assets/main-aabbccdd11223344.css.br'))
-    assert.ok(!match.test('/static/surveys.js'))
-    assert.ok(!match.test('/api/projects/1/data.aabbccdd.js'))
+    // PostHog's build names files name-HASH.ext with an uppercase letters-and-digits hash.
+    for (const hashed of ['/static/stylesEagerTailwind-YDFOWSD6.css', '/static/index-S63B2BAAB92.js', '/static/chunk-AB12CD34.js.map', '/static/main-AB12CD34.css.br'])
+        assert.ok(match.test(hashed), hashed)
+    for (const plain of ['/static/surveys.js', '/static/recorder.js', '/static/posthog-recorder.js', '/static/lazy-recorder.js', '/static/toolbar.js', '/static/array.full.js', '/api/projects/1/data-AB12CD34.js'])
+        assert.ok(!match.test(plain), plain)
 })
 
 test('the adapter preserves native Node HTTP framing without a listening socket', async () => {
