@@ -64,7 +64,12 @@ export function startPrewarm(): void {
     const round = async () => {
         if (running) return
         running = true
-        try { log('prewarm round', await prewarmRound(tools, keep)) } catch (e) { log('prewarm failed', { error: (e as Error).message }) } finally { running = false }
+        try {
+            log('prewarm round', await prewarmRound(tools, keep))
+            // The signal scorecard replays a year of weeks; computing missing weeks here keeps the page instant.
+            const t = Date.now(); await (await import('../core/scorecard.ts')).scorecard({ weeks: 52 })
+            log('prewarm scorecard', { ms: Date.now() - t })
+        } catch (e) { log('prewarm failed', { error: (e as Error).message }) } finally { running = false }
     }
     // First round two minutes after start, so the service and PostHog settle first.
     setTimeout(round, 120_000).unref()

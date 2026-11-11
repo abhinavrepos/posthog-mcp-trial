@@ -251,6 +251,13 @@ const MIGRATIONS: string[] = [
     );
     CREATE INDEX client_surveys_client ON client_surveys(client,created_at);
     ALTER TABLE survey_launches ADD COLUMN clients TEXT NOT NULL DEFAULT '[]';`,
+    `CREATE TABLE client_outcomes (
+        client TEXT PRIMARY KEY NOT NULL CHECK(length(client) BETWEEN 1 AND 256),
+        outcome TEXT NOT NULL CHECK(outcome IN ('left','contracted','renewed','stayed')),
+        decided_on TEXT NOT NULL CHECK(decided_on GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' AND date(decided_on,'+0 days') IS NOT NULL AND date(decided_on,'+0 days') = decided_on),
+        note TEXT NOT NULL DEFAULT '' CHECK(length(note) <= 500),
+        recorded_by TEXT NOT NULL, recorded_at TEXT NOT NULL
+    );`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

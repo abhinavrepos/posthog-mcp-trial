@@ -1,5 +1,7 @@
+import { peerComparisons } from './peers.ts'
+import { newClientValues } from './newclients.ts'
 // Weekly account-team queue. Reads only Lens history; actions deliberately bypass the answer cache.
-import { aggregates, metrics, cached, coverage, dataThrough, validWindow, validDay, tasksDb } from './tasks.ts'
+import { periodAggregates, metrics, cached, coverage, dataThrough, validWindow, validDay, tasksDb } from './tasks.ts'
 import { all, one, run, tx } from './db.ts'
 import { rescuePrivacy } from './rescueprivacy.ts'
 import { clientSignals, type SignalKind } from './signals.ts'
@@ -10,8 +12,8 @@ export const RESCUE = { failing: .15, slower: 1.3, slower_seconds: 10, dropped: 
     regular_weeks: 2, users_lost: 2, users_fraction: .3, done_min: 5, activity_min: 20, default_min: 5, urgent: 40, snooze_days: 120, snooze_growth: 1.5 } as const
 export const RESCUE_STATUSES = ['open', 'contacted', 'in_progress', 'resolved', 'expected'] as const
 export type RescueStatus = typeof RESCUE_STATUSES[number]
-export type ReasonKind = 'missing' | 'users_lost' | 'failing' | 'slower' | 'dropped' | 'activity_drop' | 'worse_since_snoozed' | SignalKind
-const weights: Record<ReasonKind, number> = { key_person_gap: 4, work_moving_out: 3, recurring_close_error: 3, giving_up: 3, missing: 5, users_lost: 4, failing: 3, slower: 2, dropped: 2, activity_drop: 3, worse_since_snoozed: 0 }
+export type ReasonKind = 'missing' | 'users_lost' | 'failing' | 'slower' | 'dropped' | 'activity_drop' | 'worse_since_snoozed' | 'peer_gap' | 'not_established' | SignalKind
+const weights: Record<ReasonKind, number> = { peer_gap: 1, not_established: 2, key_person_gap: 4, work_moving_out: 3, recurring_close_error: 3, giving_up: 3, missing: 5, users_lost: 4, failing: 3, slower: 2, dropped: 2, activity_drop: 3, worse_since_snoozed: 0 }
 export interface RescueReason { kind: ReasonKind; text: string; task_id?: string; task_name?: string; now: number; before: number;
     evidence?: Record<string, number | number[]>; last_seen?: string; dialog?: string; template?: string; next_close_start?: string }
 export interface RescueAction { owner: string | null; status: RescueStatus; note: string | null; due: string | null;
@@ -37,6 +39,8 @@ export function rescueClients(text: string): { id: string; name: string }[] {
 }
 function nextStep(r: RescueReason): string {
     switch (r.kind) {
+        case 'peer_gap': return 'Watch one slow attempt next to a typical one from another client: is it their data, setup or training?'
+        case 'not_established': return 'Watch an unfinished attempt and help the client complete their first task.'
         case 'key_person_gap': return 'Ask the account team whether the person who did most of their work has left or changed role; offer help to whoever takes over.'
         case 'work_moving_out': return 'Ask what they do with the exported files (reports, audit, spreadsheet fixes, another system?). Use Ask them to send a short in-app question.'
         case 'recurring_close_error': return `Fix or work around "${r.template}" before their next close (from ${r.next_close_start}); watch one session from the last close.`
@@ -50,14 +54,14 @@ function nextStep(r: RescueReason): string {
     }
 }
 async function compute(window: Window, baseline: Window, min: number): Promise<RescueClient[]> {
-    const now = new Map(aggregates(window).map(r => [JSON.stringify([r.client, r.task_id]), r]))
+    const now = new Map((await periodAggregates(window)).map(r => [JSON.stringify([r.client, r.task_id]), r]))
     const names = new Map(query<{ client: string; name: string }>('SELECT * FROM client_names').map(r => [r.client, r.name]))
     const tasks = new Map(query<{ task_id: string; name: string }>('SELECT * FROM task_catalog').map(r => [r.task_id, r.name]))
     const clients = new Map<string, { reasons: RescueReason[]; before: number; now: number }>()
     for (const a of now.values()) {
         const c = clients.get(a.client) || { reasons: [], before: 0, now: 0 }; c.now += a.attempts; clients.set(a.client, c)
     }
-    for (const b of aggregates(baseline)) {
+    for (const b of await periodAggregates(baseline)) {
         const c = clients.get(b.client) || { reasons: [], before: 0, now: 0 }; clients.set(b.client, c); c.before += b.attempts
         const a = now.get(JSON.stringify([b.client, b.task_id])), n = metrics(a), prev = metrics(b)
         const task = { task_id: b.task_id, task_name: tasks.get(b.task_id) || b.task_id.slice(2) }
@@ -84,6 +88,20 @@ async function compute(window: Window, baseline: Window, min: number): Promise<R
         c.reasons.push({ kind, text, evidence, now: 0, before: 0, task_id, dialog, template, next_close_start,
             ...(task_id ? { task_name: tasks.get(task_id) || dialog || task_id.slice(2) } : {}) })
         clients.set(signal.client, c)
+    }
+    for (const [client, peers] of await peerComparisons(window, [...now.values()])) {
+        const c = clients.get(client) || { reasons: [], before: 0, now: 0 }
+        for (const p of peers) if (p.ratio >= 2 - 1e-12 || p.peer_done_rate - p.done_rate >= .25 - 1e-12)
+            c.reasons.push({ kind: 'peer_gap', task_id: p.task_id, task_name: p.task_name, text: p.ratio >= 2 - 1e-12 ? p.text : `${p.task_name} done rate is ${Math.round(p.done_rate*100)}% vs ${Math.round(p.peer_done_rate*100)}% across clients`,
+                now: p.client_median_s, before: p.peer_median_s, evidence: { ratio: p.ratio, done_rate: p.done_rate, peer_done_rate: p.peer_done_rate, peer_clients: p.peer_clients } })
+        clients.set(client,c)
+    }
+    for (const n of await newClientValues(window.to)) {
+        const c = clients.get(n.client) || { reasons: [], before: 0, now: 0 }
+        for (const t of n.tasks) if (t.attempts >= 5 && !t.done)
+            c.reasons.push({ kind: 'not_established', task_id: t.task_id, task_name: t.task_name,
+                text: `${t.task_name} tried ${t.attempts} times, never completed; first seen ${n.days} days ago`, now: t.attempts, before: 0 })
+        clients.set(n.client,c)
     }
     const out: RescueClient[] = []
     for (const [client, c] of clients) {
@@ -136,13 +154,16 @@ async function answer(p: RescueParams): Promise<RescueQueue> {
 export async function rescueQueue(p: RescueParams = {}): Promise<RescueQueue> {
     const { include_snoozed, ...params } = p
     if (include_snoozed !== undefined && typeof include_snoozed !== 'boolean') throw new Error('include_snoozed must be boolean')
-    const result = await cached('rescue', params, () => answer(params), 186)
-    const actions = new Map(all<RescueAction & { client: string }>('SELECT * FROM rescue_actions').map(a => [a.client, a]))
+    // Sanitize immutable history once; fresh action metadata is sanitized on every read.
+    const result = await cached('rescue', params, async () => rescuePrivacy(await answer(params)), 186)
+    const metadata = await rescuePrivacy({ actions: all<RescueAction & { client: string }>('SELECT * FROM rescue_actions'),
+        names: query<{ client: string; name: string }>('SELECT * FROM client_names') })
+    const actions = new Map(metadata.actions.map(a => [a.client, a]))
     let hidden_snoozed = 0
     const signalCoverage = (await clientSignals({ to: result.window.to })).coverage.complete
     const recovered: RescueClient[] = []
     const candidates = [...result.clients]
-    const names = new Map(query<{ client: string; name: string }>('SELECT * FROM client_names').map(r => [r.client, r.name]))
+    const names = new Map(metadata.names.map(r => [r.client, r.name]))
     for (const [client, action] of actions) if (!candidates.some(c => c.client === client) && action.acted_on)
         candidates.push({ client, client_name: names.get(client) || client, score: 0, level: 'watch', trend: 'better', reasons: [], next_step: 'Review recovery with the account team.' })
     const clients = candidates.flatMap(c => {
@@ -164,7 +185,7 @@ export async function rescueQueue(p: RescueParams = {}): Promise<RescueQueue> {
         if (snoozed && !worse && !include_snoozed) { hidden_snoozed++; return [] }
         return [{ ...c, reasons: worse ? [{ kind: 'worse_since_snoozed' as const, text: 'Worse since snoozed: score rose by at least 50%', now: c.score, before: action!.score_at_snooze! }, ...c.reasons] : c.reasons, ...(action ? { action } : {}) }]
     })
-    return rescuePrivacy({ ...result, clients, recovered, hidden_snoozed })
+    return { ...result, clients, recovered, hidden_snoozed }
 }
 export class RescueInputError extends Error {}
 /** view: the period the person is looking at when snoozing, so the score kept for "worse since snoozed"

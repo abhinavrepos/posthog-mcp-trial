@@ -1,3 +1,4 @@
+import { clientOutcomes, recordOutcome, OUTCOMES } from '../core/outcomes.ts'
 import { briefingDeliveryStatus } from '../core/briefingdelivery.ts'
 // Admin page for replay clip access: who can watch, who can download, the default for everyone
 // else, share links, clips and the activity log. Only admins reach it: PostHog owners and admins
@@ -66,6 +67,17 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
         res.end(adminHtml(v))
         return true
+    }
+
+    if (p === '/replays/admin/api/outcomes') {
+        try {
+            if (req.method === 'GET') { json(res,200,clientOutcomes()); return true }
+            if (req.method === 'POST' || req.method === 'DELETE') {
+                if (req.headers['x-clip-page'] !== '1') { json(res,403,{error:'A page request header is required.'}); return true }
+                recordOutcome(v,await readJson(req),req.method === 'DELETE')
+                json(res,200,{ok:true}); return true
+            }
+        } catch(e) { json(res,400,{error:(e as Error).message}); return true }
     }
 
     if (p === '/replays/admin/api/state' && req.method === 'GET') {
@@ -260,6 +272,7 @@ main h1{margin:8px 0 0}main button:not(.ghost){background:var(--ink);border-colo
 </style></head>
 <body>${headerHtml(v, 'Admin')}<main style="max-width:1280px"><h1>Admin</h1>
 
+<section class="card"><h2>Client outcomes</h2><p class="muted">Record the date the client decided, if known; otherwise the date it became known. Client id must match history. Saving an existing id edits its outcome.</p><form id="outcome-form" class="toolbar"><div><label for="outcome-client">Client id</label><input id="outcome-client" name="client" required maxlength="256"></div><div><label for="outcome-kind">Outcome</label><select id="outcome-kind" name="outcome">${OUTCOMES.map(o=>`<option>${o}</option>`).join('')}</select></div><div><label for="outcome-date">Decision date</label><input id="outcome-date" name="decided_on" type="date" required></div><div><label for="outcome-note">Note</label><input id="outcome-note" name="note" maxlength="500"></div><button type="submit">Save outcome</button></form><p id="outcome-msg" role="status" aria-live="polite"></p><div class="table-wrap"><table><caption>Recorded client outcomes</caption><thead><tr><th>Client</th><th>Outcome</th><th>Decision date</th><th>Note</th><th>Actions</th></tr></thead><tbody id="outcome-rows"></tbody></table></div></section>
 <div class="card"><h2>People</h2><p class="small muted">Changes to access save automatically.</p><label for="people-filter">Find a person</label><input id="people-filter" type="search" placeholder="Name or email">
 <details class="add-person"><summary>Add a person</summary><div class="toolbar"><div><label for="new-email">PostHog email</label><input id="new-email" type="email" placeholder="name@company.com"></div>
 <div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-system"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0"><label for="new-surveys">Surveys</label><select id="new-surveys"></select></div><div style="flex:0"><label for="new-dashboards">Dashboards</label><select id="new-dashboards"></select></div><div style="flex:0"><button type="button" id="add">Add person</button></div></div></details>
@@ -396,6 +409,9 @@ $('survey-shared').onchange=async()=>{try{await api('/replays/admin/api/settings
 $('dashboard-default').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({dashboard_default_role:$('dashboard-default').value})});msg('settings-msg','Saved.',true);await load()}catch(e){msg('settings-msg',e.message)}};
 $('dashboard-shared').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({dashboard_shared_token_role:$('dashboard-shared').value})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
 guardControls();
+async function loadOutcomes(){const rows=await api('/replays/admin/api/outcomes');const body=$('outcome-rows');body.replaceChildren();for(const o of rows){const tr=document.createElement('tr');for(const key of ['client','outcome','decided_on','note']){const td=document.createElement('td');td.textContent=o[key];tr.append(td)}const td=document.createElement('td');for(const action of ['Edit','Remove']){const b=document.createElement('button');b.type='button';b.textContent=action;b.setAttribute('aria-label',action+' outcome for '+o.client);b.onclick=async()=>{try{if(action==='Edit'){for(const key of ['client','outcome','decided_on','note'])$('outcome-form').elements.namedItem(key).value=o[key];$('outcome-client').focus()}else{await api('/replays/admin/api/outcomes',{method:'DELETE',body:JSON.stringify({client:o.client})});await loadOutcomes()}}catch(e){$('outcome-msg').textContent=e.message}};td.append(b)}tr.append(td);body.append(tr)}}
+$('outcome-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;try{await api('/replays/admin/api/outcomes',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(form)))});$('outcome-msg').textContent='Outcome saved.';form.reset();await loadOutcomes()}catch(err){$('outcome-msg').textContent=err.message}}
+loadOutcomes().catch(e=>{$('outcome-msg').textContent=e.message})
 load().catch(e=>{msg('people-msg',e.message+' Reload the page to try again.');$('people').innerHTML='<tr><td colspan="9" class="err"></td></tr>';$('people').querySelector('td').textContent=e.message});
 </script></body></html>`
 }
