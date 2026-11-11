@@ -50,7 +50,8 @@ async function chat(token: string) {
 
 const admin = await session(ADMIN)
 const viewer = await session(VIEWER)
-const PRIVATE = /USER[0-9]|C1PRD\||@example\.invalid/
+// Client-user identities. Lens staff emails (owner, updated_by, activity) are expected in action metadata.
+const PRIVATE = /USER[0-9]|C1PRD\|/
 const expect = process.env.E2E_EXPECT_PLANTED === '1'
 
 // 1. signal reasons in the rescue queue
@@ -90,7 +91,7 @@ if (byClient.has('S002') || !expect) {
         ok('viewer cannot draft a survey', (await viewer.api(`/replays/dashboards/api/rescue/${encodeURIComponent(target)}/ask`, 'POST', {})).status === 403)
         const a = await admin.api(`/replays/dashboards/api/rescue/${encodeURIComponent(target)}/ask`, 'POST', {})
         const id = a.body.survey_id || a.body.id || a.body.survey?.id
-        ok('Ask them creates a draft survey', a.status === 200 && !!id, JSON.stringify(a.body).slice(0, 160))
+        ok('Ask them creates a draft survey', a.status === 201 && !!id, JSON.stringify(a.body).slice(0, 160))
         if (id) {
             const sv = await admin.api('/replays/surveys/api/survey/' + id)
             const txt = JSON.stringify(sv.body)

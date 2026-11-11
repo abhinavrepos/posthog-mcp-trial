@@ -1,14 +1,15 @@
 import { rememberClientSurvey } from './surveylocal.ts'
-import { rescueQueue, setRescueAction, RescueInputError } from './rescue.ts'
+import { rescueQueue, setRescueAction, RescueInputError, type RescueParams } from './rescue.ts'
 import { saveSurvey, type SurveySpec } from './surveys.ts'
 import { surveysActive } from './config.ts'
 import { tasksDb } from './tasks.ts'
 
 const defaults = { rescueQueue, setRescueAction, saveSurvey, surveysActive }
-export async function draftRescueSurvey(client: string, by: string, injected: Partial<typeof defaults> = {}) {
+/** view: the period the person is looking at, so the survey asks about the reason they saw. */
+export async function draftRescueSurvey(client: string, by: string, injected: Partial<typeof defaults> = {}, view: Omit<RescueParams, 'include_snoozed'> = {}) {
     const d = { ...defaults, ...injected }
     if (!d.surveysActive()) throw new RescueInputError('Surveys are switched off or not configured.')
-    const c = (await d.rescueQueue({ include_snoozed: true })).clients.find(c => c.client === client)
+    const c = (await d.rescueQueue({ ...view, include_snoozed: true })).clients.find(c => c.client === client)
     if (!c) throw new RescueInputError('This client has no current rescue reasons.')
     const reason = c.reasons.find(r => r.kind !== 'worse_since_snoozed')!
     const exports = reason.kind === 'work_moving_out'
@@ -29,6 +30,6 @@ export async function draftRescueSurvey(client: string, by: string, injected: Pa
     const result = await d.saveSurvey(spec, { clientIds: [client] })
     if (!result.survey) throw new RescueInputError('Could not create draft: ' + result.compiled.problems.map(p => p.text).join('; '))
     rememberClientSurvey(result.survey.id, spec.name, [client], 'draft')
-    await d.setRescueAction(client, { note: `Draft rescue survey created: ${result.survey.id}. Review and launch on the Surveys page.` }, by)
+    await d.setRescueAction(client, { note: `Draft rescue survey created: ${result.survey.id}. Review and launch on the Surveys page.` }, by, view)
     return { survey_id: result.survey.id, open: '/replays/surveys', message: 'Draft created — review and launch it on the Surveys page' }
 }

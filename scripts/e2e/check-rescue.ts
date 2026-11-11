@@ -63,9 +63,9 @@ ok('repeat read is fast (cached)', warm < 300, `${warm} ms`)
 for (const [who, s] of [['admin', admin], ['viewer', viewer]] as const) {
     const before = s.errors.length
     const r = await s.page.goto(LENS + '/replays/dashboards', { waitUntil: 'networkidle0', timeout: 90000 }); await wait(1500)
-    const info = await s.page.evaluate(() => ({ title: document.querySelector('h1,h2')?.textContent, firstTab: document.querySelector('nav.tabs a')?.textContent, current: document.querySelector('nav.tabs a[aria-current=page]')?.textContent, forms: document.querySelectorAll('form[data-rescue], form.rescue-form, [data-rescue-form]').length, selects: document.querySelectorAll('select').length,
+    const info = await s.page.evaluate(() => ({ title: document.querySelector('h1,h2')?.textContent, firstTab: document.querySelector('nav.tabs a')?.textContent, current: document.querySelector('nav.tabs a[aria-current=page]')?.textContent, tabs: [...document.querySelectorAll('nav.tabs a')].map((a) => a.textContent || ''), forms: document.querySelectorAll('form[data-rescue], form.rescue-form, [data-rescue-form]').length, selects: document.querySelectorAll('select').length,
         unlabeled: [...document.querySelectorAll('input:not([type=hidden]),select,textarea')].filter((e: any) => e.offsetParent !== null && !e.getAttribute('aria-label') && !e.getAttribute('aria-labelledby') && !(e.id && document.querySelector('label[for="' + e.id + '"]')) && !e.closest('label')).map((e: any) => e.id || e.name || e.tagName) }))
-    ok(`${who}: Dashboards opens on the rescue queue`, r?.status() === 200 && /rescue/i.test(info.current || '') && /rescue/i.test(info.firstTab || ''), JSON.stringify({ title: info.title, firstTab: info.firstTab, current: info.current }))
+    ok(`${who}: Dashboards opens on the briefing, rescue queue is a tab`, r?.status() === 200 && /briefing/i.test(info.current || '') && info.tabs.some((t: string) => /rescue/i.test(t)), JSON.stringify({ title: info.title, current: info.current, tabs: info.tabs }))
     ok(`${who}: no browser errors, controls labelled`, s.errors.length === before && !info.unlabeled.length, [...s.errors.slice(before), ...info.unlabeled].join(' | '))
     await s.page.screenshot({ path: `${S}/rescue-${who}.png`, fullPage: true })
     await s.page.setViewport({ width: 390, height: 800 }); await wait(400)
@@ -99,7 +99,8 @@ if (target) {
 
     // 4. snooze: hidden, include_snoozed shows it, back to open
     const snooze = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)
-    const sn = await admin.api('/replays/dashboards/api/rescue/' + encodeURIComponent(target.client), 'POST', { status: 'expected', snooze_until: snooze, note: 'Seasonal, expected (check)' })
+    // Snooze from the period being viewed, as the page does: the score kept for "worse since snoozed" is for that period.
+    const sn = await admin.api('/replays/dashboards/api/rescue/' + encodeURIComponent(target.client) + '?' + W, 'POST', { status: 'expected', snooze_until: snooze, note: 'Seasonal, expected (check)' })
     const hidden = await admin.api(`/replays/dashboards/api/rescue?${W}`)
     const shown = await admin.api(`/replays/dashboards/api/rescue?${W}&include_snoozed=true`)
     ok('snoozed client hidden, counted, and shown on request', sn.status === 200 && !(hidden.body.clients || []).some((c: any) => c.client === target.client) && hidden.body.hidden_snoozed >= 1 && (shown.body.clients || []).some((c: any) => c.client === target.client), `POST ${sn.status}, hidden ${hidden.body.hidden_snoozed}`)
