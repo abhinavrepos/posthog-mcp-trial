@@ -525,3 +525,16 @@ test('dialog friction from unsorted fetched rows equals the existing session rea
     assert.equal(actual.rows_read, selected.length)
     assert.equal(actual.truncated, false)
 })
+
+test('generalise: identifiers mixing letters and digits, same as before, in linear time', async () => {
+    const { generalise } = await import('../src/core/appevents.ts')
+    const reg = { redact: [] as string[] }
+    // The previous single regex, kept here only to prove the new code gives the same answers.
+    const old = (s: string) => s.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '…').replace(/[A-Za-z0-9_.-]*(?:[A-Za-z][A-Za-z0-9_.-]*\d|\d[A-Za-z0-9_.-]*[A-Za-z])[A-Za-z0-9_.-]*/g, (t) => (t.length >= 5 ? '…' : t)).replace(/\d{3,}/g, '#')
+    for (const s of ['Trade Id 4348 Updated', 'Feed USD-LIBOR3M failed', 'User ab12 ok', 'IFRS 9 hedge', 'Run report_2024_Q3.v2 now', 'x1 y22 z333 abc1234', 'plain words only', 'A-1 B.2c d_3e4f', 'Mail jo.smith+x@acme-co.com about T123', 'a@b c@d.e user@host.co.uk', 'no-at-sign.example.com'])
+        assert.equal(generalise(s, reg), old(s), s)
+    // A long run of letters with no digit made the old regex backtrack for seconds or minutes.
+    const t = performance.now()
+    for (const long of ['Error ' + 'a'.repeat(30_000) + ' in step', 'x'.repeat(30_000), 'a1'.repeat(15_000), 'a.'.repeat(15_000)]) generalise(long, reg, 100_000)
+    assert.ok(performance.now() - t < 200, `took ${Math.round(performance.now() - t)} ms`)
+})
