@@ -358,6 +358,20 @@ test('Ask them page creates a draft through injected saveSurvey and shows the bu
     assert.match(result.data.message,/Draft created — review and launch/)
 })
 
+test('Ask them shows the real reason it cannot draft, and asks about the period being viewed', async () => {
+    const { RescueInputError } = await import('../src/core/rescue.ts')
+    let seen: any
+    const refuse = {...deps,surveysActive:()=>true,draftRescueSurvey:async(_c: string,_b: string,_d: unknown,view: any)=>{seen=view;throw new RescueInputError('This client has no current rescue reasons.')}}
+    const r=await request(`/api/rescue/acme/ask?from=${window.from}&to=${window.to}`,{...viewer(),surveys:'edit'},'POST',{},refuse)
+    assert.equal(r.status,400); assert.equal(r.data.error,'This client has no current rescue reasons.')
+    assert.deepEqual(seen.window,{from:window.from,to:window.to})
+    const original=console.error; console.error=()=>{}
+    try {
+        const broken=await request('/api/rescue/acme/ask',{...viewer(),surveys:'edit'},'POST',{},{...refuse,draftRescueSurvey:async()=>{throw new Error('secret internals')}})
+        assert.equal(broken.status,400); assert.doesNotMatch(broken.body,/secret internals/)
+    } finally { console.error=original }
+})
+
 test('client story and handover APIs follow dashboard view roles; accessible chart, timeline, fallback and scripts render',async()=>{
     const story={client:'acme',client_name:clientName,coverage:{complete:true,unprocessed:[]},weeks:[{week_start:'2026-06-01',attempts:10,done:8,users:2,errors:3,unrecovered:1,exports:4,productive_done:5}],events:[{date:'2026-06-05',kind:'note' as const,text:'<private> note'}],surveys:[],summary:'Work changed. Action open. Cause unknown.',unknown:'Unknown'}
     const injected={...deps,clientStory:async()=>story,handoverPack:async()=> '# Handover\n\n<escaped> pack'}

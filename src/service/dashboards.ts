@@ -133,7 +133,8 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
                     if (!(admin || canSurvey(v.surveys, 'edit'))) throw new HttpError(403, 'Asking clients needs the survey edit role.')
                     if (req.headers['x-clip-page'] !== '1') throw new HttpError(403, 'A page request header is required.')
                     if (!deps.surveysActive()) throw new HttpError(503, 'Surveys are switched off or not configured.')
-                    json(res, 201, await deps.draftRescueSurvey(decodeURIComponent(ask[1]), v.email, deps)); return true
+                    const { include_snoozed: _, ...view } = rescueParams(url.searchParams)
+                    json(res, 201, await deps.draftRescueSurvey(decodeURIComponent(ask[1]), v.email, deps, view)); return true
                 }
                 if (!share) throw new HttpError(403, 'Rescue changes need the dashboard share role.')
                 if (req.headers['x-clip-page'] !== '1') throw new HttpError(403, 'A page request header is required.')
@@ -259,8 +260,10 @@ ${countingHelp(map?.note || flow?.note)}
 ${pinsHtml(listDashboards(v.email, admin), v, admin)}${share ? dialogs(pin, !!manage, length(filterParams.window)) : ''}`
         html(res, 200, v, body)
     } catch (e) {
-        const status = e instanceof HttpError ? e.status : e instanceof InputError ? 400 : 400
-        const message = e instanceof HttpError || e instanceof InputError ? e.message : 'Dashboard history is unavailable. Try again shortly or ask an admin to check history processing.'
+        const known = e instanceof HttpError || e instanceof InputError || e instanceof RescueInputError
+        if (!known) console.error('dashboards:', url.pathname, e)
+        const status = e instanceof HttpError ? e.status : 400
+        const message = known ? (e as Error).message : 'Dashboard history is unavailable. Try again shortly or ask an admin to check history processing.'
         if (api) json(res, status, { error: message })
         else html(res, status, v, `<h1>Dashboards</h1><div class="card" role="alert">${esc(message)}</div><a href="${ROOT}">Back to Dashboards</a>`)
     }
@@ -478,7 +481,7 @@ document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openDialog($(b
 document.querySelectorAll('[data-page-list]').forEach(list=>{const items=[...list.children];if(!items.length||items[0].querySelector('td[colspan]'))return;const pg=makePager({mount:$(list.dataset.pageList),noun:list.dataset.noun,size:25,draw:slice=>list.replaceChildren(...slice)});pg.set(items)})
 if($('copy-handover'))$('copy-handover').onclick=async()=>{try{await navigator.clipboard.writeText($('handover-pack').textContent);$('copy-status').textContent='Copied'}catch{$('copy-status').textContent='Copy the text below to share the handover pack.'}}
 document.querySelectorAll('.rescue-action').forEach(form=>{const update=()=>{form.querySelector('.snooze-field').hidden=form.elements.status.value!=='expected';form.elements.snooze_until.required=form.elements.status.value==='expected'};form.elements.status.onchange=update;update();form.onsubmit=run(async()=>{const body=Object.fromEntries(new FormData(form));await api('rescue/'+encodeURIComponent(form.dataset.client)+location.search,'POST',body);form.querySelector('[role=status]').textContent='Saved'})})
-document.querySelectorAll('[data-ask-client]').forEach(b=>b.onclick=run(async()=>{const d=await api('rescue/'+encodeURIComponent(b.dataset.askClient)+'/ask','POST',{});$('message').textContent=d.message+' ';const a=document.createElement('a');a.href=d.open;a.textContent='Surveys page';$('message').append(a)}))
+document.querySelectorAll('[data-ask-client]').forEach(b=>b.onclick=run(async()=>{const d=await api('rescue/'+encodeURIComponent(b.dataset.askClient)+'/ask'+location.search,'POST',{});$('message').textContent=d.message+' ';const a=document.createElement('a');a.href=d.open;a.textContent='Surveys page';$('message').append(a)}))
 document.querySelectorAll('[data-review-client]').forEach(b=>b.onclick=run(async()=>{await api('rescue/'+encodeURIComponent(b.dataset.reviewClient),'POST',{note:'Quiet review completed: checked whether their work is going well.'});b.textContent='Reviewed'}))
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close())
 const form=$('filters')
