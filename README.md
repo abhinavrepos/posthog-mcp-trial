@@ -277,6 +277,32 @@ four people active for 10 minutes (`--minutes 30` for longer). `pnpm live-demo -
 one session with known timings to check the counting: with the default limit, the "Lens
 self-test" client on 2025-10-01 shows 410 s in the app, 160 s active and 250 s idle.
 
+## Rescue queue: who needs someone this week
+
+The first Dashboards tab, and the chat tools `rescue_queue` / `set_rescue_status`. A ranked list of
+clients from Lens's task history (no raw PostHog reads): for each, **urgent** or **watch**, the trend
+against a week earlier, the strongest reasons with numbers, one suggested next step, and links to the
+task map and flow time.
+
+| Reason | When |
+|---|---|
+| Stopped a task | ≥ 5 done before, none now |
+| Regular users stopped | users active in ≥ 2 weeks before, none now: ≥ 2 people or ≥ 30% of them |
+| Failing | done rate down ≥ 15 points |
+| Slower | median up ≥ 30% and ≥ 10 s |
+| Used less | a task's attempts halved |
+| Overall use fell | all attempts down ≥ 40% |
+
+Urgent: a weighted score of 40 or more, or a stopped task together with regular users stopping.
+The period is chosen on the page (last 14/28/56 days, against the same length before it) and always
+ends at the last fully processed day; no flags are given while either period is incomplete.
+
+Each client has an owner, a status (open, contacted, in progress, resolved, expected), a due date and
+a note (dashboard share role or admin; every change is in the activity log). **Expected** declines are
+snoozed until a date (at most 120 days) and come back early if the score rises by half; resolved
+clients stay listed while still flagged, so recovery is seen rather than assumed. These are attention
+signals from product use, not churn predictions: Lens has no renewal or contract data.
+
 ## Dashboards: client task map and flow time
 
 `/replays/dashboards` (the **Dashboards** tab), and the same answers in chat. PMs ask in chat; the
