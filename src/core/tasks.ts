@@ -164,24 +164,41 @@ function label(dialog: string, names?: Map<string, string>): string {
 // Answers change only when a day is stored, so each answer is kept until the next store (or 10 minutes,
 // for "today" in relative windows). Many people opening the same dashboard cost one query.
 let generation = 0
-const answers = new Map<string, { at: number; generation: number; value: Promise<unknown> }>()
+// Kept answers, each with the range of days it read (known once computed). Storing a day drops only
+// the answers that day can change: those whose range includes it, or ends before it (a default "last N
+// days" view moves forward with new data). Backfilling older days leaves current views cached; before,
+// every stored day dropped everything and the next requests recomputed all views at once, blocking Node.
+const answers = new Map<string, { at: number; value: Promise<unknown>; range?: [string, string] }>()
+function rangeOf(v: unknown): [string, string] | undefined {
+    const o = v as { window?: Window; baseline?: Window; params?: { window?: Window; baseline?: Window } } | null
+    const ws = [o?.window, o?.baseline, o?.params?.window, o?.params?.baseline].filter((w): w is Window => !!w && typeof w.from === 'string' && typeof w.to === 'string')
+    if (!ws.length) return undefined
+    // Seven days of margin before: the rescue queue's trend reads the same periods a week earlier.
+    return [shift(ws.map((w) => w.from).sort()[0], -7), ws.map((w) => w.to).sort().at(-1)!]
+}
 export function cached<T>(kind: string, p: object, compute: () => Promise<T>): Promise<T> {
     const key = kind + JSON.stringify(p), hit = answers.get(key)
-    if (hit && hit.generation === generation && Date.now() - hit.at < 600_000) return hit.value as Promise<T>
+    if (hit && Date.now() - hit.at < 600_000) return hit.value as Promise<T>
     const value = compute()
-    value.catch(() => answers.delete(key))
+    const entry: { at: number; value: Promise<unknown>; range?: [string, string] } = { at: Date.now(), value }
+    value.then((v) => { entry.range = rangeOf(v) }, () => answers.delete(key))
     if (answers.size >= 500) answers.delete(answers.keys().next().value!)
-    answers.set(key, { at: Date.now(), generation, value })
+    answers.set(key, entry)
     return value
 }
+/** Drops the kept answers a newly stored day can change (see above). */
+function invalidate(day: string): void {
+    for (const [key, a] of answers) if (!a.range || day >= a.range[0]) answers.delete(key)
+}
 /** Drops every kept answer (tests, and after maintenance). */
-export function forgetAnswers(): void { answers.clear() }
+export function forgetAnswers(): void { answers.clear(); catalogMemo = undefined }
 export const taskMap = (p: TaskMapParams): Promise<TaskMap> => cached('map', p, () => computeTaskMap(p))
 export const flowTime = (p: FlowTimeParams): Promise<FlowTime> => cached('flow', p, () => computeFlowTime(p))
 
 export function storeAttempts(day: string, attempts: TaskAttempt[], info: StoreInfo = {}): void {
     generation++
     validDay(day)
+    invalidate(day)
     if (attempts.some((a) => a.day !== day)) throw new Error('All attempts must belong to the stored day')
     const daily = new Map<string, { client: string; task: string; c: Counts }>()
     const paths = new Map<string, { client: string; task: string; path: string; c: Counts }>()
@@ -369,16 +386,25 @@ async function computeFlowTime(p: FlowTimeParams): Promise<FlowTime> {
         top_errors: all<{ template: string; count: number }>(`SELECT first_error AS template, count(*) AS count FROM task_attempts WHERE day BETWEEN ? AND ?${f.sql} AND first_error IS NOT NULL AND first_error != '' GROUP BY first_error ORDER BY count DESC, first_error LIMIT 5`, p.window.from, p.window.to, ...f.args).map((r) => ({ template: r.template, count: r.count })),
         data_through: dataThrough(), note: note(p.window) }
 }
-export function findTasks(query: string, limit = 10): Task[] {
-    if (typeof query !== 'string' || query.length > 1024) throw new Error('Task search must be a string of at most 1024 characters')
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit must be from 1 to 100')
-    const words = query.toLowerCase().trim().split(/\s+/).filter(Boolean)
+// The catalog with 90-day use, computed once per history change (and day): every task search used to
+// re-aggregate 90 days of task_daily, which dominated CPU under load.
+let catalogMemo: { generation: number; day: string; rows: (Task & { title: string })[] } | undefined
+function taskCatalog(): (Task & { title: string })[] {
+    const day = today()
+    if (catalogMemo && catalogMemo.generation === generation && catalogMemo.day === day) return catalogMemo.rows
     const rows = all<Task & { title: string }>(`SELECT c.task_id, c.dialog, c.name, coalesce(d.name, '') AS title,
         coalesce(sum(r.attempts), 0) AS attempts_90d, count(DISTINCT r.client) AS clients_90d
         FROM task_catalog c LEFT JOIN dialog_names d ON d.dialog = c.dialog
         LEFT JOIN task_daily r ON r.task_id = c.task_id AND r.day BETWEEN ? AND ?
-        GROUP BY c.task_id ORDER BY attempts_90d DESC, c.task_id`, shift(today(), -89), today())
-    return rows.filter((r) => words.every((w) => `${r.name} ${r.dialog} ${r.title}`.toLowerCase().includes(w))).slice(0, limit)
+        GROUP BY c.task_id ORDER BY attempts_90d DESC, c.task_id`, shift(day, -89), day)
+    catalogMemo = { generation, day, rows }
+    return rows
+}
+export function findTasks(query: string, limit = 10): Task[] {
+    if (typeof query !== 'string' || query.length > 1024) throw new Error('Task search must be a string of at most 1024 characters')
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit must be from 1 to 100')
+    const words = query.toLowerCase().trim().split(/\s+/).filter(Boolean)
+    return taskCatalog().filter((r) => words.every((w) => `${r.name} ${r.dialog} ${r.title}`.toLowerCase().includes(w))).slice(0, limit)
         .map(({ task_id, dialog, name, attempts_90d, clients_90d }) => ({ task_id, dialog, name, attempts_90d, clients_90d }))
 }
 
