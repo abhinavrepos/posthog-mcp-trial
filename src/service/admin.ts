@@ -4,7 +4,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config } from '../core/config.ts'
-import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSurveyRole, resetSurveyRole, setSurveySettings, SURVEY_ROLES, SURVEY_ROLE_TEXT, defaultSurveyRole, sharedTokenSurveyRole, surveyRoleOf, listMcpTokens, revokeMcpToken, type SurveyRole, setSystemAccess, surveyPeople, systemViewers, type Role, type Viewer } from './access.ts'
+import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSurveyRole, resetSurveyRole, setSurveySettings, SURVEY_ROLES, SURVEY_ROLE_TEXT, defaultSurveyRole, sharedTokenSurveyRole, surveyRoleOf, listMcpTokens, revokeMcpToken, chatUrl, setChatUrl, type SurveyRole, setSystemAccess, surveyPeople, systemViewers, type Role, type Viewer } from './access.ts'
 import { dashboardPeople, dashboardRoleOf, setDashboardRole, resetDashboardRole, setDashboardSettings, defaultDashboardRole, sharedTokenDashboardRole, DASHBOARD_ROLES, DASHBOARD_ROLE_TEXT, type DashboardRole } from './access.ts'
 import { APP_NAME, deleteClip, headerHtml, listClips, PAGE_CSS, setSaved, storage } from './replays.ts'
 
@@ -177,6 +177,13 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
             change.default_role = r
         }
         if (body.allow_share_links !== undefined) change.allow_share_links = !!body.allow_share_links
+        if (body.chat_url !== undefined) {
+            try {
+                return (json(res, 200, { ok: true, chat_url: setChatUrl(body.chat_url, v.email) }), true)
+            } catch (e) {
+                return (json(res, 400, { error: (e as Error).message }), true)
+            }
+        }
         if (body.survey_default_role !== undefined || body.survey_shared_token_role !== undefined) {
             try {
                 setSurveySettings({ default_role: body.survey_default_role as SurveyRole | undefined, shared_token_role: body.survey_shared_token_role as SurveyRole | undefined }, v.email)
@@ -257,7 +264,10 @@ function adminHtml(v: Viewer): string {
 <div><label for="dashboard-shared">Dashboard role for chat with the shared team token</label><select id="dashboard-shared"></select></div></div>
 <p class="small muted">The defaults apply to anyone who signs in with a PostHog account and is not listed above. "No access" is the safe choice. The shared team token cannot tell who asks: give it at most "See surveys and results", and give people personal tokens for more.</p><p id="settings-msg" class="small"></p></div>
 
-<div class="card"><h2>Chat tokens</h2><p class="small muted">Personal tokens people made on the Chat page. A revoked token stops working at once.</p>
+<div class="card"><h2>Chat tokens</h2>
+<div class="toolbar" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label for="chat-url">Lens address for Copilot</label><input id="chat-url" placeholder="https://lens.example.com"></div><div><button id="chat-url-save">Save</button></div></div>
+<p class="small muted">The Chat page gives people this address. Leave empty for the default.</p><p id="chat-url-msg" class="small"></p>
+<p class="small muted">Personal tokens people made on the Chat page. A revoked token stops working at once.</p>
 <div class="table-wrap"><table><thead><tr><th>Person</th><th>Name</th><th>Made</th><th>Last used</th><th></th></tr></thead><tbody id="tokens"></tbody></table></div></div>
 
 <div class="card"><h2>Clips</h2><p class="small muted" id="space"></p>
@@ -277,7 +287,7 @@ const clock=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 const short=e=>(e||'').replace(/@.*/,'');
 const cell=(tr,t,cls)=>{const td=document.createElement('td');if(t instanceof Node)td.appendChild(t);else td.textContent=t??'';if(cls)td.className=cls;tr.appendChild(td);return td};
 const msg=(id,t,ok)=>{$(id).textContent=t;$(id).className='small '+(ok?'ok':'err')};
-const ACTIONS={'signin':'Signed in','signout':'Signed out','signin.failed':'Failed sign in','recording.inspected':'Looked up a recording','clip.requested':'Asked for a clip','clip.created':'Clip made','clip.viewed':'Watched a clip','clip.downloaded':'Downloaded a clip','clip.link_shared':'Created a share link','clip.deleted':'Deleted a clip','clip.saved':'Saved a clip','clip.unsaved':'Unsaved a clip','clip.comment_added':'Commented on a clip','clip.comment_edited':'Edited a clip comment','clip.comment_deleted':'Deleted a clip comment','clips.pruned':'Old clips deleted','access.role_set':'Changed a role','access.role_removed':'Removed a role','access.settings':'Changed settings','access.system_set':'Changed System page access','access.surveys_set':'Changed Surveys page access','access.survey_role_set':'Changed a survey role','access.survey_role_reset':'Reset a survey role','access.survey_settings':'Changed survey settings','access.dashboard_role_set':'Changed a dashboard role','access.dashboard_role_reset':'Reset a dashboard role','access.dashboard_settings':'Changed dashboard settings','dashboard.pinned':'Pinned a dashboard','dashboard.changed':'Changed a dashboard','dashboard.deleted':'Deleted a dashboard','dashboard.shared':'Shared a dashboard','chat.token_created':'Made a chat token','chat.token_revoked':'Revoked a chat token','survey.created':'Made a survey','survey.changed':'Changed a survey','survey.launched':'Launched a survey','survey.stopped':'Stopped a survey','survey.archived':'Archived a survey'};
+const ACTIONS={'signin':'Signed in','signout':'Signed out','signin.failed':'Failed sign in','recording.inspected':'Looked up a recording','clip.requested':'Asked for a clip','clip.created':'Clip made','clip.viewed':'Watched a clip','clip.downloaded':'Downloaded a clip','clip.link_shared':'Created a share link','clip.deleted':'Deleted a clip','clip.saved':'Saved a clip','clip.unsaved':'Unsaved a clip','clip.comment_added':'Commented on a clip','clip.comment_edited':'Edited a clip comment','clip.comment_deleted':'Deleted a clip comment','clips.pruned':'Old clips deleted','access.role_set':'Changed a role','access.role_removed':'Removed a role','access.settings':'Changed settings','access.system_set':'Changed System page access','access.surveys_set':'Changed Surveys page access','access.survey_role_set':'Changed a survey role','access.survey_role_reset':'Reset a survey role','access.survey_settings':'Changed survey settings','access.dashboard_role_set':'Changed a dashboard role','access.dashboard_role_reset':'Reset a dashboard role','access.dashboard_settings':'Changed dashboard settings','access.chat_url':'Changed the Copilot address','dashboard.pinned':'Pinned a dashboard','dashboard.changed':'Changed a dashboard','dashboard.deleted':'Deleted a dashboard','dashboard.shared':'Shared a dashboard','chat.token_created':'Made a chat token','chat.token_revoked':'Revoked a chat token','survey.created':'Made a survey','survey.changed':'Changed a survey','survey.launched':'Launched a survey','survey.stopped':'Stopped a survey','survey.archived':'Archived a survey'};
 let S=null;
 function roleSelect(value,disabled){const s=document.createElement('select');S.roles.forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.text;if(r.id===value)o.selected=true;s.appendChild(o)});s.disabled=!!disabled;return s}
 async function load(){S=await api('/replays/admin/api/state');
@@ -333,6 +343,8 @@ function renderAudit(){const tb=$('audit');tb.innerHTML='';
  S.audit.forEach(e=>{const tr=document.createElement('tr');cell(tr,when(e.t),'small');cell(tr,e.who);cell(tr,ACTIONS[e.action]||e.action);const {t,who,action,...rest}=e;cell(tr,Object.entries(rest).map(([k,v])=>k+': '+(typeof v==='object'?JSON.stringify(v):v)).join(' · '),'small muted');tb.appendChild(tr)})}
 let searchTimer;$('filter').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(async()=>{const q=$('filter').value.trim();try{S.audit=(await api('/replays/admin/api/audit'+(q?'?q='+encodeURIComponent(q):''))).audit;renderAudit()}catch(e){}},250)};
 $('add').onclick=async()=>{const email=$('new-email').value.trim();if(!email)return;try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email,role:$('new-role').value,system:$('new-system').checked,dashboard_role:$('new-dashboards').value==='default'?'':$('new-dashboards').value,survey_role:$('new-surveys').value==='default'?'':$('new-surveys').value})});$('new-email').value='';$('new-system').checked=false;$('new-surveys').value='default';$('new-dashboards').value='default';msg('people-msg','Added '+email+'.',true);load()}catch(e){msg('people-msg',e.message)}};
+$('chat-url').value=${JSON.stringify(chatUrl()).replace(/</g, '\\u003c')};
+$('chat-url-save').onclick=async()=>{try{const r=await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({chat_url:$('chat-url').value})});$('chat-url').value=r.chat_url;msg('chat-url-msg','Saved.',true)}catch(e){msg('chat-url-msg',e.message)}};
 $('default-role').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({default_role:$('default-role').value})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
 $('share').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({allow_share_links:$('share').value==='1'})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
 $('survey-default').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({survey_default_role:$('survey-default').value})});msg('settings-msg','Saved.',true);load()}catch(e){msg('settings-msg',e.message)}};

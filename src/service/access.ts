@@ -138,6 +138,25 @@ export function resetSurveyRole(email: string, by: string): void {
         if (before) audit(by, 'access.survey_role_reset', { person: e, before })
     })
 }
+/** The Lens address people put in their chat app (Copilot). Admins set it; default PUBLIC_URL. */
+export const chatUrl = (): string => getSetting<string>('chat_url', '') || config.service.publicUrl
+export function setChatUrl(value: unknown, by: string): string {
+    const raw = String(value ?? '').trim().replace(/\/+$/, '')
+    if (raw) {
+        let u: URL
+        try {
+            u = new URL(raw)
+        } catch {
+            throw new Error('Give a full address, e.g. https://lens.example.com')
+        }
+        if (!/^https?:$/.test(u.protocol) || u.search || u.hash) throw new Error('Give a full address, e.g. https://lens.example.com')
+    }
+    tx(() => {
+        setSetting('chat_url', raw)
+        audit(by, 'access.chat_url', { url: raw || '(default)' })
+    })
+    return chatUrl()
+}
 export function setSurveySettings(change: { default_role?: SurveyRole; shared_token_role?: SurveyRole }, by: string): void {
     tx(() => {
         if (change.default_role !== undefined) {

@@ -782,13 +782,11 @@ kept unchanged.
 
 ### Connecting GitHub Copilot (for PMs)
 
-Each person opens **Chat** in Lens and clicks **Connect Copilot**. Lens makes their personal key and
-shows the fields for each server (Lens, and PostHog through Lens) with Copy buttons. In the GitHub
-Copilot app: cog → MCP Servers → Add Server → + Add Custom server, fill in name, transport `http`,
-URL and the header `Authorization: Bearer <key>`, and repeat for the second server. One key serves
-both (`/mcp` and `/posthog-mcp`), and Copilot gets that person's access. Servers apply to new chats.
-On Copilot Business or Enterprise, the organisation must allow the "MCP servers in Copilot" policy.
-The page also has VS Code install buttons, a VS Code `mcp.json`, and the Claude Code commands.
+On the **Chat** page, **Connect Copilot** makes the person's key and shows the fields for each server
+(Lens, and PostHog through Lens) with Copy buttons, for the Copilot app's MCP Servers → Add Custom
+server. One key serves both, with that person's access. Admins set the address Copilot uses on the
+Admin page (Chat tokens → Lens address for Copilot; default `PUBLIC_URL`). On Copilot Business or
+Enterprise, the organisation must allow the "MCP servers in Copilot" policy.
 
 ### Using PostHog's MCP server next to this one
 

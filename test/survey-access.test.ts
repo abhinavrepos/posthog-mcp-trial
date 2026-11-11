@@ -101,3 +101,20 @@ test('launch safeguard: four rules, a Jira ticket, the acknowledgement word for 
     assert.match(String((await post({ ticket: 'REVAL-1' })).body), /acknowledgement/)
     assert.match(String((await post({ ticket: 'nope', acknowledgement: ACKNOWLEDGEMENT })).body), /Jira ticket ID/)
 })
+
+test('Copilot address: admins set it, the Chat page hands it out, bad values refused', async () => {
+    const { config } = await import('../src/core/config.ts')
+    assert.equal(access.chatUrl(), config.service.publicUrl, 'default is PUBLIC_URL')
+    assert.equal(access.setChatUrl(' https://lens.ion.example/ ', 'admin@x.com'), 'https://lens.ion.example')
+    for (const bad of ['lens', 'ftp://x', 'https://x/?a=1', 'javascript:alert(1)']) assert.throws(() => access.setChatUrl(bad, 'admin@x.com'), /full address/, bad)
+    const { handleConnect } = await import('../src/service/connect.ts')
+    let body = ''
+    const res = { writeHead() {}, end(b: string) { body = b } } as never
+    const req = Object.assign((async function* () { yield '{}' })(), { method: 'POST', headers: {} })
+    const v = { email: 'lead@x.com', role: 'watch', surveys: 'launch' } as never
+    await handleConnect(req as never, res, new URL('http://x/replays/connect/api/tokens'), v)
+    assert.equal(JSON.parse(body).url, 'https://lens.ion.example/mcp')
+    access.setChatUrl('', 'admin@x.com')
+    assert.equal(access.chatUrl(), config.service.publicUrl, 'empty goes back to the default')
+    assert.ok(access.readAudit({ action: 'access.chat_url' }).length >= 2)
+})
