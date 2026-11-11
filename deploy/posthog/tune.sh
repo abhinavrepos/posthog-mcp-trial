@@ -99,7 +99,7 @@ PY
     docker compose up -d --no-deps --force-recreate clickhouse web proxy
 fi
 # Wait for container health AND a real web request; no external network is needed.
-wait_seconds="${LENS_TUNE_HEALTH_SECONDS:-600}"
+wait_seconds="${LENS_TUNE_HEALTH_SECONDS:-1500}"  # PostHog web can take 10+ minutes to start on a small box
 [[ "$wait_seconds" =~ ^[1-9][0-9]*$ ]] || { echo 'Invalid LENS_TUNE_HEALTH_SECONDS' >&2; exit 1; }
 deadline=$((SECONDS + wait_seconds))
 healthy=0

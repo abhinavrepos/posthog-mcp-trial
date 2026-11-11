@@ -13,7 +13,7 @@ existing scale/upgrade scripts retain it. Applying/undoing recreates web,
 clickhouse, and proxy; plan a maintenance window. Unchanged reapplication does
 not restart services. A lock prevents concurrent tuning operations. Existing
 files and .env are saved before mutation and restored if validation, recreation,
-or the health deadline fails. The default health deadline is 600 seconds.
+or the health deadline fails. The default health deadline is 1500 seconds.
 
 The changes and their limits
 ---------------------------
