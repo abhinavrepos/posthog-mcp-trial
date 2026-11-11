@@ -1,5 +1,6 @@
 // Dashboard pages use the task-history contract; no PostHog queries live here.
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { rescueQueue, setRescueAction, RescueInputError, RESCUE_STATUSES, type RescueQueue, type RescueParams } from '../core/rescue.ts'
 import { taskMap, flowTime, findTasks, ingestStatus } from '../core/tasks.ts'
 import type { FlowTime, FlowTimeParams, TaskMap, TaskMapParams, Window, Flag, Coverage } from '../core/taskstypes.ts'
 import { createDashboard, getDashboard, listDashboards, updateDashboard, deleteDashboard, shareDashboard, canOpen, canManage, knownPeople, KIND_TEXT, type Dashboard, type DashboardKind } from '../core/dashboards.ts'
@@ -7,7 +8,7 @@ import { can, canDashboard, canUseDashboards, type Viewer } from './access.ts'
 import { PAGE_CSS, headerHtml, APP_NAME, PAGER_JS } from './replays.ts'
 
 const ROOT = '/replays/dashboards'
-const defaults = { taskMap, flowTime, findTasks, ingestStatus }
+const defaults = { rescueQueue, setRescueAction, taskMap, flowTime, findTasks, ingestStatus }
 type Deps = typeof defaults
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 const num = (n: number) => n.toLocaleString('en-US')
@@ -98,19 +99,29 @@ function html(res: ServerResponse, status: number, v: Viewer, body: string) {
     res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Dashboards · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}${CSS}</style></head><body>${headerHtml(v, 'Dashboards')}<main class="wide"><div id="message" role="alert"></div><div id="action-status" role="status" aria-live="polite"></div>${body}</main><script>${PAGER_JS}
 ${CLIENT}</script></body></html>`)
 }
-export async function handleDashboards(req: IncomingMessage, res: ServerResponse, url: URL, v: Viewer, deps: Deps = defaults): Promise<boolean> {
+export async function handleDashboards(req: IncomingMessage, res: ServerResponse, url: URL, v: Viewer, injected: Partial<Deps> = defaults): Promise<boolean> {
+    const deps = { ...defaults, ...injected }
     const api = url.pathname.startsWith(ROOT + '/api/'), path = url.pathname.slice((ROOT + '/api/').length), admin = can(v.role, 'admin'), share = admin || canDashboard(v.dashboards, 'share')
     try {
         if (!canUseDashboards(v)) throw new HttpError(403, 'Ask an admin for dashboard access')
         if (api) {
             const method = req.method || 'GET'
             if (method === 'GET') {
+                if (path === 'rescue') { json(res, 200, await deps.rescueQueue(rescueParams(url.searchParams))); return true }
                 if (path === 'task-map') { json(res, 200, await deps.taskMap(queryParams('task_map', url.searchParams) as TaskMapParams)); return true }
                 if (path === 'flow-time') { json(res, 200, await deps.flowTime(queryParams('flow_time', url.searchParams) as FlowTimeParams)); return true }
                 if (path === 'tasks') { const q = url.searchParams.get('q') || ''; if (q.length > 200) bad('Search is too long.'); json(res, 200, await deps.findTasks(q, 100)); return true }
                 if (path === 'status') { json(res, 200, await deps.ingestStatus()); return true }
                 if (path === 'people') { if (!share) throw new HttpError(403, 'Sharing needs the dashboard share role.'); json(res, 200, knownPeople()); return true }
                 if (path === 'pins') { json(res, 200, listDashboards(v.email, admin)); return true }
+            }
+            if (path.startsWith('rescue/') && method === 'POST') {
+                if (!share) throw new HttpError(403, 'Rescue changes need the dashboard share role.')
+                if (req.headers['x-clip-page'] !== '1') throw new HttpError(403, 'A page request header is required.')
+                const change = await readJson(req)
+                try { json(res, 200, await deps.setRescueAction(decodeURIComponent(path.slice(7)), change, v.email)) }
+                catch (e) { if (e instanceof RescueInputError) bad(e.message); throw e }
+                return true
             }
             const match = /^pins\/([0-9a-f]{12})(?:\/(share))?$/.exec(path)
             const pin = match ? getDashboard(match[1]) : undefined
@@ -148,7 +159,14 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
         const suffix = url.pathname.slice(ROOT.length).replace(/\/$/, ''), pin = suffix ? getDashboard(suffix.slice(1)) : undefined
         if (suffix && !pin) throw new HttpError(404, 'Dashboard not found.')
         if (pin && !canOpen(pin, v.email, admin)) throw new HttpError(403, 'This dashboard has not been shared with you.')
-        const selected = url.searchParams.get('view') || pin?.kind || 'task_map'
+        const selected = url.searchParams.get('view') || pin?.kind || 'rescue'
+        if (selected === 'rescue' && !pin) {
+            let body: string
+            try { body = rescueHtml(await deps.rescueQueue(rescueParams(url.searchParams)), url, v, share) }
+            catch (e) { if (e instanceof InputError) throw e; body = '<div class="card" role="alert">Dashboard history is unavailable. Try again shortly.</div>' }
+            html(res, 200, v, `${rescueNav('rescue')}<h1>Rescue queue</h1>${body}${pinsHtml(listDashboards(v.email, admin), v, admin)}`)
+            return true
+        }
         if (selected !== 'task_map' && selected !== 'flow_time') bad('View must be task_map or flow_time.')
         const kind: DashboardKind = pin?.kind || selected as DashboardKind
         const override = ['from', 'to', 'days', 'task', 'client', 'compare', 'granularity', 'min_attempts', 'slowest_limit'].some(k => url.searchParams.has(k))
@@ -196,7 +214,7 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
         const manage = pin && share && canManage(pin, v.email, admin)
         const context = { kind, params: filterParams, id: pin?.id, relative: url.searchParams.has('days') ? length(filterParams.window) : url.searchParams.has('from') || url.searchParams.has('to') ? null : pin && 'last_days' in pin.params.window ? (pin.params.window as unknown as { last_days: number }).last_days : null, shares: pin?.shared_with || [] }
         const body = `<div id="dashboard-context" data-context="${esc(JSON.stringify(context))}"></div>
-<nav class="tabs" aria-label="Dashboard views"><a href="${ROOT}?view=task_map" ${kind === 'task_map' ? 'aria-current="page"' : ''}>Client task map</a><a href="${ROOT}?view=flow_time" ${kind === 'flow_time' ? 'aria-current="page"' : ''}>Flow time</a><a href="#pinned">Pinned</a></nav>
+<nav class="tabs" aria-label="Dashboard views"><a href="${ROOT}?view=rescue">Rescue queue</a><a href="${ROOT}?view=task_map" ${kind === 'task_map' ? 'aria-current="page"' : ''}>Client task map</a><a href="${ROOT}?view=flow_time" ${kind === 'flow_time' ? 'aria-current="page"' : ''}>Flow time</a><a href="#pinned">Pinned</a></nav>
 <div class="tools"><h1>${esc(pin?.title || KIND_TEXT[kind])}</h1><div class="actions">${controls}${manage ? '<details class="dashboard-settings"><summary>Settings</summary><div class="actions"><button class="ghost" type="button" id="save-filters">Save filters</button><button class="ghost" type="button" data-open="rename-dialog">Rename</button><button class="ghost" type="button" id="open-share">Share</button><button class="ghost" type="button" data-open="delete-dialog">Delete</button></div></details>' : ''}</div></div>
 ${pin ? `<details class="ownership"><summary>Owner: ${esc(pin.owner)} · Shared with ${num(pin.shared_with.length)}</summary><p>${pin.shared_with.map(esc).join(', ') || 'No one else has access.'}</p></details>` : ''}
 ${statusLine}${filters(kind, filterParams, url, tasks, clients, pin ? 'last_days' in pin.params.window : undefined)}${coreError}
@@ -211,6 +229,54 @@ ${pinsHtml(listDashboards(v.email, admin), v, admin)}${share ? dialogs(pin, !!ma
         else html(res, status, v, `<h1>Dashboards</h1><div class="card" role="alert">${esc(message)}</div><a href="${ROOT}">Back to Dashboards</a>`)
     }
     return true
+}
+
+function rescueParams(q: URLSearchParams): RescueParams {
+    const p: RescueParams = {}
+    if (q.has('from') || q.has('to')) p.window = windowOf({ from: q.get('from'), to: q.get('to') })
+    else if (q.has('days')) {
+        const to = ingestStatus().last_day || shift(new Date().toISOString().slice(0, 10), -1)
+        p.window = { from: shift(to, 1 - integer(q.get('days'), 1, 366, 'Days')), to }
+    }
+    if (q.has('baseline_from') || q.has('baseline_to')) p.baseline = windowOf({ from: q.get('baseline_from'), to: q.get('baseline_to') })
+    if (q.has('min_attempts')) p.min_attempts = integer(q.get('min_attempts'), 1, 100000, 'Minimum attempts')
+    if (q.has('include_snoozed')) {
+        if (!['true', 'false', '1', '0'].includes(q.get('include_snoozed')!)) bad('Show snoozed must be true or false.')
+        p.include_snoozed = ['true', '1'].includes(q.get('include_snoozed')!)
+    }
+    return p
+}
+const rescueNav = (selected: string) => `<nav class="tabs" aria-label="Dashboard views"><a href="${ROOT}?view=rescue" ${selected === 'rescue' ? 'aria-current="page"' : ''}>Rescue queue</a><a href="${ROOT}?view=task_map">Client task map</a><a href="${ROOT}?view=flow_time">Flow time</a><a href="#pinned">Pinned</a></nav>`
+function rescueHtml(r: RescueQueue, url: URL, v: Viewer, share: boolean): string {
+    const q = url.searchParams, level = q.get('level') || 'all', status = q.get('status') || 'any'
+    if (!['all', 'urgent', 'watch'].includes(level)) bad('Invalid level.')
+    if (!['any', 'unassigned', 'mine', ...RESCUE_STATUSES].includes(status)) bad('Invalid status.')
+    const clients = r.clients.filter(c => (level === 'all' || c.level === level) && (status === 'any' || status === 'unassigned' && !c.action?.owner || status === 'mine' && c.action?.owner === v.email.toLowerCase() || (c.action?.status || 'open') === status))
+    const options = (values: readonly string[], selected: string) => values.map(x => `<option value="${esc(x)}" ${x === selected ? 'selected' : ''}>${esc(x.replaceAll('_', ' '))}</option>`).join('')
+    return `<p>${r.coverage.complete ? `${r.clients.length} clients need someone this week` : 'Waiting for processed history'}</p>
+${!r.coverage.complete ? `<div class="card" role="status">${esc(r.coverage.text)}<details><summary>Unprocessed days</summary>${r.coverage.unprocessed.map(esc).join(', ')}</details></div>` : ''}
+<p class="muted">Data through ${esc(r.data_through || 'not yet available')} · ${esc(r.window.from)} to ${esc(r.window.to)} · compared with ${esc(r.baseline.from)} to ${esc(r.baseline.to)}</p>
+<form class="card rescue-filters" method="get"><input type="hidden" name="view" value="rescue">
+${['from', 'to', 'baseline_from', 'baseline_to', 'days', 'min_attempts'].filter(k => q.has(k)).map(k => `<input type="hidden" name="${k}" value="${esc(q.get(k))}">`).join('')}
+<label>Level <select name="level">${options(['all', 'urgent', 'watch'], level)}</select></label>
+<label>Status <select name="status">${options(['any', 'unassigned', 'mine', ...RESCUE_STATUSES], status)}</select></label>
+<label><input type="checkbox" name="include_snoozed" value="true" ${q.get('include_snoozed') === 'true' || q.get('include_snoozed') === '1' ? 'checked' : ''}> Show snoozed</label><button type="submit">Apply</button></form>
+<p>${r.hidden_snoozed} snoozed clients hidden</p>
+${share ? `<datalist id="rescue-people">${knownPeople().map(e => `<option value="${esc(e)}"></option>`).join('')}</datalist>` : ''}
+<div data-page-list="rescue-pager" data-noun="clients">${clients.map(c => {
+    const a = c.action, link = new URLSearchParams({ view: 'task_map', client: c.client, from: r.window.from, to: r.window.to, baseline_from: r.baseline.from, baseline_to: r.baseline.to })
+    const flow = new URLSearchParams({ view: 'flow_time', client: c.client, task: c.critical_task?.task_id || '', from: r.window.from, to: r.window.to })
+    return `<article class="card rescue-client"><h2>${esc(c.client_name)} <span class="rescue-level ${c.level}">${c.level}</span></h2><p>Trend: ${esc(c.trend)}</p>
+<ul>${c.reasons.slice(0, 3).map(reason => `<li>${esc(reason.text)}</li>`).join('')}</ul><p>${esc(c.next_step)}</p>
+<p><a href="${ROOT}?${esc(link)}">Open task map for this client</a>${c.critical_task ? ` · <a href="${ROOT}?${esc(flow)}">Flow time</a>` : ''}</p>
+${share ? `<form class="rescue-action" data-client="${esc(c.client)}">
+<label>Owner <input type="email" name="owner" list="rescue-people" value="${esc(a?.owner)}" placeholder="Email"></label>
+<label>Status <select name="status">${options(RESCUE_STATUSES, a?.status || 'open')}</select></label>
+<label>Due <input type="date" name="due" value="${esc(a?.due)}"></label>
+<label>Note <textarea name="note" maxlength="500">${esc(a?.note)}</textarea></label>
+<label class="snooze-field" ${a?.status !== 'expected' ? 'hidden' : ''}>Snooze until <input type="date" name="snooze_until" value="${esc(a?.snooze_until)}"></label>
+<button type="submit">Save</button><span role="status" aria-live="polite"></span></form>` : `<p>Owner: ${esc(a?.owner || 'Unassigned')} · Status: ${esc(a?.status || 'open')}${a?.due ? ` · Due: ${esc(a.due)}` : ''}</p>${a?.note ? `<p>${esc(a.note)}</p>` : ''}`}</article>`
+}).join('') || '<p class="card">No clients match these filters.</p>'}</div><div id="rescue-pager"></div><p class="muted">${esc(r.note)}</p>`
 }
 
 function filters(kind: DashboardKind, p: TaskMapParams | FlowTimeParams, url: URL, tasks: Awaited<ReturnType<Deps['findTasks']>>, clients: TaskMap['clients'], savedRelative?: boolean) {
@@ -305,6 +371,8 @@ ${manage ? `<dialog id="rename-dialog" role="dialog" aria-modal="true" aria-labe
 <dialog id="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-heading"><form id="delete-form"><h2 id="delete-heading">Delete this dashboard?</h2><p>The saved view and its shares will be removed.</p><div class="actions">${close}<button class="primary" type="submit">Delete</button></div></form></dialog>` : ''}`
 }
 const CSS = `
+.rescue-client{overflow-wrap:anywhere;min-width:0}.rescue-client h2{font-size:1.1rem}.rescue-level{font-size:.8rem;padding:3px 8px;border-radius:12px}.rescue-level.urgent{background:#fce4dc;color:#832e17}.rescue-level.watch{background:#fff0cb;color:#735315}.rescue-filters,.rescue-action{display:flex;gap:12px;flex-wrap:wrap;align-items:end}.rescue-action label,.rescue-filters label{display:flex;flex-direction:column;gap:4px;max-width:100%;min-width:0}.rescue-action input,.rescue-action textarea,.rescue-action select{width:100%;max-width:100%;box-sizing:border-box}.rescue-action [hidden]{display:none}.rescue-action textarea{min-height:60px}.rescue-action label{flex:1 1 160px}.rescue-filters input[type=checkbox]{width:auto}.tabs{flex-wrap:wrap}
+
 :root{--good:var(--ok);--warn:#9a5b00;--down:var(--err)}
 @media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#151922;--card:#1d2330;--ink:#e8ebf2;--muted:#acb5c6;--line:#374151;--accent:#8fb5ff;--accent-ink:#151922;--chip:#29303d;--good:#7ed5a0;--warn:#edbd70;--down:#ffa4a0}}
 main.wide{max-width:1280px;min-width:0}main *{box-sizing:border-box}main [hidden]{display:none!important}
@@ -335,6 +403,7 @@ const openDialog=(dialog,opener)=>{dialog.querySelectorAll('[role=alert]').forEa
 document.querySelectorAll('dialog').forEach(d=>d.addEventListener('close',()=>{if(d._opener)d._opener.focus()}))
 document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openDialog($(b.dataset.open),b))
 document.querySelectorAll('[data-page-list]').forEach(list=>{const items=[...list.children];if(!items.length||items[0].querySelector('td[colspan]'))return;const pg=makePager({mount:$(list.dataset.pageList),noun:list.dataset.noun,size:25,draw:slice=>list.replaceChildren(...slice)});pg.set(items)})
+document.querySelectorAll('.rescue-action').forEach(form=>{const update=()=>{form.querySelector('.snooze-field').hidden=form.elements.status.value!=='expected';form.elements.snooze_until.required=form.elements.status.value==='expected'};form.elements.status.onchange=update;update();form.onsubmit=run(async()=>{const body=Object.fromEntries(new FormData(form));await api('rescue/'+encodeURIComponent(form.dataset.client),'POST',body);form.querySelector('[role=status]').textContent='Saved'})})
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close())
 const form=$('filters')
 if(form){
