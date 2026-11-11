@@ -103,11 +103,13 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
     }))
     reg('set_rescue_status', {
         description: 'Set the owner, status, note, due date or expected-decline snooze for a client in the rescue queue.',
-        inputSchema: { client: z.string(), owner: z.string().optional(), status: z.enum(RESCUE_STATUSES).optional(), note: z.string().max(500).optional(), due: z.string().optional(), snooze_until: z.string().optional() },
-    }, safe(async ({ client, ...change }) => {
+        inputSchema: { client: z.string(), owner: z.string().optional(), status: z.enum(RESCUE_STATUSES).optional(), note: z.string().max(500).optional(), due: z.string().optional(), snooze_until: z.string().optional(), when: filters.when, compared_with: filters.compared_with },
+    }, safe(async ({ client, when, compared_with, ...change }) => {
         const matches = await d.rescueClients(client)
         if (matches.length !== 1) return json({ message: 'Which client did you mean? Choose a client id.', candidates: matches })
-        return json(await d.setRescueAction(matches[0].id, Object.fromEntries(Object.entries(change).filter(([, v]) => v !== undefined)), caller.email || caller.who))
+        // The period being discussed, so a snooze keeps the score the person saw (as on the page).
+        const view = { ...(when ? { window: windowFor(when, 28) } : {}), ...(compared_with ? { baseline: windowFor(compared_with, 28) } : {}) }
+        return json(await d.setRescueAction(matches[0].id, Object.fromEntries(Object.entries(change).filter(([, v]) => v !== undefined)), caller.email || caller.who, view))
     }))
     reg('find_task', {
         description: `Which ${appEvents()?.app || 'app'} task does someone mean? Matches their own words ("book a hedge", "run the FX report") to task ids and names, with use over the last 90 days. Call it before flow_time when a task is named loosely.`,

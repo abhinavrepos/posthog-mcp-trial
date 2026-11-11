@@ -121,14 +121,17 @@ export async function rescueQueue(p: RescueParams = {}): Promise<RescueQueue> {
     const clients = result.clients.flatMap(c => {
         const action = actions.get(c.client)
         const snoozed = action?.status === 'expected' && !!action.snooze_until && action.snooze_until > today()
-        const worse = snoozed && action.score_at_snooze !== null && c.score >= action.score_at_snooze * RESCUE.snooze_growth && c.score > action.score_at_snooze
+        // Not flagged when snoozed (score 0): stays hidden until the date; there is nothing to be "worse" than.
+        const worse = snoozed && !!action.score_at_snooze && c.score >= action.score_at_snooze * RESCUE.snooze_growth
         if (snoozed && !worse && !include_snoozed) { hidden_snoozed++; return [] }
         return [{ ...c, reasons: worse ? [{ kind: 'worse_since_snoozed' as const, text: 'Worse since snoozed: score rose by at least 50%', now: c.score, before: action!.score_at_snooze! }, ...c.reasons] : c.reasons, ...(action ? { action } : {}) }]
     })
     return { ...result, clients, hidden_snoozed }
 }
 export class RescueInputError extends Error {}
-export async function setRescueAction(client: string, change: Record<string, unknown>, by: string): Promise<RescueAction> {
+/** view: the period the person is looking at when snoozing, so the score kept for "worse since snoozed"
+ * is the one they saw (default: the default view). */
+export async function setRescueAction(client: string, change: Record<string, unknown>, by: string, view: Omit<RescueParams, 'include_snoozed'> = {}): Promise<RescueAction> {
     if (typeof client !== 'string' || !client.trim() || client.length > 256) throw new RescueInputError('Give a client id of 1–256 characters')
     if (!change || typeof change !== 'object' || Array.isArray(change)) throw new RescueInputError('Give an action object')
     if (!Object.keys(change).length || Object.keys(change).some(k => !['owner', 'status', 'note', 'due', 'snooze_until'].includes(k))) throw new RescueInputError('Give owner, status, note, due or snooze_until')
@@ -141,7 +144,7 @@ export async function setRescueAction(client: string, change: Record<string, unk
         try { validDay(merged[key] as string) } catch { throw new RescueInputError('Dates must be valid YYYY-MM-DD dates') }
     }
     if (merged.status === 'expected' && (!merged.snooze_until || String(merged.snooze_until) <= today() || String(merged.snooze_until) > shift(today(), RESCUE.snooze_days))) throw new RescueInputError('Expected needs a snooze date within the next 120 days')
-    const score = merged.status !== 'expected' ? null : old?.status === 'expected' && old.snooze_until === merged.snooze_until ? old.score_at_snooze : (await rescueQueue({ include_snoozed: true })).clients.find(c => c.client === client)?.score ?? 0
+    const score = merged.status !== 'expected' ? null : old?.status === 'expected' && old.snooze_until === merged.snooze_until ? old.score_at_snooze : (await rescueQueue({ ...view, include_snoozed: true })).clients.find(c => c.client === client)?.score ?? 0
     tx(() => {
         run(`INSERT OR REPLACE INTO rescue_actions VALUES (?,?,?,?,?,?,?,?,?)`, client, (merged.owner as string)?.toLowerCase() || null, merged.status as string,
             merged.note as string | null, merged.due as string || null, merged.snooze_until as string || null, score, by, new Date().toISOString())

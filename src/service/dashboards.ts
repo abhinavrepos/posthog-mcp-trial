@@ -119,7 +119,8 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
                 if (!share) throw new HttpError(403, 'Rescue changes need the dashboard share role.')
                 if (req.headers['x-clip-page'] !== '1') throw new HttpError(403, 'A page request header is required.')
                 const change = await readJson(req)
-                try { json(res, 200, await deps.setRescueAction(decodeURIComponent(path.slice(7)), change, v.email)) }
+                const { include_snoozed: _, ...view } = rescueParams(url.searchParams)
+                try { json(res, 200, await deps.setRescueAction(decodeURIComponent(path.slice(7)), change, v.email, view)) }
                 catch (e) { if (e instanceof RescueInputError) bad(e.message); throw e }
                 return true
             }
@@ -403,7 +404,7 @@ const openDialog=(dialog,opener)=>{dialog.querySelectorAll('[role=alert]').forEa
 document.querySelectorAll('dialog').forEach(d=>d.addEventListener('close',()=>{if(d._opener)d._opener.focus()}))
 document.querySelectorAll('[data-open]').forEach(b=>b.onclick=()=>openDialog($(b.dataset.open),b))
 document.querySelectorAll('[data-page-list]').forEach(list=>{const items=[...list.children];if(!items.length||items[0].querySelector('td[colspan]'))return;const pg=makePager({mount:$(list.dataset.pageList),noun:list.dataset.noun,size:25,draw:slice=>list.replaceChildren(...slice)});pg.set(items)})
-document.querySelectorAll('.rescue-action').forEach(form=>{const update=()=>{form.querySelector('.snooze-field').hidden=form.elements.status.value!=='expected';form.elements.snooze_until.required=form.elements.status.value==='expected'};form.elements.status.onchange=update;update();form.onsubmit=run(async()=>{const body=Object.fromEntries(new FormData(form));await api('rescue/'+encodeURIComponent(form.dataset.client),'POST',body);form.querySelector('[role=status]').textContent='Saved'})})
+document.querySelectorAll('.rescue-action').forEach(form=>{const update=()=>{form.querySelector('.snooze-field').hidden=form.elements.status.value!=='expected';form.elements.snooze_until.required=form.elements.status.value==='expected'};form.elements.status.onchange=update;update();form.onsubmit=run(async()=>{const body=Object.fromEntries(new FormData(form));await api('rescue/'+encodeURIComponent(form.dataset.client)+location.search,'POST',body);form.querySelector('[role=status]').textContent='Saved'})})
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close())
 const form=$('filters')
 if(form){
