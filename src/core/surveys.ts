@@ -1,3 +1,4 @@
+import { rememberClientSurvey } from './surveylocal.ts'
 // Surveys made from Lens: a PM describes one in the app's own words (which dialog, which button, which
 // message, which clients, which colours) and Lens turns it into a PostHog survey that PostHog's own
 // survey script shows. Nothing new is added to the tracked app.
@@ -571,7 +572,13 @@ export async function saveSurvey(spec: SurveySpec, opts: { id?: string; clientId
     const survey = opts.id
         ? await surveyApi<PostHogSurvey>(`${encodeURIComponent(opts.id)}/`, { method: 'PATCH', body: JSON.stringify(compiled.body) })
         : await surveyApi<PostHogSurvey>('', { method: 'POST', body: JSON.stringify(compiled.body) })
+    rememberSurvey(survey)
     return { survey, compiled }
+}
+
+function rememberSurvey(s: PostHogSurvey): PostHogSurvey {
+    rememberClientSurvey(s.id, s.name, s.conditions?.lensChain?.audience?.clients || [], statusOf(s))
+    return s
 }
 
 /** Starts a draft, or starts a stopped survey again. PostHog activates the survey's flag only on this PATCH. */
@@ -582,19 +589,19 @@ export async function launchSurvey(id: string): Promise<PostHogSurvey> {
     if (st === 'archived') throw new Error('This survey is archived.')
     if (s.conditions?.lensChain && !s.conditions.lensChain.steps?.length) throw new Error('This survey has no chain steps.')
     const now = new Date().toISOString()
-    return surveyApi<PostHogSurvey>(`${encodeURIComponent(id)}/`, { method: 'PATCH', body: JSON.stringify(st === 'draft' ? { start_date: now } : { end_date: null }) })
+    return rememberSurvey(await surveyApi<PostHogSurvey>(`${encodeURIComponent(id)}/`, { method: 'PATCH', body: JSON.stringify(st === 'draft' ? { start_date: now } : { end_date: null }) }))
 }
 
 export async function stopSurvey(id: string): Promise<PostHogSurvey> {
     const s = await surveyApi<PostHogSurvey>(`${checkId(id)}/`)
     if (statusOf(s) !== 'running') return s
-    return surveyApi<PostHogSurvey>(`${encodeURIComponent(id)}/`, { method: 'PATCH', body: JSON.stringify({ end_date: new Date().toISOString() }) })
+    return rememberSurvey(await surveyApi<PostHogSurvey>(`${encodeURIComponent(id)}/`, { method: 'PATCH', body: JSON.stringify({ end_date: new Date().toISOString() }) }))
 }
 
 /** Hides a survey from lists; a running one is stopped first. */
 export async function archiveSurvey(id: string): Promise<PostHogSurvey> {
     await stopSurvey(id)
-    return surveyApi<PostHogSurvey>(`${encodeURIComponent(checkId(id))}/`, { method: 'PATCH', body: JSON.stringify({ archived: true }) })
+    return rememberSurvey(await surveyApi<PostHogSurvey>(`${encodeURIComponent(checkId(id))}/`, { method: 'PATCH', body: JSON.stringify({ archived: true }) }))
 }
 
 // ------------------------------------------------------------------ for people: a survey in words

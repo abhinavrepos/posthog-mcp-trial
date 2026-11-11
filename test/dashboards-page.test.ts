@@ -357,3 +357,33 @@ test('Ask them page creates a draft through injected saveSurvey and shows the bu
     assert.deepEqual(saved.clients,['acme']); assert.equal(saved.questions[0].type,'single')
     assert.match(result.data.message,/Draft created — review and launch/)
 })
+
+test('client story and handover APIs follow dashboard view roles; accessible chart, timeline, fallback and scripts render',async()=>{
+    const story={client:'acme',client_name:clientName,coverage:{complete:true,unprocessed:[]},weeks:[{week_start:'2026-06-01',attempts:10,done:8,users:2,errors:3,unrecovered:1,exports:4,productive_done:5}],events:[{date:'2026-06-05',kind:'note' as const,text:'<private> note'}],surveys:[],summary:'Work changed. Action open. Cause unknown.',unknown:'Unknown'}
+    const injected={...deps,clientStory:async()=>story,handoverPack:async()=> '# Handover\n\n<escaped> pack'}
+    for(const v of [viewer('none'),viewer(),viewer('share'),viewer('none','admin@example.com',true)]) {
+        const allowed=v.role==='admin'||v.dashboards!=='none'
+        for(const path of ['?view=story&client=acme','/api/story?client=acme','/api/handover-pack?client=acme']) {
+            const r=await request(path,v,'GET',undefined,injected)
+            assert.equal(r.status,allowed?200:403)
+            if(!path.startsWith('/api/')&&allowed) {
+                assert.match(r.body,/<h1>&lt;img src=x onerror=1&gt;<\/h1>/)
+                assert.match(r.body,/Weekly work counts \(chart alternative\)/);assert.match(r.body,/<svg[^>]+role="img"/)
+                assert.match(r.body,/<th scope="col">users<\/th>/);assert.match(r.body,/&lt;private&gt; note/)
+                assert.match(r.body,/Copy handover pack/);assert.match(r.body,/<pre id="handover-pack"/);assert.match(r.body,/&lt;escaped&gt; pack/)
+                assert.doesNotMatch(r.body,/<img|<private>|<escaped>/);scriptsParse(r.body)
+            }
+        }
+    }
+    for(const path of ['?view=story','/api/story?client=acme&weeks=53','/api/story?client=acme&weeks=1.5','/api/handover-pack']) assert.equal((await request(path)).status,400)
+    assert.match((await request('?view=task_map')).body,/view=story/)
+})
+test('briefing grid renders all eight columns, explanatory labels, story links and standard pagination',async()=>{
+    const grid=[{client:'acme',client_name:'ACME',score:50,open:ROOT+'?view=story&client=acme',cells:['missing','users_lost','failing','slower','work_moving_out','recurring_close_error','giving_up','trend'].map(column=>({column,mark:column==='missing'?'●':'–',label:column==='missing'?'Yes: Hedge Designation stopped':column+': not flagged'}))}]
+    const brief={generated_at:'2026-06-16',period:window,headline:'Review clients',sections:{new_or_worse:[],close_soon:[],overdue:[],recovered:[],quiet_review:null},counts:{},queue_scores:{},verified_recoveries:[],grid}
+    const r=await request('',viewer(),'GET',undefined,{...deps,mondayBrief:async()=>brief})
+    assert.equal(r.status,200)
+    for(const name of ['Stopped task','Users stopped','Failing','Slower','Exports','Close errors','Giving up','Trend']) assert.ok(r.body.includes('<th scope="col">'+name+'</th>'))
+    assert.match(r.body,/aria-label="Yes: Hedge Designation stopped"/)
+    assert.match(r.body,/data-page-list="portfolio-pager"/);assert.match(r.body,/view=story/);scriptsParse(r.body)
+})

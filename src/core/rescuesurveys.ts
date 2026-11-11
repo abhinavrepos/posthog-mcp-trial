@@ -1,3 +1,4 @@
+import { rememberClientSurvey } from './surveylocal.ts'
 import { rescueQueue, setRescueAction, RescueInputError } from './rescue.ts'
 import { saveSurvey, type SurveySpec } from './surveys.ts'
 import { surveysActive } from './config.ts'
@@ -27,6 +28,7 @@ export async function draftRescueSurvey(client: string, by: string, injected: Pa
     }
     const result = await d.saveSurvey(spec, { clientIds: [client] })
     if (!result.survey) throw new RescueInputError('Could not create draft: ' + result.compiled.problems.map(p => p.text).join('; '))
+    rememberClientSurvey(result.survey.id, spec.name, [client], 'draft')
     await d.setRescueAction(client, { note: `Draft rescue survey created: ${result.survey.id}. Review and launch on the Surveys page.` }, by)
     return { survey_id: result.survey.id, open: '/replays/surveys', message: 'Draft created — review and launch it on the Surveys page' }
 }

@@ -1,3 +1,4 @@
+import { startBriefingDelivery } from '../core/briefingdelivery.ts'
 // The triage service:
 //   POST /webhooks/jira   signed Jira webhook → 202 at once, triage runs in the background
 //   GET  /clips/<name>    signed, expiring clip links (with Range support so the video can seek)
@@ -281,6 +282,7 @@ for (const [name, value] of Object.entries({ ...(jiraConfigured() ? { JIRA_WEBHO
 pruneOldClips()
 // The task history behind the dashboards: day by day in the background (core/tasks.ts).
 if (appEvents()) startTaskHistory()
+if (appEvents()) startBriefingDelivery()
 if (appEvents() && config.features.lensMcp) startPrewarm()
 setInterval(() => pruneOldClips(), 6 * 3_600_000).unref()
 

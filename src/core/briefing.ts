@@ -7,7 +7,13 @@ import { clientSignals } from './signals.ts'
 
 const shift = (d: string, n: number) => new Date(Date.parse(d) + n * 86400000).toISOString().slice(0, 10)
 export interface BriefItem { client: string; client_name: string; text: string; open: string; score?: number }
+export const GRID_COLUMNS = [
+    ['missing', 'Stopped task'], ['users_lost', 'Users stopped'], ['failing', 'Failing'], ['slower', 'Slower'],
+    ['work_moving_out', 'Exports'], ['recurring_close_error', 'Close errors'], ['giving_up', 'Giving up'], ['trend', 'Trend'],
+] as const
+export interface BriefGridRow { client: string; client_name: string; score: number; open: string; cells: { column: string; mark: string; label: string }[] }
 export interface MondayBrief {
+    grid?: BriefGridRow[]
     generated_at: string; period: { from: string; to: string }; headline: string
     sections: { new_or_worse: BriefItem[]; close_soon: BriefItem[]; overdue: BriefItem[]; recovered: BriefItem[]; quiet_review: BriefItem | null }
     counts: Record<string, number>; queue_scores: Record<string, number>; verified_recoveries: string[]
@@ -19,11 +25,36 @@ export function mondayBrief({ by, now = new Date() }: { by: string; now?: Date }
     by = by.trim().toLowerCase()
     const day = now.toISOString().slice(0, 10), key = `${by}:${day}`
     const saved = one<{ payload: string }>('SELECT payload FROM briefing_snapshots WHERE "by"=? AND substr(created_at,1,10)=?', by, day)
-    if (saved) return Promise.resolve(JSON.parse(saved.payload))
+    if (saved) {
+        const value = JSON.parse(saved.payload) as MondayBrief
+        if (value.grid) return Promise.resolve(value)
+        if (pending.has(key)) return pending.get(key)!
+        // Upgrade a pre-grid daily snapshot without changing its personal sections or scores.
+        const upgrade = portfolio(value.period.to, value.sections.quiet_review).then(async grid => {
+            const result = await rescuePrivacy({ ...value, grid })
+            run('UPDATE briefing_snapshots SET payload=? WHERE "by"=? AND substr(created_at,1,10)=?', JSON.stringify(result), by, day)
+            return result
+        }).finally(() => pending.delete(key))
+        pending.set(key, upgrade)
+        return upgrade
+    }
     if (pending.has(key)) return pending.get(key)!
     const work = build(by, now).finally(() => pending.delete(key))
     pending.set(key, work)
     return work
+}
+async function portfolio(to: string, quiet: BriefItem | null): Promise<BriefGridRow[]> {
+    const q = await rescueQueue({ window: { from: shift(to, -27), to }, include_snoozed: true })
+    const signals = await clientSignals({ to })
+    const clients = new Map(q.clients.map(c => [c.client, { client: c.client, client_name: c.client_name, score: c.score, reasons: c.reasons.map(r => ({ kind: String(r.kind), text: r.text })), trend: c.trend as string }]))
+    for (const s of signals.signals) if (!clients.has(s.client)) clients.set(s.client, { client: s.client, client_name: s.client_name, score: 0, reasons: signals.signals.filter(x => x.client === s.client).map(x => ({ kind: x.kind, text: x.text })), trend: 'unknown' })
+    if (quiet && !clients.has(quiet.client)) clients.set(quiet.client, { client: quiet.client, client_name: quiet.client_name, score: 0, reasons: [], trend: 'quiet review' })
+    return [...clients.values()].sort((a,b) => b.score-a.score || a.client.localeCompare(b.client)).map(c => ({ client: c.client, client_name: c.client_name, score: c.score,
+        open: link(c.client, { view: 'story' }), cells: GRID_COLUMNS.map(([kind, label]) => {
+            if (kind === 'trend') return { column: kind, mark: c.trend, label: `Trend: ${c.trend}` }
+            const reasons = c.reasons.filter(r => r.kind === kind)
+            return { column: kind, mark: reasons.length ? '●' : '–', label: reasons.length ? `Yes: ${reasons.map(r => r.text).join('; ')}` : `${label}: ${q.coverage.complete && signals.coverage.complete ? 'not flagged' : 'not flagged or insufficient history'}` }
+        }) }))
 }
 async function build(by: string, now: Date): Promise<MondayBrief> {
     const day = now.toISOString().slice(0, 10), period = { from: shift(day, -7), to: shift(day, -1) }
@@ -59,7 +90,8 @@ async function build(by: string, now: Date): Promise<MondayBrief> {
         if (candidates.length) quiet_review = item(candidates[0][0], `Steady low use: ${candidates[0][1]} attempts this week, ${before.get(candidates[0][0])} before; silence is not satisfaction. Check whether their work is going well.`)
     }
     const counts = { new_or_worse: changed.length, close_soon: close_soon.length, overdue: overdue.length, recovered: recovered.length, quiet_review: quiet_review ? 1 : 0, queue: queue.clients.length }
-    const result: MondayBrief = { generated_at: now.toISOString(), period, headline: queue.coverage.complete ? `${changed.length} clients are new or worse, ${overdue.length} actions overdue and ${recovered.length} verified recoveries.` : 'History is incomplete; review overdue actions while evidence is being processed.', sections: { new_or_worse, close_soon, overdue, recovered, quiet_review }, counts, verified_recoveries: recoveries.map(c => c.client), queue_scores: Object.fromEntries(queue.clients.map(c => [c.client,c.score])) }
+    const grid = await portfolio(period.to, quiet_review)
+    const result: MondayBrief = { grid, generated_at: now.toISOString(), period, headline: queue.coverage.complete ? `${changed.length} clients are new or worse, ${overdue.length} actions overdue and ${recovered.length} verified recoveries.` : 'History is incomplete; review overdue actions while evidence is being processed.', sections: { new_or_worse, close_soon, overdue, recovered, quiet_review }, counts, verified_recoveries: recoveries.map(c => c.client), queue_scores: Object.fromEntries(queue.clients.map(c => [c.client,c.score])) }
     const sanitized = await rescuePrivacy(result)
     return tx(() => {
         run('INSERT OR IGNORE INTO briefing_snapshots ("by",created_at,payload) VALUES (?,?,?)', by, result.generated_at, JSON.stringify(sanitized))

@@ -1,3 +1,4 @@
+import { briefingDeliveryStatus } from '../core/briefingdelivery.ts'
 // Admin page for replay clip access: who can watch, who can download, the default for everyone
 // else, share links, clips and the activity log. Only admins reach it: PostHog owners and admins
 // of the organization that owns the project, plus anyone given the admin role here.
@@ -244,6 +245,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
 }
 
 function adminHtml(v: Viewer): string {
+    const e = (value: unknown) => String(value).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]!)
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Admin · ${APP_NAME}</title><style>${PAGE_CSS()}
 .badge{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--chip);white-space:nowrap}.warn{background:#fef0c7;color:#7a2e0e}
 .people-table{table-layout:fixed;width:100%;min-width:1150px}.table-wrap{overflow-x:auto}.people-table td select{max-width:none}.people-table td:last-child button{padding:6px 4px;white-space:nowrap;overflow-wrap:normal}td select{min-width:0;width:100%;max-width:160px}#people td{overflow-wrap:anywhere}#people td:nth-child(3),#people td:nth-child(5),#people td:nth-child(6){width:13%;max-width:160px}.badge{white-space:normal}label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;cursor:pointer}label.check input{width:auto;margin:0}.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px}
@@ -287,6 +289,7 @@ main h1{margin:8px 0 0}main button:not(.ghost){background:var(--ink);border-colo
 
 <div class="card"><h2>Chat keys</h2>
 <details class="settings"><summary>Copilot settings</summary>
+<p class="small muted">Briefing delivery: ${config.briefing.webhook ? `on (${e(config.briefing.kind)}, ${e(config.briefing.day)} at ${e(config.briefing.hour)}:00 UTC)` : 'off'} · Last sent: ${e(briefingDeliveryStatus().last_sent || 'never')}</p>
 <div class="toolbar" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label for="chat-url">Lens address for Copilot</label><input id="chat-url" placeholder="https://lens.example.com"></div><div><button type="button" id="chat-url-save">Save address</button></div></div>
 <p class="small muted">The Chat page gives people this address. Leave empty for the default.</p><p id="chat-url-msg" class="small" aria-live="polite"></p>
 </details><p class="small muted">Revoking a key stops its chat access immediately.</p>

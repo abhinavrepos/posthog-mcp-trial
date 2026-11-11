@@ -321,6 +321,49 @@ Quiet review uses 1–19 weekly attempts within 20% of the previous week and rot
 action update or previous quiet review; dashboard share users
 can mark it reviewed.
 
+**All clients at a glance** shows clients with any reason or signal in the current 28-day rescue
+view, plus the quiet-review client, ordered by rescue score. Accessible marks cover stopped tasks,
+users stopped, failing, slower, exports, close errors, giving up and trend. The table is paginated;
+each row opens the client story. Blank marks mean no observed flag, not proof of satisfaction.
+
+### Client story and handover
+
+Open **Client story** from a rescue card, briefing item or the task map client list, or ask chat
+with `client_story(client, weeks?)` (26 weeks by default, 1–52). A UTC calendar-week chart and
+counts table show attempts, done, distinct task users, error chains, unrecovered errors, export
+submits and productive done. The final week may be partial. Missing days are disclosed, never
+interpreted as a cleared flag. The timeline merges weekly reason appearances/disappearances,
+signals first observed, audited status changes, notes and locally recorded targeted survey activity.
+Weekly reason reviews compare trailing 28 days with the preceding 28, retaining the regular-user
+definition used by the rescue queue. These observations do not establish exact onset or causation; a cleared flag is not verified recovery.
+
+**Copy handover pack** (also `handover_pack(client)`) provides Markdown with the top five tasks
+by done in 90 days, current reasons with numbers, open action and owner, surveys, up to two
+retained session replay links, and what remains unknown. The text is also available for manual
+copying. These outputs contain counts without user identities; staff owner emails are allowed.
+All story, handover, grid and briefing reads use Lens SQLite only, with cached history calculations.
+Survey targeting/status is recorded locally on Lens writes; older surveys without targeting metadata
+and later changes made directly in PostHog may be absent or stale. Survey answers are not included.
+
+### Deliver the briefing to Teams or Slack
+
+Delivery is **off by default**. Set `LENS_BRIEFING_WEBHOOK` to an incoming webhook URL,
+`LENS_BRIEFING_WEBHOOK_KIND=teams` (or `slack`), `LENS_BRIEFING_DAY=mon` and
+`LENS_BRIEFING_HOUR=8` (UTC, 0–23), then restart. `SERVICE_PUBLIC_URL` supplies the Briefing link.
+The service checks each minute and on startup during the configured hour. It posts the headline,
+up to five new/worse clients, close-soon and overdue counts with up to five examples each, and
+quiet review. Delivery has its own daily briefing snapshots; personal briefings keep their own comparisons.
+Teams uses a MessageCard and Slack a simple text payload. No user identities or survey answers are sent.
+
+A successful send date and a delivery claim persist in the main database settings, so restarts do
+not resend that day's briefing. Requests time out after 10 seconds and retry once; failures are
+logged without webhook URLs or response bodies and do not crash the service. After two failures,
+the slot is not retried again that day. As with any webhook, a lost response after acceptance can
+cause the retry to duplicate a message. An interrupted in-flight claim expires after two minutes.
+The Admin Copilot settings area shows delivery state and the last successful send, read-only.
+Keep the webhook URL secret. If the service misses the configured hour, it waits for the next
+configured day; it does not backfill delivery.
+
 The first contacted/in-progress/resolved action captures its reason kinds and task ids plus the action
 date. Recovery requires those reasons to disappear in a complete period starting after that date;
 signal reasons also require complete capture coverage. A reason still present after 14 days is

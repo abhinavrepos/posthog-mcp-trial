@@ -160,6 +160,12 @@ export const config = {
         rciIssueType: env('JIRA_RCI_ISSUE_TYPE', 'RCI'),
         riskIssueType: env('JIRA_RISK_ISSUE_TYPE', 'MMT Risk'),
     },
+    briefing: {
+        webhook: env('LENS_BRIEFING_WEBHOOK'),
+        kind: env('LENS_BRIEFING_WEBHOOK_KIND', 'teams'),
+        day: env('LENS_BRIEFING_DAY', 'mon'),
+        hour: Number(env('LENS_BRIEFING_HOUR', '8')),
+    },
     service: {
         port: Number(env('SERVICE_PORT', '8080')),
         // Base URL people use to open clip links (served by the triage service).

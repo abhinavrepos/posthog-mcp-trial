@@ -204,7 +204,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             if (!ticket.ok) return text(`Not launched: ${ticket.error} Ask the person for the right ticket.`)
             const launched = await launchSurvey(survey_id)
             const v = viewOf(launched)
-            recordLaunch({ survey_id: v.id, survey_name: v.name, ticket: ticket.key, ticket_summary: ticket.summary ?? null, launched_by: who, via: 'chat', rules: check.rules })
+            recordLaunch({ survey_id: v.id, survey_name: v.name, ticket: ticket.key, ticket_summary: ticket.summary ?? null, launched_by: who, via: 'chat', rules: check.rules, clients: v.clients })
             audit(who, 'survey.launched', { survey: v.id, name: v.name, ticket: ticket.key })
             const chain = launched.conditions?.lensChain
             const conflicts = chain ? conflictsFor(chain, launched, await listSurveys()) : []
