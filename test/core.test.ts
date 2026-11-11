@@ -212,7 +212,8 @@ describe('PostHog read cache and transport', () => {
         const barrier = new Promise<void>((resolve) => { release = resolve })
         t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit & { dispatcher?: unknown }) => {
             calls++
-            assert.ok(init.dispatcher, 'a reusable dispatcher is supplied')
+            // Node's own fetch reuses connections; an npm-undici dispatcher would break every real request.
+            assert.equal(init.dispatcher, undefined, 'no foreign dispatcher on the built-in fetch')
             await barrier
             return new Response(JSON.stringify({ columns: ['n'], results: [[1]] }))
         })
@@ -259,7 +260,7 @@ describe('PostHog read cache and transport', () => {
         await assert.rejects(fail()); await assert.rejects(fail())
         assert.equal((await cachedPosthogRead('failure', async () => 42)).value, 42)
     })
-    test('retries overload once, never retries invalid requests, and caps simultaneous reads at two', async (t) => {
+    test('retries overload once, never retries invalid requests, and caps simultaneous reads (default four)', async (t) => {
         const { hogql, clearPosthogCache } = await import('../src/core/posthog.ts')
         const { config } = await import('../src/core/config.ts')
         const old = { ...config.posthog }
@@ -280,7 +281,7 @@ describe('PostHog read cache and transport', () => {
         assert.equal(calls, 3)
         status = 200
         await Promise.all(Array.from({ length: 8 }, () => hogql('SELECT 1 LIMIT 1')))
-        assert.equal(peak, 2)
+        assert.equal(peak, 4)
     })
 })
 
