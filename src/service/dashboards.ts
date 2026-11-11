@@ -1,7 +1,7 @@
 // Dashboard pages use the task-history contract; no PostHog queries live here.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { rescueQueue, setRescueAction, RescueInputError, RESCUE_STATUSES, type RescueQueue, type RescueParams } from '../core/rescue.ts'
-import { taskMap, flowTime, findTasks, ingestStatus } from '../core/tasks.ts'
+import { taskMap, flowTime, findTasks, ingestStatus, dataThrough } from '../core/tasks.ts'
 import type { FlowTime, FlowTimeParams, TaskMap, TaskMapParams, Window, Flag, Coverage } from '../core/taskstypes.ts'
 import { createDashboard, getDashboard, listDashboards, updateDashboard, deleteDashboard, shareDashboard, canOpen, canManage, knownPeople, KIND_TEXT, type Dashboard, type DashboardKind } from '../core/dashboards.ts'
 import { can, canDashboard, canUseDashboards, type Viewer } from './access.ts'
@@ -238,7 +238,8 @@ function rescueParams(q: URLSearchParams): RescueParams {
     const days = q.get('days'), period = !!days && days !== 'custom'
     if (!period && (q.has('from') || q.has('to'))) p.window = windowOf({ from: q.get('from'), to: q.get('to') })
     else if (period) {
-        const to = ingestStatus().last_day || shift(new Date().toISOString().slice(0, 10), -1)
+        // End at the last fully processed day (today is still being read), as the default view does.
+        const to = dataThrough() || shift(new Date().toISOString().slice(0, 10), -1)
         p.window = { from: shift(to, 1 - integer(q.get('days'), 1, 366, 'Days')), to }
     }
     if (!period && (q.has('baseline_from') || q.has('baseline_to'))) p.baseline = windowOf({ from: q.get('baseline_from'), to: q.get('baseline_to') })
