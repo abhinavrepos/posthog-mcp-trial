@@ -101,6 +101,35 @@ if (byClient.has('S002') || !expect) {
     }
 }
 
+// 3b. client story, handover pack, outcomes and the signal scorecard
+{
+    const story = await admin.api('/replays/dashboards/api/story?client=S001')
+    const st = JSON.stringify(story.body)
+    ok('client story answers with a timeline, no identities', story.status === 200 && Array.isArray(story.body.events) && story.body.weeks?.length > 0 && !PRIVATE.test(st), `${story.body.events?.length} events, ${story.body.weeks?.length} weeks`)
+    if (expect) ok('the story shows the key-person signal', /One person did/.test(st))
+    const pack = await admin.api('/replays/dashboards/api/handover-pack?client=S002')
+    ok('handover pack is markdown without identities', pack.status === 200 && /^#/m.test(pack.body.markdown || '') && !PRIVATE.test(pack.body.markdown || ''), (pack.body.markdown || '').split('\n')[0])
+    const p = admin.page, before = admin.errors.length
+    const r = await p.goto(LENS + '/replays/dashboards?view=story&client=S002', { waitUntil: 'networkidle0', timeout: 90000 }); await wait(1000)
+    ok('story page loads without errors', r?.status() === 200 && admin.errors.length === before, admin.errors.slice(before).join(' | '))
+    await p.screenshot({ path: `${S}/story-admin.png`, fullPage: true })
+    // outcomes: Harbor left today (its exports climbed weeks earlier), Quiet Mills renewed
+    const today = new Date().toISOString().slice(0, 10)
+    ok('viewer cannot record an outcome', (await viewer.api('/replays/admin/api/outcomes', 'POST', { client: 'S002', outcome: 'left', decided_on: today })).status >= 400)
+    const o1 = await admin.api('/replays/admin/api/outcomes', 'POST', { client: 'S002', outcome: 'left', decided_on: today, note: 'e2e check' })
+    const o2 = await admin.api('/replays/admin/api/outcomes', 'POST', { client: 'S005', outcome: 'renewed', decided_on: today, note: 'e2e check' })
+    ok('admin records outcomes', o1.status === 200 && o2.status === 200)
+    const t0 = Date.now(); const sc = await viewer.api('/replays/dashboards/api/scorecard?weeks=26'); const ms = Date.now() - t0
+    const rows: any[] = sc.body.rows || []
+    const wmo = rows.find((x) => x.kind === 'work_moving_out'), overall = rows.find((x) => x.kind === 'overall')
+    ok('scorecard answers (viewer) without identities or probabilities', sc.status === 200 && !PRIVATE.test(JSON.stringify(sc.body)) && !/probab/i.test(JSON.stringify(sc.body.rows)), `${ms} ms; ${sc.body.explanation}`)
+    if (expect) ok('scorecard: work moving out warned before Harbor left', wmo?.hits === 1 && wmo?.median_lead_days > 0, JSON.stringify(wmo))
+    console.log('  overall:', JSON.stringify(overall))
+    await admin.api('/replays/admin/api/outcomes', 'DELETE', { client: 'S002' })
+    await admin.api('/replays/admin/api/outcomes', 'DELETE', { client: 'S005' })
+    ok('test outcomes removed', ((await admin.api('/replays/admin/api/outcomes')).body || []).filter((x: any) => ['S002', 'S005'].includes(x.client)).length === 0)
+}
+
 // 4. chat
 const at = await admin.api('/replays/connect/api/tokens', 'POST', { label: 'signals check' })
 const vt = await viewer.api('/replays/connect/api/tokens', 'POST', { label: 'signals check' })
@@ -108,6 +137,7 @@ const ac = await chat(at.body.token), vc = await chat(vt.body.token)
 const an = await ac.list(), vn = await vc.list()
 ok('chat: admin has monday_brief and draft_rescue_survey', an.includes('monday_brief') && an.includes('draft_rescue_survey'))
 ok('chat: viewer has monday_brief, not draft_rescue_survey', vn.includes('monday_brief') && !vn.includes('draft_rescue_survey'))
+ok('chat: viewer has client_story, handover_pack and signal_scorecard', ['client_story', 'handover_pack', 'signal_scorecard'].every((t) => vn.includes(t)))
 const mb = await vc.call('monday_brief', {})
 const mbText = JSON.stringify(mb.data?.result?.content || mb.data?.error || '')
 ok('chat: monday_brief answers without identities', mb.status === 200 && !mb.data?.result?.isError && !PRIVATE.test(mbText), mbText.slice(0, 160))
