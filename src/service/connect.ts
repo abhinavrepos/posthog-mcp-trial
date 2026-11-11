@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config, posthogMcpActive } from '../core/config.ts'
 import { can, canSurvey, chatUrl, createMcpToken, listMcpTokens, revokeMcpToken, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
-import { APP_NAME, headerHtml, PAGE_CSS } from './replays.ts'
+import { APP_NAME, headerHtml, PAGER_JS, PAGE_CSS } from './replays.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -64,34 +64,37 @@ table{width:100%;table-layout:fixed}td,th{overflow-wrap:anywhere}ol.steps{paddin
 .f{display:grid;grid-template-columns:130px 1fr auto;gap:8px;align-items:center;padding:4px 0}.f code{background:var(--chip);padding:5px 8px;border-radius:6px;overflow-wrap:anywhere;font-size:13px}
 @media (max-width:560px){.f{grid-template-columns:1fr auto}.f span{grid-column:1/-1}}</style></head>
 <body>${headerHtml(v, 'Chat')}<main style="max-width:820px">
-<div class="card"><h2>Connect GitHub Copilot</h2>
+<div class="card"><h1>Connect GitHub Copilot</h1>
 <ol class="steps">
-<li><button id="make">Connect Copilot</button> <span id="msg" class="small"></span></li>
+<li><button type="button" id="make">Connect Copilot</button> <span id="msg" class="small" aria-live="polite"></span></li>
 <li>In the Copilot app: cog → <b>MCP Servers</b> → <b>Add Server</b> → <b>+ Add Custom server</b>. Copy in the fields below${ph ? ', once per server' : ''}.<div id="add"></div></li>
 <li>Start a new chat and ask, e.g. <i>"Which clients need attention this month?"</i></li>
 </ol>
 <p class="small muted">Copilot gets your access (survey role: ${role}). The key is shown once.</p>
 </div>
-<div class="card"><h2>Your keys</h2><div class="table-wrap"><table><thead><tr><th>Name</th><th>Made</th><th>Last used</th><th></th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div>
+<div class="card"><h2>Your keys</h2><div class="table-wrap"><table><thead><tr><th scope="col">Name</th><th scope="col">Made</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div><div id="keys-pager"></div><p id="keys-msg" class="small" aria-live="polite"></p>
 <p class="small muted">Revoke a key you no longer use.</p></div>
 </main>
 <script>
+${PAGER_JS}
 const $=id=>document.getElementById(id)
 const api=(path,opts={})=>fetch(path,{...opts,headers:{'content-type':'application/json','x-clip-page':'1'}}).then(async r=>{const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||('Error '+r.status));return b})
 const when=t=>t?new Date(t).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}):'never'
 function cell(tr,t){const td=document.createElement('td');if(t instanceof Node)td.appendChild(t);else td.textContent=t;tr.appendChild(td)}
 function el(tag,attrs,text){const e=document.createElement(tag);Object.assign(e,attrs||{});if(text)e.textContent=text;return e}
-async function load(){const d=await api('/replays/connect/api/tokens');const tb=$('rows');tb.innerHTML='';if(!d.tokens.length)tb.innerHTML='<tr><td colspan="4" class="muted">No keys yet.</td></tr>'
-  d.tokens.forEach(t=>{const tr=document.createElement('tr');cell(tr,t.label);cell(tr,when(t.created_at));cell(tr,t.revoked_at?'Revoked '+when(t.revoked_at):when(t.last_used_at))
-    if(!t.revoked_at){const b=document.createElement('button');b.className='ghost';b.textContent='Revoke';b.onclick=async()=>{if(!confirm('Revoke "'+t.label+'"? Chat with it stops at once.'))return;await api('/replays/connect/api/tokens/'+t.id,{method:'DELETE'});load()};cell(tr,b)}else cell(tr,'');tb.appendChild(tr)})}
-$('make').onclick=async()=>{try{const t=await api('/replays/connect/api/tokens',{method:'POST',body:JSON.stringify({label:'GitHub Copilot'})})
+function message(id,text,error=false){$(id).textContent=text;$(id).className='small '+(error?'err':'');$(id).setAttribute('role',error?'alert':'status')}
+const keysPg=makePager({mount:$('keys-pager'),noun:'keys',size:25,draw:slice=>{const tb=$('rows');tb.innerHTML='';if(!slice.length)tb.innerHTML='<tr><td colspan="4" class="muted">No keys yet. Choose Connect Copilot to make one.</td></tr>'
+  slice.forEach(t=>{const tr=document.createElement('tr');cell(tr,t.label);cell(tr,when(t.created_at));cell(tr,t.revoked_at?'Revoked '+when(t.revoked_at):when(t.last_used_at))
+    if(!t.revoked_at){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Revoke';b.setAttribute('aria-label','Revoke '+t.label+' key made '+when(t.created_at));b.onclick=async()=>{if(!confirm('Revoke "'+t.label+'"? Chat with it stops at once.'))return;b.disabled=true;try{await api('/replays/connect/api/tokens/'+t.id,{method:'DELETE'});await load();message('keys-msg','Key revoked.')}catch(e){message('keys-msg',e.message+' Try revoking again.',true)}finally{b.disabled=false;if(!b.isConnected)($('keys-pager').querySelector('button:not(:disabled)')||$('make')).focus()}};cell(tr,b)}else cell(tr,'');tb.appendChild(tr)})}})
+async function load(){try{const d=await api('/replays/connect/api/tokens');keysPg.set(d.tokens,true)}catch(e){message('keys-msg',e.message+' Reload the page to try again.',true)}}
+$('make').onclick=async()=>{$('make').disabled=true;message('msg','Making your key…');try{const t=await api('/replays/connect/api/tokens',{method:'POST',body:JSON.stringify({label:'GitHub Copilot'})})
   const list=[[t.name,t.url,'Server 1: ${APP_NAME}']];if(t.posthog_url)list.push(['posthog',t.posthog_url,'Server 2: PostHog'])
-  const copyBtn=val=>{const b=el('button',{className:'ghost'},'Copy');b.onclick=async()=>{try{await navigator.clipboard.writeText(val);b.textContent='Copied'}catch{b.textContent='Select and copy'};setTimeout(()=>b.textContent='Copy',1500)};return b}
-  const field=(box,label,val)=>{const r=el('div',{className:'f'});r.appendChild(el('span',null,label));r.appendChild(el('code',null,val));r.appendChild(copyBtn(val));box.appendChild(r)}
+  const copyBtn=val=>{const b=el('button',{className:'ghost',type:'button'},'Copy');b.onclick=async()=>{b.disabled=true;try{await navigator.clipboard.writeText(val);b.textContent='Copied';message('msg','Copied.')}catch{b.textContent='Select and copy';message('msg','Copy failed. Select the value and copy it.',true)}finally{b.disabled=false};setTimeout(()=>b.textContent='Copy',1500)};return b}
+  const field=(box,label,val)=>{const r=el('div',{className:'f'});r.appendChild(el('span',null,label));r.appendChild(el('code',null,val));const copy=copyBtn(val);copy.setAttribute('aria-label','Copy '+label+' for '+box.querySelector('h3').textContent);r.appendChild(copy);box.appendChild(r)}
   const add=$('add');add.innerHTML='';add.className=''
   list.forEach(([n,u,title])=>{const s=el('div',{className:'srv'});s.appendChild(el('h3',null,title))
     field(s,'Name',n);field(s,'Transport','http');field(s,'URL',u);field(s,'Header name','Authorization');field(s,'Header value','Bearer '+t.token);add.appendChild(s)})
-  $('make').textContent='Make a new key';$('msg').textContent='';load()}catch(e){$('msg').textContent=e.message;$('msg').className='small err'}}
-load().catch(e=>{$('rows').innerHTML='<tr><td colspan="4" class="err"></td></tr>';$('rows').querySelector('td').textContent=e.message})
+  $('make').textContent='Make a new key';message('msg','Key ready. Copy the fields below.');await load();add.tabIndex=-1;add.focus()}catch(e){message('msg',e.message+' Try connecting again.',true)}finally{$('make').disabled=false}}
+load()
 </script></body></html>`
 }
