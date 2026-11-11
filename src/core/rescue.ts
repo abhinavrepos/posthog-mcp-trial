@@ -26,7 +26,10 @@ const moved = (w: Window): Window => ({ from: shift(w.from, -7), to: shift(w.to,
 const query = <T>(sql: string, ...args: string[]) => tasksDb.prepare(sql).all(...args) as T[]
 export function rescueClients(text: string): { id: string; name: string }[] {
     // Resolve against local history as well: a rescue read/write must never query raw events.
-    const rows = query<{ id: string; name: string }>(`SELECT DISTINCT d.client AS id, coalesce(n.name, d.client) AS name FROM task_daily d LEFT JOIN client_names n ON n.client=d.client`)
+    // client_names holds every client the history has named (a few rows); scanning task_daily for distinct
+    // clients read ~730,000 rows per call and froze the server under load. Unnamed ids are checked directly.
+    const rows = query<{ id: string; name: string }>(`SELECT client AS id, name FROM client_names`)
+    if (!rows.some(r => r.id.toLowerCase() === text.toLowerCase()) && query<{ x: number }>(`SELECT 1 AS x FROM task_daily WHERE client = ? LIMIT 1`, text).length) rows.push({ id: text, name: text })
     const exact = rows.filter(r => r.id.toLowerCase() === text.toLowerCase() || r.name.toLowerCase() === text.toLowerCase())
     return exact.length ? exact : rows.filter(r => r.name.toLowerCase().includes(text.toLowerCase()))
 }

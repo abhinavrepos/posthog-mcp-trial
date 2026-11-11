@@ -323,3 +323,28 @@ test('days not processed yet are never flagged as missing work', async () => {
     assert.equal(done.coverage.complete, true)
     assert.ok(done.rows.some((x) => x.flags.includes('missing')))
 })
+
+test('storing a day drops only the answers it can change: inside or after their range, not older backfill', async () => {
+    reset()
+    const { cached } = await import('../src/core/tasks.ts')
+    forgetAnswers()
+    let runs = 0
+    const view = { window: { from: day(14), to: day(1) }, baseline: { from: day(28), to: day(15) } }
+    const read = () => cached('test-view', { k: 1 }, async () => { runs++; return { params: view } })
+    await read(); await read(); assert.equal(runs, 1)
+    storeAttempts(day(60), [])               // older than the range (minus the 7-day trend margin): kept
+    await read(); assert.equal(runs, 1, 'backfilling an old day keeps current views')
+    storeAttempts(day(20), [])               // inside the baseline: dropped
+    await read(); assert.equal(runs, 2)
+    storeAttempts(day(33), [])               // within the 7-day margin before the baseline (trend): dropped
+    await read(); assert.equal(runs, 3)
+    storeAttempts(day(0), [])                // newer than the range: a default view moves forward, dropped
+    await read(); assert.equal(runs, 4)
+    // An answer still being computed when a day is stored is dropped too (its range is not known yet).
+    let release!: () => void
+    const slow = cached('test-slow', {}, () => new Promise((r) => { release = () => r({ params: view }) }))
+    storeAttempts(day(90), [])
+    release(); await slow
+    let again = 0; await cached('test-slow', {}, async () => { again++; return { params: view } })
+    assert.equal(again, 1, 'pending answers are recomputed after a store')
+})
