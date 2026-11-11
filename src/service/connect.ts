@@ -62,17 +62,21 @@ function connectHtml(v: Viewer): string {
 pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--chip);padding:10px 12px;border-radius:8px;font-size:13px}.once{border-left:4px solid var(--accent);padding:8px 12px;background:var(--chip);border-radius:6px}
 table{width:100%;table-layout:fixed}td,th{overflow-wrap:anywhere}ol.steps{padding-left:20px}ol.steps li{margin:10px 0}
 a.btn{display:inline-block;padding:8px 14px;border-radius:8px;background:var(--accent);color:#fff;text-decoration:none;font-weight:600;margin:4px 8px 4px 0}
-details{margin-top:12px}summary{cursor:pointer;font-weight:600}</style></head>
+details{margin-top:12px}summary{cursor:pointer;font-weight:600}
+.srv{border:1px solid var(--line,#ddd);border-radius:10px;padding:10px 12px;margin:10px 0}.srv h3{margin:0 0 6px;font-size:15px}
+.f{display:grid;grid-template-columns:130px 1fr auto;gap:8px;align-items:center;padding:4px 0}.f code{background:var(--chip);padding:5px 8px;border-radius:6px;overflow-wrap:anywhere;font-size:13px}
+@media (max-width:560px){.f{grid-template-columns:1fr auto}.f span{grid-column:1/-1}}</style></head>
 <body>${headerHtml(v, 'Chat')}<main style="max-width:820px">
 <div class="card"><h2>Connect GitHub Copilot</h2>
-<p>Ask ${APP_NAME}${ph ? ' and PostHog' : ''} questions in Copilot Chat in VS Code, e.g. <i>"Which clients need attention this month?"</i>. It takes a minute and you do it once. Copilot then has your access: survey role <b>${role}</b>.</p>
+<p>Ask ${APP_NAME}${ph ? ' and PostHog' : ''} questions in the GitHub Copilot app, e.g. <i>"Which clients need attention this month?"</i>. It takes two minutes and you do it once. Copilot then has your access: survey role <b>${role}</b>.</p>
 <ol class="steps">
 <li><b>Make your key.</b> <button id="make">Connect Copilot</button> <span id="msg" class="small"></span></li>
-<li><b>Add to VS Code.</b> <span id="addHint" class="muted">The buttons appear after step 1.</span><div id="add"></div></li>
-<li><b>Use it.</b> In VS Code open Copilot Chat, pick <b>Agent</b> mode, and ask. The first time, Copilot asks to allow the tools: allow them.</li>
+<li><b>Add ${ph ? 'the two servers' : 'the server'} in the Copilot app.</b> Click the cog (bottom left) → <b>MCP Servers</b> → <b>Add Server</b> → <b>+ Add Custom server</b>. Fill in the fields below with the Copy buttons, and click <b>Add Server</b>.${ph ? ' Then do it again for the second server.' : ''}
+<div id="add" class="muted small">The fields appear after step 1.</div></li>
+<li><b>Use it.</b> Start a <b>new</b> chat in Copilot (servers apply to new chats) and ask. The first time, Copilot asks to allow the tools: allow them.</li>
 </ol>
 <div id="fresh"></div>
-<p class="small muted">Nothing happens when you click a button? Use "Set it up by hand" above. Copilot shows no tools at all? Your company's Copilot admin must allow MCP servers (the "MCP servers in Copilot" policy).</p>
+<p class="small muted">Copilot shows no ${APP_NAME} tools? Check the server is switched on in MCP Servers, and that your company's Copilot admin allows MCP servers (the "MCP servers in Copilot" policy). Lost the key or changed laptop? Make a new key and change the Authorization value.</p>
 </div>
 <div class="card"><h2>Your keys</h2><div class="table-wrap"><table><thead><tr><th>Name</th><th>Made</th><th>Last used</th><th></th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div>
 <p class="small muted">Revoke a key you no longer use, or if someone else may have seen it; then connect again. An admin can revoke any key.</p></div>
@@ -89,18 +93,22 @@ async function load(){const d=await api('/replays/connect/api/tokens');const tb=
 // VS Code's install link: it opens VS Code, which asks the person to install the server.
 const install=(name,url,token)=>'vscode:mcp/install?'+encodeURIComponent(JSON.stringify({name,type:'http',url,headers:{Authorization:'Bearer '+token}}))
 $('make').onclick=async()=>{try{const t=await api('/replays/connect/api/tokens',{method:'POST',body:JSON.stringify({label:'GitHub Copilot'})})
-  const list=[[t.name,t.url,'1. Add Lens to VS Code']];if(t.posthog_url)list.push(['posthog',t.posthog_url,'2. Add PostHog to VS Code'])
-  const add=$('add');add.innerHTML='';$('addHint').textContent='Click '+(list.length>1?'both, one at a time':'it')+'. VS Code opens: click Install.'
-  list.forEach(([n,u,label])=>add.appendChild(el('a',{className:'btn',href:install(n,u,t.token)},label)))
-  // By hand: user MCP settings, with the key kept in VS Code's secret storage (it asks once).
+  const list=[[t.name,t.url,'Server 1: ${APP_NAME}']];if(t.posthog_url)list.push(['posthog',t.posthog_url,'Server 2: PostHog'])
+  const copyBtn=val=>{const b=el('button',{className:'ghost'},'Copy');b.onclick=async()=>{try{await navigator.clipboard.writeText(val);b.textContent='Copied'}catch{b.textContent='Select and copy'};setTimeout(()=>b.textContent='Copy',1500)};return b}
+  const field=(box,label,val)=>{const r=el('div',{className:'f'});r.appendChild(el('span',null,label));r.appendChild(el('code',null,val));r.appendChild(copyBtn(val));box.appendChild(r)}
+  const add=$('add');add.innerHTML='';add.className=''
+  list.forEach(([n,u,title])=>{const s=el('div',{className:'srv'});s.appendChild(el('h3',null,title))
+    field(s,'Name',n);field(s,'Transport','http');field(s,'URL',u);field(s,'Header name','Authorization');field(s,'Header value','Bearer '+t.token);add.appendChild(s)})
+  // VS Code: its install link opens VS Code, which asks to install the server.
   const servers={};list.forEach(([n,u])=>servers[n]={type:'http',url:u,headers:{Authorization:'Bearer \${input:lens-key}'}})
   const cfg={inputs:[{type:'promptString',id:'lens-key',description:'Your ${APP_NAME} key',password:true}],servers}
   const claude=list.map(([n,u])=>'claude mcp add --transport http '+n+' '+u+' --header "Authorization: Bearer '+t.token+'"').join('\\n')
   const box=$('fresh');box.innerHTML=''
-  const once=el('div',{className:'once'});once.appendChild(el('b',null,'Your key. It is shown only once; the buttons above already contain it.'));once.appendChild(el('pre',null,t.token))
-  const d1=el('details');d1.appendChild(el('summary',null,'Set it up by hand (VS Code, Visual Studio, JetBrains)'))
-  d1.appendChild(el('p',{className:'small'},'In VS Code: Command Palette → "MCP: Open User Configuration", paste this, save, and paste the key above when asked.'))
-  d1.appendChild(el('pre',null,JSON.stringify(cfg,null,2)))
+  const once=el('div',{className:'once'});once.appendChild(el('b',null,'Your key is shown only once. Finish step 2 before leaving this page.'))
+  const d1=el('details');d1.appendChild(el('summary',null,'Copilot in VS Code instead'))
+  d1.appendChild(el('p',{className:'small'},'Click each button; VS Code opens and asks to install. Or: Command Palette → "MCP: Open User Configuration", paste the block below, and paste your key when asked.'))
+  list.forEach(([n,u,title])=>d1.appendChild(el('a',{className:'btn',href:install(n,u,t.token)},'Add '+title.replace(/^Server [0-9]: /,'')+' to VS Code')))
+  d1.appendChild(el('pre',null,JSON.stringify(cfg,null,2)));d1.appendChild(el('p',{className:'small'},'Your key:'));d1.appendChild(el('pre',null,t.token))
   const d2=el('details');d2.appendChild(el('summary',null,'Other chat apps (Claude Code)'));d2.appendChild(el('pre',null,claude))
   once.appendChild(d1);once.appendChild(d2);box.appendChild(once)
   $('make').textContent='Make a new key';$('msg').textContent='';load()}catch(e){$('msg').textContent=e.message;$('msg').className='small err'}}
