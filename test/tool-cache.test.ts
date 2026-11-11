@@ -69,3 +69,30 @@ test('pre-warm settings: default tools, interval, off switch, only cacheable too
     assert.deepEqual(prewarmSettings({ LENS_PREWARM_TOOLS: 'top_pains, record_verdict ,nope' }).tools, ['top_pains'])
     for (const t of DEFAULT_PREWARM) assert.ok(CACHED_TOOLS.has(t), t)
 })
+
+test('pre-warm refresh: the flag reaches the tool through the MCP transport; chat meanwhile gets the kept answer', async () => {
+    const { withPrewarm } = await import('../src/mcp/tools.ts')
+    const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js')
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js')
+    clearToolAnswers()
+    let runs = 0, release!: () => void
+    const slow = () => new Promise<any>((r) => { const n = ++runs; if (n === 1) return r({ content: [{ type: 'text', text: 'v1' }] }); release = () => r({ content: [{ type: 'text', text: 'v' + n }] }) })
+    const server = new McpServer({ name: 't', version: '1' })
+    server.registerTool('top_pains', { description: 'x' }, async () => cachedToolCall('top_pains', {}, slow) as any)
+    const client = new Client({ name: 'c', version: '1' }); const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(a); await client.connect(b)
+    const text = (r: any) => r.content[0].text
+    assert.equal(text(await client.callTool({ name: 'top_pains', arguments: {} })), 'v1')
+    // The pre-warm asks through the transport: it must recompute (flag carried across), not return v1.
+    const refreshing = withPrewarm(20 * 60_000, () => client.callTool({ name: 'top_pains', arguments: {} }))
+    await new Promise((r) => setTimeout(r, 20))
+    assert.equal(runs, 2, 'the pre-warm started a refresh')
+    // Chat during the refresh: the kept answer at once, no waiting.
+    const t = performance.now()
+    assert.equal(text(await client.callTool({ name: 'top_pains', arguments: {} })), 'v1')
+    assert.ok(performance.now() - t < 50)
+    release()
+    assert.equal(text(await refreshing), 'v2')
+    assert.equal(text(await client.callTool({ name: 'top_pains', arguments: {} })), 'v2', 'then the refreshed answer')
+    await client.close(); await server.close()
+})

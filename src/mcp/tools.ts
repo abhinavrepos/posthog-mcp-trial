@@ -1,5 +1,6 @@
 // MCP tools over the same core as the Jira automation. Each one answers a question a PM or
 // support lead asks that Jira alone cannot.
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
@@ -100,12 +101,12 @@ const stable = (v: unknown): string => Array.isArray(v) ? `[${v.map(stable).join
     : v && typeof v === 'object' ? `{${Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stable((v as Record<string, unknown>)[k])).join(',')}}`
     : JSON.stringify(v) ?? 'null'
 export function clearToolAnswers(): void { toolAnswers.clear(); toolFlights.clear(); toolBytes = 0 }
-// While the background pre-warm runs (src/mcp/prewarm.ts), answers are recomputed and kept until the next
-// refresh instead of two minutes.
-let prewarmTtl = 0
-export async function withPrewarm<T>(ttlMs: number, work: () => Promise<T>): Promise<T> {
-    prewarmTtl = ttlMs
-    try { return await work() } finally { prewarmTtl = 0 }
+// Calls made by the background pre-warm (src/mcp/prewarm.ts) recompute their answer and keep it until the
+// next round. Only those calls: the flag travels with the pre-warm's own async work, so chat questions
+// asked during a round still get the kept answer at once.
+const prewarming = new AsyncLocalStorage<number>()
+export function withPrewarm<T>(ttlMs: number, work: () => Promise<T>): Promise<T> {
+    return prewarming.run(ttlMs, work)
 }
 function remember(key: string, value: unknown, ttl: number): void {
     const bytes = JSON.stringify(value).length
@@ -117,8 +118,11 @@ function remember(key: string, value: unknown, ttl: number): void {
 export async function cachedToolCall(name: string, args: unknown, run: () => Promise<unknown>): Promise<unknown> {
     if (!TOOL_TTL_MS) return run()
     const key = name + '\u0000' + stable(args ?? {})
+    const prewarmTtl = prewarming.getStore() ?? 0
     const hit = toolAnswers.get(key), refreshing = prewarmTtl > 0
     if (hit && !refreshing && Date.now() - hit.at < hit.ttl) { toolAnswers.delete(key); toolAnswers.set(key, hit); return structuredClone(hit.value) }
+    // A chat question while the pre-warm refreshes this answer gets the kept one rather than waiting.
+    if (hit && !refreshing && toolFlights.has(key)) return structuredClone(hit.value)
     let flight = toolFlights.get(key)
     if (!flight) {
         const ttl = Math.max(TOOL_TTL_MS, prewarmTtl)

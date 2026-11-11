@@ -9,6 +9,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
 import { lensServerInfo } from './server-info.ts'
 import { CACHED_TOOLS, registerTools, withPrewarm } from './tools.ts'
+import { surveysActive } from '../core/config.ts'
+import { surveyOverview } from '../core/surveys.ts'
 
 const log = (msg: string, extra: Record<string, unknown> = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), msg, ...extra }))
 export const DEFAULT_PREWARM = ['reval_brief', 'top_pains', 'dialog_friction', 'client_signals', 'discover_workflows', 'message_doctor']
@@ -39,10 +41,25 @@ export async function prewarmRound(tools: string[], keepMs: number): Promise<Rec
     return out
 }
 
+// The survey list (Surveys page and list_surveys, 30 days by default) keeps answers 30-60 s and serves a
+// marked stale one for 5 minutes while it refreshes; reading it every 4 minutes keeps it always ready.
+// One light query and one API page; skipped when surveys are off or the pre-warm is off.
+export const SURVEY_REFRESH_MS = 4 * 60_000
+let surveyTimer: NodeJS.Timeout | undefined
+function startSurveyRefresh(): void {
+    if (surveyTimer || !surveysActive()) return
+    const read = () => surveyOverview(30).catch((e) => log('survey refresh failed', { error: (e as Error).message }))
+    setTimeout(read, 90_000).unref()
+    surveyTimer = setInterval(read, SURVEY_REFRESH_MS)
+    surveyTimer.unref()
+}
+
 let timer: NodeJS.Timeout | undefined, running = false
 export function startPrewarm(): void {
     const { minutes, tools } = prewarmSettings()
-    if (!minutes || !tools.length || timer) return
+    if (!minutes) return
+    startSurveyRefresh()
+    if (!tools.length || timer) return
     const keep = (minutes + 5) * 60_000
     const round = async () => {
         if (running) return
