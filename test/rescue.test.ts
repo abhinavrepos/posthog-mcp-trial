@@ -177,3 +177,25 @@ test('default comparison is the same length as the window, just before it', asyn
     const q28 = await rescueQueue({ window: { from: '2026-03-01', to: '2026-03-28' } })
     assert.deepEqual(q28.baseline, { from: '2026-02-01', to: '2026-02-28' })
 })
+
+test('snoozing while viewing a custom period: score from that period, hidden there; unflagged snoozes stay hidden', async () => {
+    reset()
+    // Flagged only in a 14-day view: work stops in the last fortnight, while the default 28-day view still sees it.
+    const recent = { from: shift(window.to, -13), to: window.to }, before14 = { from: shift(recent.from, -14), to: shift(recent.from, -1) }
+    put(before14.from, attempts(before14.from, 8))
+    const view = { window: recent, baseline: before14 }
+    const flagged = await rescueQueue(view)
+    assert.equal(flagged.clients[0]?.reasons[0].kind, 'missing')
+    assert.equal((await rescueQueue({})).clients.length, 0, 'not flagged in the default view')
+    const snooze = shift(new Date().toISOString().slice(0, 10), 10)
+    const a = await setRescueAction('ACME', { status: 'expected', snooze_until: snooze }, 'pm@example.com', view)
+    assert.equal(a.score_at_snooze, flagged.clients[0].score, 'the score kept is the one the person saw')
+    const after = await rescueQueue(view)
+    assert.equal(after.clients.length, 0); assert.equal(after.hidden_snoozed, 1)
+    // Snoozed while not flagged at all (score 0): stays hidden until the date instead of "worse" at once.
+    await setRescueAction('ACME', { status: 'open', snooze_until: null }, 'pm@example.com')
+    const z = await setRescueAction('ACME', { status: 'expected', snooze_until: snooze }, 'pm@example.com')
+    assert.equal(z.score_at_snooze, 0)
+    const hidden = await rescueQueue(view)
+    assert.equal(hidden.clients.length, 0); assert.equal(hidden.hidden_snoozed, 1)
+})
