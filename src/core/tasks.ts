@@ -388,9 +388,12 @@ let taskQuery: TaskQuery = hogql
 export function setTaskQuery(query: TaskQuery = hogql): void { taskQuery = query }
 const EVENT_PAGE = 50_000, MAX_SESSIONS = 100_000, MAX_EVENTS = 3_000_000
 // PostHog limits how many queries one key may run (about 240 a minute and 1,200 an hour by default), and
-// Lens's other tools share that budget. A day costs one query for its sessions and one per 50,000 events:
-// about 4 for a full Reval day (~110,000 events). Sessions are matched on PostHog's $session_id column,
+// Lens's other tools share that budget. A day costs one query for its sessions and two per 50,000 events:
+// about 7 for a full Reval day (~110,000 events). Sessions are matched on PostHog's $session_id column,
 // not inside the properties JSON, which keeps each scan cheap.
+// Each page is read in two steps so ClickHouse never sorts wide rows: first the page's keys (session,
+// time, id; small), then the full rows between the first and last key, unsorted. Sorting 50,000 full rows
+// took up to 800 MB and, on a small ClickHouse, starved the Live page; the key sort needs a fraction.
 const BUSY = new Set([429, 500, 502, 503, 504, 513])
 /** Retries a query PostHog was too busy for (rate limit, overload, timeout), waiting longer each time (5 s, 20 s, 60 s). */
 export async function patiently<T>(fn: () => Promise<T>, waits = [5_000, 20_000, 60_000]): Promise<T> {
@@ -409,6 +412,7 @@ export async function patiently<T>(fn: () => Promise<T>, waits = [5_000, 20_000,
  * so a task started before midnight still finishes. Keyset pages (session, time, uuid) never skip or repeat
  * events that share a timestamp. All scans are bounded; caps are recorded as truncated.
  */
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits?: number[]): Promise<void> {
     validDay(day)
     const started = performance.now(), reg = required()
@@ -425,11 +429,19 @@ export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits
     const by = new Map<string, RawEvent[]>()
     let events = 0, sid = '', ts = values.from, uuid = ''
     while (ids.length && events < MAX_EVENTS) {
-        const page = await q(`SELECT ${columns(reg)}, toString(uuid) AS event_uuid, ${P.clientName} AS client_name FROM events
-                WHERE timestamp >= {from} AND timestamp < {scan_to} AND event IN {events}
-                AND $session_id IN (${startedToday})
-                AND ($session_id, timestamp, toString(uuid)) > ({sid}, {ts}, {uuid})
+        const range = `timestamp >= {from} AND timestamp < {scan_to} AND event IN {events} AND $session_id IN (${startedToday})`
+        const keys = await q(`SELECT $session_id AS sid, timestamp AS ts, toString(uuid) AS event_uuid FROM events
+                WHERE ${range} AND ($session_id, timestamp, toString(uuid)) > ({sid}, {ts}, {uuid})
                 ORDER BY $session_id, timestamp, toString(uuid) LIMIT ${EVENT_PAGE}`, { ...values, sid, ts, uuid })
+        if (!keys.length) break
+        const end = keys.at(-1)!
+        const rows = await q(`SELECT ${columns(reg)}, toString(uuid) AS event_uuid, ${P.clientName} AS client_name FROM events
+                WHERE ${range} AND ($session_id, timestamp, toString(uuid)) > ({sid}, {ts}, {uuid})
+                AND ($session_id, timestamp, toString(uuid)) <= ({end_sid}, {end_ts}, {end_uuid}) LIMIT ${EVENT_PAGE * 2}`,
+            { ...values, sid, ts, uuid, end_sid: String(end.sid), end_ts: String(end.ts), end_uuid: String(end.event_uuid) })
+        // The same order as the keys: session, then time (PostHog's own format, to the microsecond), then id.
+        // An event that arrived between the two reads lies inside the range and is simply included.
+        const page = rows.sort((a, b) => cmp(String(a.sid), String(b.sid)) || cmp(String(a.ts), String(b.ts)) || cmp(String(a.event_uuid), String(b.event_uuid)))
         events += page.length
         for (const row of page) {
             const e = toRaw(row)
@@ -441,8 +453,8 @@ export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits
                 const c = dialogCounts.get(e.dialog)!; c.set(e.dialogName, (c.get(e.dialogName) || 0) + 1)
             }
         }
-        if (page.length < EVENT_PAGE) break
-        const last = page.at(-1)!, next = [String(last.sid), String(last.ts), String(last.event_uuid)]
+        if (keys.length < EVENT_PAGE) break
+        const next = [String(end.sid), String(end.ts), String(end.event_uuid)]
         if (next[0] === sid && next[1] === ts && next[2] === uuid) throw new Error('Event pagination did not advance')
         ;[sid, ts, uuid] = next
         if (events >= MAX_EVENTS) truncated = true
