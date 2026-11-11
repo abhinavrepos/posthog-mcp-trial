@@ -74,14 +74,13 @@ export function liveHtml(v: Viewer): string {
     const s = presenceSettings()
     const boot = JSON.stringify({ gap: s.gap_s, gaps: [...new Set([...GAP_CHOICES, s.gap_s])].sort((a, b) => a - b), liveMinutes: s.live_minutes, replayBase: `${config.posthog.publicHost}/project/${config.posthog.projectId}/replay/` }).replace(/</g, '\\u003c')
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Live · ${APP_NAME}</title><style>${PAGE_CSS()}
-:root{--act:#2a78d6;--idle:#86b6ef;--grid:#e1e0d9;--axis:#c3c2b7;--live:#0ca30c}
-main.wide{max-width:1180px}
+:root{--act:#535b65;--idle:#d1d5da;--grid:#e7e8e9;--axis:#b9bec4;--live:#067647}
+main.wide{max-width:1180px}.wide .card{border:0;border-top:1px solid var(--line);border-radius:0;background:transparent;padding:24px 0}.wide>.card:first-of-type{border-top:0;padding-top:0}
 .now{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}#now-sub{flex:1;min-width:220px}.hero{font-size:52px;font-weight:650;line-height:1}
-.pulse{width:12px;height:12px;border-radius:50%;background:var(--live);box-shadow:0 0 0 0 rgba(12,163,12,.5);animation:p 2s infinite;flex:none}.pulse.off{background:var(--axis);animation:none}
-@keyframes p{70%{box-shadow:0 0 0 10px rgba(12,163,12,0)}100%{box-shadow:0 0 0 0 rgba(12,163,12,0)}}
+.pulse{width:12px;height:12px;border-radius:50%;background:var(--live);flex:none}.pulse.off{background:var(--axis);animation:none}
 .filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin:4px 0 16px}.filters>div{min-width:150px}.filters>div.grow{flex:1}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
-.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px}.tile span{display:block;font-size:13px;color:var(--muted)}.tile b{font-size:24px;font-weight:600}
+.tile{padding:12px 0;min-width:0}.tile span{display:block;font-size:13px;color:var(--muted)}.tile b{font-size:24px;font-weight:600}
 .tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
 .seg{display:flex;gap:2px;height:8px;width:100%;margin-top:8px}.seg i{display:block;height:8px;border-radius:999px}.seg .a{background:var(--act)}.seg .i{background:var(--idle)}
 td .seg{width:90px;margin:0;display:inline-flex;vertical-align:middle}
@@ -103,11 +102,13 @@ tr.click{cursor:pointer}tr.click:hover td{background:var(--bg)}td.num,th.num{tex
 details.how summary{cursor:pointer;font-weight:600}details.how li{margin:4px 0}
 .tl-head{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}.tl-nav{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .tl-nav input[type=date]{width:auto;padding:6px 8px}.tl-nav button{padding:6px 11px}.tl-whole{display:flex;gap:5px;align-items:center;margin:0 4px;font-size:13px;color:var(--muted)}.tl-whole input{width:auto}
-.tl-facts{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tl-facts span{background:var(--bg);border-radius:7px;padding:5px 9px;font-size:13px;color:var(--muted)}.tl-facts b{color:var(--ink);font-variant-numeric:tabular-nums}
+.tl-facts{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tl-facts span{padding:5px 0;font-size:13px;color:var(--muted)}.tl-facts b{color:var(--ink);font-variant-numeric:tabular-nums}
 #tl-chart{outline:none;border-radius:6px}#tl-chart:focus-visible{box-shadow:0 0 0 2px var(--accent)}#tl-chart svg{cursor:crosshair}
 .tlbtn{padding:3px 9px;font-size:13px}#tl-pick{min-height:34px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.live-settings{align-self:flex-end;padding:10px 0;min-width:150px}.live-settings[open]{flex-basis:100%}.live-settings>div{max-width:260px;margin-top:12px}.filters>div{min-width:0;flex:1 1 150px}.heat-scroll{overflow-x:auto;max-width:100%}.heat{min-width:640px}.tiles{gap:12px 24px}.tl-facts{gap:6px 20px}
+@media(max-width:600px){.hero{font-size:40px}.now{gap:10px}#now-sub{min-width:0;flex-basis:180px}.live-settings{flex-basis:100%;padding:0}.tl-nav{gap:4px}.tl-nav input[type=date]{max-width:145px}.tl-facts{gap:4px 14px}}
 </style></head>
-<body>${headerHtml(v, 'Live')}<main class="wide"><h1 class="sr-only">Live activity</h1><p id="live-status" class="small" aria-live="polite"></p>
+<body>${headerHtml(v, 'Live')}<main class="wide"><h1>Live activity</h1><p id="live-status" class="small" aria-live="polite"></p>
 
 <div class="card"><h2>In the app now</h2><div class="now"><span aria-hidden="true" class="pulse off" id="pulse"></span><span class="hero" id="now-count">–</span><span class="muted" aria-live="polite" id="now-sub">Loading…</span></div>
 <div class="table-wrap"><table><thead><tr><th scope="col">Client</th><th scope="col">Person</th><th scope="col">Last action</th><th scope="col">In the app since</th><th scope="col" class="num">Today in the app</th><th scope="col" class="num">Today active</th><th scope="col">Actions</th></tr></thead><tbody id="now-rows"></tbody></table><div id="now-pager"></div></div></div>
@@ -116,7 +117,7 @@ details.how summary{cursor:pointer;font-weight:600}details.how li{margin:4px 0}
 <div><label for="range">Period</label><select id="range"><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="custom">Pick dates…</option></select></div>
 <div class="custom hidden"><label for="from">From</label><input type="date" id="from"></div><div class="custom hidden"><label for="to">To</label><input type="date" id="to"></div>
 <div class="grow"><label for="client">Client</label><select id="client"><option value="">All clients</option></select></div>
-<div><label for="gap">Active for … after each action</label><select id="gap"></select></div>
+<details class="live-settings"><summary>Settings</summary><div><label for="gap">Active time after each action</label><select id="gap"></select></div></details>
 </div>
 
 <div class="card hidden" id="tl-card">
@@ -132,17 +133,18 @@ details.how summary{cursor:pointer;font-weight:600}details.how li{margin:4px 0}
 
 <div id="report">
 <div class="tiles" id="tiles"></div>
-<div class="card"><h2 id="chart-title">Time in the app</h2><p class="small muted" style="margin-top:-6px">Each column adds up everyone's time, so three people for an hour make 3 h.</p><div class="legend"><span><i aria-hidden="true" style="background:var(--act)"></i>Active</span><span><i aria-hidden="true" style="background:var(--idle)"></i>Idle</span></div>
+<div class="card"><h2 id="chart-title">Time in the app</h2><p class="small muted" style="margin-top:-6px">Total time across all people.</p><div class="legend"><span><i aria-hidden="true" style="background:var(--act)"></i>Active</span><span><i aria-hidden="true" style="background:var(--idle)"></i>Idle</span></div>
 <div class="chart" id="chart"></div><p class="small muted" id="chart-note"></p>
 <details><summary class="small">Show as a table</summary><div class="table-wrap"><table id="chart-table"></table><div id="chart-table-pager"></div></div></details></div>
-<div class="card" id="heat-card"><h2>Active time by hour</h2><p class="small muted" style="margin-top:-6px">Each square is one hour of one day: the darker, the more active time, everyone added up.</p><div class="heat" id="heat" role="group" aria-label="Active time by hour. Use arrow keys to move between hours."></div><div class="scale" id="scale"></div></div>
+<div class="card" id="heat-card"><h2>Active time by hour</h2><p class="small muted" style="margin-top:-6px">Darker hours have more active time across all people.</p><div class="heat-scroll" tabindex="0" role="region" aria-label="Hourly activity; scroll to see all hours"><div class="heat" id="heat" role="group" aria-label="Active time by hour. Use arrow keys to move between hours."></div></div><div class="scale" id="scale"></div></div>
 <div class="card"><div class="row" style="align-items:center;margin-bottom:8px"><h2 id="list-title" style="margin:0;flex:1">Clients</h2><span id="who-pill"></span><button class="ghost" id="list-csv" type="button">Download CSV</button></div>
 <div class="table-wrap"><table id="list"></table><div id="list-pager"></div></div><p class="small muted" id="list-note"></p></div>
 <div class="card hidden" id="sessions-card"><div class="row" style="align-items:center;margin-bottom:8px"><h2 style="margin:0;flex:1" id="sessions-title">Sessions</h2><button class="ghost" id="sessions-csv" type="button">Download CSV</button></div>
 <div class="table-wrap"><table id="sessions"></table><div id="sessions-pager"></div></div><p class="small"><button class="ghost hidden" id="more" type="button">Show more</button></p></div>
 </div>
 
-<details class="card how"><summary>How the time is counted</summary><ul class="small">
+<details class="card how"><summary>How this works</summary><ul class="small">
+<li>Charts add everyone’s time: three people for an hour make 3 h.</li>
 <li><b>In the app</b>: from a person's first action to their last, in each session. PostHog ends a session after 30 minutes without any action, so a break longer than that starts a new session and is not counted.</li>
 <li><b>Active</b>: after each action, the time until the next one, up to the limit you pick above (1 minute by default). <b>Idle</b>: the rest of the time in the app, when the app was open but nobody did anything.</li>
 <li>An action is anything PostHog records from a person: clicks, typing, screens, your own events. Automatic background events are left out.</li>
@@ -198,7 +200,7 @@ const nowPager=makePager({mount:$('now-pager'),noun:'people',size:25,draw:people
   tr.appendChild(el('td','num',dur(p.today.open_s)));tr.appendChild(el('td','num',dur(p.today.active_s)));tr.appendChild(tlCell(p.user,p.client_id,dayOf(new Date()),p.client_name));tb.appendChild(tr)});}});
 async function loadNow(){try{const r=await api('/replays/live/api/now?tz='+encodeURIComponent(TZ)+'&gap='+S.gap);
  LIVE=new Set(r.people.map(p=>p.client_id));const clients=LIVE.size;
- $('now-count').textContent=String(r.people.length);$('pulse').classList.toggle('off',!r.people.length);
+ $('now-count').textContent=r.people.length.toLocaleString();$('pulse').classList.toggle('off',!r.people.length);
  $('now-sub').textContent=(r.people.length===1?'person':'people')+' in the app now'+(r.people.length?', from '+clients+' client'+(clients===1?'':'s'):'')+' · an action in the last '+r.minutes+' minutes · updated '+new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
  nowPager.set(r.people,true);$('now-sub').className='muted';$('now-sub').removeAttribute('role');
  }catch(e){$('now-sub').textContent=e.message;$('now-sub').className='err';$('now-sub').setAttribute('role','alert')}}
@@ -257,7 +259,7 @@ function renderChart(){const{unit,items}=series();const box=$('chart');box.inner
 const chartPager=makePager({mount:$('chart-table-pager'),noun:'time periods',size:25,draw:items=>{const unit=series().unit; const tb=$('chart-table');tb.innerHTML='';const hr=el('tr');[unit==='hour'?'Hour':'Day','In the app','Active','Idle','People'].forEach((h,i)=>hr.appendChild(el('th',i?'num':null,h)));const th=el('thead');th.appendChild(hr);tb.appendChild(th);const bd=el('tbody');
  items.forEach(it=>{const tr=el('tr');tr.appendChild(el('td',null,it.title));[dur(it.open),dur(it.active),dur(it.idle),String(it.people)].forEach(v=>tr.appendChild(el('td','num',v)));bd.appendChild(tr)});tb.appendChild(bd)}});
 
-const RAMP=['#cde2fb','#b7d3f6','#9ec5f4','#86b6ef','#6da7ec','#5598e7','#3987e5','#2a78d6','#256abf','#1c5cab','#184f95','#104281','#0d366b'];
+const RAMP=['#eef0f2','#e1e4e8','#d4d8de','#c7ccd3','#bac1c9','#adb5bf','#a0a9b5','#939eab','#8692a1','#798697','#6c7a8d','#5f6e83','#526279'];
 function renderHeat(){const[f,t]=period();const card=$('heat-card');if(f===t){card.classList.add('hidden');return}card.classList.remove('hidden');
  const box=$('heat');box.innerHTML='';box.style.gridTemplateColumns='92px repeat(24,minmax(0,1fr))';
  const by=new Map(R.hours.map(h=>[h.day+'|'+h.hour,h]));const max=Math.max(1,...R.hours.map(h=>h.active_s));

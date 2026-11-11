@@ -62,18 +62,22 @@ function connectHtml(v: Viewer): string {
 table{width:100%;table-layout:fixed}td,th{overflow-wrap:anywhere}ol.steps{padding-left:20px}ol.steps li{margin:10px 0}
 .srv{border:1px solid var(--line,#ddd);border-radius:10px;padding:10px 12px;margin:10px 0}.srv h3{margin:0 0 6px;font-size:15px}
 .f{display:grid;grid-template-columns:130px 1fr auto;gap:8px;align-items:center;padding:4px 0}.f code{background:var(--chip);padding:5px 8px;border-radius:6px;overflow-wrap:anywhere;font-size:13px}
-@media (max-width:560px){.f{grid-template-columns:1fr auto}.f span{grid-column:1/-1}}</style></head>
+@media (max-width:560px){.f{grid-template-columns:1fr auto}.f span{grid-column:1/-1}}
+main{min-width:0}main .card{background:transparent;border:0;border-radius:0;padding:24px 0;margin:0}main .card+ .card{border-top:1px solid var(--line);margin-top:16px}main h1{margin-top:0}main button:not(.ghost){background:var(--ink);border-color:var(--ink);color:var(--card)}main .ghost{border-color:transparent;color:var(--ink)}
+ol.steps{padding-left:24px}ol.steps li{padding:8px 0 16px 8px}ol.steps li::marker{color:var(--muted);font-weight:600}.srv{border:0;border-radius:0;padding:16px 0;margin:8px 0}.srv+.srv{border-top:1px solid var(--line)}.f{grid-template-columns:100px minmax(0,1fr) auto;gap:12px}.f code{background:var(--bg)}main .table-wrap{overflow:visible}main td{padding-top:14px;padding-bottom:14px}
+@media(max-width:560px){.f{grid-template-columns:minmax(0,1fr) auto;gap:6px}.f span{grid-column:1/-1}main th,main td{padding-left:3px;padding-right:3px;font-size:13px}main td button{padding:6px 3px}ol.steps li{padding-left:2px}main h1{font-size:24px}}
+</style></head>
 <body>${headerHtml(v, 'Chat')}<main style="max-width:820px">
 <div class="card"><h1>Connect GitHub Copilot</h1>
+<p class="small muted">Your key is shown once. Copilot uses your Lens access (surveys: ${role}).</p>
 <ol class="steps">
 <li><button type="button" id="make">Connect Copilot</button> <span id="msg" class="small" aria-live="polite"></span></li>
-<li>In the Copilot app: cog → <b>MCP Servers</b> → <b>Add Server</b> → <b>+ Add Custom server</b>. Copy in the fields below${ph ? ', once per server' : ''}.<div id="add"></div></li>
-<li>Start a new chat and ask, e.g. <i>"Which clients need attention this month?"</i></li>
+<li>Open Copilot settings → <b>MCP Servers</b> → <b>Add Server</b> → <b>+ Add Custom server</b>. Copy these fields${ph ? ', once per server' : ''}.<div id="add"></div></li>
+<li>Start a new chat: <i>"Which clients need attention this month?"</i></li>
 </ol>
-<p class="small muted">Copilot gets your access (survey role: ${role}). The key is shown once.</p>
 </div>
-<div class="card"><h2>Your keys</h2><div class="table-wrap"><table><thead><tr><th scope="col">Name</th><th scope="col">Made</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div><div id="keys-pager"></div><p id="keys-msg" class="small" aria-live="polite"></p>
-<p class="small muted">Revoke a key you no longer use.</p></div>
+<div class="card"><h2>Your keys</h2><div class="table-wrap"><table><thead><tr><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div><div id="keys-pager"></div><p id="keys-msg" class="small" aria-live="polite"></p>
+</div>
 </main>
 <script>
 ${PAGER_JS}
