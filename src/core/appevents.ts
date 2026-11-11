@@ -243,11 +243,15 @@ export function generalise(text: string, reg: Pick<AppEvents, 'redact'>, max = 2
         .trim()
     for (const r of reg.redact) s = s.replace(new RegExp(r, 'i'), (_m, keep = '') => `${keep}…`)
     s = s
-        .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '…')
+        // Emails: only tokens that contain an @ are searched (scanning every position of a long run
+        // without one is quadratic).
+        .replace(/[\w.+@-]+/g, (t) => (t.includes('@') ? t.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '…') : t))
         .replace(/\b\d{4}[-/]\d{2}[-/]\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?/g, '<date>')
         .replace(/\b\d{1,2}[-/ ][A-Za-z]{3}[-/ ]\d{4}( \d{2}:\d{2}(:\d{2})?)?/g, '<date>')
-        // A token mixing letters and digits (a code, a user id, a feed name) is an identifier.
-        .replace(/[A-Za-z0-9_.-]*(?:[A-Za-z][A-Za-z0-9_.-]*\d|\d[A-Za-z0-9_.-]*[A-Za-z])[A-Za-z0-9_.-]*/g, (t) => (t.length >= 5 ? '…' : t))
+        // A token mixing letters and digits (a code, a user id, a feed name) is an identifier. Each run of
+        // token characters is matched once and then checked: the earlier single regex, with overlapping
+        // nested quantifiers, backtracked catastrophically on long tokens and blocked the whole server.
+        .replace(/[A-Za-z0-9_.-]+/g, (t) => (t.length >= 5 && /[A-Za-z]/.test(t) && /\d/.test(t) ? '…' : t))
         .replace(/\d{3,}/g, '#')
     return s.length > max ? s.slice(0, max - 1) + '…' : s
 }
