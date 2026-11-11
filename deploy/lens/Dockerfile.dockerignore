@@ -17,4 +17,6 @@ deploy/status/status.env
 !deploy/posthog/survey-engine/engine.js
 !deploy/posthog/survey-engine/build.mjs
 !deploy/posthog/survey-engine/fixtures
+# The PostHog static-caching rule, for its test.
+!deploy/posthog/tuning-static.caddy
 demo-app
