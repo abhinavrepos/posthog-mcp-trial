@@ -89,8 +89,9 @@ export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(appEvents() ? A
 // minutes is answered from memory, and identical questions asked at once share one run. Only these
 // tools: their answers do not depend on who asks or change anything. Errors are never kept.
 export const CACHED_TOOLS = new Set(['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor', 'screen_usage', 'find_silent_issues', 'error_blast_radius'])
-// Tools that change what other tools report: after one runs, kept answers are dropped.
-export const WRITE_TOOLS = new Set(['record_verdict', 'correct_ticket_link', 'refresh_releases', 'triage_ticket'])
+// All of these read PostHog events only. Lens's own writes (record_verdict, correct_ticket_link,
+// refresh_releases, triage_ticket) change releases, verdicts and ticket links, which only uncached tools
+// read (release_outcomes, list_releases, ticket_evidence...), so a write never needs to drop these answers.
 const TOOL_TTL_MS = Math.max(0, Number(process.env.LENS_TOOL_CACHE_SECONDS ?? 120)) * 1000
 const TOOL_CACHE_BYTES = 16 * 1024 * 1024
 const toolAnswers = new Map<string, { at: number; value: unknown; bytes: number; ttl: number }>()
@@ -141,7 +142,6 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
         const call = cb as (a: unknown, e: unknown) => unknown
         const handler = typeof cb !== 'function' ? cb
             : CACHED_TOOLS.has(name) ? (args: unknown, extra: unknown) => cachedToolCall(name, args, () => Promise.resolve(call(args, extra)))
-            : WRITE_TOOLS.has(name) ? async (args: unknown, extra: unknown) => { try { return await call(args, extra) } finally { clearToolAnswers() } }
             : cb
         return register(name, { ...cfg, description: `${cfg.description ?? ''} ${DIRECT_CALL}`.trim() } as never, handler as never)
     }) as typeof server.registerTool
