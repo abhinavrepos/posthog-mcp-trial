@@ -14,3 +14,4 @@ deploy/offline/images.lock
 deploy/offline/last-kit.txt
 deploy/offline/out/
 deploy/offline/kit/
+e2e-out/
