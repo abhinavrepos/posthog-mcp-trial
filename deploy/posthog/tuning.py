@@ -43,7 +43,10 @@ def generate(out, env_path, config_path=None):
         return int(value)
     ram = number('LENS_TUNE_RAM_MB', int(re.search(r'MemTotal:\s+(\d+)', Path('/proc/meminfo').read_text())[1]) // 1024, 1024)
     workers = number('LENS_PH_WORKERS', 2 if ram < 32768 else 3, 1, 16)
-    lifetime = number('LENS_PH_WORKER_LIFETIME', 3600, 60)
+    # Worker recycling is off by default: Granian restarts every worker at the same moment, and PostHog's web
+    # app takes minutes to start, so hourly recycling meant minutes of 502s every hour (seen on the test box).
+    lifetime = number('LENS_PH_WORKER_LIFETIME', 0, 0)
+    if 0 < lifetime < 600: raise ValueError('LENS_PH_WORKER_LIFETIME must be 0 (off) or at least 600 seconds')
     # ClickHouse gets the memory the smaller web worker pool frees (about a seventh of RAM: ~3 GB on 22 GB).
     server = number('LENS_CH_SERVER_MB', min(8192, max(1024, ram // 7)), 512, ram)
     # One query may use most of it; big sorts and group-bys spill to disk at a quarter instead of failing.
@@ -79,7 +82,7 @@ def generate(out, env_path, config_path=None):
         ET.ElementTree(tree).write(out / name, encoding='unicode')
         ET.parse(out / name)
     services = {
-        'web': {'environment': {'GRANIAN_WORKERS': str(workers), 'GRANIAN_WORKERS_LIFETIME': str(lifetime)}},
+        'web': {'environment': {'GRANIAN_WORKERS': str(workers), **({'GRANIAN_WORKERS_LIFETIME': str(lifetime)} if lifetime else {})}},
         'clickhouse': {'volumes': [
             './lens-tuning/server.xml:/etc/clickhouse-server/config.d/zz-lens-tuning.xml:ro',
             './lens-tuning/users.xml:/etc/clickhouse-server/users.d/zz-lens-tuning.xml:ro']},

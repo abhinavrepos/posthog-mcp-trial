@@ -50,7 +50,7 @@ class Tuning(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('"workers": 2', result.stdout)
         self.assertIn('"workers": 3', self.run_tune('--dry-run', LENS_TUNE_RAM_MB='32768').stdout)
-        for key, value in [('LENS_PH_WORKERS', '0'), ('LENS_CH_SPILL_MB', '99999'), ('LENS_CH_RAM_RATIO', '1.5'), ('LENS_CH_QUERY_MB', 'oops')]:
+        for key, value in [('LENS_PH_WORKER_LIFETIME', '300'), ('LENS_PH_WORKERS', '0'), ('LENS_CH_SPILL_MB', '99999'), ('LENS_CH_RAM_RATIO', '1.5'), ('LENS_CH_QUERY_MB', 'oops')]:
             self.assertNotEqual(self.run_tune('--dry-run', **{key: value}).returncode, 0)
         before = self.env_file.read_text()
         for mode in [True, True, False]:
@@ -75,6 +75,9 @@ class Tuning(unittest.TestCase):
         self.assertIsNone(users.find('profiles/default/constraints'), 'no constraints that could reject PostHog queries')
         self.assertIsNone(users.find('profiles/default/max_threads'), 'threads left to PostHog unless set')
         override = json.loads((out/tuning.OVERRIDE).read_text())
+        # Worker recycling is off by default (all workers restart at once: minutes of 502s every cycle).
+        self.assertNotIn('GRANIAN_WORKERS_LIFETIME', override['services']['web']['environment'])
+        self.assertEqual(override['services']['web']['environment']['GRANIAN_WORKERS'], '2')
         self.assertNotIn('CADDYFILE', override['services']['proxy'].get('environment', {}))
 
     def test_proxy_preserves_the_effective_survey_lock(self):
@@ -132,8 +135,9 @@ if args[:2] == ['compose','up'] and os.environ.get('MOCK_FAIL_ONCE') and not (ro
     def test_refuses_invalid_proxy_and_unsupported_granian_before_mutation(self):
         self.fake_docker()
         before = self.env_file.read_text()
+        # An old Granian only matters when worker recycling is turned on (it is off by default).
         for option in ['MOCK_BAD_CADDY', 'MOCK_OLD_GRANIAN']:
-            result = self.run_tune(**{option: '1'})
+            result = self.run_tune(**{option: '1'}, **({'LENS_PH_WORKER_LIFETIME': '3600'} if option == 'MOCK_OLD_GRANIAN' else {}))
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(self.env_file.read_text(), before)
             self.assertFalse((self.root/tuning.OVERRIDE).exists())
