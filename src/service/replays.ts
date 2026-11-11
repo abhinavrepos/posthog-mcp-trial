@@ -617,7 +617,7 @@ textarea{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px s
 .cm .tx{flex:1;white-space:pre-wrap;overflow-wrap:anywhere}.cm .by{font-size:12px;color:var(--muted)}.cm.on{background:var(--chip)}.cm button{padding:2px 8px;font-size:13px}
 .spin{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s 1s linear infinite;display:inline-block}@keyframes s{to{transform:rotate(1turn)}}
 :focus-visible{outline:3px solid var(--accent);outline-offset:2px}a:focus-visible,button:focus-visible{border-radius:7px}
-.skip{position:absolute;left:-9999px;top:8px;z-index:10;background:var(--card);color:var(--accent);padding:8px 12px;border-radius:7px;font-weight:600}.skip:focus{left:12px}
+.skip{position:absolute;left:-9999px;top:0;color:var(--accent);font-weight:600}.skip:focus{position:static;display:block;padding:8px 20px;background:var(--chip);border-bottom:1px solid var(--line);outline-offset:-3px;border-radius:0}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .pager{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:10px;font-size:13px}.pager .pg{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .pager button,.pager .pg>span{padding:5px 10px;white-space:nowrap}.pager select{width:auto;padding:4px 8px}
