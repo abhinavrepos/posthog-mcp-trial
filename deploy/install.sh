@@ -221,6 +221,7 @@ is_addresses() {
     [ -n "$first" ]
 }
 is_file() { local f="$1"; [[ "$f" = /* ]] || f="$APP_DIR/$f"; [ -f "$f" ] && python3 -c 'import json,sys; l=json.load(open(sys.argv[1])); assert isinstance(l,list) and all(x["path"].startswith("/") and x["name"] for x in l)' "$f" 2>/dev/null || { warn "not found, or not a JSON list like config/screens.example.json"; return 1; }; }
+is_appevents() { local f="$1"; [[ "$f" = /* ]] || f="$APP_DIR/$f"; [ -f "$f" ] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d,dict) and d' "$f" 2>/dev/null || { warn "not found, or not a JSON object like config/app-events.reval.json"; return 1; }; }
 is_jql() { [ -n "$1" ]; }
 hosts_of() { local u h out=""; for u in ${1//,/ }; do h="${u#*://}"; h="${h%%/*}"; h="${h%%:*}"; out="${out:+$out,}$h"; done; echo "$out"; }
 # On EC2 the instance metadata service (IMDSv2) knows the public IP; elsewhere ask ipify, then use the
@@ -285,6 +286,7 @@ collect_answers() {
     setting PROP_CLIENT_NAME client_name
     setting PROP_APP_VERSION app_version
     setting PROP_PERSON_EMAIL email
+    setting APP_EVENTS_FILE "" is_appevents
     setting SCREENS_FILE "" is_file
     setting JIRA_BASE_URL "" is_url
     setting JIRA_EMAIL "" is_email
@@ -678,7 +680,7 @@ open(path, "w").write("\n".join(lines) + "\n")
 PY
 }
 
-APP_KEYS=(PROP_CLIENT_ID PROP_CLIENT_NAME PROP_APP_VERSION PROP_PERSON_EMAIL SCREENS_FILE JIRA_BASE_URL JIRA_EMAIL JIRA_API_TOKEN
+APP_KEYS=(PROP_CLIENT_ID PROP_CLIENT_NAME PROP_APP_VERSION PROP_PERSON_EMAIL APP_EVENTS_FILE SCREENS_FILE JIRA_BASE_URL JIRA_EMAIL JIRA_API_TOKEN
     JIRA_RCI_ISSUE_TYPE JIRA_RISK_ISSUE_TYPE RELEASES_JIRA_PROJECT RELEASES_SUPPORT_JQL ANTHROPIC_API_KEY FEATURE_LENS_MCP
     FEATURE_POSTHOG_MCP POSTHOG_MCP_URL POSTHOG_MCP_API_KEY SERVICE_PUBLIC_URL CLIP_ALLOWED_HOSTS STATUS_PASSWORD
     FEATURE_SURVEYS POSTHOG_SURVEY_API_KEY POSTHOG_SURVEY_GATE SURVEY_BRAND)
@@ -879,6 +881,7 @@ EOF
     if [ "$STATUS_PUBLIC" = yes ]; then echo "  http://$host:8090  (any user name, password: sudo grep STATUS_PASSWORD $HERE/status/status.env)" >>"$f"
     else echo "  http://127.0.0.1:8090 on this machine. From your computer: ssh -L 8090:127.0.0.1:8090 <this machine>, then http://localhost:8090" >>"$f"; fi
     echo "  For uptime monitors: http://127.0.0.1:8090/healthz (200 or 503, no password)" >>"$f"
+    [ -n "$APP_EVENTS_FILE" ] || printf '\nNot set yet: APP_EVENTS_FILE (your app'"'"'s events; Reval: config/app-events.reval.json). Dashboards, survey steps and the app tools need it.\n' >>"$f"
     [ -n "$SCREENS_FILE" ] || printf '\nNot set yet: SCREENS_FILE (your screens, like config/screens.example.json). Pages are matched by path until then.\n' >>"$f"
     printf '\nThis summary: sudo %s status\n' "$0" >>"$f"
     echo; echo "${G}${B}Done.${N}"; echo; cat "$f"
