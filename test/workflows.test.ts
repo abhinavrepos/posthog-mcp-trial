@@ -3,13 +3,15 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { after, describe, test } from 'node:test'
+import { after, beforeEach, describe, test } from 'node:test'
 
 const dir = mkdtempSync(join(tmpdir(), 'lens-workflows-'))
 process.env.TRIAGE_DB = join(dir, 'test.db')
 process.env.APP_EVENTS_FILE = 'config/app-events.reval.json'
 process.env.POSTHOG_PROJECT_ID = 'test-project'
 process.env.POSTHOG_PERSONAL_API_KEY = 'test-key'
+const { clearPosthogCache } = await import('../src/core/posthog.ts')
+beforeEach(() => clearPosthogCache())
 const { db } = await import('../src/core/db.ts')
 const { parseAppEvents, toSteps } = await import('../src/core/appevents.ts')
 const { discoverWorkflowChains, workflowEpisodes, workflowCompletion, validateWorkflow, workflowId, workflowDialogsFromId } = await import('../src/core/workflows.ts')
@@ -215,7 +217,7 @@ describe('bounded workflow queries', () => {
         assert.deepEqual(seen[0].values.dialogs, ['A', 'B'])
         assert.equal(seen[0].values.client, clientId)
         assert.ok(seen.every((q) => !q.query.includes(clientId)))
-        for (const q of seen.slice(1)) { assert.equal((q.values.sids as string[]).length, 50); assert.match(q.query, /IN \{sids\}.*LIMIT 50000/s) }
+        for (const q of seen.slice(1)) { assert.equal((q.values.sids as string[]).length, 50); assert.match(q.query, /IN \{sids\}.*LIMIT 50000/s); assert.match(q.query, /SELECT uuid FROM events/); assert.doesNotMatch(q.query, /ORDER BY sid, ts/); assert.doesNotMatch(q.query, /properties\.\$session_id/) }
         assert.equal(r.truncated, true)
     })
     test('event row cap is disclosed', async (t) => {
@@ -287,5 +289,24 @@ describe('bounded workflow queries', () => {
             return q.query.includes('GROUP BY sid') ? response([...new Set(rows.map((r) => r.sid))].map((sid) => ({ sid }))) : response(rows)
         })
         await assert.rejects(completionWorkflow({ ...win, workflow: "Start → Finish → Save → 'Trade Id … Updated'" }), /Ambiguous workflow/)
+    })
+})
+
+
+describe('workflow answer reuse', () => {
+    test('identical discovery flights share reads and cached results cannot be mutated by callers', async (t) => {
+        let calls = 0
+        t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+            calls++
+            const q = JSON.parse(String(init.body)).query
+            if (q.query.includes('GROUP BY sid')) return response([{ sid: 's1' }, { sid: 's2' }])
+            return response([1, 2].flatMap((i) => session(`s${i}`, 'X', [open(0, 'A'), open(1, 'B'), press(2, 'B'), notice(3)])))
+        })
+        const [a, b] = await Promise.all([discoverWorkflows(win), discoverWorkflows(win)])
+        assert.deepEqual(a, b)
+        assert.equal(calls, 2)
+        a.discovered.length = 0
+        assert.equal((await discoverWorkflows(win)).discovered.length, 1)
+        assert.equal(calls, 2)
     })
 })

@@ -1,7 +1,7 @@
 // Learn what happens after an error, without exposing field values or search text.
-import { columns, dialogLabel, isGeneratedId, prop, required, toRaw, toSteps, type AppEvents, type DialogNames, type Step } from './appevents.ts'
+import { appAnswer, appQuery as hogql, columns, dialogLabel, isGeneratedId, prop, required, toRaw, toSteps, type AppEvents, type DialogNames, type Step } from './appevents.ts'
 import { recordingSpans } from './incidents.ts'
-import { hogql, replayUrl } from './posthog.ts'
+import { replayUrl } from './posthog.ts'
 import { P } from './props.ts'
 import { tokens } from './text.ts'
 
@@ -197,6 +197,10 @@ export interface MessageDoctorReport {
 
 /** Error sessions first, then their events (including fields), so busy sessions do not hide errors. */
 export async function messageDoctor(q: { from: Date; to: Date; clientId?: string; dialog?: string; message?: string }): Promise<MessageDoctorReport> {
+    return appAnswer('messageDoctor', [q], () => computeMessageDoctor(q), 60_000)
+}
+
+async function computeMessageDoctor(q: { from: Date; to: Date; clientId?: string; dialog?: string; message?: string }): Promise<MessageDoctorReport> {
     const reg = required()
     const button = prop(reg, 'button')
     // Reval sends the message as ["text"], but other vocabularies may send a plain string or action.
@@ -217,10 +221,10 @@ export async function messageDoctor(q: { from: Date; to: Date; clientId?: string
     // Filter dialog/message after attribution/grouping. A messagebox carries neither its originating
     // dialog nor its title, and filtering raw messages would also miss id-free template matches.
     const candidates = await hogql(
-        `SELECT toString(properties.$session_id) AS sid, max(timestamp) AS last FROM events
+        `SELECT toString($session_id) AS sid, max(timestamp) AS last FROM events
          WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}
            AND ${prop(reg, 'dialog')} IN {special} AND (${outcome}) = {error}
-           AND notEmpty(toString(properties.$session_id)) AND ({client} = '' OR toString(${P.client}) = {client})
+           AND notEmpty(toString($session_id)) AND ({client} = '' OR toString(${P.client}) = {client})
          GROUP BY sid ORDER BY last DESC, sid LIMIT 1000`, values
     )
     // Read through now, not just the requested window: a retry just after the window still counts.
@@ -235,9 +239,9 @@ export async function messageDoctor(q: { from: Date; to: Date; clientId?: string
     const read = async (ids: string[]): Promise<void> => {
         const rows = await hogql(
             `SELECT ${columns(reg)} FROM events
-             WHERE toString(properties.$session_id) IN {ids} AND event IN {events}
+             WHERE toString($session_id) IN {ids} AND event IN {events}
                AND timestamp >= {history} AND timestamp < {observed}
-             ORDER BY sid, ts LIMIT 50000`, { ...eventValues, ids }
+             LIMIT 50000`, { ...eventValues, ids }
         )
         eventRows += rows.length
         if (rows.length >= EVENT_LIMIT) {

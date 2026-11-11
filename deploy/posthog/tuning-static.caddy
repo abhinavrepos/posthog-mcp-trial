@@ -1,0 +1,6 @@
+    # Only fingerprinted static assets (PostHog's build names them name-HASH.ext, HASH = 8+ uppercase letters
+    # or digits) are immutable; surveys.js, toolbar.js, recorder.js and other unhashed files stay short-lived.
+    @lens_static_hash path_regexp lens_static_hash ^/static/.*-[A-Z0-9]{8,16}\.(js|css|woff2?|ttf|png|jpe?g|gif|svg|webp|ico)(\.map)?(\.(br|gz))?$
+    header @lens_static_hash Cache-Control "public, max-age=31536000, immutable" {
+        defer
+    }

@@ -14,10 +14,8 @@ import {
     queueAlert,
     estimateReach,
     listSurveys,
-    getSurvey,
     launchSurvey,
     saveSurvey,
-    specOf,
     stopSurvey,
     surveyOverview,
     surveyResults,
@@ -238,7 +236,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         },
         async ({ days }) => {
             const list = await surveyOverview(days)
-            return json(`${list.length} surveys; counts over the last ${days} days. Page: ${pageUrl()}`, list.map((s) => ({ id: s.id, name: s.name, status: s.status, made_by_lens: s.made_by_lens, steps: s.steps, clients: s.clients, shown: s.shown, answered: s.answered, dismissed: s.dismissed, questions: s.questions.map((q) => q.text) })))
+            return json(`${list.length} surveys; counts over the last ${days} days. Page: ${pageUrl()}`, list.map((s) => ({ id: s.id, name: s.name, status: s.status, ...(s.freshness ? { freshness: s.freshness } : {}), made_by_lens: s.made_by_lens, steps: s.steps, clients: s.clients, shown: s.shown, answered: s.answered, dismissed: s.dismissed, questions: s.questions.map((q) => q.text) })))
         }
     )
 
@@ -252,7 +250,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         },
         async ({ survey_id, days }) => {
             const r = await surveyResults(survey_id, days)
-            const spec = r.survey.made_by_lens ? specOf(await getSurvey(survey_id)) : undefined
+            const spec = r.spec
             return json(`Results, last ${days} days. Page: ${pageUrl(survey_id)}${spec ? '. "spec" is the survey as it is now: change fields there and pass them to save_survey with survey_id.' : ''}`, { ...r, ...(spec ? { spec } : {}) })
         }
     )

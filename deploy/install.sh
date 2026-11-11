@@ -97,9 +97,9 @@ chmod 700 "$STATE_DIR"
 
 done_step() { [ -f "$STATE_DIR/done/$1" ]; }
 finish() { date -u +%Y-%m-%dT%H:%M:%SZ >"$STATE_DIR/done/$1"; ok "step $1 done"; }
-STEPS=(check packages posthog scale addresses user app account posthog_mcp surveys offline settings service status mcp doctor)
+STEPS=(check packages posthog scale addresses user app account posthog_mcp surveys tune offline settings service status mcp doctor)
 # Cheap and safe to repeat, so they run every time and changed answers take effect.
-ALWAYS=" check addresses app posthog_mcp surveys offline settings service status mcp doctor "
+ALWAYS=" check addresses app posthog_mcp surveys tune offline settings service status mcp doctor "
 # Where the images come from (deploy/offline/ecr.sh: IMAGES_FROM=ecr when deploy/offline/ecr.env is here).
 . "$HERE/migrate/versions/versions.env"
 
@@ -306,6 +306,7 @@ collect_answers() {
     setting ANTHROPIC_API_KEY ""
     setting FEATURE_LENS_MCP on is_onoff
     setting LENS_MCP_NAME lens is_mcpname
+    setting TUNE on is_onoff
     setting SURVEY_ENGINE on is_onoff
     setting SURVEY_BRAND "Survey by ION"
     # on: PostHog's own survey screens and API answer only Lens (surveys are managed in Lens).
@@ -670,6 +671,20 @@ step_surveys() {
     SURVEY_ENGINE="$SURVEY_ENGINE" SURVEY_BRAND="$SURVEY_BRAND" SURVEY_UI_LOCK="$SURVEY_UI_LOCK" SURVEY_GATE="$POSTHOG_SURVEY_GATE" LENS_URL="$SERVICE_PUBLIC_URL" \
         bash "$HERE/posthog/survey-engine/apply.sh" "$POSTHOG_DIR"
     finish surveys
+}
+
+# Run after survey lock creation; proxy tuning consumes its effective CADDYFILE.
+step_tune() {
+    CURRENT=tune; step "Tuning PostHog memory and static caching"
+    if [ "$TUNE" = off ]; then say "skipped (TUNE=off; existing tuning is kept, tune.sh --undo removes it)"; finish tune; return; fi
+    local key value
+    local -a tune_env=()
+    for key in LENS_TUNE_RAM_MB LENS_PH_WORKERS LENS_PH_WORKER_LIFETIME LENS_CH_QUERY_MB LENS_CH_SPILL_MB LENS_CH_THREADS LENS_CH_SERVER_MB LENS_CH_RAM_RATIO LENS_CH_MARK_CACHE_MB LENS_CH_UNCOMPRESSED_CACHE_MB LENS_TUNE_HEALTH_SECONDS; do
+        value="$(known "$key")"
+        [ -z "$value" ] || tune_env+=("$key=$value")
+    done
+    env "${tune_env[@]}" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/posthog/tune.sh" </dev/null || die "PostHog tuning failed (previous config restored); inspect tune.sh output. TUNE=off skips this step."
+    finish tune
 }
 
 set_secret() { # key value: writes it into .secrets.env, replacing the old line

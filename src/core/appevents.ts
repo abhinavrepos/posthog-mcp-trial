@@ -12,11 +12,104 @@ import { readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 
 import { config, ROOT } from './config.ts'
-import { hogql, propertyDefinitions, replayUrl } from './posthog.ts'
+import { hogql as posthogQuery, PostHogError, propertyDefinitions, replayUrl, type Row } from './posthog.ts'
 import { recordingSpans } from './incidents.ts'
 import { snapshotsFile } from './clip.ts'
 import { attemptTimings, clockShift, networkFromFile, seconds, timingWords, type AttemptTiming } from './replaynet.ts'
 import { P } from './props.ts'
+
+// Keep these scans serial even when a report composes several independent answers.
+// Other Lens modules may share the box: never fan out JSON-heavy event scans here.
+let queryTail: Promise<unknown> = Promise.resolve()
+let queuedQueries = 0
+export function appQuery(query: string, values: Record<string, unknown> = {}): Promise<Row[]> {
+    if (queuedQueries >= 64) return Promise.reject(new PostHogError('App event read queue is busy', 503))
+    queuedQueries++
+    const result = queryTail.then(() => posthogQuery(query, values)).finally(() => { queuedQueries-- })
+    queryTail = result.catch(() => undefined)
+    return result
+}
+const hogql = appQuery
+
+/** Bounded answer cache, separate from raw event data. No rejected promises are retained. */
+export class AppAnswerCache {
+    private entries = new Map<string, { value: unknown; at: number; ttl: number; bytes: number }>()
+    private flights = new Map<string, Promise<unknown>>()
+    private bytes = 0
+    private generation = 0
+    constructor(private maxBytes = 8 * 1024 * 1024, private maxEntries = 128, private clock = Date.now) {}
+    clear(): void { this.entries.clear(); this.bytes = 0; this.generation++; this.flights.clear() }
+    async get<T>(key: string, ttl: number, compute: () => Promise<T>): Promise<T> {
+        const generation = this.generation
+        const old = this.entries.get(key)
+        if (old && this.clock() - old.at < old.ttl) {
+            this.entries.delete(key); this.entries.set(key, old)
+            return structuredClone(old.value) as T
+        }
+        const flight = this.flights.get(key)
+        if (flight) return structuredClone(await flight) as T
+        const pending = (async () => {
+            try {
+                const value = await compute()
+                const bytes = Buffer.byteLength(JSON.stringify(value, (_k, v) => v instanceof Map ? [...v] : v) ?? '')
+                if (generation !== this.generation || (value && typeof value === 'object' && '_cache' in value)) return value
+                const existing = this.entries.get(key)
+                if (existing && this.entries.delete(key)) this.bytes -= existing.bytes
+                if (bytes <= this.maxBytes && ttl > 0) {
+                    this.entries.set(key, { value: structuredClone(value), at: this.clock(), ttl, bytes })
+                    this.bytes += bytes
+                    while (this.bytes > this.maxBytes || this.entries.size > this.maxEntries) {
+                        const first = this.entries.keys().next().value!
+                        this.bytes -= this.entries.get(first)!.bytes; this.entries.delete(first)
+                    }
+                }
+                return value
+            } catch (error) {
+                const retryable = error instanceof PostHogError && (error.status === 429 || ((error.status ?? 0) >= 500 && (error.status ?? 0) < 600))
+                    || error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name)
+                // Stale answers are explicitly marked, never used for malformed queries/auth errors.
+                if (generation === this.generation && old && this.clock() - old.at < old.ttl + 3_600_000 && retryable && old.value && typeof old.value === 'object' && !Array.isArray(old.value) && !(old.value instanceof Map)) {
+                    return { ...structuredClone(old.value), _cache: { stale: true, cached_at: new Date(old.at).toISOString(), reason: 'PostHog temporarily unavailable' } } as T
+                }
+                throw error
+            }
+        })()
+        if (this.flights.size < this.maxEntries) this.flights.set(key, pending)
+        try { return structuredClone(await pending) } finally { if (this.flights.get(key) === pending) this.flights.delete(key) }
+    }
+}
+const appAnswers = new AppAnswerCache()
+export const clearAppAnswers = () => appAnswers.clear()
+
+export function appAnswer<T>(kind: string, args: unknown[], compute: () => Promise<T>, ttl = 60_000): Promise<T> {
+    if (process.env.LENS_APP_CACHE === '0') return compute()
+    // Default rolling N-day requests have a different wall clock on every call. Share them for
+    // one TTL, retaining the actual computed window in the answer. Explicit windows stay exact.
+    const normalize = (v: unknown): unknown => {
+        if (v instanceof Date) return v.toISOString()
+        if (Array.isArray(v)) return v.map(normalize)
+        if (v && typeof v === 'object') {
+            const o = v as Record<string, unknown>
+            if (o.from instanceof Date && o.to instanceof Date && Math.abs(Date.now() - o.to.getTime()) < 5000 && (o.to.getTime() - o.from.getTime()) % 86_400_000 === 0)
+                return normalize({ ...o, from: undefined, to: undefined, rolling_days: (o.to.getTime() - o.from.getTime()) / 86_400_000 })
+            return Object.fromEntries(Object.keys(o).sort().filter((k) => o[k] !== undefined).map((k) => [k, normalize(o[k])]))
+        }
+        return v
+    }
+    return appAnswers.get(JSON.stringify([kind, normalize(args)]), ttl, compute)
+}
+
+/** Select only narrow keys for the sort, then fetch projected values without sorting JSON. */
+export async function appRows(selection: string, where: string, values: Record<string, unknown>, order: string, limit: number, fetchWhere = where): Promise<Row[]> {
+    const keys = await hogql(`SELECT toString(uuid) AS event_uuid, $session_id AS sid, timestamp AS ts FROM events
+        WHERE ${where} ORDER BY ${order} LIMIT ${limit}`, values)
+    if (!keys.length) return []
+    const rows = await hogql(`SELECT ${selection}, toString(uuid) AS event_uuid FROM events
+        WHERE ${fetchWhere} AND toString(uuid) IN {event_ids} LIMIT ${limit}`,
+        { ...values, event_ids: keys.map((r) => String(r.event_uuid)) })
+    const position = new Map(keys.map((r, i) => [String(r.event_uuid), i]))
+    return rows.sort((a, b) => position.get(String(a.event_uuid))! - position.get(String(b.event_uuid))!)
+}
 
 export type Role = 'dialog' | 'dialogName' | 'tab' | 'action' | 'control' | 'button' | 'version'
 export const ROLES: Role[] = ['dialog', 'dialogName', 'tab', 'action', 'control', 'button', 'version']
@@ -530,7 +623,7 @@ export function required(): AppEvents {
 export const prop = (reg: AppEvents, role: Role) => (reg.properties[role] ? `toString(properties.${reg.properties[role]!.name})` : `''`)
 
 export function columns(reg: AppEvents): string {
-    return `toString(properties.$session_id) AS sid, timestamp AS ts, event, toString(${P.client}) AS client, toString(distinct_id) AS user,
+    return `toString($session_id) AS sid, timestamp AS ts, event, toString(${P.client}) AS client, toString(distinct_id) AS user,
             ${prop(reg, 'dialog')} AS dialog, ${prop(reg, 'dialogName')} AS dialogName, ${prop(reg, 'tab')} AS tab,
             ${prop(reg, 'action')} AS action, ${prop(reg, 'control')} AS control, ${prop(reg, 'button')} AS button, ${prop(reg, 'version')} AS version,
             toFloat(properties.$time) AS ctime`
@@ -554,11 +647,15 @@ export const toRaw = (r: Record<string, unknown>): RawEvent => ({
 
 /** The name seen most for each dialog in a window (UNKNOWN left out). */
 export async function dialogNames(from: Date, to: Date, clientId = ''): Promise<Map<string, { opens: number; name?: string; sessions: number; clients: number }>> {
+    return appAnswer('dialogNames', [from, to, clientId], () => computeDialogNames(from, to, clientId), to.getTime() < Date.now() - 86_400_000 ? 3_600_000 : 60_000)
+}
+
+async function computeDialogNames(from: Date, to: Date, clientId = ''): Promise<Map<string, { opens: number; name?: string; sessions: number; clients: number }>> {
     const reg = required()
     const rows = await hogql(
         `SELECT ${prop(reg, 'dialog')} AS dialog, topK(3)(${prop(reg, 'dialogName')}) AS names,
                 countIf(event = {screen} AND ${prop(reg, 'action')} IN {open}) AS opens,
-                uniq(properties.$session_id) AS sessions, uniq(toString(${P.client})) AS clients
+                uniq($session_id) AS sessions, uniq(toString(${P.client})) AS clients
          FROM events
          WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND notEmpty(${prop(reg, 'dialog')})
            AND ({client} = '' OR toString(${P.client}) = {client})
@@ -597,13 +694,15 @@ export interface SessionStoryResult {
 
 /** One session as a story, with a replay link at each error. */
 export async function sessionStory(sessionId: string, opts: { maxLines?: number } = {}): Promise<SessionStoryResult> {
+    return appAnswer('sessionStory', [sessionId, opts], () => computeSessionStory(sessionId, opts), 60_000)
+}
+
+async function computeSessionStory(sessionId: string, opts: { maxLines?: number } = {}): Promise<SessionStoryResult> {
     const reg = required()
-    const rows = await hogql(
-        `SELECT ${columns(reg)} FROM events
-         WHERE properties.$session_id = {sid} AND event IN {events} AND timestamp > now() - INTERVAL 400 DAY
-         ORDER BY ts LIMIT 5000`,
-        { sid: sessionId, events: [reg.events.screen, reg.events.interaction] }
-    )
+    const rows = await appRows(columns(reg),
+        `$session_id = {sid} AND event IN {events} AND timestamp > now() - INTERVAL 400 DAY`,
+        { sid: sessionId, events: [reg.events.screen, reg.events.interaction] }, 'ts', 5000)
+
     if (!rows.length) throw new Error(`No ${reg.app} events for session ${sessionId}. Check the id (a PostHog session id or replay link).`)
     const events = rows.map(toRaw)
     const steps = toSteps(events, reg)
@@ -663,6 +762,10 @@ export interface SlowAttempt {
  * recent sessions. Recordings are downloaded (and cached), so this reads at most `sessions` of them.
  */
 export async function slowAttempts(q: { from: Date; to: Date; clientId?: string; dialog?: string; sessions?: number }): Promise<{ sessions_read: number; sessions_without_network: number; attempts: SlowAttempt[]; note: string }> {
+    return appAnswer('slowAttempts', [q], () => computeSlowAttempts(q), 60_000)
+}
+
+async function computeSlowAttempts(q: { from: Date; to: Date; clientId?: string; dialog?: string; sessions?: number }): Promise<{ sessions_read: number; sessions_without_network: number; attempts: SlowAttempt[]; note: string }> {
     const reg = required()
     const want = Math.min(Math.max(q.sessions ?? 12, 1), 40)
     const names = await dialogNames(q.from, q.to, q.clientId)
@@ -671,10 +774,10 @@ export async function slowAttempts(q: { from: Date; to: Date; clientId?: string;
     if (wanted && !dialogs.length) throw new Error(`No dialog matches "${q.dialog}" in this period.`)
     // The newest recorded sessions with attempts (in the dialog, if one is given).
     const rows = await hogql(
-        `SELECT toString(properties.$session_id) AS sid, max(timestamp) AS last FROM events
+        `SELECT toString($session_id) AS sid, max(timestamp) AS last FROM events
          WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND ${prop(reg, 'button')} IN {submit}
            AND ({client} = '' OR toString(${P.client}) = {client}) AND ({all} = 1 OR ${prop(reg, 'dialog')} IN {dialogs})
-           AND notEmpty(toString(properties.$session_id))
+           AND notEmpty(toString($session_id))
          GROUP BY sid ORDER BY last DESC LIMIT 200`,
         { from: q.from.toISOString(), to: q.to.toISOString(), events: [reg.events.screen, reg.events.interaction], submit: reg.submitButtons, client: q.clientId || '', all: dialogs.length ? 0 : 1, dialogs: dialogs.length ? dialogs : [''] }
     )
@@ -684,11 +787,11 @@ export async function slowAttempts(q: { from: Date; to: Date; clientId?: string;
     let without = 0
     for (const sid of sids) {
         const ev = (
-            await hogql(`SELECT ${columns(reg)} FROM events WHERE properties.$session_id = {sid} AND event IN {events} AND timestamp >= {from} - INTERVAL 1 DAY ORDER BY ts LIMIT 5000`, {
+            await appRows(columns(reg), `$session_id = {sid} AND event IN {events} AND timestamp >= {from} - INTERVAL 1 DAY`, {
                 sid,
                 events: [reg.events.screen, reg.events.interaction],
                 from: q.from.toISOString(),
-            })
+            }, 'ts', 5000)
         ).map(toRaw)
         const steps = toSteps(ev, reg)
         const timings = await sessionTimings(sid, steps).catch(() => undefined)
@@ -759,6 +862,10 @@ const ROW_LIMIT = 50_000
 
 /** Where people fail: per dialog, attempts and outcomes, errors, retries, who was hit. */
 export async function dialogFriction(q: { from: Date; to: Date; clientId?: string; dialog?: string; limit?: number }): Promise<FrictionResult> {
+    return appAnswer('dialogFriction', [q], () => computeDialogFriction(q), q.to.getTime() < Date.now() - 86_400_000 ? 3_600_000 : 60_000)
+}
+
+async function computeDialogFriction(q: { from: Date; to: Date; clientId?: string; dialog?: string; limit?: number }): Promise<FrictionResult> {
     const reg = required()
     const values = {
         from: q.from.toISOString(),
@@ -771,14 +878,11 @@ export async function dialogFriction(q: { from: Date; to: Date; clientId?: strin
     // What friction needs: dialogs opened, buttons, searches, the menu and messages. Fields are left
     // out (most of the events), so a message right after a field is tied to the dialog then open.
     const [rows, opens] = await Promise.all([
-        hogql(
-            `SELECT ${columns(reg)} FROM events
-             WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}
+        appRows(columns(reg),
+            `timestamp >= {from} AND timestamp < {to} AND event IN {events}
                AND (event = {screen} OR ${prop(reg, 'dialog')} IN {special} OR notEmpty(${prop(reg, 'button')}) OR upper(${prop(reg, 'control')}) IN ('SEARCH', 'SEARCHTYPE', 'MENU'))
-               AND ({client} = '' OR toString(${P.client}) = {client})
-             ORDER BY sid, ts LIMIT ${ROW_LIMIT}`,
-            values
-        ),
+               AND ({client} = '' OR toString(${P.client}) = {client})`,
+            values, 'sid, ts', ROW_LIMIT, 'timestamp >= {from} AND timestamp < {to} AND event IN {events}'),
         dialogNames(q.from, q.to, q.clientId),
     ])
     const bySession = new Map<string, RawEvent[]>()
@@ -819,6 +923,10 @@ export interface Vocabulary {
 
 /** What the app's events are and hold, from the vocabulary and the last days of data. */
 export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vocabulary> {
+    return appAnswer('describeAppEvents', [days, clientSource], () => computeDescribeAppEvents(days, clientSource), 60_000)
+}
+
+async function computeDescribeAppEvents(days = 7, clientSource = ''): Promise<Vocabulary> {
     const reg = required()
     const to = new Date()
     const from = new Date(to.getTime() - days * 86_400_000)
@@ -831,16 +939,13 @@ export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vo
             `SELECT count() AS n, ${roles
                 .map((r, i) => `countIf(notEmpty(${prop(reg, r)})) AS f${i}, topK(12)(${r === 'action' ? `if(upper(${prop(reg, 'control')}) = 'SEARCH', '', ${prop(reg, r)})` : prop(reg, r)}) AS t${i}`)
                 .join(', ')}
-             FROM events WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}`,
+             FROM events WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} LIMIT 1`,
             w
         ),
         dialogNames(from, to),
-        hogql(
-            `SELECT ${prop(reg, 'dialog')} AS dialog, ${prop(reg, 'button')} AS button, ${prop(reg, 'action')} AS action FROM events
-             WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND ${prop(reg, 'dialog')} IN {special}
-             ORDER BY timestamp DESC LIMIT 5000`,
-            { ...w, special: [...reg.dialogs.messages, ...reg.dialogs.notices] }
-        ),
+        appRows(`${prop(reg, 'dialog')} AS dialog, ${prop(reg, 'button')} AS button, ${prop(reg, 'action')} AS action`,
+            `timestamp >= {from} AND timestamp < {to} AND event IN {events} AND ${prop(reg, 'dialog')} IN {special}`,
+            { ...w, special: [...reg.dialogs.messages, ...reg.dialogs.notices] }, 'ts DESC', 5000, 'timestamp >= {from} AND timestamp < {to} AND event IN {events}'),
         hogql(
             `SELECT toString(${P.client}) AS client, count() AS n FROM events WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}
              GROUP BY client ORDER BY n DESC LIMIT 25`,
@@ -967,6 +1072,10 @@ export interface ClientSignalsResult {
 
 /** Every client, this window against the one before it of the same length. */
 export async function clientSignalsReport(q: { from: Date; to: Date; clientId?: string; limit?: number }): Promise<ClientSignalsResult> {
+    return appAnswer('clientSignalsReport', [q], () => computeClientSignalsReport(q), q.to.getTime() < Date.now() - 86_400_000 ? 3_600_000 : 60_000)
+}
+
+async function computeClientSignalsReport(q: { from: Date; to: Date; clientId?: string; limit?: number }): Promise<ClientSignalsResult> {
     const reg = required()
     const len = q.to.getTime() - q.from.getTime()
     const from0 = new Date(q.from.getTime() - len)
@@ -976,7 +1085,7 @@ export async function clientSignalsReport(q: { from: Date; to: Date; clientId?: 
     const button = prop(reg, 'button')
     const isError = `${dialog} IN {messages}${empty.length ? ` AND NOT match(${button}, {empty})` : ''}`
     const period = (name: string, cond: string) => `
-        uniqIf(properties.$session_id, ${cond}) AS ${name}_sessions, groupUniqArrayIf(500)(toString(distinct_id), ${cond}) AS ${name}_users,
+        uniqIf($session_id, ${cond}) AS ${name}_sessions, groupUniqArrayIf(500)(toString(distinct_id), ${cond}) AS ${name}_users,
         uniqIf(toDate(timestamp), ${cond}) AS ${name}_days, uniqIf(${dialog}, ${cond} AND event = {screen}) AS ${name}_dialogs,
         countIf(${cond} AND ${button} IN {submit}) AS ${name}_attempts, countIf(${cond} AND ${isError}) AS ${name}_errors`
     const rows = await hogql(
@@ -1087,6 +1196,10 @@ export interface PainsReport {
 
 /** The top pains of a period against the one before, plus the clients with warning signs. */
 export async function topPains(q: { from: Date; to: Date; max?: number }): Promise<PainsReport> {
+    return appAnswer('topPains', [q], () => computeTopPains(q), 60_000)
+}
+
+async function computeTopPains(q: { from: Date; to: Date; max?: number }): Promise<PainsReport> {
     const len = q.to.getTime() - q.from.getTime()
     const prevFrom = new Date(q.from.getTime() - len)
     const [now, before, clients] = await Promise.all([
@@ -1098,6 +1211,7 @@ export async function topPains(q: { from: Date; to: Date; max?: number }): Promi
     const spans = await recordingSpans(pains.flatMap((p) => (p.example ? [p.example.session_id] : []))).catch(() => new Map())
     return {
         window: now.window,
+        ...([now, before, clients].some((v) => '_cache' in v) ? { _cache: { stale: true, reason: 'A component used a cached answer because PostHog is temporarily unavailable' } } : {}),
         pains: pains.map((p) => {
             const span = p.example && spans.get(p.example.session_id)
             return span ? { ...p, replay_url: replayUrl(p.example!.session_id, Math.max(0, (Date.parse(p.example!.at) - Date.parse(span.start)) / 1000 - 20)) } : p
@@ -1128,6 +1242,10 @@ export interface TradeHit {
  * "trade 4348 failed for us".
  */
 export async function findTrade(q: { id: string; from: Date; to: Date; clientId?: string; limit?: number }): Promise<{ id: string; sessions: TradeHit[]; note: string }> {
+    return appAnswer('findTrade', [q], () => computeFindTrade(q), 60_000)
+}
+
+async function computeFindTrade(q: { id: string; from: Date; to: Date; clientId?: string; limit?: number }): Promise<{ id: string; sessions: TradeHit[]; note: string }> {
     const reg = required()
     const id = q.id.trim()
     if (!/^\d{1,15}$/.test(id)) throw new Error('A trade or link id is a number, e.g. 4348.')
@@ -1141,8 +1259,8 @@ export async function findTrade(q: { id: string; from: Date; to: Date; clientId?
         client: q.clientId || '',
     }
     const hits = await hogql(
-        `SELECT toString(properties.$session_id) AS sid, min(timestamp) AS first FROM events
-         WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND notEmpty(toString(properties.$session_id))
+        `SELECT toString($session_id) AS sid, min(timestamp) AS first FROM events
+         WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND notEmpty(toString($session_id))
            AND ((${prop(reg, 'dialog')} IN {special} AND match(${prop(reg, 'button')}, {re}))
                 OR (upper(${prop(reg, 'control')}) = 'SEARCH' AND trim(${prop(reg, 'action')}) = {id}))
            AND ({client} = '' OR toString(${P.client}) = {client})
@@ -1155,11 +1273,11 @@ export async function findTrade(q: { id: string; from: Date; to: Date; clientId?
     for (const h of hits) {
         const sid = String(h.sid)
         const ev = (
-            await hogql(`SELECT ${columns(reg)} FROM events WHERE properties.$session_id = {sid} AND event IN {events} AND timestamp >= {from} - INTERVAL 1 DAY ORDER BY ts LIMIT 5000`, {
+            await appRows(columns(reg), `$session_id = {sid} AND event IN {events} AND timestamp >= {from} - INTERVAL 1 DAY`, {
                 sid,
                 events: values.events,
                 from: values.from,
-            })
+            }, 'ts', 5000)
         ).map(toRaw)
         const steps = toSteps(ev, reg)
         const mentions = steps.filter((s) => ((s.kind === 'message' || s.kind === 'notice') && new RegExp(values.re).test(firstValue(s.raw.button))) || (s.kind === 'search' && (s.raw.action || '').trim() === id))
