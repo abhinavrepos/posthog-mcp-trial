@@ -169,3 +169,11 @@ test('year of 50 clients × 40 tasks daily rows is under 1 second cold and 10ms 
     assert.equal(r.clients.length, 50); assert.deepEqual(hot, r)
     assert.ok(cold < 1000, `cold ${cold.toFixed(1)}ms`); assert.ok(warm < 10, `cached ${warm.toFixed(1)}ms`)
 })
+
+test('default comparison is the same length as the window, just before it', async () => {
+    const { rescueQueue } = await import('../src/core/rescue.ts')
+    const q = await rescueQueue({ window: { from: '2026-03-15', to: '2026-03-28' } })
+    assert.deepEqual(q.baseline, { from: '2026-03-01', to: '2026-03-14' })
+    const q28 = await rescueQueue({ window: { from: '2026-03-01', to: '2026-03-28' } })
+    assert.deepEqual(q28.baseline, { from: '2026-02-01', to: '2026-02-28' })
+})

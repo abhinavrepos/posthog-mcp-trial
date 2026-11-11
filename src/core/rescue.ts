@@ -94,7 +94,9 @@ function compute(window: Window, baseline: Window, min: number): RescueClient[] 
 async function answer(p: RescueParams): Promise<RescueQueue> {
     const through = dataThrough(), to = through || shift(today(), -1), window = p.window || { from: shift(to, -27), to }
     validWindow(window)
-    const baseline = p.baseline || { from: shift(window.from, -28), to: shift(window.from, -1) }
+    // Compare like with like: the period of the same length just before the window.
+    const length = Math.round((Date.parse(window.to) - Date.parse(window.from)) / 86400000) + 1
+    const baseline = p.baseline || { from: shift(window.from, -length), to: shift(window.from, -1) }
     validWindow(baseline)
     const min = p.min_attempts ?? RESCUE.default_min
     if (!Number.isInteger(min) || min < 1 || min > 100000) throw new Error('min_attempts must be an integer from 1 to 100000')
