@@ -58,6 +58,21 @@ transaction(() => {
         CREATE TABLE task_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         PRAGMA user_version = 1;
     `)
+    if (version < 2) tasksDb.exec(`
+        CREATE TABLE ops_daily(day TEXT NOT NULL, client TEXT NOT NULL, dialog TEXT NOT NULL, op TEXT NOT NULL,
+            family TEXT NOT NULL, submits INTEGER NOT NULL, completed INTEGER NOT NULL, accepted INTEGER NOT NULL,
+            errors INTEGER NOT NULL, empty INTEGER NOT NULL, PRIMARY KEY(day,client,dialog,op)) WITHOUT ROWID;
+        CREATE TABLE errors_daily(day TEXT NOT NULL, client TEXT NOT NULL, dialog TEXT NOT NULL, op TEXT NOT NULL,
+            template TEXT NOT NULL, chains INTEGER NOT NULL, unrecovered INTEGER NOT NULL,
+            PRIMARY KEY(day,client,dialog,op,template)) WITHOUT ROWID;
+        CREATE TABLE user_daily(day TEXT NOT NULL, client TEXT NOT NULL, user TEXT NOT NULL, events INTEGER NOT NULL,
+            completed INTEGER NOT NULL, PRIMARY KEY(day,client,user)) WITHOUT ROWID;
+        CREATE TABLE client_daily(day TEXT NOT NULL, client TEXT NOT NULL, sessions INTEGER NOT NULL, users INTEGER NOT NULL,
+            export_chains INTEGER NOT NULL, productive_done INTEGER NOT NULL, export_after_error INTEGER NOT NULL,
+            PRIMARY KEY(day,client)) WITHOUT ROWID;
+        INSERT INTO task_state SELECT 'signals_missing:' || day, '1' FROM task_ingest;
+        PRAGMA user_version = 2;
+    `)
 })
 type Row = Record<string, unknown>
 const all = <T = Row>(sql: string, ...args: SQLInputValue[]) => tasksDb.prepare(sql).all(...args) as T[]
@@ -141,7 +156,75 @@ export function extractAttempts(sessions: Step[][], reg: AppEvents): TaskAttempt
     return result
 }
 
-interface StoreInfo {
+export type OpFamily = 'export' | 'import' | 'delete' | 'login' | 'productive' | 'other'
+export interface OpsDaily { day: string; client: string; dialog: string; op: string; family: OpFamily; submits: number; completed: number; accepted: number; errors: number; empty: number }
+export interface ErrorsDaily { day: string; client: string; dialog: string; op: string; template: string; chains: number; unrecovered: number }
+export interface UserDaily { day: string; client: string; user: string; events: number; completed: number }
+export interface ClientDaily { day: string; client: string; sessions: number; users: number; export_chains: number; productive_done: number; export_after_error: number }
+export interface StepSummary { ops: OpsDaily[]; errors: ErrorsDaily[]; users: UserDaily[]; clients: ClientDaily[] }
+const productive = new Set(['save', 'save index', 'run', 'apply', 'create hypothetical', 'add', 'submit', 'post', 'approve', 'process', 'calculate', 'recalc cashflow'])
+export function operationFamily(op: string): OpFamily {
+    return ['export', 'xls export', 'xlsx export', 'csv export'].includes(op) ? 'export'
+        : op === 'import' || op === 'delete' || op === 'login' ? op : productive.has(op) ? 'productive' : 'other'
+}
+/** Sessions are in step order, as returned by toSteps. Pending errors are retired once by a good retry. */
+export function summariseSteps(sessions: Step[][], day: string, _reg: AppEvents): StepSummary {
+    const ops = new Map<string, OpsDaily>(), errors = new Map<string, ErrorsDaily>(), users = new Map<string, UserDaily>()
+    const clients = new Map<string, ClientDaily>(), people = new Map<string, Set<string>>()
+    for (const session of sessions) {
+        if (!session.length) continue
+        const client = session[0].raw.client || ''
+        let c = clients.get(client)
+        if (!c) { c = { day, client, sessions: 0, users: 0, export_chains: 0, productive_done: 0, export_after_error: 0 }; clients.set(client, c); people.set(client, new Set()) }
+        c.sessions++
+        const submits = new Map<number, { step: Step; op: string; key: string }>()
+        const pending = new Map<string, ErrorsDaily[]>(), seenErrors = new Set<number>()
+        let lastError = -Infinity
+        for (const step of session) {
+            const user = session[0].raw.user || ''
+            const uk = JSON.stringify([client, user])
+            let u = users.get(uk)
+            if (!u) { u = { day, client, user, events: 0, completed: 0 }; users.set(uk, u) }
+            u.events++; if (user) people.get(client)!.add(user)
+            if (step.kind === 'submit') {
+                const op = step.label.toLowerCase(), family = operationFamily(op), key = JSON.stringify([step.dialog, op])
+                const ok = JSON.stringify([client, step.dialog, op])
+                let o = ops.get(ok)
+                if (!o) { o = { day, client, dialog: step.dialog, op, family, submits: 0, completed: 0, accepted: 0, errors: 0, empty: 0 }; ops.set(ok, o) }
+                o.submits++
+                if (step.outcome === 'error') o.errors++
+                else if (step.outcome === 'completed' || step.outcome === 'accepted' || step.outcome === 'empty') o[step.outcome]++
+                if (family === 'export') {
+                    c.export_chains++
+                    const gap = Date.parse(step.ts) - lastError
+                    if (gap >= 0 && gap <= 15 * 60_000) c.export_after_error++
+                }
+                if (step.outcome === 'completed' || step.outcome === 'accepted') {
+                    if (family === 'productive') { u.completed++; c.productive_done++ }
+                    for (const e of pending.get(key) || []) e.unrecovered--
+                    pending.delete(key)
+                }
+                submits.set(step.i, { step, op, key })
+            }
+            if ((step.kind === 'message' || step.kind === 'notice') && step.outcome === 'error') {
+                lastError = Date.parse(step.ts)
+                const sub = step.cause === undefined ? undefined : submits.get(step.cause)
+                if (!sub || seenErrors.has(sub.step.i)) continue
+                seenErrors.add(sub.step.i)
+                const ek = JSON.stringify([client, sub.step.dialog, sub.op, step.template || ''])
+                let e = errors.get(ek)
+                if (!e) { e = { day, client, dialog: sub.step.dialog, op: sub.op, template: step.template || '', chains: 0, unrecovered: 0 }; errors.set(ek, e) }
+                e.chains++; e.unrecovered++
+                const list = pending.get(sub.key) || []; list.push(e); pending.set(sub.key, list)
+            }
+        }
+    }
+    for (const [client, c] of clients) c.users = people.get(client)!.size
+    return { ops: [...ops.values()], errors: [...errors.values()], users: [...users.values()], clients: [...clients.values()] }
+}
+
+export interface StoreInfo {
+    summary?: StepSummary
     sessions?: number; events?: number; truncated?: boolean; seconds?: number
     dialogNames?: Map<string, string>; clientNames?: Map<string, string>
     finishes?: Map<string, Map<string, number>>
@@ -210,7 +293,21 @@ export function storeAttempts(day: string, attempts: TaskAttempt[], info: StoreI
     }
     transaction(() => {
         const affected = new Set([...all<{ task_id: string }>('SELECT DISTINCT task_id FROM task_daily WHERE day = ?', day).map((r) => r.task_id), ...attempts.map((a) => a.task_id)])
-        for (const table of ['task_attempts', 'task_daily', 'task_paths_daily', 'task_users_daily', 'task_finishes_daily', 'task_ingest']) run(`DELETE FROM ${table} WHERE day = ?`, day)
+        for (const table of ['task_attempts', 'task_daily', 'task_paths_daily', 'task_users_daily', 'task_finishes_daily', 'task_ingest', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily']) run(`DELETE FROM ${table} WHERE day = ?`, day)
+        if (info.summary) {
+            run('DELETE FROM task_state WHERE key = ?', 'signals_missing:' + day)
+            const tables = { ops: 'ops_daily', errors: 'errors_daily', users: 'user_daily', clients: 'client_daily' } as const
+            for (const k of Object.keys(tables) as (keyof StepSummary)[]) {
+                const rows = info.summary[k]
+                if (!rows.length) continue
+                const columns = Object.keys(rows[0])
+                const insert = tasksDb.prepare(`INSERT INTO ${tables[k]} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`)
+                for (const row of rows) {
+                    if (row.day !== day) throw new Error('All summary rows must belong to the stored day')
+                    insert.run(...Object.values(row))
+                }
+            }
+        }
         const ins = tasksDb.prepare('INSERT INTO task_attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
         for (const a of attempts) ins.run(day, a.client, a.user, a.session_id, a.task_id, JSON.stringify(a.path), JSON.stringify(a.path),
             a.started_at, a.ended_at, a.duration_s, a.outcome, a.errors, a.first_error ?? null, a.offset_s)
@@ -508,7 +605,7 @@ export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits
         }
     }
     const dialogNames = new Map([...dialogCounts].map(([d, c]) => [d, [...c].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0]]))
-    storeAttempts(day, attempts, { sessions: ids.length, events, truncated, seconds: (performance.now() - started) / 1000, clientNames, dialogNames, finishes })
+    storeAttempts(day, attempts, { sessions: ids.length, events, truncated, seconds: (performance.now() - started) / 1000, clientNames, dialogNames, finishes, summary: summariseSteps(sessions, day, reg) })
 }
 let running = false, scheduled = false
 function state(key: string, value: string) { run('INSERT OR REPLACE INTO task_state VALUES (?,?)', key, value) }
@@ -535,7 +632,12 @@ export async function runIngest(opts: { days?: string[]; maxBackfill?: number } 
             }
         }
         for (const day of new Set(days)) try { await ingestDay(day) } catch (e) { failure(day, e) }
-        transaction(() => run('DELETE FROM task_attempts WHERE day < ?', shift(today(), 1 - config.tasks.historyDays)))
+        transaction(() => {
+            // Task rollups outlive captures. Keep their signal coverage honest after capture retention.
+            run(`INSERT OR IGNORE INTO task_state SELECT 'signals_missing:' || day, '1' FROM task_ingest WHERE day < ?`, shift(today(), 1 - config.tasks.historyDays))
+            for (const table of ['task_attempts', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily'])
+                run(`DELETE FROM ${table} WHERE day < ?`, shift(today(), 1 - config.tasks.historyDays))
+        })
         forgetAnswers()
         tasksDb.exec('PRAGMA incremental_vacuum(1000)')
     } finally { running = false }

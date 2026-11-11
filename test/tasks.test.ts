@@ -12,14 +12,14 @@ process.env.TRIAGE_DB = join(dir, 'triage.db')
 process.env.APP_EVENTS_FILE = 'config/app-events.reval.json'
 const { db: triageDb } = await import('../src/core/db.ts')
 const { parseAppEvents, toSteps } = await import('../src/core/appevents.ts')
-const { extractAttempts, storeAttempts, tasksDb, taskMap, flowTime, findTasks, ingestDay, ingestStatus, runIngest, setTaskQuery, forgetAnswers } = await import('../src/core/tasks.ts')
+const { summariseSteps, extractAttempts, storeAttempts, tasksDb, taskMap, flowTime, findTasks, ingestDay, ingestStatus, runIngest, setTaskQuery, forgetAnswers } = await import('../src/core/tasks.ts')
 const reg = parseAppEvents(JSON.parse(readFileSync('config/app-events.reval.json', 'utf8')))
 after(() => { tasksDb.close(); triageDb.close(); rmSync(dir, { recursive: true, force: true }) })
 const DAY = 86_400_000
 const day = (n: number) => new Date(Date.now() - n * DAY).toISOString().slice(0, 10)
 const before = day(2), now = day(1)
 function reset() {
-    for (const t of ['task_attempts', 'task_daily', 'task_paths_daily', 'task_users_daily', 'task_catalog', 'task_finishes_daily', 'task_ingest', 'dialog_names', 'client_names', 'task_state']) tasksDb.exec(`DELETE FROM ${t}`)
+    for (const t of ['task_attempts', 'task_daily', 'task_paths_daily', 'task_users_daily', 'task_catalog', 'task_finishes_daily', 'task_ingest', 'dialog_names', 'client_names', 'task_state', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily']) tasksDb.exec(`DELETE FROM ${t}`)
 }
 function attempt(d = now, task = 't_DlgSave', outcome: TaskAttempt['outcome'] = 'done', duration = 40, user = 'alice'): TaskAttempt {
     return { day: d, client: 'ACME', user, session_id: 'sid', task_id: task, path: ['DlgList', task.slice(2)], started_at: `${d}T10:00:00.000Z`,
@@ -236,7 +236,7 @@ test('ingest retries when PostHog is busy or rate-limited, and gives up on other
     assert.equal(calls, 3, 'gives up after its waits')
 })
 
-test('scheduler continues after errors, serializes runs, backfills newest first, and prunes only attempts', async () => {
+test('scheduler continues after errors, serializes runs, backfills newest first, and prunes attempts and captures while retaining task rollups', async () => {
     reset()
     const { config } = await import('../src/core/config.ts')
     const seen: string[] = [], logs: string[] = [], oldError = console.error
@@ -249,7 +249,7 @@ test('scheduler continues after errors, serializes runs, backfills newest first,
         return []
     })
     const old = day(config.tasks.historyDays + 2)
-    storeAttempts(old, [attempt(old)])
+    storeAttempts(old, [attempt(old)], { summary: summariseSteps([toSteps([submit(0), reply(1, false)], reg)], old, reg) })
     try {
         const work = runIngest({ maxBackfill: 2 })
         assert.equal(ingestStatus().running, true)
@@ -263,6 +263,9 @@ test('scheduler continues after errors, serializes runs, backfills newest first,
         assert.equal((tasksDb.prepare('SELECT count(*) AS n FROM task_attempts').get() as { n: number }).n, 0)
         assert.equal((tasksDb.prepare('SELECT count(*) AS n FROM task_daily').get() as { n: number }).n, 1)
         assert.equal((tasksDb.prepare('SELECT count(*) AS n FROM task_users_daily').get() as { n: number }).n, 1)
+        for (const table of ['ops_daily', 'errors_daily', 'user_daily', 'client_daily'])
+            assert.equal((tasksDb.prepare(`SELECT count(*) AS n FROM ${table} WHERE day=?`).get(old) as { n: number }).n, 0)
+        assert.ok(tasksDb.prepare('SELECT 1 FROM task_state WHERE key=?').get('signals_missing:' + old))
         await runIngest({ days: [day(0)] })
         assert.equal(ingestStatus().last_error, null)
         assert.ok(ingestStatus().last_run)
@@ -347,4 +350,71 @@ test('storing a day drops only the answers it can change: inside or after their 
     release(); await slow
     let again = 0; await cached('test-slow', {}, async () => { again++; return { params: view } })
     assert.equal(again, 1, 'pending answers are recomputed after a store')
+})
+
+
+test('step summary families, outcomes, recovery, export window and atomic replacement', () => {
+    reset()
+    const steps = toSteps([raw(0, 'DlgList'), submit(1), reply(2, false), submit(3), reply(4),
+        submit(5, 'DlgOther'), reply(6, false),
+        raw(906, 'DlgOther', { event: 'Event', action: '', button: 'CSV Export' }),
+        raw(907, 'DlgOther', { event: 'Event', action: '', button: 'XLS Export' }),
+        raw(908, 'DlgOther', { event: 'Event', action: '', button: 'Import' }),
+        raw(909, 'DlgOther', { event: 'Event', action: '', button: 'Delete' }),
+        raw(910, 'DlgOther', { event: 'Event', action: '', button: 'Login' }),
+        raw(911, 'DlgOther', { event: 'Event', action: '', button: 'OK' })], reg)
+    const summary = summariseSteps([steps], now, reg)
+    assert.equal(summary.clients[0].export_chains, 2)
+    assert.equal(summary.clients[0].export_after_error, 1)
+    assert.equal(summary.clients[0].productive_done, 1)
+    assert.equal(summary.users[0].events, steps.length)
+    assert.equal(summary.users[0].completed, 1)
+    assert.deepEqual(summary.errors.map(r => [r.chains, r.unrecovered]), [[1, 0], [1, 1]])
+    assert.deepEqual(summary.ops.map(r => r.family), ['productive', 'productive', 'export', 'export', 'import', 'delete', 'login', 'other'])
+    const save = summary.ops[0]; assert.equal(save.submits, 2); assert.equal(save.completed, 1); assert.equal(save.errors, 1)
+    storeAttempts(now, [], { summary })
+    for (const table of ['ops_daily', 'errors_daily', 'user_daily', 'client_daily']) assert.ok((tasksDb.prepare(`SELECT count(*) AS n FROM ${table}`).get() as { n: number }).n > 0)
+    storeAttempts(now, [])
+    for (const table of ['ops_daily', 'errors_daily', 'user_daily', 'client_daily']) assert.equal((tasksDb.prepare(`SELECT count(*) AS n FROM ${table} WHERE day = ?`).get(now) as { n: number }).n, 0)
+})
+
+test('version 1 database upgrades in place preserving task history', async () => {
+    const { spawnSync } = await import('node:child_process')
+    const file = join(dir, 'migration.db'), url = new URL('../src/core/tasks.ts', import.meta.url).href
+    const env = { ...process.env, TASKS_DB: file }
+    const child = (code: string) => {
+        const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', code], { env, encoding: 'utf8' })
+        assert.equal(result.status, 0, result.stderr)
+    }
+    // Create the original schema, with data, then reopen it through the migration.
+    const source = readFileSync('src/core/tasks.ts', 'utf8')
+    const ddl = source.slice(source.indexOf('CREATE TABLE task_attempts'), source.indexOf('PRAGMA user_version = 1;') + 'PRAGMA user_version = 1;'.length)
+    const { DatabaseSync } = await import('node:sqlite')
+    const old = new DatabaseSync(file)
+    old.exec(ddl)
+    old.prepare('INSERT INTO client_names VALUES (?,?)').run('OLD', 'Old client')
+    old.prepare('INSERT INTO task_ingest VALUES (?,1,2,0,0,1,?)').run(now, now)
+    old.prepare('INSERT INTO task_daily VALUES (?,?,?,?,?,?,?,?,?)').run(now, 'OLD', 't_DlgOld', 2, 1, 1, 0, 1, JSON.stringify(DURATION_BUCKETS.map(() => 0)))
+    old.close()
+    child(`const {tasksDb: db} = await import(${JSON.stringify(url)});
+        const assert = (await import('node:assert/strict')).default;
+        assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
+        assert.equal(db.prepare("SELECT name FROM client_names WHERE client='OLD'").get().name, 'Old client');
+        assert.equal(db.prepare('SELECT count(*) AS n FROM task_ingest').get().n, 1);
+        assert.equal(db.prepare("SELECT done FROM task_daily WHERE client='OLD'").get().done, 1);
+        assert.equal(db.prepare("SELECT count(*) AS n FROM task_state WHERE key LIKE 'signals_missing:%'").get().n, 1);
+        for (const table of ['ops_daily','errors_daily','user_daily','client_daily']) db.prepare('SELECT * FROM '+table).all();
+        db.close();`)
+})
+
+test('summary counts accepted and empty submits without treating other families as productive', () => {
+    const make = (i: number, label: string, outcome: Step['outcome']): Step => ({
+        i, ts: raw(i, 'DlgSave').ts, kind: 'submit', dialog: 'DlgSave', tab: '', label, outcome, raw: raw(i, 'DlgSave'),
+    })
+    const steps = [make(0, 'Apply', 'accepted'), make(1, 'Run', 'empty'), make(2, 'Export', 'completed'),
+        make(3, 'Save Index', 'none'), make(4, 'Recalc Cashflow', 'completed')]
+    const s = summariseSteps([steps], now, reg)
+    assert.equal(s.users[0].user, 'ENV|01|ACME|alice')
+    assert.equal(s.users[0].completed, 2); assert.equal(s.clients[0].productive_done, 2)
+    assert.equal(s.ops[0].accepted, 1); assert.equal(s.ops[1].empty, 1); assert.equal(s.ops[2].completed, 1)
 })

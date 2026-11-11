@@ -56,8 +56,13 @@ function generate(day: string) {
             const dialog = `DlgTask${pad(task)}`, slow = c === 1 && task === 1 && ago <= 14 ? 1.6 : 1
             add('PageView', dialog, '', 'OPEN')
             for (let k = 0; k < 3; k++) add('Event', dialog, 'Field', 'CHANGE', 4 * slow + r() * 6 * slow)
+            if (r() < 0.12) add('Event', dialog, 'CSV Export', '', 1)
             add('Event', dialog, 'Save', '', 2 * slow)
-            if (r() < 0.1) { add('Event', 'messagebox', 'Invalid date', '', 1); add('Event', dialog, 'Save', '', 5 * slow) }
+            if (r() < 0.1) {
+                add('Event', 'messagebox', 'Invalid date', '', 1)
+                if (r() < 0.3) { add('Event', dialog, 'Export', '', 1); continue }
+                add('Event', dialog, 'Save', '', 5 * slow)
+            }
             add('Event', 'toast', `Trade Id ${1000 + a} Updated`, '', 1)
         }
     }
