@@ -398,12 +398,13 @@ test('version 1 database upgrades in place preserving task history', async () =>
     old.close()
     child(`const {tasksDb: db} = await import(${JSON.stringify(url)});
         const assert = (await import('node:assert/strict')).default;
-        assert.equal(db.prepare('PRAGMA user_version').get().user_version, 2);
+        assert.equal(db.prepare('PRAGMA user_version').get().user_version, 4);
+        assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name='daily_client_day'").get());
         assert.equal(db.prepare("SELECT name FROM client_names WHERE client='OLD'").get().name, 'Old client');
         assert.equal(db.prepare('SELECT count(*) AS n FROM task_ingest').get().n, 1);
         assert.equal(db.prepare("SELECT done FROM task_daily WHERE client='OLD'").get().done, 1);
         assert.equal(db.prepare("SELECT count(*) AS n FROM task_state WHERE key LIKE 'signals_missing:%'").get().n, 1);
-        for (const table of ['ops_daily','errors_daily','user_daily','client_daily']) db.prepare('SELECT * FROM '+table).all();
+        for (const table of ['ops_daily','errors_daily','user_daily','client_daily','week_obs','week_done']) db.prepare('SELECT * FROM '+table).all();
         db.close();`)
 })
 

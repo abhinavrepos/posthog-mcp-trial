@@ -308,7 +308,7 @@ Each client has an owner, a status (open, contacted, in progress, resolved, expe
 a note (dashboard share role or admin; every change is in the activity log). **Expected** declines are
 snoozed until a date (at most 120 days) and come back early if the score rises by half; resolved
 clients stay listed while still flagged, so recovery is seen rather than assumed. These are attention
-signals from product use, not churn predictions: Lens has no renewal or contract data.
+signals from product use, not churn predictions. Admins can record known decisions for the scorecard below.
 
 ### Monday briefing and checking recovery
 
@@ -992,3 +992,42 @@ plugin fails or any container restarts.
 - Everything here runs over plain HTTP on a public IP, which is fine for a demo of invented data.
   Put it behind HTTPS (a domain, so the hobby installer gets a certificate) before it touches
   real client data.
+
+### Signal scorecard and recorded client outcomes
+
+Admins can add, edit or remove a client decision under **Admin → Client outcomes**. Use the
+history client id and one of `left`, `contracted`, `renewed`, `stayed`. Record the date the client
+decided if known, otherwise when it became known; notes are limited to 500 characters. Writes
+are audited as `outcome.recorded`. These facts live in Lens's main SQLite database.
+
+The **Scorecard** Dashboards tab and `signal_scorecard(weeks?)` chat tool are available to the
+dashboard view role. They replay up to 52 complete UTC weeks ending Sunday. For each end date,
+Lens compares the trailing 28 days with the preceding 28, and reads the client signals as of that
+date. Weeks lacking either complete rescue period are skipped. Signal families retain their own
+capture coverage rules; the coverage note reports incomplete signal history. Replay uses cached
+local reads, independent of actions, snoozes and recorded outcomes. Editing an outcome updates
+the scorecard immediately without replaying history again.
+
+Each kind and the overall row count distinct flagged clients, left/contracted clients flagged
+strictly before deciding (hits), median lead days, left/contracted clients without an earlier flag
+in the replay (misses), and flagged renewed/stayed clients (possible false alarms). A first flag
+is a weekly observation, not an exact onset. Misses can reflect limited history. The page shows a
+computing state while requesting the cached replay. No probabilities are calculated:
+“N clients with outcomes; this is a small sample: treat as a sanity check, not accuracy.”
+
+### Peer comparison and new-client value
+
+**Client story → Compared with other clients** uses the trailing 28 processed days. A task needs
+at least five done for the client and five done each for at least five other clients. Duration
+compares the client's interpolated histogram median with the median of other clients' medians;
+done rate also uses the median of their individual rates. Every peer has equal weight, and peer
+names and user identities are excluded. Stories list tasks at least 1.5x slower or 15 percentage
+points below the peer done rate. Rescue reason `peer_gap` (weight 1) starts at 2x or 25 points.
+The exported `peerBenchmark({client, window})` reader returns qualifying task comparisons.
+
+Briefing's **New clients** section shows up to five clients, oldest first, whose first processed
+activity was within the last 90 days. For their three most attempted tasks through the review date,
+Lens counts distinct UTC weeks with a completion. Two weeks establishes repeated completion;
+fewer weeks remains visible for review. `not_established` (rescue weight 2) flags a top task with
+at least five attempts and no completion. First seen means first activity in Lens's processed
+history, not a verified onboarding date; incomplete or limited history can understate progress.

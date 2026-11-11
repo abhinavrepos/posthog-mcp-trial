@@ -55,7 +55,7 @@ test('registered tools follow none, view and share roles', async () => {
             } else assert.deepEqual((await c.client.listTools()).tools.map(t => t.name).sort(), dashboardToolNames(role).sort())
         } finally { await c.close() }
     }
-    assert.equal(dashboardToolNames('view').length, 9)
+    assert.equal(dashboardToolNames('view').length, 10)
     assert.equal(dashboardToolNames('share').length, DASHBOARD_TOOLS.length)
 })
 
@@ -244,4 +244,19 @@ test('client story and handover tools use local client resolution for view roles
         const ambiguous=await c.client.callTool({name:'client_story',arguments:{client:'ambiguous'}})
         assert.equal(JSON.parse((ambiguous.content as {text:string}[])[0].text).candidates.length,2)
     } finally {await c.close()}
+})
+
+
+test('signal scorecard is a view-role read and validates bounded weeks', async () => {
+    const seen: unknown[] = []
+    const mock = { scorecard: async (p: {weeks?:number} = {}) => { seen.push(p); return {weeks:p.weeks || 52,rows:[],explanation:'Small sample.'} as never } }
+    const c = await chat('view',true,mock)
+    try {
+        const result = await c.client.callTool({name:'signal_scorecard',arguments:{weeks:12}})
+        assert.match((result.content as {text:string}[])[0].text,/Small sample/)
+        assert.deepEqual(seen,[{weeks:12}])
+        const bad = await c.client.callTool({name:'signal_scorecard',arguments:{weeks:53}})
+        assert.equal(bad.isError,true)
+        assert.equal(seen.length,1)
+    } finally { await c.close() }
 })

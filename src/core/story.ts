@@ -1,8 +1,9 @@
+import { peerBenchmark, type PeerTask } from './peers.ts'
 // A client account narrative from Lens's own history. Never query PostHog here.
 import { tasksDb, cached, coverage, dataThrough } from './tasks.ts'
 import { all, one } from './db.ts'
-import { rescueQueue, rescueWindow, type RescueAction, type RescueReason } from './rescue.ts'
-import { clientSignals } from './signals.ts'
+import { rescueQueue, type RescueAction } from './rescue.ts'
+import { weekObservation } from './weekly.ts'
 import { rescuePrivacy } from './rescueprivacy.ts'
 import { replayUrl } from './posthog.ts'
 import type { Coverage } from './taskstypes.ts'
@@ -12,21 +13,18 @@ const query = <T>(sql: string, ...args: string[]) => tasksDb.prepare(sql).all(..
 export interface StoryWeek { week_start: string; attempts: number; done: number; users: number; errors: number; unrecovered: number; exports: number; productive_done: number }
 export interface StoryEvent { date: string; kind: 'reason_seen' | 'reason_cleared' | 'signal_seen' | 'action' | 'survey' | 'note'; text: string }
 export interface ClientStory {
+    peers?: PeerTask[]; peer_note?: string
     client: string; client_name: string; coverage: Coverage; weeks: StoryWeek[]; events: StoryEvent[]; summary: string
     surveys: { name: string; date: string; status: string }[]; action?: RescueAction; unknown: string
 }
-const reasonKey = (r: RescueReason) => JSON.stringify([r.kind, r.task_id || '', r.dialog || '', r.template || ''])
-const signalKinds = new Set(['key_person_gap', 'work_moving_out', 'recurring_close_error', 'giving_up'])
 async function history(client: string, weeks: number, to: string) {
     // Calendar weeks in UTC; the final week can be partial through the last processed day.
     const monday = shift(to, -((new Date(to).getUTCDay() + 6) % 7)), from = shift(monday, -7 * (weeks - 1))
     const series: StoryWeek[] = [], events: StoryEvent[] = []
-    let previous: Map<string, RescueReason> | null = null
+    let previous: Map<string, { text: string }> | null = null
     const seenSignals = new Set<string>()
     for (let i = -1; i < weeks; i++) {
         const start = shift(from, i * 7), end = [shift(start, 6), to].sort()[0]
-        // Weekly observations of the standard 28-day rescue comparison retain the regular-user definition.
-        const window = { from: shift(end, -27), to: end }, baseline = { from: shift(end, -55), to: shift(end, -28) }
         if (i >= 0) {
             const sum = (table: string, expr: string) => query<Record<string, number>>(`SELECT ${expr} FROM ${table} WHERE client=? AND day BETWEEN ? AND ?`, client, start, end)[0]
             const t = sum('task_daily', 'coalesce(sum(attempts),0) AS attempts, coalesce(sum(done),0) AS done')
@@ -36,18 +34,18 @@ async function history(client: string, weeks: number, to: string) {
                 exports: sum('ops_daily', "coalesce(sum(CASE WHEN family='export' THEN submits ELSE 0 END),0) AS n").n,
                 productive_done: sum('client_daily', 'coalesce(sum(productive_done),0) AS n').n })
         }
-        const complete = coverage(window, baseline).complete
-        const current = new Map((await rescueWindow(window, baseline)).filter(c => c.client === client).flatMap(c => c.reasons)
-            .filter(r => !signalKinds.has(r.kind)).map(r => [reasonKey(r), r]))
+        // Stored weekly observations (src/core/weekly.ts): computed once per week, not on every story.
+        const obs = await weekObservation(end), complete = obs.complete
+        const mine = obs.rows.filter(r => r.client === client)
+        const current = new Map(mine.filter(r => r.source === 'reason').map(r => [r.key, r]))
         if (i >= 0 && complete) {
             for (const [key, r] of current) if (!previous?.has(key)) events.push({ date: end, kind: 'reason_seen', text: `First observed in weekly review: ${r.text}` })
             if (previous) for (const [key, r] of previous) if (!current.has(key)) events.push({ date: end, kind: 'reason_cleared', text: `No longer flagged in weekly review: ${r.text} (not proof of recovery)` })
         }
         previous = complete ? current : null
-        for (const s of (await clientSignals({ to: end, client })).signals) {
-            const key = JSON.stringify([s.kind, s.task_id || '', s.dialog || '', s.template || ''])
-            if (i >= 0 && !seenSignals.has(key)) events.push({ date: end, kind: 'signal_seen', text: `Signal first observed in weekly review: ${s.text}` })
-            seenSignals.add(key)
+        for (const s of mine.filter(r => r.source === 'signal')) {
+            if (i >= 0 && !seenSignals.has(s.key)) events.push({ date: end, kind: 'signal_seen', text: `Signal first observed in weekly review: ${s.text}` })
+            seenSignals.add(s.key)
         }
     }
     return { weeks: series, events, coverage: coverage({ from: shift(from, -56), to }), window: { from, to } }
@@ -80,7 +78,8 @@ export async function clientStory({ client, weeks = 26 }: { client: string; week
     const changed = `Latest calendar week through ${to}: ${last.attempts} attempts and ${last.done} done${before ? ` versus ${before.attempts} attempts and ${before.done} done in the preceding week` : ''}; the latest week may be partial.`
     const doing = action ? `The account action is ${action.status.replaceAll('_', ' ')} with ${action.owner || 'no owner assigned'}${action.due ? ` and due ${action.due}` : ''}; ${surveys.length} survey records are available.` : `No account action is recorded; ${surveys.length} survey records are available.`
     const unknown = `History cannot tell us why use changed or whether work moved elsewhere; ${h.coverage.complete ? 'processed days cover this series' : 'some days are unprocessed'}, survey status is last recorded locally and weekly flags compare trailing 28-day periods rather than exact onset dates.`
-    return rescuePrivacy({ client, client_name: name, coverage: h.coverage, weeks: h.weeks, events, surveys, ...(action ? { action } : {}), summary: `${changed} ${doing} ${unknown}`, unknown })
+    const peer = await peerBenchmark({ client, window: { from: shift(to,-27), to } })
+    return rescuePrivacy({ peers: peer.tasks.filter(p => p.ratio >= 1.5 - 1e-12 || p.peer_done_rate-p.done_rate >= .15 - 1e-12), peer_note: peer.coverage.complete ? peer.note : peer.coverage.text, client, client_name: name, coverage: h.coverage, weeks: h.weeks, events, surveys, ...(action ? { action } : {}), summary: `${changed} ${doing} ${unknown}`, unknown })
 }
 export async function handoverPack(client: string): Promise<string> {
     const story = await clientStory({ client }), to = dataThrough() || shift(new Date().toISOString().slice(0,10), -1), from = shift(to, -89)

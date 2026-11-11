@@ -73,6 +73,18 @@ transaction(() => {
         INSERT INTO task_state SELECT 'signals_missing:' || day, '1' FROM task_ingest;
         PRAGMA user_version = 2;
     `)
+    if (version < 3) tasksDb.exec(`
+        CREATE INDEX daily_client_day ON task_daily(client, day);
+        PRAGMA user_version = 3;
+    `)
+    // Weekly observations (src/core/weekly.ts): each completed week's flags, computed once and dropped when a
+    // day they may read is stored again.
+    if (version < 4) tasksDb.exec(`
+        CREATE TABLE week_obs(week_end TEXT NOT NULL, client TEXT NOT NULL, source TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL,
+            text TEXT NOT NULL, PRIMARY KEY(week_end, client, source, key)) WITHOUT ROWID;
+        CREATE TABLE week_done(week_end TEXT PRIMARY KEY, computed_at TEXT NOT NULL, signals_complete INTEGER NOT NULL);
+        PRAGMA user_version = 4;
+    `)
 })
 type Row = Record<string, unknown>
 const all = <T = Row>(sql: string, ...args: SQLInputValue[]) => tasksDb.prepare(sql).all(...args) as T[]
@@ -277,7 +289,14 @@ function invalidate(day: string): void {
     for (const [key, a] of answers) if (!a.range || day >= a.range[0]) answers.delete(key)
 }
 /** Drops every kept answer (tests, and after maintenance). */
-export function forgetAnswers(): void { answers.clear(); catalogMemo = undefined }
+/** Increases whenever a day is stored: lets a computation tell whether history changed while it ran. */
+export const historyGeneration = (): number => generation
+/** Drops every kept answer, including stored weekly observations (tests, maintenance). keepWeekly: the daily
+ * attempt clean-up keeps them, since weekly observations never read raw attempts. */
+export function forgetAnswers(keepWeekly = false): void {
+    answers.clear(); catalogMemo = undefined
+    if (!keepWeekly) tasksDb.exec('DELETE FROM week_obs; DELETE FROM week_done')
+}
 export const taskMap = (p: TaskMapParams): Promise<TaskMap> => cached('map', p, () => computeTaskMap(p))
 export const flowTime = (p: FlowTimeParams): Promise<FlowTime> => cached('flow', p, () => computeFlowTime(p))
 
@@ -285,6 +304,9 @@ export function storeAttempts(day: string, attempts: TaskAttempt[], info: StoreI
     generation++
     validDay(day)
     invalidate(day)
+    // Every weekly observation ending on or after this day may have read it (they look back, never forward).
+    tasksDb.prepare('DELETE FROM week_done WHERE week_end >= ?').run(day)
+    tasksDb.prepare('DELETE FROM week_obs WHERE week_end >= ?').run(day)
     if (attempts.some((a) => a.day !== day)) throw new Error('All attempts must belong to the stored day')
     const daily = new Map<string, { client: string; task: string; c: Counts }>()
     const paths = new Map<string, { client: string; task: string; path: string; c: Counts }>()
@@ -358,6 +380,28 @@ export function aggregates(w: Window, task?: string, client?: string): Aggregate
     return all<Aggregate>(`SELECT client, task_id, sum(attempts) AS attempts, sum(done) AS done,
         sum(failed) AS failed, sum(abandoned) AS abandoned, hist_merge(dur_hist) AS hist
         FROM task_daily WHERE day BETWEEN ? AND ?${f.sql} GROUP BY client, task_id`, w.from, w.to, ...f.args)
+}
+/** Weekly rescue comparisons reuse periods as later baselines. Calendar-aligned 28-day
+ * windows also share their four weekly histogram rollups, so a year replay scans each day once. */
+export async function periodAggregates(window: Window): Promise<ReturnType<typeof aggregates>> {
+    const result = await cached('period-aggregates', { window }, async () => {
+        if (validWindow(window) !== 28 || new Date(window.from).getUTCDay() !== 1) return { window, rows: aggregates(window) }
+        const groups = new Map<string, { row: Aggregate; hist: number[] }>()
+        for (let i = 0; i < 4; i++) {
+            const from = shift(window.from, i * 7), week = { from, to: shift(from, 6) }
+            const part = await cached('week-aggregates', { window: week }, async () => ({ window: week, rows: aggregates(week) }))
+            for (const r of part.rows) {
+                const k = JSON.stringify([r.client, r.task_id]), g = groups.get(k)
+                if (!g) groups.set(k, { row: { ...r }, hist: [...histogram(r.hist)] })
+                else {
+                    g.row.attempts += r.attempts; g.row.done += r.done; g.row.failed += r.failed; g.row.abandoned += r.abandoned
+                    merge(g.hist, histogram(r.hist))
+                }
+            }
+        }
+        return { window, rows: [...groups.values()].map(g => ({ ...g.row, hist: JSON.stringify(g.hist) })) }
+    })
+    return result.rows
 }
 function userCounts(w: Window, task?: string, client?: string): Map<string, number> {
     const f = filters(task, client)
@@ -641,7 +685,7 @@ export async function runIngest(opts: { days?: string[]; maxBackfill?: number } 
             for (const table of ['task_attempts', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily'])
                 run(`DELETE FROM ${table} WHERE day < ?`, shift(today(), 1 - config.tasks.historyDays))
         })
-        forgetAnswers()
+        forgetAnswers(true) // old attempts only: weekly observations stay
         tasksDb.exec('PRAGMA incremental_vacuum(1000)')
     } finally { running = false }
 }
