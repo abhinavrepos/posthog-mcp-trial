@@ -5,6 +5,7 @@
 //   POST/GET/DELETE /posthog-mcp  PostHog MCP with Lens routing and replay refusal
 //   GET  /status          recent jobs
 //   GET  /replays         the replay clip page (PostHog login), see replays.ts
+import { startPrewarm } from '../mcp/prewarm.ts'
 import { existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { basename, join } from 'node:path'
@@ -280,6 +281,7 @@ for (const [name, value] of Object.entries({ ...(jiraConfigured() ? { JIRA_WEBHO
 pruneOldClips()
 // The task history behind the dashboards: day by day in the background (core/tasks.ts).
 if (appEvents()) startTaskHistory()
+if (appEvents() && config.features.lensMcp) startPrewarm()
 setInterval(() => pruneOldClips(), 6 * 3_600_000).unref()
 
 // The release dashboard reads Jira and PostHog at start (when its data is older than an hour)

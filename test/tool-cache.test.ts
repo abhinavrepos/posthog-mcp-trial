@@ -46,3 +46,26 @@ test('only read-only analysis tools are cached; nothing that writes or depends o
     for (const t of ['record_verdict', 'correct_ticket_link', 'refresh_releases', 'triage_ticket', 'get_replay_link', 'launch_survey', 'list_surveys', 'task_map', 'pin_dashboard', 'release_outcomes', 'list_releases'])
         assert.ok(!CACHED_TOOLS.has(t), t)
 })
+
+test('pre-warm: recomputes even when an answer is kept, and keeps it until the next round', async () => {
+    const { withPrewarm } = await import('../src/mcp/tools.ts')
+    clearToolAnswers(); let runs = 0
+    const run = async () => ({ content: [{ type: 'text', text: String(++runs) }] })
+    await cachedToolCall('reval_brief', {}, run)
+    await withPrewarm(20 * 60_000, () => cachedToolCall('reval_brief', {}, run))
+    assert.equal(runs, 2, 'the pre-warm refreshes a kept answer')
+    const realNow = Date.now
+    try {
+        Date.now = () => realNow() + 10 * 60_000 // ten minutes later: past the normal two minutes
+        assert.equal((await cachedToolCall('reval_brief', {}, run) as any).content[0].text, '2', 'still the pre-warmed answer')
+        assert.equal(runs, 2)
+    } finally { Date.now = realNow }
+})
+
+test('pre-warm settings: default tools, interval, off switch, only cacheable tools', async () => {
+    const { prewarmSettings, DEFAULT_PREWARM } = await import('../src/mcp/prewarm.ts')
+    assert.deepEqual(prewarmSettings({}), { minutes: 15, tools: DEFAULT_PREWARM })
+    assert.equal(prewarmSettings({ LENS_PREWARM_MINUTES: '0' }).minutes, 0)
+    assert.deepEqual(prewarmSettings({ LENS_PREWARM_TOOLS: 'top_pains, record_verdict ,nope' }).tools, ['top_pains'])
+    for (const t of DEFAULT_PREWARM) assert.ok(CACHED_TOOLS.has(t), t)
+})

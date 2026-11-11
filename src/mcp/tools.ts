@@ -92,7 +92,7 @@ export const CACHED_TOOLS = new Set(['reval_brief', 'describe_app_events', 'top_
 export const WRITE_TOOLS = new Set(['record_verdict', 'correct_ticket_link', 'refresh_releases', 'triage_ticket'])
 const TOOL_TTL_MS = Math.max(0, Number(process.env.LENS_TOOL_CACHE_SECONDS ?? 120)) * 1000
 const TOOL_CACHE_BYTES = 16 * 1024 * 1024
-const toolAnswers = new Map<string, { at: number; value: unknown; bytes: number }>()
+const toolAnswers = new Map<string, { at: number; value: unknown; bytes: number; ttl: number }>()
 const toolFlights = new Map<string, Promise<unknown>>()
 let toolBytes = 0
 // Arguments as text with object keys sorted at every level, so {a, b} and {b, a} are the same question.
@@ -100,22 +100,30 @@ const stable = (v: unknown): string => Array.isArray(v) ? `[${v.map(stable).join
     : v && typeof v === 'object' ? `{${Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stable((v as Record<string, unknown>)[k])).join(',')}}`
     : JSON.stringify(v) ?? 'null'
 export function clearToolAnswers(): void { toolAnswers.clear(); toolFlights.clear(); toolBytes = 0 }
-function remember(key: string, value: unknown): void {
+// While the background pre-warm runs (src/mcp/prewarm.ts), answers are recomputed and kept until the next
+// refresh instead of two minutes.
+let prewarmTtl = 0
+export async function withPrewarm<T>(ttlMs: number, work: () => Promise<T>): Promise<T> {
+    prewarmTtl = ttlMs
+    try { return await work() } finally { prewarmTtl = 0 }
+}
+function remember(key: string, value: unknown, ttl: number): void {
     const bytes = JSON.stringify(value).length
     if (bytes > TOOL_CACHE_BYTES / 8) return // one huge answer must not push everything else out
     const old = toolAnswers.get(key); if (old) { toolBytes -= old.bytes; toolAnswers.delete(key) }
-    toolAnswers.set(key, { at: Date.now(), value, bytes }); toolBytes += bytes
+    toolAnswers.set(key, { at: Date.now(), value, bytes, ttl }); toolBytes += bytes
     for (const [k, v] of toolAnswers) { if (toolBytes <= TOOL_CACHE_BYTES && toolAnswers.size <= 256) break; toolAnswers.delete(k); toolBytes -= v.bytes }
 }
 export async function cachedToolCall(name: string, args: unknown, run: () => Promise<unknown>): Promise<unknown> {
     if (!TOOL_TTL_MS) return run()
     const key = name + '\u0000' + stable(args ?? {})
-    const hit = toolAnswers.get(key)
-    if (hit && Date.now() - hit.at < TOOL_TTL_MS) { toolAnswers.delete(key); toolAnswers.set(key, hit); return structuredClone(hit.value) }
+    const hit = toolAnswers.get(key), refreshing = prewarmTtl > 0
+    if (hit && !refreshing && Date.now() - hit.at < hit.ttl) { toolAnswers.delete(key); toolAnswers.set(key, hit); return structuredClone(hit.value) }
     let flight = toolFlights.get(key)
     if (!flight) {
+        const ttl = Math.max(TOOL_TTL_MS, prewarmTtl)
         flight = run().then((value) => {
-            if (!(value as { isError?: boolean } | undefined)?.isError) remember(key, value)
+            if (!(value as { isError?: boolean } | undefined)?.isError) remember(key, value, ttl)
             return value
         }).finally(() => toolFlights.delete(key))
         toolFlights.set(key, flight)
