@@ -73,10 +73,10 @@ export function getClip(name: string): ClipRecord | undefined {
 }
 
 /** Recent clips, or only the ones this person made or saved. */
-export function listClips(opts: { holder?: string; limit?: number } = {}): ClipRecord[] {
+export function listClips(opts: { holder?: string; limit?: number; offset?: number } = {}): ClipRecord[] {
     const where = opts.holder ? 'WHERE c.name IN (SELECT clip_name FROM clip_holders WHERE email = ?)' : ''
     const params = opts.holder ? [opts.holder] : []
-    return all<Record<string, unknown>>(`${SELECT_CLIP} ${where} ORDER BY c.last_requested_at DESC LIMIT ?`, ...params, opts.limit ?? 200).map(fromRow)
+    return all<Record<string, unknown>>(`${SELECT_CLIP} ${where} ORDER BY c.last_requested_at DESC, c.name ASC LIMIT ? OFFSET ?`, ...params, opts.limit ?? 200, opts.offset ?? 0).map(fromRow)
 }
 
 /** Records that `by` has this clip. A clip that already exists is not stored again: the person is
@@ -452,7 +452,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
 
     if (p === '/replays/api/clips' && req.method === 'GET') {
         const counts = commentCounts()
-        json(res, 200, { clips: listClips({ holder: viewer.email, limit: 100 }).map((c) => clipView(c, viewer.email, counts)), retention_days: RETENTION_DAYS })
+        json(res, 200, { clips: listClips({ holder: viewer.email, limit: Math.min(500, Math.max(1, Math.floor(Number(url.searchParams.get('limit')) || 100))), offset: Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(Number(url.searchParams.get('offset')) || 0))) }).map((c) => clipView(c, viewer.email, counts)), retention_days: RETENTION_DAYS })
         return true
     }
     m = /^\/replays\/api\/clips\/([^/]+)$/.exec(p)
@@ -619,8 +619,8 @@ textarea{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px s
 :focus-visible{outline:3px solid var(--accent);outline-offset:2px}a:focus-visible,button:focus-visible{border-radius:7px}
 .skip{position:absolute;left:-9999px;top:8px;z-index:10;background:var(--card);color:var(--accent);padding:8px 12px;border-radius:7px;font-weight:600}.skip:focus{left:12px}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-.pager{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:10px;font-size:13px}.pager .pg{display:flex;gap:6px;align-items:center}
-.pager button{padding:5px 10px}.pager select{width:auto;padding:4px 8px}
+.pager{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:10px;font-size:13px}.pager .pg{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.pager button,.pager .pg>span{padding:5px 10px;white-space:nowrap}.pager select{width:auto;padding:4px 8px}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}`
 
 export const PAGE_CSS = () => CSS
@@ -673,20 +673,20 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
 
 export function loginHtml(section: Section = 'Replay clips'): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
-<body>${headerHtml(undefined, section)}<main style="max-width:440px"><div class="card"><h2>Sign in</h2>
+<body>${headerHtml(undefined, section)}<main style="max-width:440px"><div class="card"><h1 style="font-size:20px">Sign in</h1>
 <p class="small muted">Use your PostHog account. Signing in here also signs you in to PostHog in this browser.</p>
 <form id="f"><p><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></p>
 <p><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required></p>
-<p><button id="go">Sign in</button></p><p id="msg" class="small err"></p></form>
+<p><button id="go" type="submit">Sign in</button></p><p id="msg" class="small err" role="alert"></p></form>
 <p class="small muted">Use two-factor login, or already signed in to PostHog? <a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on PostHog</a>, then <a href="/replays">reload this page</a>.</p></div></main>
-<script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('go');b.disabled=true;document.getElementById('msg').textContent='';
+<script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('go');if(b.disabled)return;b.disabled=true;document.getElementById('msg').textContent='Signing in…';
 try{const r=await fetch('/replays/login',{method:'POST',headers:{'content-type':'application/json','x-clip-page':'1'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('pw').value})});
 const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Sign in failed.');location.href=location.pathname+location.search}catch(err){document.getElementById('msg').textContent=err.message}finally{b.disabled=false}}</script></body></html>`
 }
 
 function noAccessHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No access · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
-<body>${headerHtml(v, 'Replay clips')}<main style="max-width:560px"><div class="card"><h2>You don't have access to replay clips</h2>
+<body>${headerHtml(v, 'Replay clips')}<main style="max-width:560px"><div class="card"><h1 style="font-size:20px">You don't have access to replay clips</h1>
 <p>You're signed in as <b>${esc(v.email)}</b>, but no admin has given you access yet. Replays can show client data, so access is given person by person.</p>
 <p class="muted small">Ask a PostHog admin to give you the "Watch clips" role on the admin page.</p></div></main></body></html>`
 }
@@ -696,43 +696,45 @@ function pageHtml(v: Viewer): string {
     const boot = JSON.stringify({ lengths: LENGTHS, ttl: config.service.clipLinkTtlHours, retention: RETENTION_DAYS, perHour: PER_HOUR, canDownload: can(v.role, 'download'), shareLinks: can(v.role, 'download') && loadAccess().allow_share_links }).replace(/</g, '\\u003c')
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
 <body>${headerHtml(v, 'Replay clips')}<main>
+<h1 class="sr-only">Replay clips</h1>
 
 <div class="card"><h2>1. Which replay?</h2>
 <label for="input">PostHog replay link or session id</label>
 <div class="row"><div style="flex:4"><input id="input" placeholder="${esc(config.posthog.publicHost)}/project/${esc(config.posthog.projectId)}/replay/…" autocomplete="off"></div>
-<div style="flex:0"><button id="check">Check</button></div></div>
-<p id="inspect-msg" class="small"></p>
+<div style="flex:0"><button id="check" type="button">Check replay</button></div></div>
+<p aria-live="polite" aria-atomic="true" id="inspect-msg" class="small"></p>
 <div id="info" class="hidden">
 <div class="facts"><div><span>Client</span><b id="f-client"></b></div><div><span>User</span><b id="f-user"></b></div><div><span>Recorded</span><b id="f-when"></b></div><div><span>Length</span><b id="f-len"></b></div></div>
-<label>Key moments (click one to start the clip just before it)</label><div id="moments" class="chips"></div>
+<p class="small muted">Key moments: choose one to start just before it.</p><div id="moments" class="chips"></div><div id="moments-pager"></div>
 <p class="small muted" id="pages"></p></div></div>
 
 <div class="card" id="make" aria-disabled="true"><h2>2. Make the clip</h2>
 <div class="row"><div><label for="start">Start at (m:ss)</label><input id="start" value="0:00"></div>
 <div><label for="length">Length</label><select id="length"></select></div>
-<div style="flex:0"><button id="go" disabled>Make clip</button></div></div>
-<p id="job-msg" class="small"></p>
-<div id="result" class="hidden"><div class="player" id="player"><video id="video" controls preload="metadata" controlslist="nodownload nofullscreen" oncontextmenu="return CFG.canDownload"><track kind="captions" srclang="en" label="Comments" id="track"></video><div class="cap" id="cap" aria-live="polite"></div><button class="fs" id="fs" type="button" title="Full screen, with the comments">Full screen</button></div>
-<div class="row" style="align-items:center"><button class="ghost" id="save" type="button">Save this</button><a class="btn" id="dl">Download MP4</a><button class="ghost" id="share">Copy share link</button><a class="btn ghost" id="open" target="_blank" rel="noopener">Open in PostHog</a></div>
-<p id="keep-msg" class="small muted"></p><p id="share-msg" class="small muted"></p>
+<div style="flex:0"><button id="go" type="button" disabled>Make clip</button></div></div>
+<p aria-live="polite" aria-atomic="true" id="job-msg" class="small"></p>
+<div id="result" class="hidden"><div class="player" id="player"><video aria-label="Replay clip" id="video" controls preload="metadata" controlslist="nodownload nofullscreen" oncontextmenu="return CFG.canDownload"><track kind="captions" srclang="en" label="Comments" id="track"></video><div class="cap" id="cap" aria-live="polite"></div><button class="fs" id="fs" type="button" title="Full screen, with the comments">Full screen</button></div>
+<div class="row" style="align-items:center"><button class="ghost" id="save" type="button">Save this</button><a class="btn" id="dl">Download MP4</a><button class="ghost" id="share" type="button">Copy share link</button><a class="btn ghost" id="open" target="_blank" rel="noopener">Open in PostHog</a></div>
+<p aria-live="polite" aria-atomic="true" id="keep-msg" class="small muted"></p><p aria-live="polite" aria-atomic="true" id="share-msg" class="small muted"></p>
 <div class="comments"><h3>Comments on the video</h3>
 <p class="small muted" style="margin:0 0 6px">Each comment shows big over the video at its moment, like a subtitle. Downloads and share links include them, burned into the video.</p>
-<div id="c-list"></div>
+<div id="c-list"></div><div id="comments-pager"></div>
 <div class="row" style="margin-top:10px"><div style="flex:0 0 120px"><label for="c-at">At (m:ss)</label><input id="c-at" value="0:00" autocomplete="off"></div>
 <div style="flex:0 0 140px"><label for="c-dur">Show for</label><select id="c-dur"></select></div>
 <div style="flex:0"><button class="ghost" id="c-now" type="button" title="Take the moment the video is at" style="white-space:nowrap">Use video time</button></div></div>
 <p style="margin:8px 0"><label for="c-text">Comment</label><textarea id="c-text" rows="2" placeholder="What should people notice at this moment?"></textarea></p>
-<div class="row" style="align-items:center"><button id="c-add" type="button">Add comment</button><button class="ghost hidden" id="c-cancel" type="button">Cancel</button><span class="small" id="c-msg"></span></div>
+<div class="row" style="align-items:center"><button id="c-add" type="button">Add comment</button><button class="ghost hidden" id="c-cancel" type="button">Cancel</button><span class="small" aria-live="polite" aria-atomic="true" id="c-msg"></span></div>
 <p class="small muted" id="c-plain"></p></div></div></div>
 
-<div class="card"><h2>Your clips</h2><div class="table-wrap"><table><thead><tr><th>Made</th><th>Client</th><th>User</th><th>Part</th><th>Kept until</th><th></th></tr></thead><tbody id="recent"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table></div>
-<p class="small muted" id="retention"></p></div>
+<div class="card"><h2>Your clips</h2><div class="table-wrap"><table><thead><tr><th scope="col">Made</th><th scope="col">Client</th><th scope="col">User</th><th scope="col">Part</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="recent"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table><div id="recent-pager"></div></div>
+<p id="recent-msg" class="small" role="alert"></p><p class="small muted" id="retention"></p></div>
 
 <div class="card"><h2>Get MP4 from PostHog in one click</h2>
 <p class="small">Drag this button to your bookmarks bar. While you watch a replay in PostHog, click it to open the replay here.</p>
 <p><a class="btn ghost" href="${esc(bookmarklet)}">Get MP4</a></p></div>
 </main>
 <script>
+${PAGER_JS}
 const CFG=${boot};const $=id=>document.getElementById(id);
 const clock=s=>{s=Math.max(0,Math.floor(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=String(s%60).padStart(2,'0');return h?h+':'+String(m).padStart(2,'0')+':'+x:m+':'+x};
 const when=iso=>new Date(iso).toLocaleString([], {dateStyle:'medium',timeStyle:'short'});
@@ -741,65 +743,71 @@ CFG.lengths.forEach(l=>{const o=document.createElement('option');o.value=l;o.tex
 $('retention').textContent='Clips are deleted '+CFG.retention+' days after they were last made, unless you click Save. Share links expire after '+Math.round(CFG.ttl/24)+' days. Every view and download is logged.';
 const day=iso=>new Date(iso).toLocaleDateString([], {dateStyle:'medium'});
 const keepText=c=>c.saved?'You saved this clip. It stays until you unsave it.':c.saved_by.length?'Saved by someone else, so it is kept.':'Deleted on '+day(c.expires_at)+' unless someone saves it.';
-async function toggleSave(c){const r=await api('/replays/api/clips/'+encodeURIComponent(c.name)+'/save',{method:'POST',body:JSON.stringify({saved:!c.saved})});return r}
+async function toggleSave(c){if(c.saved&&!confirm('Unsave this clip? It may be deleted after the retention period.'))return c;const r=await api('/replays/api/clips/'+encodeURIComponent(c.name)+'/save',{method:'POST',body:JSON.stringify({saved:!c.saved})});return r}
 let info=null,cur=null;
-function txt(el,t,cls){el.textContent=t;el.className='small '+(cls||'')}
-async function check(){const input=$('input').value.trim();if(!input)return;txt($('inspect-msg'),'Checking…','muted');$('info').classList.add('hidden');$('go').disabled=true;
+function txt(el,t,cls){el.textContent=t;el.className='small '+(cls||'');el.setAttribute('role',cls==='err'?'alert':'status')}
+const momentsPager=makePager({mount:$('moments-pager'),noun:'key moments',size:25,draw:moments=>{  const box=$('moments');box.innerHTML='';
+  if(!moments.length){box.innerHTML='<span class="muted small">No errors or frustrated clicks in this recording.</span>'}
+  moments.forEach(m=>{const b=document.createElement('button');b.type='button';b.className='chip'+(m.kind==='error'?' error':'');b.innerHTML='<span class="t"></span>';b.querySelector('.t').textContent=clock(m.offset_s);b.append(m.kind+' '+m.label);b.onclick=()=>{$('start').value=clock(Math.max(0,m.offset_s-5))};box.appendChild(b)});
+}});
+async function check(){if($('check').disabled)return;const input=$('input').value.trim();if(!input){txt($('inspect-msg'),'Paste a replay link or session ID first.','err');$('input').focus();return}info=null;$('check').disabled=true;$('input').disabled=true;$('make').setAttribute('aria-disabled','true');txt($('inspect-msg'),'Checking…','muted');$('info').classList.add('hidden');$('go').disabled=true;
  try{const r=await api('/replays/api/inspect',{method:'POST',body:JSON.stringify({input})});info=r.info;
   $('f-client').textContent=info.client||'unknown';$('f-user').textContent=info.user||'unknown';$('f-when').textContent=when(info.start);$('f-len').textContent=clock(info.duration_s);
-  const box=$('moments');box.innerHTML='';const shown=info.moments.filter(m=>m.kind!=='page').slice(0,30);
-  if(!shown.length){box.innerHTML='<span class="muted small">No errors or frustrated clicks in this recording.</span>'}
-  shown.forEach(m=>{const b=document.createElement('button');b.type='button';b.className='chip'+(m.kind==='error'?' error':'');b.innerHTML='<span class="t"></span>';b.querySelector('.t').textContent=clock(m.offset_s);b.append(m.kind+' '+m.label);b.onclick=()=>{$('start').value=clock(Math.max(0,m.offset_s-5))};box.appendChild(b)});
+  momentsPager.set(info.moments.filter(m=>m.kind!=='page'));
   $('pages').textContent=info.pages.length?'Pages: '+info.pages.join(' → '):'';
-  $('start').value=clock(r.suggested_start_s);$('info').classList.remove('hidden');$('go').disabled=false;txt($('inspect-msg'),'')
- }catch(e){txt($('inspect-msg'),e.message,'err')}}
+  $('start').value=clock(r.suggested_start_s);$('info').classList.remove('hidden');$('go').disabled=false;$('make').setAttribute('aria-disabled','false');txt($('inspect-msg'),'Replay checked. Choose a start time and length.','ok')
+ }catch(e){txt($('inspect-msg'),e.message+' Check the link and try again.','err')}finally{$('check').disabled=false;$('input').disabled=false}}
+$('input').addEventListener('input',()=>{info=null;$('go').disabled=true;$('make').setAttribute('aria-disabled','true');$('info').classList.add('hidden');txt($('inspect-msg'),'Check this replay before making a clip.','muted')});
 $('check').onclick=check;$('input').addEventListener('keydown',e=>{if(e.key==='Enter')check()});$('input').addEventListener('paste',()=>setTimeout(check,50));
-$('go').onclick=async()=>{$('go').disabled=true;$('result').classList.add('hidden');txt($('job-msg'),'Queued…','muted');
+$('go').onclick=async()=>{if($('go').disabled)return;$('go').disabled=true;$('check').disabled=true;$('input').disabled=true;$('result').classList.add('hidden');txt($('job-msg'),'Queued…','muted');
  try{let j=await api('/replays/api/clips',{method:'POST',body:JSON.stringify({input:$('input').value.trim(),start:$('start').value,length:Number($('length').value)})});
-  while(j.state==='queued'||j.state==='rendering'){$('job-msg').innerHTML='<span class="spin"></span> '+(j.state==='queued'?'Waiting in queue (position '+j.position+')':'Making the clip… '+j.elapsed_s+' s (usually 10 to 30 s)');await new Promise(r=>setTimeout(r,1500));j=await api('/replays/api/jobs/'+j.id)}
+  while(j.state==='queued'||j.state==='rendering'){$('job-msg').innerHTML='<span class="spin" aria-hidden="true"></span> '+(j.state==='queued'?'Waiting in queue (position '+j.position+')':'Making the clip… '+j.elapsed_s+' s (usually 10 to 30 s)');await new Promise(r=>setTimeout(r,1500));j=await api('/replays/api/jobs/'+j.id)}
   if(j.state==='failed')throw new Error(j.error||'The clip could not be made.');
   show(j.clip);txt($('job-msg'),'Ready.','ok');loadRecent()
- }catch(e){txt($('job-msg'),e.message,'err')}finally{$('go').disabled=false}};
+ }catch(e){txt($('job-msg'),e.message,'err')}finally{$('go').disabled=false;$('check').disabled=false;$('input').disabled=false}};
 function show(c){$('dl').classList.toggle('hidden',!CFG.canDownload);$('share').classList.toggle('hidden',!CFG.shareLinks);$('video').src=c.video_url+'#t=1';$('dl').href=c.download_url;$('track').src='/replays/api/clips/'+encodeURIComponent(c.name)+'/comments.vtt';loadComments(c);$('open').href=c.replay_url;$('share').dataset.name=c.name;cur=c;$('save').textContent=c.saved?'Saved ✓ (unsave)':'Save this';txt($('keep-msg'),keepText(c),'muted');$('share-msg').textContent='';$('result').classList.remove('hidden');$('result').scrollIntoView({behavior:'smooth',block:'nearest'})}
-$('share').onclick=async()=>{try{const r=await api('/replays/api/share/'+encodeURIComponent($('share').dataset.name),{method:'POST',body:JSON.stringify({comments:true})});await navigator.clipboard.writeText(r.url).catch(()=>{});$('share-msg').textContent='Link copied'+(r.comments?', with the comments in the video':'')+'. Anyone with it can watch this clip for '+Math.round(r.expires_hours/24)+' days: '+r.url}catch(e){$('share-msg').textContent=e.message}};
-$('save').onclick=async()=>{if(!cur)return;$('save').disabled=true;try{const c=await toggleSave(cur);cur=c;$('save').textContent=c.saved?'Saved ✓ (unsave)':'Save this';txt($('keep-msg'),keepText(c),c.saved?'ok':'muted');loadRecent()}catch(e){txt($('keep-msg'),e.message,'err')}finally{$('save').disabled=false}};
-async function loadRecent(){try{const r=await api('/replays/api/clips');const tb=$('recent');tb.innerHTML='';
- if(!r.clips.length){tb.innerHTML='<tr><td colspan="6" class="muted">No clips yet.</td></tr>';return}
- r.clips.forEach(c=>{const tr=document.createElement('tr');[when(c.created_at),c.client||'',(c.user||'').replace(/@.*/,''),c.range+(c.comments?' · '+c.comments+' comment'+(c.comments===1?'':'s'):''),c.saved?'Saved':c.expires_at?day(c.expires_at):'Saved by someone else'].forEach(t=>{const td=document.createElement('td');td.textContent=t;tr.appendChild(td)});
-  const td=document.createElement('td');td.style.whiteSpace='nowrap';const w=document.createElement('button');w.className='ghost';w.textContent='Watch';w.onclick=()=>show(c);
-  const k=document.createElement('button');k.className='ghost';k.textContent=c.saved?'Unsave':'Save';k.onclick=async()=>{k.disabled=true;try{const n=await toggleSave(c);if(cur&&cur.name===n.name)show(n);loadRecent()}catch(e){alert(e.message)}};
-  td.append(w,' ',k);tr.appendChild(td);tb.appendChild(tr)})}catch(e){$('recent').innerHTML='<tr><td colspan="6" class="err"></td></tr>';$('recent').querySelector('td').textContent=e.message}}
+$('share').onclick=async()=>{if($('share').disabled)return;$('share').disabled=true;txt($('share-msg'),'Creating link…','muted');try{const r=await api('/replays/api/share/'+encodeURIComponent($('share').dataset.name),{method:'POST',body:JSON.stringify({comments:true})});let copied=false;try{await navigator.clipboard.writeText(r.url);copied=true}catch{};$('share-msg').textContent=(copied?'Link copied':'Copy this link')+(r.comments?', with the comments in the video':'')+'. Anyone with it can watch this clip for '+Math.round(r.expires_hours/24)+' days: '+r.url}catch(e){txt($('share-msg'),e.message+' Try again.','err')}finally{$('share').disabled=false}};
+$('save').onclick=async()=>{if(!cur||$('save').disabled)return;$('save').disabled=true;try{const c=await toggleSave(cur);cur=c;$('save').textContent=c.saved?'Saved ✓ (unsave)':'Save this';txt($('keep-msg'),keepText(c),c.saved?'ok':'muted');loadRecent()}catch(e){txt($('keep-msg'),e.message,'err')}finally{$('save').disabled=false}};
+const recentPager=makePager({mount:$('recent-pager'),noun:'clips',size:25,draw:clips=>{const tb=$('recent');tb.innerHTML='';
+ if(!clips.length){tb.innerHTML='<tr><td colspan="6" class="muted">No clips yet. Check a replay above to make your first clip.</td></tr>';return}
+ clips.forEach(c=>{const tr=document.createElement('tr');[when(c.created_at),c.client||'',(c.user||'').replace(/@.*/,''),c.range+(c.comments?' · '+c.comments+' comment'+(c.comments===1?'':'s'):''),c.saved?'Saved':c.expires_at?day(c.expires_at):'Saved by someone else'].forEach(t=>{const td=document.createElement('td');td.textContent=t;tr.appendChild(td)});
+  const td=document.createElement('td');td.style.whiteSpace='nowrap';const w=document.createElement('button');w.type='button';w.className='ghost';w.textContent='Watch';w.onclick=()=>{show(c);$('video').focus()};
+  const k=document.createElement('button');k.type='button';k.className='ghost';k.textContent=c.saved?'Unsave':'Save';k.onclick=async()=>{k.disabled=true;try{const n=await toggleSave(c);if(cur&&cur.name===n.name)show(n);loadRecent()}catch(e){$('recent-msg').textContent=e.message+' Try saving again.'}finally{k.disabled=false}};
+  td.append(w,' ',k);tr.appendChild(td);tb.appendChild(tr)})}});
+let recentLoad=0;
+async function loadRecent(){const request=++recentLoad;try{const clips=[];let offset=0;while(true){const r=await api('/replays/api/clips?limit=100&offset='+offset);if(request!==recentLoad)return;clips.push(...r.clips);if(r.clips.length<100)break;offset+=r.clips.length}recentPager.set(clips,true);$('recent-msg').textContent=''}catch(e){if(request===1)$('recent').innerHTML='';$('recent-msg').textContent=e.message+' Reload the page to try again.'}}
 // ---------------------------------------------------------------- comments on the video
 let CM={clip:null,list:[],cues:[],editing:null,length:0,durations:[],touched:false};
 const atText=x=>{x=Math.max(0,Math.round(x*10)/10);const m=Math.floor(x/60),r=x-m*60;const whole=Math.floor(r);const tenth=Math.round((r-whole)*10);return m+':'+String(whole).padStart(2,'0')+(tenth?'.'+tenth:'')};
 const parseAt=t=>{const m=/^\\s*(?:(\\d+):)?(\\d{1,2})(?:\\.(\\d))?\\s*$/.exec(t||'');if(!m)return NaN;return Number(m[1]||0)*60+Number(m[2])+Number(m[3]||0)/10};
-function cmMsg(t,cls){$('c-msg').textContent=t;$('c-msg').className='small '+(cls||'')}
-async function loadComments(c){CM.clip=c;CM.editing=null;CM.touched=false;resetComposer();try{applyComments(await api('/replays/api/clips/'+encodeURIComponent(c.name)+'/comments'))}catch(e){cmMsg(e.message,'err')}}
+function cmMsg(t,cls){txt($('c-msg'),t,cls)}
+async function loadComments(c){CM.clip=c;CM.editing=null;CM.touched=false;resetComposer();CM.list=[];CM.cues=[];commentsPager.set([]);$('c-add').disabled=true;cmMsg('Loading comments…','muted');try{const r=await api('/replays/api/clips/'+encodeURIComponent(c.name)+'/comments');if(CM.clip!==c)return;applyComments(r);$('c-add').disabled=false;cmMsg('')}catch(e){if(CM.clip===c)cmMsg(e.message+' Open the clip again to retry.','err')}}
 function applyComments(r){CM.list=r.comments;CM.cues=r.cues;CM.length=r.length_s;
  if(!CM.durations.length){CM.durations=r.durations;r.durations.forEach(d=>{const o=document.createElement('option');o.value=d;o.textContent=d+' seconds';if(d===r.default_duration)o.selected=true;$('c-dur').appendChild(o)})}
  $('c-text').maxLength=r.max_text;renderComments();paint();
  if(CM.clip){CM.clip.comments=r.comments.length;$('dl').textContent=r.comments.length&&CFG.canDownload?'Download MP4 with comments':'Download MP4'}
  $('c-plain').innerHTML='';if(r.comments.length&&CFG.canDownload){const a=document.createElement('a');a.href=CM.clip.download_url+'?comments=0';a.textContent='Download without the comments';$('c-plain').appendChild(a)}
  const tr=$('video').textTracks[0];if(tr)tr.mode=document.fullscreenElement===$('video')?'showing':'hidden'}
-function renderComments(){const box=$('c-list');box.innerHTML='';
+const commentsPager=makePager({mount:$('comments-pager'),noun:'comments',size:25,draw:slice=>renderComments(slice)});
+function renderComments(slice){if(!slice){commentsPager.set(CM.list,true);return}const box=$('c-list');box.innerHTML='';
  if(!CM.list.length){const p=document.createElement('p');p.className='small muted';p.textContent='No comments yet. Pause the video where something matters and write what to notice.';box.appendChild(p);return}
- CM.list.forEach(c=>{const row=document.createElement('div');row.className='cm';row.dataset.at=c.at_s;
+ slice.forEach(c=>{const row=document.createElement('div');row.className='cm';row.dataset.at=c.at_s;
   const at=document.createElement('button');at.className='ghost at';at.type='button';at.textContent=atText(c.at_s);at.title='Jump to this moment';at.onclick=()=>{const v=$('video');v.pause();v.currentTime=c.at_s;paint()};row.appendChild(at);
   const body=document.createElement('div');body.style.flex='1';const tx=document.createElement('div');tx.className='tx';tx.textContent=c.text;body.appendChild(tx);
   const by=document.createElement('div');by.className='by';by.textContent=c.author.replace(/@.*/,'')+' · shows for '+c.duration_s+' s'+(c.updated_at!==c.created_at?' · edited':'');body.appendChild(by);row.appendChild(body);
   if(c.can_edit){const e=document.createElement('button');e.className='ghost';e.type='button';e.textContent='Edit';e.onclick=()=>editComment(c);const d=document.createElement('button');d.className='ghost';d.type='button';d.textContent='Delete';
-   d.onclick=async()=>{if(!confirm('Delete this comment?'))return;try{applyComments(await api('/replays/api/clips/'+encodeURIComponent(CM.clip.name)+'/comments/'+c.id,{method:'DELETE'}));cmMsg('Deleted.','ok')}catch(err){cmMsg(err.message,'err')}};
+   d.onclick=async()=>{if(d.disabled||!confirm('Delete this comment?'))return;d.disabled=true;try{applyComments(await api('/replays/api/clips/'+encodeURIComponent(CM.clip.name)+'/comments/'+c.id,{method:'DELETE'}));cmMsg('Deleted.','ok');$('c-add').focus()}catch(err){cmMsg(err.message+' Try deleting again.','err')}finally{d.disabled=false}};
    const w=document.createElement('div');w.style.display='flex';w.style.gap='6px';w.append(e,d);row.appendChild(w)}
   box.appendChild(row)})}
 function resetComposer(){CM.editing=null;$('c-text').value='';$('c-add').textContent='Add comment';$('c-cancel').classList.add('hidden');CM.touched=false;cmMsg('')}
 function editComment(c){CM.editing=c;$('c-at').value=atText(c.at_s);$('c-dur').value=String(c.duration_s);if($('c-dur').value!==String(c.duration_s)){const o=document.createElement('option');o.value=c.duration_s;o.textContent=c.duration_s+' seconds';$('c-dur').appendChild(o);$('c-dur').value=String(c.duration_s)}
  $('c-text').value=c.text;$('c-add').textContent='Save changes';$('c-cancel').classList.remove('hidden');CM.touched=true;$('c-text').focus();const v=$('video');v.pause();v.currentTime=c.at_s;paint()}
-$('c-cancel').onclick=resetComposer;
+$('c-cancel').onclick=()=>{resetComposer();$('c-text').focus()};
 $('c-now').onclick=()=>{$('c-at').value=atText($('video').currentTime);CM.touched=true};
 $('c-at').oninput=()=>{CM.touched=true};
 // Writing a comment pauses the video and takes its moment, unless a moment was typed already.
 $('c-text').addEventListener('focus',()=>{const v=$('video');if(!v.paused)v.pause();if(!CM.touched&&!CM.editing)$('c-at').value=atText(v.currentTime)});
-$('c-add').onclick=async()=>{if(!CM.clip)return;const at=parseAt($('c-at').value);if(Number.isNaN(at)){cmMsg('Write the moment like 0:12 or 1:05.5.','err');return}
+$('c-add').onclick=async()=>{if(!CM.clip||$('c-add').disabled)return;const at=parseAt($('c-at').value);if(Number.isNaN(at)){cmMsg('Write the moment like 0:12 or 1:05.5.','err');return}
  const body=JSON.stringify({at_s:at,duration_s:Number($('c-dur').value),text:$('c-text').value});$('c-add').disabled=true;
  try{const path='/replays/api/clips/'+encodeURIComponent(CM.clip.name)+'/comments'+(CM.editing?'/'+CM.editing.id:'');const was=!!CM.editing;
   applyComments(await api(path,{method:'POST',body}));resetComposer();cmMsg(was?'Saved.':'Added. Play the video to see it.','ok');const v=$('video');v.currentTime=Math.max(0,at-1);paint()}

@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { config } from '../core/config.ts'
 import { GAP_CHOICES, includesToday, liveNow, parsePresenceQuery, personDay, presenceReport, presenceSessions, presenceSettings, validTimeZone, type PresenceQuery } from '../core/presence.ts'
 import type { Viewer } from './access.ts'
-import { APP_NAME, headerHtml, PAGE_CSS } from './replays.ts'
+import { APP_NAME, headerHtml, PAGE_CSS, PAGER_JS } from './replays.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -107,10 +107,10 @@ details.how summary{cursor:pointer;font-weight:600}details.how li{margin:4px 0}
 #tl-chart{outline:none;border-radius:6px}#tl-chart:focus-visible{box-shadow:0 0 0 2px var(--accent)}#tl-chart svg{cursor:crosshair}
 .tlbtn{padding:3px 9px;font-size:13px}#tl-pick{min-height:34px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 </style></head>
-<body>${headerHtml(v, 'Live')}<main class="wide">
+<body>${headerHtml(v, 'Live')}<main class="wide"><h1 class="sr-only">Live activity</h1><p id="live-status" class="small" aria-live="polite"></p>
 
-<div class="card"><div class="now"><span class="pulse off" id="pulse"></span><span class="hero" id="now-count">–</span><span class="muted" id="now-sub">Loading…</span></div>
-<div class="table-wrap"><table><thead><tr><th>Client</th><th>Person</th><th>Last action</th><th>In the app since</th><th class="num">Today in the app</th><th class="num">Today active</th><th></th></tr></thead><tbody id="now-rows"></tbody></table></div></div>
+<div class="card"><h2>In the app now</h2><div class="now"><span aria-hidden="true" class="pulse off" id="pulse"></span><span class="hero" id="now-count">–</span><span class="muted" aria-live="polite" id="now-sub">Loading…</span></div>
+<div class="table-wrap"><table><thead><tr><th scope="col">Client</th><th scope="col">Person</th><th scope="col">Last action</th><th scope="col">In the app since</th><th scope="col" class="num">Today in the app</th><th scope="col" class="num">Today active</th><th scope="col">Actions</th></tr></thead><tbody id="now-rows"></tbody></table><div id="now-pager"></div></div></div>
 
 <div class="filters" id="filters">
 <div><label for="range">Period</label><select id="range"><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="custom">Pick dates…</option></select></div>
@@ -120,26 +120,26 @@ details.how summary{cursor:pointer;font-weight:600}details.how li{margin:4px 0}
 </div>
 
 <div class="card hidden" id="tl-card">
-<div class="tl-head"><div style="flex:1;min-width:220px"><h2 id="tl-title" style="margin:0">Timeline</h2><div class="small muted" id="tl-sub"></div></div>
+<div class="tl-head"><div style="flex:1;min-width:220px"><h2 id="tl-title" style="margin:0">Timeline</h2><div class="small muted" aria-live="polite" id="tl-sub"></div></div>
 <div class="tl-nav"><button class="ghost" id="tl-prev" type="button" aria-label="Previous day">‹</button><input type="date" id="tl-day" aria-label="Day"><button class="ghost" id="tl-next" type="button" aria-label="Next day">›</button>
-<button class="ghost" id="tl-today" type="button">Today</button><label class="tl-whole"><input type="checkbox" id="tl-whole">Whole day</label><button class="ghost" id="tl-close" type="button" aria-label="Close the timeline">×</button></div></div>
+<button class="ghost" id="tl-today" type="button">Today</button><label class="tl-whole"><input type="checkbox" id="tl-whole" aria-label="Show the whole day">Whole day</label><button class="ghost" id="tl-close" type="button" aria-label="Close the timeline">×</button></div></div>
 <div class="tl-facts" id="tl-facts"></div>
-<div class="legend"><span><i style="background:var(--act)"></i>Active</span><span><i style="background:var(--idle)"></i>Idle (app open, no action)</span><span><i style="background:var(--muted);width:2px"></i>An action</span><span><i style="background:var(--ink);width:2px;height:12px"></i>Opened a screen</span></div>
+<div class="legend"><span><i aria-hidden="true" style="background:var(--act)"></i>Active</span><span><i aria-hidden="true" style="background:var(--idle)"></i>Idle (app open, no action)</span><span><i aria-hidden="true" style="background:var(--muted);width:2px"></i>An action</span><span><i aria-hidden="true" style="background:var(--ink);width:2px;height:12px"></i>Opened a screen</span></div>
 <div class="chart" id="tl-chart" tabindex="0" aria-label="Timeline of the day. Use the left and right arrow keys to step through the actions."></div>
-<div id="tl-pick" class="small muted">Point at the timeline to see what happened. Click a moment to make a clip from it.</div>
-<details><summary class="small" id="tl-list-sum">Every action</summary><div class="table-wrap"><table id="tl-list"></table></div><p><button class="ghost hidden" id="tl-more" type="button">Show more</button></p></details>
+<div aria-live="polite" id="tl-pick" class="small muted">Point at the timeline to see what happened. Click a moment to make a clip from it.</div>
+<details><summary class="small" id="tl-list-sum">Every action</summary><div class="table-wrap"><table id="tl-list"></table><div id="tl-list-pager"></div></div><p><button class="ghost hidden" id="tl-more" type="button">Show more</button></p></details>
 </div>
 
 <div id="report">
 <div class="tiles" id="tiles"></div>
-<div class="card"><h2 id="chart-title">Time in the app</h2><p class="small muted" style="margin-top:-6px">Each column adds up everyone's time, so three people for an hour make 3 h.</p><div class="legend"><span><i style="background:var(--act)"></i>Active</span><span><i style="background:var(--idle)"></i>Idle</span></div>
+<div class="card"><h2 id="chart-title">Time in the app</h2><p class="small muted" style="margin-top:-6px">Each column adds up everyone's time, so three people for an hour make 3 h.</p><div class="legend"><span><i aria-hidden="true" style="background:var(--act)"></i>Active</span><span><i aria-hidden="true" style="background:var(--idle)"></i>Idle</span></div>
 <div class="chart" id="chart"></div><p class="small muted" id="chart-note"></p>
-<details><summary class="small">Show as a table</summary><div class="table-wrap"><table id="chart-table"></table></div></details></div>
-<div class="card" id="heat-card"><h2>Active time by hour</h2><p class="small muted" style="margin-top:-6px">Each square is one hour of one day: the darker, the more active time, everyone added up.</p><div class="heat" id="heat"></div><div class="scale" id="scale"></div></div>
+<details><summary class="small">Show as a table</summary><div class="table-wrap"><table id="chart-table"></table><div id="chart-table-pager"></div></div></details></div>
+<div class="card" id="heat-card"><h2>Active time by hour</h2><p class="small muted" style="margin-top:-6px">Each square is one hour of one day: the darker, the more active time, everyone added up.</p><div class="heat" id="heat" role="group" aria-label="Active time by hour. Use arrow keys to move between hours."></div><div class="scale" id="scale"></div></div>
 <div class="card"><div class="row" style="align-items:center;margin-bottom:8px"><h2 id="list-title" style="margin:0;flex:1">Clients</h2><span id="who-pill"></span><button class="ghost" id="list-csv" type="button">Download CSV</button></div>
-<div class="table-wrap"><table id="list"></table></div><p class="small muted" id="list-note"></p></div>
+<div class="table-wrap"><table id="list"></table><div id="list-pager"></div></div><p class="small muted" id="list-note"></p></div>
 <div class="card hidden" id="sessions-card"><div class="row" style="align-items:center;margin-bottom:8px"><h2 style="margin:0;flex:1" id="sessions-title">Sessions</h2><button class="ghost" id="sessions-csv" type="button">Download CSV</button></div>
-<div class="table-wrap"><table id="sessions"></table></div><p class="small"><button class="ghost hidden" id="more" type="button">Show more</button></p></div>
+<div class="table-wrap"><table id="sessions"></table><div id="sessions-pager"></div></div><p class="small"><button class="ghost hidden" id="more" type="button">Show more</button></p></div>
 </div>
 
 <details class="card how"><summary>How the time is counted</summary><ul class="small">
@@ -151,6 +151,7 @@ details.how summary{cursor:pointer;font-weight:600}details.how li{margin:4px 0}
 </main>
 <div id="tip" hidden></div>
 <script>
+${PAGER_JS}
 const CFG=${boot};const $=id=>document.getElementById(id);
 const TZ=(()=>{try{return Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'}catch(e){return 'UTC'}})();
 const api=p=>fetch(p,{headers:{'x-clip-page':'1'}}).then(async r=>{const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||('Error '+r.status));return b});
@@ -163,8 +164,8 @@ const ago=iso=>{const s=Math.max(0,Math.round((Date.now()-Date.parse(iso))/1000)
 const dur=s=>{s=Math.round(s||0);if(s<60)return s+' s';const m=Math.round(s/60);if(m<60)return m+' min';const h=Math.floor(m/60),r=m%60;return h+' h'+(r?' '+r+' min':'')};
 const hrs=s=>{const h=(s||0)/3600;return h>=100?Math.round(h).toLocaleString()+' h':h>=10?h.toFixed(0)+' h':h>=1?h.toFixed(1)+' h':dur(s)};
 const pct=(a,b)=>b>0?Math.round(100*a/b)+'%':'–';
-const el=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e};
-const segBar=(a,i)=>{const w=el('span','seg');const t=a+i;if(t<=0)return w;if(a>0){const x=el('i','a');x.style.flex=String(a);w.appendChild(x)}if(i>0){const y=el('i','i');y.style.flex=String(i);w.appendChild(y)}return w};
+const el=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(tag==='button')e.type='button';if(tag==='th')e.scope='col';if(tag==='i'||cls==='dot')e.setAttribute('aria-hidden','true');if(text!=null)e.textContent=text;return e};
+const segBar=(a,i)=>{const w=el('span','seg');w.setAttribute('aria-hidden','true');const t=a+i;if(t<=0)return w;if(a>0){const x=el('i','a');x.style.flex=String(a);w.appendChild(x)}if(i>0){const y=el('i','i');y.style.flex=String(i);w.appendChild(y)}return w};
 $('tz-name').textContent=TZ;
 CFG.gaps.forEach(g=>{const o=el('option',null,g<60?g+' seconds':g===60?'1 minute':(g/60)+' minutes');o.value=g;$('gap').appendChild(o)});
 
@@ -184,30 +185,33 @@ const tip=$('tip');
 function showTip(target,title,rows){tip.innerHTML='';tip.appendChild(el('div','t',title));rows.forEach(([color,value,label])=>{const r=el('div','r');if(color){const k=el('span','k');k.style.background=color;r.appendChild(k)}r.appendChild(el('b',null,value));r.appendChild(el('span','muted',label));tip.appendChild(r)});
  tip.hidden=false;const b=target.getBoundingClientRect(),w=tip.offsetWidth,h=tip.offsetHeight;let x=b.left+b.width/2-w/2,y=b.top-h-8;if(y<4)y=b.bottom+8;x=Math.max(4,Math.min(innerWidth-w-4,x));tip.style.left=x+'px';tip.style.top=y+'px'}
 const hideTip=()=>{tip.hidden=true};
+document.addEventListener('keydown',e=>{if(e.key==='Escape')hideTip()});
 function hover(node,title,rows){node.addEventListener('pointerenter',()=>{node.classList.add('on');showTip(node,title,rows)});node.addEventListener('pointerleave',()=>{node.classList.remove('on');hideTip()});node.addEventListener('focus',()=>showTip(node,title,rows));node.addEventListener('blur',hideTip)}
 
 // ---------------------------------------------------------------- live now
 let LIVE=new Set();
+const nowPager=makePager({mount:$('now-pager'),noun:'people',size:25,draw:people=>{ const tb=$('now-rows');tb.innerHTML='';
+ if(!people.length){const tr=el('tr');const td=el('td','muted','Nobody has done anything in the app in the last few minutes.');td.colSpan=7;tr.appendChild(td);tb.appendChild(tr)}
+ people.forEach(p=>{const tr=el('tr');const choose=()=>{S.client=p.client_id;S.user='';S.range='today';syncControls();load()};
+  const c=el('td');c.appendChild(el('span','dot'));const b=el('button','ghost',p.client_name);b.setAttribute('aria-label','Show people at '+p.client_name);b.onclick=choose;c.appendChild(b);tr.appendChild(c);
+  tr.appendChild(el('td',null,p.user));tr.appendChild(el('td',null,ago(p.last_seen)));tr.appendChild(el('td',null,timeOf(p.session_start)));
+  tr.appendChild(el('td','num',dur(p.today.open_s)));tr.appendChild(el('td','num',dur(p.today.active_s)));tr.appendChild(tlCell(p.user,p.client_id,dayOf(new Date()),p.client_name));tb.appendChild(tr)});}});
 async function loadNow(){try{const r=await api('/replays/live/api/now?tz='+encodeURIComponent(TZ)+'&gap='+S.gap);
  LIVE=new Set(r.people.map(p=>p.client_id));const clients=LIVE.size;
  $('now-count').textContent=String(r.people.length);$('pulse').classList.toggle('off',!r.people.length);
  $('now-sub').textContent=(r.people.length===1?'person':'people')+' in the app now'+(r.people.length?', from '+clients+' client'+(clients===1?'':'s'):'')+' · an action in the last '+r.minutes+' minutes · updated '+new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
- const tb=$('now-rows');tb.innerHTML='';
- if(!r.people.length){const tr=el('tr');const td=el('td','muted','Nobody has done anything in the app in the last '+r.minutes+' minutes.');td.colSpan=7;tr.appendChild(td);tb.appendChild(tr)}
- r.people.forEach(p=>{const tr=el('tr','click');tr.title='Show '+p.client_name;tr.onclick=()=>{S.client=p.client_id;S.user='';S.range='today';syncControls();load()};
-  const c=el('td');c.appendChild(el('span','dot'));c.appendChild(document.createTextNode(p.client_name));tr.appendChild(c);
-  tr.appendChild(el('td',null,p.user));tr.appendChild(el('td',null,ago(p.last_seen)));tr.appendChild(el('td',null,timeOf(p.session_start)));
-  tr.appendChild(el('td','num',dur(p.today.open_s)));tr.appendChild(el('td','num',dur(p.today.active_s)));tr.appendChild(tlCell(p.user,p.client_id,dayOf(new Date()),p.client_name));tb.appendChild(tr)});
- if(R)renderList()}catch(e){$('now-sub').textContent=e.message;$('now-sub').className='err'}}
+ nowPager.set(r.people,true);$('now-sub').className='muted';$('now-sub').removeAttribute('role');
+ }catch(e){$('now-sub').textContent=e.message;$('now-sub').className='err';$('now-sub').setAttribute('role','alert')}}
 
 // ---------------------------------------------------------------- the report
-let R=null,SESS=[],shown=200,sortKey='open_s',sortDir=-1,busy=0,sbusy=0,listAll=false;
-async function load(){syncUrl();listAll=false;const my=++busy;$('report').classList.add('loading');
+let R=null,SESS=[],sortKey='open_s',sortDir=-1,busy=0,sbusy=0;
+const pageKeys={};function keepPage(id,key){const keep=pageKeys[id]===key;pageKeys[id]=key;return keep}
+async function load(){syncUrl();const my=++busy;$('report').classList.add('loading');$('report').setAttribute('aria-busy','true');$('live-status').removeAttribute('role');$('live-status').textContent='Loading activity…';
  try{const r=await api('/replays/live/api/time?'+params(false));if(my!==busy)return;R=r;render();
   if(S.client)await loadSessions();else $('sessions-card').classList.add('hidden')}
- catch(e){if(my!==busy)return;$('tiles').innerHTML='';const t=el('div','tile err',e.message);$('tiles').appendChild(t)}
- finally{if(my===busy)$('report').classList.remove('loading')}}
-async function loadSessions(){const my=++sbusy;const r=await api('/replays/live/api/sessions?'+params(true));if(my!==sbusy)return;SESS=r.sessions;shown=200;renderSessions()}
+ catch(e){if(my!==busy)return;$('tiles').innerHTML='';const t=el('div','tile err',e.message+' Change the filters or try again.');t.setAttribute('role','alert');$('tiles').appendChild(t)}
+ finally{if(my===busy){$('report').classList.remove('loading');$('report').setAttribute('aria-busy','false');$('live-status').textContent=''}}}
+async function loadSessions(){const my=++sbusy,key=params(true).toString();$('sessions-card').setAttribute('aria-busy','true');try{const r=await api('/replays/live/api/sessions?'+key);if(my!==sbusy||key!==params(true).toString())return;SESS=r.sessions;renderSessions()}finally{if(my===sbusy)$('sessions-card').setAttribute('aria-busy','false')}}
 
 function render(){fillClients();renderTiles();renderChart();renderHeat();renderList()}
 function fillClients(){const s=$('client'),cur=S.client;s.innerHTML='';s.appendChild(new Option('All clients',''));
@@ -249,8 +253,9 @@ function renderChart(){const{unit,items}=series();const box=$('chart');box.inner
   hover(g,it.title,[['var(--act)',dur(it.active),'active'],['var(--idle)',dur(it.idle),'idle'],[null,dur(it.open),'in the app'],[null,String(it.people),it.people===1?'person':'people']])});
  box.appendChild(svg);
  const busiest=items.reduce((a,b)=>b.open>a.open?b:a,items[0]);$('chart-note').textContent=max>0?'Busiest '+(unit==='hour'?'hour':'day')+': '+busiest.title+', '+dur(busiest.open)+' in the app across '+busiest.people+(busiest.people===1?' person.':' people.'):'No time in the app in this period.';
- const tb=$('chart-table');tb.innerHTML='';const hr=el('tr');[unit==='hour'?'Hour':'Day','In the app','Active','Idle','People'].forEach((h,i)=>hr.appendChild(el('th',i?'num':null,h)));const th=el('thead');th.appendChild(hr);tb.appendChild(th);const bd=el('tbody');
- items.forEach(it=>{const tr=el('tr');tr.appendChild(el('td',null,it.title));[dur(it.open),dur(it.active),dur(it.idle),String(it.people)].forEach(v=>tr.appendChild(el('td','num',v)));bd.appendChild(tr)});tb.appendChild(bd)}
+ chartPager.set(items,keepPage('chart',params(false).toString()))}
+const chartPager=makePager({mount:$('chart-table-pager'),noun:'time periods',size:25,draw:items=>{const unit=series().unit; const tb=$('chart-table');tb.innerHTML='';const hr=el('tr');[unit==='hour'?'Hour':'Day','In the app','Active','Idle','People'].forEach((h,i)=>hr.appendChild(el('th',i?'num':null,h)));const th=el('thead');th.appendChild(hr);tb.appendChild(th);const bd=el('tbody');
+ items.forEach(it=>{const tr=el('tr');tr.appendChild(el('td',null,it.title));[dur(it.open),dur(it.active),dur(it.idle),String(it.people)].forEach(v=>tr.appendChild(el('td','num',v)));bd.appendChild(tr)});tb.appendChild(bd)}});
 
 const RAMP=['#cde2fb','#b7d3f6','#9ec5f4','#86b6ef','#6da7ec','#5598e7','#3987e5','#2a78d6','#256abf','#1c5cab','#184f95','#104281','#0d366b'];
 function renderHeat(){const[f,t]=period();const card=$('heat-card');if(f===t){card.classList.add('hidden');return}card.classList.remove('hidden');
@@ -258,57 +263,61 @@ function renderHeat(){const[f,t]=period();const card=$('heat-card');if(f===t){ca
  const by=new Map(R.hours.map(h=>[h.day+'|'+h.hour,h]));const max=Math.max(1,...R.hours.map(h=>h.active_s));
  box.appendChild(el('div','lbl',''));for(let h=0;h<24;h++)box.appendChild(el('div','hd',h%3===0?String(h).padStart(2,'0'):''));
  for(let d=t;d>=f;d=addDays(d,-1)){box.appendChild(el('div','lbl',dayName(d)));
-  for(let h=0;h<24;h++){const x=by.get(d+'|'+h);const c=el('div','c');c.tabIndex=0;
+  for(let h=0;h<24;h++){const x=by.get(d+'|'+h);const c=el('div','c');c.tabIndex=d===t&&h===0?0:-1;c.setAttribute('role','img');c.onkeydown=e=>{const cells=[...box.querySelectorAll('.c')],i=cells.indexOf(c);let next=i;if(e.key==='ArrowRight')next=i+1;else if(e.key==='ArrowLeft')next=i-1;else if(e.key==='ArrowDown')next=i+24;else if(e.key==='ArrowUp')next=i-24;else if(e.key==='Home')next=0;else if(e.key==='End')next=cells.length-1;else return;e.preventDefault();next=Math.max(0,Math.min(cells.length-1,next));c.tabIndex=-1;cells[next].tabIndex=0;cells[next].focus()};
    if(x&&x.active_s>0){c.style.background=RAMP[Math.min(RAMP.length-1,Math.floor(Math.sqrt(x.active_s/max)*(RAMP.length-1)))]}
-   const hh=String(h).padStart(2,'0')+':00–'+String(h+1).padStart(2,'0')+':00';c.setAttribute('aria-label',dayName(d)+' '+hh+': '+dur(x?x.active_s:0)+' active');
+   const hh=String(h).padStart(2,'0')+':00–'+String(h+1).padStart(2,'0')+':00';c.setAttribute('aria-label',dayName(d)+' '+hh+': '+dur(x?x.active_s:0)+' active, '+dur(x?x.idle_s:0)+' idle, '+(x?x.people:0)+' people');
    hover(c,dayName(d)+', '+hh,[['var(--act)',dur(x?x.active_s:0),'active'],['var(--idle)',dur(x?x.idle_s:0),'idle'],[null,String(x?x.people:0),(x&&x.people===1)?'person':'people']]);box.appendChild(c)}}
  const sc=$('scale');sc.innerHTML='';sc.appendChild(el('span',null,'Less'));[0,2,4,6,8,10,12].forEach(i=>{const s=el('i');s.style.background=RAMP[i];sc.appendChild(s)});sc.appendChild(el('span',null,'More · up to '+dur(max)+' active in one hour'))}
 
 // clients, or the people of one client
-function cols(){return S.client?[['user','Person'],['sessions','Sessions',1],['open_s','In the app',1],['active_s','Active',1],['idle_s','Idle',1],['share','Active share'],['first','First action'],['last','Last action'],['tl','']]
+function cols(){return S.client?[['user','Person'],['sessions','Sessions',1],['open_s','In the app',1],['active_s','Active',1],['idle_s','Idle',1],['share','Active share'],['first','First action'],['last','Last action'],['tl','Timeline']]
  :[['client_name','Client'],['people','People',1],['sessions','Sessions',1],['open_s','In the app',1],['active_s','Active',1],['idle_s','Idle',1],['share','Active share'],['last','Last action']]}
 function rows(){return S.client?(R.people||[]):R.clients}
-function renderList(){const pick=R.clients.find(c=>c.client_id===S.client);
+const listPager=makePager({mount:$('list-pager'),noun:'clients or people',size:25,draw:slice=>renderList(slice)});
+function renderList(slice){const pick=R.clients.find(c=>c.client_id===S.client);
  $('list-title').textContent=S.client?'People at '+(pick?pick.client_name:S.client):'Clients';
- const pill=$('who-pill');pill.innerHTML='';if(S.client){const p=el('span','pill',pick?pick.client_name:S.client);const x=el('button',null,'×');x.title='Show all clients';x.onclick=()=>{S.client='';S.user='';load()};p.appendChild(x);pill.appendChild(p)}
+ const pill=$('who-pill');pill.innerHTML='';if(S.client){const p=el('span','pill',pick?pick.client_name:S.client);const x=el('button',null,'×');x.title='Show all clients';x.setAttribute('aria-label','Show all clients');x.onclick=()=>{S.client='';S.user='';load()};p.appendChild(x);pill.appendChild(p)}
  const t=$('list');t.innerHTML='';const hr=el('tr');
- cols().forEach(([k,label,num])=>{if(k==='tl'){hr.appendChild(el('th'));return}const th=el('th','sort'+(num?' num':''),label);if(k===sortKey)th.appendChild(el('span','arr',sortDir<0?'▼':'▲'));th.onclick=()=>{if(sortKey===k)sortDir=-sortDir;else{sortKey=k;sortDir=num||k==='last'||k==='share'?-1:1}renderList()};hr.appendChild(th)});
+ cols().forEach(([k,label,num])=>{if(k==='tl'){hr.appendChild(el('th',null,'Timeline'));return}const th=el('th',num?'num':'');th.setAttribute('aria-sort',k===sortKey?(sortDir<0?'descending':'ascending'):'none');const b=el('button','ghost',label);b.style.padding='2px 4px';if(k===sortKey){const arrow=el('span','arr',sortDir<0?'▼':'▲');arrow.setAttribute('aria-hidden','true');b.appendChild(arrow)}b.onclick=()=>{if(sortKey===k)sortDir=-sortDir;else{sortKey=k;sortDir=num||k==='last'||k==='share'?-1:1}renderList();const buttons=$('list').querySelectorAll('thead button');for(const button of buttons)if(button.textContent.startsWith(label)){button.focus();break}};th.appendChild(b);hr.appendChild(th)});
  const th=el('thead');th.appendChild(hr);t.appendChild(th);const bd=el('tbody');
  const val=(r,k)=>k==='share'?(r.open_s?r.active_s/r.open_s:0):r[k];
  const list=[...rows()].sort((a,b)=>{const x=val(a,sortKey),y=val(b,sortKey);return(typeof x==='string'?x.localeCompare(y):(x||0)-(y||0))*sortDir});
- if(!list.length){const tr=el('tr');const td=el('td','muted','Nobody used the app in this period.');td.colSpan=cols().length;tr.appendChild(td);bd.appendChild(tr)}
- const LIMIT=25,cut=!listAll&&list.length>LIMIT+5;(cut?list.slice(0,LIMIT):list).forEach(r=>{const tr=el('tr','click');
-  if(S.client){tr.title='Show '+r.user+"'s sessions";tr.onclick=()=>{S.user=S.user===r.user?'':r.user;syncUrl();loadSessions().catch(e=>alert(e.message));renderList()};if(S.user===r.user)tr.style.background='var(--chip)'}
-  else{tr.title='Show the people at '+r.client_name;tr.onclick=()=>{S.client=r.client_id;S.user='';sortKey='open_s';sortDir=-1;load();scrollTo({top:0,behavior:'smooth'})}}
+ if(!slice){listPager.set(list,keepPage('list',params(false).toString()+'|'+sortKey+'|'+sortDir));return}
+ if(!list.length){const tr=el('tr');const td=el('td','muted','No activity in this period. Try a different period or client.');td.colSpan=cols().length;tr.appendChild(td);bd.appendChild(tr)}
+ slice.forEach(r=>{const tr=el('tr');let choose;
+  if(S.client){tr.title='Show '+r.user+"'s sessions";choose=()=>{S.user=S.user===r.user?'':r.user;syncUrl();loadSessions().catch(e=>{const status=$('live-status');status.setAttribute('role','alert');status.textContent=e.message+' Choose the person again to retry.'});renderList();for(const b of $('list').querySelectorAll('tbody button'))if(b.getAttribute('aria-label')==='Filter sessions for '+r.user){b.focus();break}};if(S.user===r.user)tr.style.background='var(--chip)'}
+  else{tr.title='Show the people at '+r.client_name;choose=()=>{S.client=r.client_id;S.user='';sortKey='open_s';sortDir=-1;load();scrollTo({top:0,behavior:'smooth'})}}
   cols().forEach(([k,,num])=>{let td;
-   if(k==='client_name'){td=el('td');if(LIVE.has(r.client_id)){const d=el('span','dot');d.title='In the app now';td.appendChild(d)}td.appendChild(document.createTextNode(r.client_name))}
+   if(k==='client_name'){td=el('td');if(LIVE.has(r.client_id)){const d=el('span','dot');d.title='In the app now';td.appendChild(d);td.appendChild(el('span','small','Live · '))}const b=el('button','ghost',r.client_name);b.setAttribute('aria-label','Show people at '+r.client_name);b.onclick=choose;td.appendChild(b)}
    else if(k==='share'){td=el('td');td.appendChild(segBar(r.active_s,r.idle_s));td.appendChild(el('span','small muted',' '+pct(r.active_s,r.open_s)))}
    else if(k==='first'||k==='last')td=el('td','small',whenOf(r[k]));
-   else if(k==='user')td=el('td',null,r.user);
+   else if(k==='user'){td=el('td');const b=el('button','ghost',r.user);b.setAttribute('aria-label','Filter sessions for '+r.user);b.setAttribute('aria-pressed',String(S.user===r.user));b.onclick=choose;td.appendChild(b)}
    else if(k==='tl'){const[f,t]=period();td=tlCell(r.user,S.client,f===t?f:dayOf(new Date(r.last)),pick?pick.client_name:'')}
    else td=el('td','num',k.endsWith('_s')?dur(r[k]):Number(r[k]).toLocaleString());
    tr.appendChild(td)});bd.appendChild(tr)});
- if(cut){const tr=el('tr');const td=el('td');td.colSpan=cols().length;const b=el('button','ghost','Show all '+list.length.toLocaleString()+' '+(S.client?'people':'clients'));b.type='button';b.onclick=()=>{listAll=true;renderList()};td.appendChild(b);tr.appendChild(td);bd.appendChild(tr)}
- t.appendChild(bd);$('list-note').textContent=S.client?'Click a person to see only their sessions below.':'Click a client to see its people and every session.'}
 
-function renderSessions(){const card=$('sessions-card');card.classList.remove('hidden');
+ t.appendChild(bd);$('list-note').textContent=S.client?'Choose a person to filter their sessions below. Choose them again to clear.':'Choose a client to see its people and sessions.'}
+
+const sessionsPager=makePager({mount:$('sessions-pager'),noun:'sessions',size:25,draw:slice=>renderSessions(slice)});
+function renderSessions(slice){if(!slice){sessionsPager.set(SESS,keepPage('sessions',params(true).toString()));return}const card=$('sessions-card');card.classList.remove('hidden');
  $('sessions-title').textContent=(S.user?S.user+"'s sessions":'Every session')+' ('+SESS.length.toLocaleString()+(SESS.length>=1000?'+':'')+')';
- const t=$('sessions');t.innerHTML='';const hr=el('tr');['Person','Started','Ended','In the app','Active','Idle','Actions','',''].forEach((h,i)=>hr.appendChild(el('th',i>=3&&i<=6?'num':null,h)));const th=el('thead');th.appendChild(hr);t.appendChild(th);
- const bd=el('tbody');if(!SESS.length){const tr=el('tr');const td=el('td','muted','No sessions in this period.');td.colSpan=9;tr.appendChild(td);bd.appendChild(tr)}
- SESS.slice(0,shown).forEach(s=>{const tr=el('tr');tr.appendChild(el('td',null,s.user));tr.appendChild(el('td','small',whenOf(s.start)));tr.appendChild(el('td','small',timeOf(s.end)));
+ const t=$('sessions');t.innerHTML='';const hr=el('tr');['Person','Started','Ended','In the app','Active','Idle','Actions','Clip','Timeline'].forEach((h,i)=>hr.appendChild(el('th',i>=3&&i<=6?'num':null,h)));const th=el('thead');th.appendChild(hr);t.appendChild(th);
+ const bd=el('tbody');if(!SESS.length){const tr=el('tr');const td=el('td','muted','No sessions in this period. Try a different period or person.');td.colSpan=9;tr.appendChild(td);bd.appendChild(tr)}
+ slice.forEach(s=>{const tr=el('tr');tr.appendChild(el('td',null,s.user));tr.appendChild(el('td','small',whenOf(s.start)));tr.appendChild(el('td','small',timeOf(s.end)));
   [dur(s.open_s),dur(s.active_s),dur(s.idle_s),String(s.actions)].forEach(v=>tr.appendChild(el('td','num',v)));
   const td=el('td');const a=el('a','btn ghost small','Make a clip');a.href='/replays?url='+encodeURIComponent(s.session_id);a.title='Open this session on the clip page';a.style.padding='3px 9px';td.appendChild(a);tr.appendChild(td);tr.appendChild(tlCell(s.user,s.client_id,dayOf(new Date(s.start)),s.client_name));bd.appendChild(tr)});
- t.appendChild(bd);$('more').classList.toggle('hidden',SESS.length<=shown);$('more').textContent='Show '+Math.min(200,SESS.length-shown)+' more'}
-$('more').onclick=()=>{shown+=200;renderSessions()};
+ t.appendChild(bd);$('more').classList.add('hidden')}
+$('more').onclick=()=>renderSessions();
 
 // ---------------------------------------------------------------- one person's day
 function tlCell(user,client,day,name){const td=el('td');const b=el('button','ghost tlbtn','Timeline');b.type='button';b.title='Show '+user+"'s day as a timeline";b.onclick=e=>{e.stopPropagation();openTimeline(user,client,day,name)};td.appendChild(b);return td}
-function openTimeline(user,client,day,name){TL.user=user;TL.client=client||'';TL.clientName=name||'';TL.day=day||dayOf(new Date());TL.pin=null;TL.shown=300;TL.data=null;$('tl-card').classList.remove('hidden');syncUrl();loadTimeline();$('tl-card').scrollIntoView({behavior:'smooth',block:'start'})}
-async function loadTimeline(){if(!TL.user)return;const my=++tlbusy;$('tl-card').classList.add('loading');
+let timelineOpener=null;
+function openTimeline(user,client,day,name){timelineOpener=document.activeElement;TL.user=user;TL.client=client||'';TL.clientName=name||'';TL.day=day||dayOf(new Date());TL.pin=null;TL.shown=300;TL.data=null;TM=null;$('tl-card').classList.remove('hidden');syncUrl();loadTimeline();$('tl-title').tabIndex=-1;$('tl-title').focus();$('tl-card').scrollIntoView({behavior:'smooth',block:'start'})}
+async function loadTimeline(){if(!TL.user)return;const my=++tlbusy;$('tl-card').classList.add('loading');$('tl-card').setAttribute('aria-busy','true');$('tl-sub').textContent='Loading timeline…';
  try{const q=new URLSearchParams({user:TL.user,from:TL.day,to:TL.day,tz:TZ,gap:String(S.gap)});if(TL.client)q.set('client',TL.client);
   const d=await api('/replays/live/api/person?'+q);if(my!==tlbusy)return;TL.data=d;renderTimeline()}
- catch(e){if(my!==tlbusy)return;$('tl-title').textContent=TL.user;$('tl-sub').textContent=e.message;$('tl-sub').className='small err'}
- finally{if(my===tlbusy)$('tl-card').classList.remove('loading')}}
+ catch(e){if(my!==tlbusy)return;$('tl-title').textContent=TL.user;$('tl-sub').textContent=e.message;$('tl-sub').className='small err';$('tl-sub').setAttribute('role','alert')}
+ finally{if(my===tlbusy){$('tl-card').classList.remove('loading');$('tl-card').setAttribute('aria-busy','false')}}}
 const PF=new Intl.DateTimeFormat('en-GB',{timeZone:TZ,hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
 const secOf=iso=>{const o={};PF.formatToParts(new Date(iso)).forEach(x=>o[x.type]=x.value);return(+o.hour)*3600+(+o.minute)*60+(+o.second)};
 const hms=x=>{x=Math.max(0,Math.round(x));return String(Math.floor(x/3600)).padStart(2,'0')+':'+String(Math.floor(x%3600/60)).padStart(2,'0')+':'+String(x%60).padStart(2,'0')};
@@ -324,7 +333,7 @@ function tlModel(d){const acts=d.actions.map(a=>({...a,s:secOf(a.t)})).sort((a,b
  return{acts,sessions,lanes:Math.max(1,lanes.length)}}
 let TM=null;
 function renderTimeline(){const d=TL.data;TM=tlModel(d);const today=dayOf(new Date());
- if(d.actions.length&&d.client_name)TL.clientName=d.client_name;$('tl-title').textContent=d.user;$('tl-sub').className='small muted';$('tl-sub').textContent=[TL.clientName||d.client_name,dayName(d.day)+(d.day===today?' (today)':'')].filter(Boolean).join(' · ');
+ if(d.actions.length&&d.client_name)TL.clientName=d.client_name;$('tl-title').textContent=d.user;$('tl-sub').className='small muted';$('tl-sub').removeAttribute('role');$('tl-sub').textContent=[TL.clientName||d.client_name,dayName(d.day)+(d.day===today?' (today)':'')].filter(Boolean).join(' · ');
  $('tl-day').value=d.day;$('tl-next').disabled=d.day>=today;$('tl-whole').checked=TL.whole;
  $('tl-facts').innerHTML='';const T=d.totals;
  if(!T.sessions){fact('No activity on','this day');}
@@ -381,15 +390,17 @@ function renderPin(){const box=$('tl-pick');box.innerHTML='';box.className='smal
 $('tl-chart').addEventListener('keydown',e=>{if(!TM||!TM.acts.length)return;const acts=TM.acts;let i=TL.pin&&TL.pin.act?acts.indexOf(acts.find(a=>a.t===TL.pin.act.t&&a.session_id===TL.pin.act.session_id)):-1;
  if(e.key==='ArrowRight')i=Math.min(acts.length-1,i+1);else if(e.key==='ArrowLeft')i=i<0?acts.length-1:Math.max(0,i-1);else if(e.key==='Home')i=0;else if(e.key==='End')i=acts.length-1;else return;
  e.preventDefault();TL.pin=tlAt(acts[i].s);TL.pin.act=acts[i];renderPin()});
-function renderTlList(){const d=TL.data,t=$('tl-list');t.innerHTML='';$('tl-list-sum').textContent='Every action ('+d.actions.length.toLocaleString()+(d.truncated?'+, the first '+d.actions.length.toLocaleString()+' shown':'')+')';
- const hr=el('tr');['Time','What','Screen','Then',''].forEach(h=>hr.appendChild(el('th',null,h)));const th=el('thead');th.appendChild(hr);t.appendChild(th);const bd=el('tbody');
- const sess=new Map(TM.sessions.map(x=>[x.session_id,x]));
- TM.acts.slice(0,TL.shown).forEach(a=>{const tr=el('tr');tr.appendChild(el('td','small',hms(a.s)));tr.appendChild(el('td',null,a.label));tr.appendChild(el('td','small muted',a.screen));
+const actionsPager=makePager({mount:$('tl-list-pager'),noun:'actions',size:25,draw:slice=>renderTlList(slice)});
+function renderTlList(slice){if(!slice){actionsPager.set(TM.acts,keepPage('actions',TL.user+'|'+TL.client+'|'+TL.day));return}const d=TL.data,t=$('tl-list');t.innerHTML='';$('tl-list-sum').textContent='Every action ('+d.actions.length.toLocaleString()+(d.truncated?'+, the first '+d.actions.length.toLocaleString()+' shown':'')+')';
+ const hr=el('tr');['Time','What','Screen','Then','Clip'].forEach(h=>hr.appendChild(el('th',null,h)));const th=el('thead');th.appendChild(hr);t.appendChild(th);const bd=el('tbody');
+ const sess=new Map(TM.sessions.map(x=>[x.session_id,x]));if(!slice.length){const tr=el('tr'),td=el('td','muted','No actions on this day. Try another day.');td.colSpan=5;tr.appendChild(td);bd.appendChild(tr)}
+ slice.forEach(a=>{const tr=el('tr');tr.appendChild(el('td','small',hms(a.s)));tr.appendChild(el('td',null,a.label));tr.appendChild(el('td','small muted',a.screen));
   tr.appendChild(el('td','small muted',a.last?'last action of the session':a.gap_s>d.gap_s?'idle '+dur(a.gap_s-d.gap_s):''));
   const td=el('td');const c=clipLink(sess.get(a.session_id),Date.parse(a.t));if(c){const l=el('a','btn ghost tlbtn','Clip');l.href=c.href;l.title='Make a clip from 10 seconds before this action';td.appendChild(l)}tr.appendChild(td);bd.appendChild(tr)});
- t.appendChild(bd);$('tl-more').classList.toggle('hidden',TM.acts.length<=TL.shown)}
+ t.appendChild(bd);$('tl-more').classList.add('hidden')}
 $('tl-more').onclick=()=>{TL.shown+=300;renderTlList()};
-$('tl-close').onclick=()=>{TL.user='';TL.data=null;$('tl-card').classList.add('hidden');hideTip();syncUrl()};
+$('tl-close').onclick=()=>{++tlbusy;TL.user='';TL.data=null;TM=null;$('tl-card').classList.add('hidden');hideTip();syncUrl();if(timelineOpener&&timelineOpener.isConnected)timelineOpener.focus();else $('client').focus()};
+$('tl-card').addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();$('tl-close').click()}});
 $('tl-prev').onclick=()=>{TL.day=addDays(TL.day,-1);TL.pin=null;syncUrl();loadTimeline()};
 $('tl-next').onclick=()=>{const t=dayOf(new Date());if(TL.day>=t)return;TL.day=addDays(TL.day,1);TL.pin=null;syncUrl();loadTimeline()};
 $('tl-today').onclick=()=>{TL.day=dayOf(new Date());TL.pin=null;syncUrl();loadTimeline()};
@@ -407,12 +418,12 @@ $('sessions-csv').onclick=()=>{const[f,t]=period();csv('sessions_'+S.client+'_'+
 
 // ---------------------------------------------------------------- controls
 $('range').onchange=()=>{S.range=$('range').value;if(S.range==='custom'){const[f,t]=period();S.from=S.from||f;S.to=S.to||t}syncControls();load()};
-$('from').onchange=$('to').onchange=()=>{S.from=$('from').value;S.to=$('to').value;if(S.from&&S.to&&S.to>=S.from)load()};
+$('from').onchange=$('to').onchange=()=>{S.from=$('from').value;S.to=$('to').value;if(S.from&&S.to&&S.to>=S.from){$('to').setCustomValidity('');load()}else{$('to').setCustomValidity('Choose an end date on or after the start date.');$('to').reportValidity()}};
 $('client').onchange=()=>{S.client=$('client').value;S.user='';sortKey='open_s';sortDir=-1;load()};
 $('gap').onchange=()=>{S.gap=Number($('gap').value);load();loadNow();loadTimeline()};
 let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(()=>{if(R)renderChart();if(TL.data){drawTimeline();renderPin()}},150)});
 syncControls();load();loadNow();
-setInterval(()=>{if(document.hidden)return;loadNow();if(period()[1]>=dayOf(new Date()))load();if(TL.user&&TL.day===dayOf(new Date()))loadTimeline()},30000);
+setInterval(()=>{if(document.hidden||document.activeElement?.closest('main button,main input,main select,main summary,#tl-chart,#tl-card'))return;loadNow();if(period()[1]>=dayOf(new Date()))load();if(TL.user&&TL.day===dayOf(new Date()))loadTimeline()},30000);
 if(TL.user){if(!TL.day)TL.day=dayOf(new Date());$('tl-card').classList.remove('hidden');loadTimeline()}
 </script></body></html>`
 }

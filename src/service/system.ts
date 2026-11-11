@@ -6,7 +6,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config } from '../core/config.ts'
 import { canSeeSystem, readAudit, type Viewer } from './access.ts'
-import { APP_NAME, headerHtml, PAGE_CSS, storage } from './replays.ts'
+import { APP_NAME, headerHtml, PAGER_JS, PAGE_CSS, storage } from './replays.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -93,35 +93,36 @@ main.wide{max-width:1180px}
 .st.ok{color:var(--good)}.st.ok i{background:var(--good)}.st.warn{color:var(--warn)}.st.warn i{background:var(--warn)}.st.down{color:var(--down)}.st.down i{background:var(--down)}.st.info{color:var(--muted)}.st.info i{background:var(--muted)}
 .tools{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:8px}.tools h2{margin:0}.tools input{max-width:240px}
 td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}td.w{overflow-wrap:anywhere}td small{display:none;color:var(--muted)}
-@media (max-width:640px){.tools input{max-width:none}th.r,td.r{display:none}td small{display:block}.st{font-size:0;gap:0}.svc .st{font-size:12.5px;gap:5px}table{font-size:13px}th,td{padding:7px 4px}}
+@media (max-width:640px){.tools input{max-width:none}th.r,td.r{display:none}td small{display:block}.st{font-size:12px;gap:3px}.svc .st{font-size:12.5px;gap:5px}table{font-size:13px}th,td{padding:7px 4px}}
 details.nums summary{cursor:pointer;color:var(--muted);font-size:13px;margin-top:6px}details.nums table{font-size:13px}
 .tile.problem{border-color:var(--down);background:var(--down-bg)}.tile.problem small{color:var(--down)}
 #problems:empty{display:none}.card{overflow-wrap:anywhere}main.wide{min-width:0}.table-wrap{overflow:visible}table{width:100%;table-layout:fixed}.containers-table th:first-child{width:72px}.containers-table th:nth-child(2){width:26%}.containers-table th.r{width:22%}td,th{overflow-wrap:anywhere}
 .spark{display:block;width:90px;max-width:100%;height:24px}.container-detail{font-size:12px;color:var(--muted)}.container-detail p{margin:4px 0}.container-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
 select{max-width:100%;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)}
-@media(max-width:640px){.containers-table th:nth-child(2){width:42%}.svc{grid-template-columns:minmax(0,1fr) auto}.svc .d{grid-column:1/-1;grid-row:2;text-align:left}.containers-table th:last-child,.containers-table td:last-child{display:none}.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.tile b{font-size:21px}.banner{padding:12px}.card{padding:12px}.containers-table th:first-child{width:28px}.tools input{width:100%;min-width:0}}
+@media(max-width:640px){.containers-table th:nth-child(2){width:42%}.svc{grid-template-columns:minmax(0,1fr) auto}.svc .d{grid-column:1/-1;grid-row:2;text-align:left}.containers-table th:last-child,.containers-table td:last-child{display:none}.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.tile b{font-size:21px}.banner{padding:12px}.card{padding:12px}.containers-table th:first-child{width:65px}.tools input{width:100%;min-width:0}}
 </style></head>
 <body>${headerHtml(v, 'System')}<main class="wide">
-<div class="banner" id="banner" role="status"><span class="big" id="b-icon" aria-hidden="true">…</span><div><h1 id="b-head">Checking…</h1><p id="b-sub"></p></div></div>
-<div id="problems"></div>
+<div class="banner" id="banner"><span class="big" id="b-icon" aria-hidden="true">…</span><div><h1 id="b-head" role="status" aria-live="polite">Checking…</h1><p id="b-sub"></p></div></div>
+<div id="problems"></div><div id="problems-pager"></div>
 <div class="tiles" id="tiles"></div>
 <div class="charts">
-<div class="card"><h2>Events per hour, last 24 hours</h2><div class="chart" id="c-events"></div><details class="nums"><summary>Show the numbers</summary><div id="t-events"></div></details></div>
-<div class="card"><h2>Events per minute, last 60 minutes</h2><div class="chart" id="c-minutes"></div></div>
-<div class="card"><h2>CPU, last hour</h2><div class="chart" id="c-cpu"></div></div>
-<div class="card"><h2>Memory, last hour</h2><div class="chart" id="c-mem"></div></div>
-<div class="card"><h2>Disk used, last hour</h2><div class="chart" id="c-disk"></div></div>
-<div class="card"><h2>Load, last hour</h2><div class="chart" id="c-load"></div></div>
+<div class="card"><h2>Events per hour, last 24 hours</h2><div class="chart" id="c-events"></div><details class="nums" id="n-events"><summary>Show the numbers</summary><div id="t-events"></div><div id="p-events"></div></details></div>
+<div class="card"><h2>Events per minute, last 60 minutes</h2><div class="chart" id="c-minutes"></div><details class="nums" id="n-minutes"><summary>Show the numbers</summary><div id="t-minutes"></div><div id="p-minutes"></div></details></div>
+<div class="card"><h2>CPU, last hour</h2><div class="chart" id="c-cpu"></div><details class="nums" id="n-cpu"><summary>Show the numbers</summary><div id="t-cpu"></div><div id="p-cpu"></div></details></div>
+<div class="card"><h2>Memory, last hour</h2><div class="chart" id="c-mem"></div><details class="nums" id="n-mem"><summary>Show the numbers</summary><div id="t-mem"></div><div id="p-mem"></div></details></div>
+<div class="card"><h2>Disk used, last hour</h2><div class="chart" id="c-disk"></div><details class="nums" id="n-disk"><summary>Show the numbers</summary><div id="t-disk"></div><div id="p-disk"></div></details></div>
+<div class="card"><h2>Load, last hour</h2><div class="chart" id="c-load"></div><details class="nums" id="n-load"><summary>Show the numbers</summary><div id="t-load"></div><div id="p-load"></div></details></div>
 </div>
-<div class="split" id="services"></div>
+<div class="split" id="services"></div><div id="services-pager"></div>
 <div class="split"><div class="card" id="clickhouse"></div><div class="card" id="lens"></div></div>
 <div class="card"><div class="tools"><h2 id="c-title">Containers</h2><select id="view" aria-label="Container view"><option value="all">All containers · problems first</option><option value="mem_bytes">Top 5 by memory</option><option value="cpu_pct">Top 5 by CPU</option></select><input id="find" type="search" placeholder="Find a container" aria-label="Find a container"></div>
-<div class="table-wrap"><table class="containers-table"><thead><tr><th>Status</th><th>Container</th><th class="r">Running</th><th class="n">CPU</th><th class="n">Memory</th><th class="n">Restarts</th></tr></thead><tbody id="rows"></tbody></table></div></div>
-<div class="card"><h2>Recent changes</h2><div id="changes"></div></div>
+<div class="table-wrap"><table class="containers-table"><thead><tr><th scope="col">Status</th><th scope="col">Container</th><th scope="col" class="r">Running</th><th scope="col" class="n">CPU</th><th scope="col" class="n">Memory</th><th scope="col" class="n">Restarts</th></tr></thead><tbody id="rows"><tr><td colspan="6">Loading containers…</td></tr></tbody></table></div><div id="containers-pager"></div></div>
+<div class="card"><h2>Recent changes</h2><div id="changes">Loading recent changes…</div><div id="changes-pager"></div></div>
 <div class="card"><h2>About this server</h2><div id="about"></div></div>
 <p class="small muted">Counts and machine figures only, refreshed every 15 seconds. No event or replay content is read. CPU and memory history restarts when the status service does.</p>
 </main>
-<script>${CLIENT}</script></body></html>`
+<script>${PAGER_JS}
+${CLIENT}</script></body></html>`
 }
 
 // Runs in the browser. Names come from Docker, so everything goes through esc().
@@ -151,37 +152,42 @@ function hover(box,points){box.onmousemove=e=>{const s=box.querySelector('svg');
   if(!best){t.remove();return}t.textContent=best.text;t.style.left=Math.min(r.width-60,Math.max(60,best.x/w*r.width))+'px';t.style.top=Math.max(26,best.y/H*r.height)+'px'}
   box.onmouseleave=()=>box.querySelector('.tip')?.remove()}
 
-function bars(box,data,minute=false,at=Date.now()){W=box.clientWidth||560;if(!data){box.innerHTML='<p class="note">No event counts yet.</p>';return}
+function bars(box,data,minute=false,at=Date.now()){W=box.clientWidth||560;if(!data){numbers(minute?'minutes':'events',[],'Events');box.innerHTML='<p class="note">No event counts yet.</p>';return}
   const hour=minute?60000:3600000,count=minute?60:24,now=Math.floor(at/hour)*hour,by=new Map(data),slots=[];for(let i=count-1;i>=0;i--){const t=now-i*hour;slots.push([t,by.get(t)||0])}
   const max=nice(Math.max(...slots.map(s=>s[1]),1)),step=(W-L-R)/count,bw=Math.max(1,step-2)
   const f=frame(max,v=>v>=1000?(v/1000)+'k':String(Math.round(v)),[[L+bw/2,clock(slots[0][0]),'start'],[L+(count/2)*step,clock(slots[count/2][0]),'middle'],[W-R,clock(slots[count-1][0]),'end']]);const pts=[];let b=''
   slots.forEach(([t,n],i)=>{const x=L+i*step+1,top=f.y(n),base=f.y(0);if(n){const h=Math.max(2,base-top),r=Math.min(4,bw/2,h);b+='<path fill="var(--act)" d="M'+x+' '+base+'v'+(-(h-r))+'q0 '+(-r)+' '+r+' '+(-r)+'h'+(bw-2*r)+'q'+r+' 0 '+r+' '+r+'v'+(h-r)+'z"/>'}
     pts.push({x:x+bw/2,y:top,text:clock(t)+' · '+num(n)+' events'})})
   box.innerHTML='<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Event counts">'+f.g+b+'</svg>';hover(box,pts)
-  if(!minute)$('t-events').innerHTML='<table><thead><tr><th>Hour</th><th class="n">Events</th></tr></thead><tbody>'+slots.slice().reverse().map(s=>'<tr><td>'+clock(s[0])+'</td><td class="n">'+num(s[1])+'</td></tr>').join('')+'</tbody></table>'}
+  numbers(minute?'minutes':'events',slots.slice().reverse().map(s=>[s[0],s[1]]),'Events');
+  if(!minute&&!$('n-events').open)$('t-events').innerHTML='<table><thead><tr><th scope="col">Hour</th><th scope="col" class="n">Events</th></tr></thead><tbody>'+slots.slice().reverse().map(s=>'<tr><td>'+clock(s[0])+'</td><td class="n">'+num(s[1])+'</td></tr>').join('')+'</tbody></table>'}
 
-function line(box,hist,idx,name,load=false){W=box.clientWidth||560;const p=(hist||[]).filter(h=>h[idx]!=null);if(p.length<2){box.innerHTML='<p class="note">Collecting, this fills in over the next few minutes.</p>';return}
+function line(box,hist,idx,name,load=false){W=box.clientWidth||560;const p=(hist||[]).filter(h=>h[idx]!=null);if(p.length<2){numbers(({CPU:'cpu',Memory:'mem',Disk:'disk',Load:'load'})[name],[],name);box.innerHTML='<p class="note">Collecting, this fills in over the next few minutes.</p>';return}
+  numbers(({CPU:'cpu',Memory:'mem',Disk:'disk',Load:'load'})[name],p.map(h=>[h[0],load?Number(h[idx]).toFixed(1):pct(h[idx])]),name);
   const t0=p[0][0],t1=p[p.length-1][0],x=t=>L+(W-L-R)*(t-t0)/Math.max(1,t1-t0),f=frame(load?nice(Math.max(...p.map(h=>h[idx]),1)):100,v=>load?String(v):v+'%',[[L,clock(t0),'start'],[W-R,clock(t1),'end']])
   const pts=p.map(h=>({x:x(h[0]),y:f.y(h[idx]),text:clock(h[0])+' · '+name+' '+(load?Number(h[idx]).toFixed(1):pct(h[idx]))})),d=pts.map((q,i)=>(i?'L':'M')+q.x.toFixed(1)+' '+q.y.toFixed(1)).join('')
   const e=pts[pts.length-1];box.innerHTML='<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(name)+' for the last hour, now '+(load?Number(p.at(-1)[idx]).toFixed(1):pct(p.at(-1)[idx]))+'">'+f.g+'<path d="'+d+'" fill="none" stroke="var(--act)" stroke-width="2" stroke-linejoin="round"/><circle cx="'+e.x+'" cy="'+e.y+'" r="4" fill="var(--act)" stroke="var(--card)" stroke-width="2"/></svg>';hover(box,pts)}
 
 const tile=(name,value,sub,problem=false)=>'<div class="tile'+(problem?' problem':'')+'"><span>'+esc(name)+'</span><b>'+esc(value)+'</b>'+(sub?'<small>'+esc(sub)+'</small>':'')+'</div>'
+const pagers={}
+function paged(id,items,noun,draw,keep=true){if(items.length>25||pagers[id]){const mount=$(id+'-pager'),active=document.activeElement,restore=mount.contains?.(active),tag=active?.tagName,text=active?.textContent;if(!pagers[id])pagers[id]=makePager({mount,noun,size:25,draw});pagers[id].set(items,keep);if(restore){const next=[...mount.querySelectorAll('button,select')].find(el=>el.tagName===tag&&(tag==='SELECT'||el.textContent===text)&&!el.disabled);(next||mount.querySelector('button:not(:disabled)'))?.focus()}}else draw(items)}
+function numbers(id,rows,label){const details=$('n-'+id);details.ontoggle=()=>{if(!details.open)return;const draw=slice=>{$('t-'+id).innerHTML='<table><thead><tr><th scope="col">Time</th><th scope="col">'+esc(label)+'</th></tr></thead><tbody>'+slice.map(r=>'<tr><td>'+clock(r[0])+'</td><td>'+esc(r[1])+'</td></tr>').join('')+'</tbody></table>';if(!slice.length)$('t-'+id).innerHTML='<p class="muted">No readings yet. Check again in a few minutes.</p>'};if(!pagers['n-'+id])pagers['n-'+id]=makePager({mount:$('p-'+id),noun:'readings',size:25,draw});pagers['n-'+id].set(rows,true)};if(details.open)details.ontoggle()}
 let containers=[]
 const opened=new Set()
 function spark(hist,idx,label){const p=(hist||[]).filter(h=>Number.isFinite(h[idx]));if(p.length<2)return '';const max=Math.max(...p.map(h=>h[idx]),1),t0=p[0][0],dt=Math.max(1,p.at(-1)[0]-t0);return '<svg class="spark" viewBox="0 0 90 24" role="img" aria-label="'+esc(label)+' over the last hour"><path d="'+p.map((h,i)=>(i?'L':'M')+(90*(h[0]-t0)/dt).toFixed(1)+' '+(23-22*h[idx]/max).toFixed(1)).join('')+'" fill="none" stroke="var(--act)" stroke-width="1.5"/></svg>'}
-function table(){const q=$('find').value.trim().toLowerCase();let list=containers.filter(c=>c.name.toLowerCase().includes(q));const view=$('view').value
+function table(keep=true){const active=document.activeElement;const focusedKey=active?.closest?.('details[data-key]')?.dataset.key;const q=$('find').value.trim().toLowerCase();let list=containers.filter(c=>c.name.toLowerCase().includes(q));const view=$('view').value
   if(view!=='all')list=list.slice().sort((a,b)=>(b[view]??-1)-(a[view]??-1)).slice(0,5)
-  $('rows').innerHTML=list.map(c=>{const key=c.group+'/'+c.name;return '<tr><td>'+st(c.level)+'</td><td class="w"><details data-key="'+esc(key)+'"'+(opened.has(key)?' open':'')+'><summary>'+esc(c.name)+'</summary><div class="container-detail">'+[
+  paged('containers',list,'containers',slice=>{$('rows').innerHTML=slice.map(c=>{const key=c.group+'/'+c.name;return '<tr><td>'+st(c.level)+'</td><td class="w"><details data-key="'+esc(key)+'"'+(opened.has(key)?' open':'')+'><summary>'+esc(c.name)+'</summary><div class="container-detail">'+[
     ['Image',c.image],['Started',c.started_at],['OOM killed',c.oom_killed==null?null:String(c.oom_killed)],['Exit code',c.exit_code],
     ['Memory limit',c.mem_limit_bytes?gb(c.mem_limit_bytes)+' ('+pct(c.mem_limit_pct)+' used)':'No limit'],
     ['Network rx / tx',gb(c.network_rx_bytes)+' / '+gb(c.network_tx_bytes)],['Block read / write',gb(c.block_read_bytes)+' / '+gb(c.block_write_bytes)],['PIDs',c.pids]
   ].map(([k,v])=>'<p>'+esc(k)+': '+esc(v??'–')+'</p>').join('')+(c.health_output?'<pre>Last health check: '+esc(c.health_output)+'</pre>':'')+'</div></details><small>'+esc(c.detail)+'</small></td><td class="r">'+esc(c.detail)+'</td><td class="n">'+pct(c.cpu_pct)+spark(c.history,1,'CPU')+'</td><td class="n">'+gb(c.mem_bytes)+spark(c.history,2,'Memory')+'</td><td class="n">'+num(c.restarts)+'</td></tr>'}).join('')||'<tr><td colspan="6" class="muted">No container matches.</td></tr>'
-  $('rows').querySelectorAll('details').forEach(d=>d.ontoggle=()=>d.open?opened.add(d.dataset.key):opened.delete(d.dataset.key))}
-$('find').oninput=table;$('view').onchange=table
+  $('rows').querySelectorAll('details').forEach(d=>d.ontoggle=()=>d.open?opened.add(d.dataset.key):opened.delete(d.dataset.key));if(focusedKey)$('rows').querySelectorAll('details').forEach(d=>{if(d.dataset.key===focusedKey)d.querySelector('summary')?.focus()})},keep)}
+$('find').oninput=()=>table(false);$('view').onchange=()=>table(false)
 let lastStatus=null,connectionError=null
 function freshness(){if(!lastStatus)return;const s=lastStatus,age=s.checked_at?Math.max(0,Math.floor((Date.now()-Date.parse(s.checked_at))/1000)):null,stale=age!=null&&age>60
   $('banner').className='banner '+(stale?'warn':connectionError?'down':s.level);$('b-icon').textContent=stale?'!':connectionError?'✕':ICON[s.level]||'…'
-  $('b-head').textContent=stale?'Status data is stale — checks have stopped':connectionError?connectionError:!s.checked_at?'Checking…':s.down?plural(s.down,'problem')+(s.warn?', '+plural(s.warn,'warning'):''):s.warn?'Everything is up, '+plural(s.warn,'warning'):'Everything is up'
+  const heading=stale?'Status data is stale — checks have stopped':connectionError?connectionError:!s.checked_at?'Checking…':s.down?plural(s.down,'problem')+(s.warn?', '+plural(s.warn,'warning'):''):s.warn?'Everything is up, '+plural(s.warn,'warning'):'Everything is up';if($('b-head').textContent!==heading)$('b-head').textContent=heading
   $('b-sub').textContent=age==null?'Waiting for the first check':'Updated '+age+' s ago · '+new Date(s.checked_at).toLocaleString()}
 const pairs=entries=>entries.map(([k,v])=>'<div class="svc"><span>'+esc(k)+'</span><span class="d">'+esc(v??'–')+'</span></div>').join('')
 
@@ -189,7 +195,7 @@ function draw(s){const rows=s.checks||[],m=s.metrics||{},mc=m.machine||{},byName
   const box=rows.filter(r=>r.group.startsWith('Containers')).sort((a,b)=>RANK[b.level]-RANK[a.level]||a.name.localeCompare(b.name));containers=box
   const counts=containerSummary(box);lastStatus=s;connectionError=null;freshness()
   const problems=rows.filter(r=>r.level==='down'||r.level==='warn').sort((a,b)=>RANK[b.level]-RANK[a.level])
-  $('problems').innerHTML=problems.length?'<div class="card"><h2>Needs attention</h2>'+problems.map(r=>'<div class="svc"><span>'+esc(r.group)+' · '+esc(r.name)+'</span><span class="d">'+esc(r.detail)+'</span>'+st(r.level)+'</div>').join('')+'</div>':''
+  paged('problems',problems,'problems',slice=>{$('problems').innerHTML=slice.length?'<div class="card"><h2>Needs attention</h2>'+slice.map(r=>'<div class="svc"><span>'+esc(r.group)+' · '+esc(r.name)+'</span><span class="d">'+esc(r.detail)+'</span>'+st(r.level)+'</div>').join('')+'</div>':''})
   const hours=m.events_by_hour,last=hours?hours.filter(h=>h[0]>=Math.floor(Date.now()/3600000)*3600000).reduce((a,h)=>a+h[1],0):null,day=hours?hours.reduce((a,h)=>a+h[1],0):null
   const memUsed=mc.mem_total?mc.mem_total-mc.mem_available:null,disk=mc.disk_total?mc.disk_total-mc.disk_free:null
   $('tiles').innerHTML=[tile('Containers running',counts.running+' of '+counts.expected,[[counts.unhealthy,'unhealthy'],[counts.restarting,'restarting'],[counts.stopped,'stopped']].filter(x=>x[0]).map(x=>x[0]+' '+x[1]).join(' · ')||'all healthy',counts.problems>0),
@@ -198,15 +204,15 @@ function draw(s){const rows=s.checks||[],m=s.metrics||{},mc=m.machine||{},byName
     tile('Disk used',disk==null?'–':pct(disk/mc.disk_total*100),mc.disk_free!=null?gb(mc.disk_free)+' free of '+gb(mc.disk_total):''),tile('Swap used',gb(mc.swap_used),'of '+gb(mc.swap_total)),tile('ClickHouse data',gb(m.clickhouse_bytes),'on disk')].join('')
   bars($('c-events'),hours,false,m.extras_at||Date.now());bars($('c-minutes'),m.events_by_minute,true,m.extras_at||Date.now());line($('c-disk'),m.history,3,'Disk');line($('c-load'),m.history,4,'Load',true);line($('c-cpu'),m.history,1,'CPU');line($('c-mem'),m.history,2,'Memory')
   const svc=(name,list)=>list.length?'<div class="card"><h2>'+name+'</h2>'+list.map(r=>'<div class="svc"><span>'+esc(r.name)+'</span><span class="d">'+esc(r.detail)+'</span>'+st(r.level)+'</div>').join('')+'</div>':''
-  $('services').innerHTML=svc('PostHog',byName('PostHog'))+svc('Lens',byName('Lens'))+svc('Data arriving',byName('Data arriving'))+svc('Machine',byName('Machine'))
+  paged('services',rows.filter(r=>['PostHog','Lens','Data arriving','Machine'].includes(r.group)),'checks',slice=>{$('services').innerHTML=['PostHog','Lens','Data arriving','Machine'].map(g=>svc(g,slice.filter(r=>r.group===g))).join('')})
   const ch=m.clickhouse||{},lens=s.lens||{},activity=lens.activity,clipDisk=lens.storage
   $('clickhouse').innerHTML='<h2>ClickHouse health</h2>'+pairs([['Version',ch.version],['Uptime',ch.uptime_s==null?null:Math.floor(ch.uptime_s/3600)+' hours'],['Running queries',num(ch.running_queries)],['Merges in progress',num(ch.merges)],['Pending mutations',num(ch.pending_mutations)],['Most active parts in one partition',num(ch.max_partition_parts)]])+'<details><summary>8 biggest tables by bytes on disk</summary>'+((ch.tables||[]).map(t=>'<div class="svc"><span>'+esc(t.database)+'.'+esc(t.table)+'</span><span class="d">'+gb(t.bytes)+' · '+num(t.rows)+' rows</span></div>').join('')||'<p class="muted">Unavailable</p>')+'</details>'
   $('lens').innerHTML='<h2>Lens activity · last 24 hours</h2>'+(activity?pairs([['Sign-ins',num(activity.signins)],['Failed sign-ins',num(activity.failed_signins)],['Clips made',num(activity.clips_made)],['Clips watched',num(activity.clips_watched)],['Clips downloaded',num(activity.clips_downloaded)],['Share links',num(activity.share_links)]])+(activity.truncated?'<p>Audit limit reached; counts are lower bounds.</p>':''):'<p class="muted">Activity unavailable</p>')+'<details><summary>Clip storage</summary>'+(clipDisk?pairs([['Clips',num(clipDisk.clips)],['Storage',gb(clipDisk.bytes)],['Saved clips',num(clipDisk.saved)],['Saved storage',gb(clipDisk.saved_bytes)]]):'<p>Unavailable</p>')+'</details>'
-  $('changes').innerHTML=(s.changes||[]).map(c=>'<div class="svc"><span>'+esc(c.group)+' · '+esc(c.name)+'</span><span class="d">'+esc(new Date(c.at).toLocaleString())+' · '+esc(LABEL[c.from]||c.from)+' → '+esc(LABEL[c.level]||c.level)+'</span></div>').join('')||'<p class="muted">No changes observed yet. The last 100 transitions are kept until the status service restarts.</p>'
+  paged('changes',s.changes||[],'changes',slice=>{$('changes').innerHTML=slice.map(c=>'<div class="svc"><span>'+esc(c.group)+' · '+esc(c.name)+'</span><span class="d">'+esc(new Date(c.at).toLocaleString())+' · '+esc(LABEL[c.from]||c.from)+' → '+esc(LABEL[c.level]||c.level)+'</span></div>').join('')||'<p class="muted">No changes observed yet. The last 100 transitions are kept until the status service restarts.</p>'})
   const a=s.about||{},dd=m.docker_disk
   $('about').innerHTML=pairs([['PostHog web image',a.posthog_image],['ClickHouse version',a.clickhouse_version],['Docker engine',a.docker_version],['Status service uptime',a.uptime_s==null?null:Math.floor(a.uptime_s/60)+' minutes'],['Check interval',a.interval_s==null?null:a.interval_s+' s'],['Last check duration',a.took_ms==null?null:a.took_ms+' ms']])+'<details><summary>Docker disk usage · cached 10 minutes</summary>'+(dd?pairs([['Images',gb(dd.images_bytes)],['Containers (writable layers)',gb(dd.containers_bytes)],['Volumes',gb(dd.volumes_bytes)],['Build cache',gb(dd.build_cache_bytes)],['Measured',new Date(dd.at).toLocaleString()]]):'<p>Unavailable</p>')+'</details><p class="small muted">Large counts and table sizes refresh every five minutes. CPU is a share of the whole machine. Histories and recent changes are held in memory.</p>'
   $('c-title').textContent='Containers ('+box.length+')';table()}
 async function tick(){try{const r=await fetch('/replays/system/api',{cache:'no-store'}),d=await r.json().catch(()=>({}));if(r.status===401)return location.reload();if(!r.ok)throw new Error(d.error||'The status service is not answering.');draw(d)}
-  catch(e){connectionError=e.message;$('banner').className='banner down';$('b-icon').textContent='✕';$('b-head').textContent=e.message;$('b-sub').textContent='This page reads the status service on port 8090. On the box, run: sudo posthog-lens status'}}
+  catch(e){connectionError=e.message;$('banner').className='banner down';$('b-icon').textContent='✕';$('b-head').textContent=e.message;$('b-sub').textContent='Trying again in 15 seconds. If this continues, contact the server administrator.'}}
 tick();setInterval(tick,15000);setInterval(freshness,1000)
 `
