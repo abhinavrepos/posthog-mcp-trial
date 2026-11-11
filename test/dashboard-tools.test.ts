@@ -29,9 +29,9 @@ const deps = {
     flowTime: async (p: FlowTimeParams) => ({ coverage: { complete: true, unprocessed: [] }, params: { ...p, granularity: 'week' as const }, task, summary: { ...counts, done_rate: .8 }, all_clients: { median_s: 30, p90_s: 70, done_rate: .9 }, series: [20, 30, 60, 80, 90, 100].map((n, i) => ({ period: `week ${i}`, attempts: 10, done: 8, median_s: n, p90_s: 120 })), paths: [{ path: ['Hedge'], labels: ['Hedge'], attempts: 10, share: 1, done_rate: .8, median_s: 60 }], slowest: [1, 2, 3, 4].map(n => ({ client: 'ACME', user: 'a', session_id: String(n), started_at: '2026-02-01', duration_s: 1000 - n, outcome: 'done' as const, path: ['Hedge'], replay_url: `https://lens/replay/${n}` })), top_errors: [{ template: 'Missing trade', count: 2 }], data_through: '2026-02-01', note: '' }),
 }
 type Deps = NonNullable<Parameters<typeof registerDashboardTools>[2]>
-async function chat(role: DashboardRole, personal = true, overrides: Deps = {}) {
+async function chat(role: DashboardRole, personal = true, overrides: Deps = {}, surveyRole: import('../src/service/access.ts').SurveyRole = 'launch') {
     const server = new McpServer({ name: 'test', version: '1' })
-    registerDashboardTools(server, { who: 'pm@x.com', email: personal ? 'pm@x.com' : undefined, dashboardRole: role, admin: false }, { ...deps, ...overrides })
+    registerDashboardTools(server, { who: 'pm@x.com', email: personal ? 'pm@x.com' : undefined, dashboardRole: role, surveyRole, admin: false }, { ...deps, ...overrides })
     const client = new Client({ name: 'test', version: '1' })
     const [a, b] = InMemoryTransport.createLinkedPair()
     await Promise.all([server.connect(a), client.connect(b)])
@@ -55,7 +55,7 @@ test('registered tools follow none, view and share roles', async () => {
             } else assert.deepEqual((await c.client.listTools()).tools.map(t => t.name).sort(), dashboardToolNames(role).sort())
         } finally { await c.close() }
     }
-    assert.equal(dashboardToolNames('view').length, 5)
+    assert.equal(dashboardToolNames('view').length, 7)
     assert.equal(dashboardToolNames('share').length, DASHBOARD_TOOLS.length)
 })
 
@@ -123,7 +123,7 @@ test('instructions fit for every survey and dashboard role, with and without Pos
     for (const posthog of [true, false]) for (const survey of access.SURVEY_ROLES) for (const dashboard of access.DASHBOARD_ROLES) {
         const instructions = serverInstructions(posthog, survey, dashboard)
         assert.ok(instructions.length < INSTRUCTIONS_LIMIT, `${posthog}/${survey}/${dashboard}: ${instructions.length}`)
-        for (const name of DASHBOARD_TOOLS) assert.equal(instructions.includes(name), dashboardToolNames(dashboard).includes(name))
+        for (const name of DASHBOARD_TOOLS) assert.equal(instructions.includes(name), dashboardToolNames(dashboard, survey).includes(name))
     }
 })
 
@@ -208,4 +208,21 @@ test('rescue chat shows top three reasons, limits rows and descriptions, links d
     assert.equal(new URL(result.open).searchParams.get('from'), queue.window.from)
     const fifty = JSON.parse(await call('rescue_queue', { limit: 50 }, { rescueQueue: async () => queue })); assert.equal(fifty.clients.length, 50)
     assert.match(await call('set_rescue_status', { client: 'rescue-client', status: 'expected' }), /snooze date/)
+})
+
+test('monday briefing tool returns saved briefing and link; draft tool follows survey roles', async () => {
+    const brief = {generated_at:'2026-06-16',period:{from:'2026-06-09',to:'2026-06-15'},headline:'No changes.',sections:{new_or_worse:[],close_soon:[],overdue:[],recovered:[],quiet_review:null},counts:{queue:0},queue_scores:{},verified_recoveries:[]}
+    const output=JSON.parse(await call('monday_brief',{}, {mondayBrief:async()=>brief}))
+    assert.equal(output.headline,brief.headline); assert.match(output.open,/view=briefing/)
+    for(const role of ['none','view','edit','launch'] as const) {
+        const c=await chat('view',true,{rescueClients:()=>[{id:'acme',name:'Acme'}],draftRescueSurvey:async()=>({survey_id:'draft',open:'/replays/surveys',message:'Draft created'})},role)
+        try {
+            const tools=(await c.client.listTools()).tools
+            assert.equal(tools.some(t=>t.name==='draft_rescue_survey'),['edit','launch'].includes(role))
+            if(['edit','launch'].includes(role)) {
+                const result=await c.client.callTool({name:'draft_rescue_survey',arguments:{client:'Acme'}})
+                assert.equal(JSON.parse((result.content as {text:string}[])[0].text).survey_id,'draft')
+            }
+        } finally { await c.close() }
+    }
 })

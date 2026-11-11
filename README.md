@@ -279,7 +279,7 @@ self-test" client on 2025-10-01 shows 410 s in the app, 160 s active and 250 s i
 
 ## Rescue queue: who needs someone this week
 
-The first Dashboards tab, and the chat tools `rescue_queue` / `set_rescue_status`. A ranked list of
+The second Dashboards tab, and the chat tools `rescue_queue` / `set_rescue_status`. A ranked list of
 clients from Lens's task history (no raw PostHog reads): for each, **urgent** or **watch**, the trend
 against a week earlier, the strongest reasons with numbers, one suggested next step, and links to the
 task map and flow time.
@@ -292,6 +292,13 @@ task map and flow time.
 | Slower | median up ≥ 30% and ≥ 10 s |
 | Used less | a task's attempts halved |
 | Overall use fell | all attempts down ≥ 40% |
+| Key person gap (weight 4) | a formerly regular person responsible for much of the work stopped, alongside falling completed work |
+| Work moving out (weight 3) | growing export share alongside falling completed work or exports after errors |
+| Recurring close error (weight 3) | the same error across at least three month-ends |
+| Giving up (weight 3) | more sessions end after errors without recovery |
+
+Signal reasons use the documented `client_signals` thresholds and capture coverage. Regular-user
+evidence contains counts and only the latest last-seen date; individual identities are excluded.
 
 Urgent: a weighted score of 40 or more, or a stopped task together with regular users stopping.
 The period is chosen on the page (last 14/28/56 days, against the same length before it) and always
@@ -302,6 +309,30 @@ a note (dashboard share role or admin; every change is in the activity log). **E
 snoozed until a date (at most 120 days) and come back early if the score rises by half; resolved
 clients stay listed while still flagged, so recovery is seen rather than assumed. These are attention
 signals from product use, not churn predictions: Lens has no renewal or contract data.
+
+### Monday briefing and checking recovery
+
+**Briefing** is the first and default Dashboards view; chat tool `monday_brief` returns the same
+briefing. It covers the last seven complete calendar days, showing up to five new or worse clients,
+close errors due within 14 days, overdue actions, verified recoveries and one steady low-use client
+for a quiet review (“silence is not satisfaction”). New/worse compares scores with your previous
+briefing. One snapshot per person per UTC day makes reloads stable; the last 26 are retained.
+Quiet review uses 1–19 weekly attempts within 20% of the previous week and rotates by the oldest
+action update or previous quiet review; dashboard share users
+can mark it reviewed.
+
+The first contacted/in-progress/resolved action captures its reason kinds and task ids plus the action
+date. Recovery requires those reasons to disappear in a complete period starting after that date;
+signal reasons also require complete capture coverage. A reason still present after 14 days is
+“still failing”; otherwise evidence is awaited. Verified clients without current reasons appear in
+briefing recoveries and the linked rescue history, outside the main queue. This verifies changes in
+product-use signals, rather than attributing them causally to help.
+
+**Ask them** (survey edit/launch or admin) and chat tool `draft_rescue_survey` create a client-targeted
+survey draft with a task-opening trigger and ease/open questions, or an export-button trigger with
+export-purpose/open questions. Draft creation records a rescue note. Review and launch on the
+Surveys page using its existing launch safeguard; these actions never launch a survey. Surveys
+must be enabled and configured.
 
 ## Dashboards: client task map and flow time
 

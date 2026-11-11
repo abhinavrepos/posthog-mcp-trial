@@ -90,7 +90,7 @@ test('regular users need two ISO weeks; count and fraction thresholds; text has 
     assert.ok(!(await kinds()).includes('users_lost'), 'one of seven is below both thresholds')
     put(window.from, people.slice(2).flatMap(u => attempts(window.from, 6, 6, 10, 't_Hedge', 'ACME', u)))
     let r = (await queue()).clients[0].reasons.find(r => r.kind === 'users_lost')!
-    assert.equal(r.now, 2); assert.equal(r.before, 7); assert.equal(r.evidence?.users.length, 2); assert.doesNotMatch(r.text, /@|occasional/)
+    assert.equal(r.now, 2); assert.equal(r.before, 7); assert.equal(r.evidence?.lost_users, 2); assert.doesNotMatch(r.text, /@|occasional/)
     assert.match((await queue()).clients[0].next_step, /changed role/)
     reset()
     for (const d of [baseline.from, shift(baseline.from, 7)]) put(d, people.slice(0, 3).flatMap(u => attempts(d, 2, 2, 10, 't_Hedge', 'ACME', u)))
@@ -198,4 +198,38 @@ test('snoozing while viewing a custom period: score from that period, hidden the
     assert.equal(z.score_at_snooze, 0)
     const hidden = await rescueQueue(view)
     assert.equal(hidden.clients.length, 0); assert.equal(hidden.hidden_snoozed, 1)
+})
+
+test('recovery captures first acted-on reasons, preserves them, and requires complete evidence after contact', async () => {
+    reset(); put(baseline.from, attempts(baseline.from, 5))
+    const action = await setRescueAction('ACME', { status: 'contacted' }, 'pm@example.com', { window, baseline })
+    assert.deepEqual(JSON.parse(action.reasons_at_action!), [{ kind: 'missing', task_id: 't_Hedge' }])
+    db.prepare('UPDATE rescue_actions SET acted_on=? WHERE client=?').run('2026-02-01', 'ACME')
+    await setRescueAction('ACME', { status: 'resolved', note: 'Help offered' }, 'pm@example.com', { window, baseline })
+    assert.equal((await queue()).clients[0].recovery, 'still_failing')
+    db.prepare('UPDATE rescue_actions SET acted_on=?').run('2026-03-01')
+    assert.equal((await queue()).clients[0].recovery, 'awaiting_evidence')
+    put(window.from, attempts(window.from, 5))
+    assert.equal((await queue()).recovered?.length, 0, 'overlapping action period cannot recover')
+    db.prepare('UPDATE rescue_actions SET acted_on=?').run('2026-02-01')
+    const recovered = await queue()
+    assert.equal(recovered.clients.length, 0); assert.equal(recovered.recovered?.[0].recovery, 'recovered')
+    assert.match(recovered.recovered![0].recovery_text!, /Hedge/)
+    tasksDb.prepare('DELETE FROM task_ingest WHERE day=?').run(window.from); forgetAnswers()
+    assert.equal((await queue()).recovered?.length, 0)
+})
+
+test('signal-only clients merge into rescue with exact weights, metadata and safe JSON', async () => {
+    reset()
+    for (let d = shift(window.to, -179); d <= window.to; d = shift(d, 1)) storeAttempts(d, [])
+    for (const d of ['2025-12-29', '2026-01-29', '2026-02-26']) tasksDb.prepare('INSERT INTO errors_daily VALUES (?,?,?,?,?,?,?)').run(d, 'SIGNAL', 'DlgClose', 'save', 'Invalid date', 1, 0)
+    tasksDb.prepare('INSERT INTO errors_daily VALUES (?,?,?,?,?,?,?)').run(window.to, 'SIGNAL', 'DlgClose', 'save', 'Rate missing', 10, 5) // a different error, so the close one stays concentrated at month-ends
+    tasksDb.prepare('INSERT INTO user_daily VALUES (?,?,?,?,?)').run(window.to, 'SIGNAL', 'private-person@secret.example', 1, 0)
+    forgetAnswers()
+    const c = (await queue()).clients.find(c => c.client === 'SIGNAL')!
+    assert.deepEqual(c.reasons.map(r => r.kind), ['giving_up', 'recurring_close_error'].sort())
+    assert.equal(c.score, 6, 'two weight-three signals with no task baseline')
+    assert.ok(c.reasons.find(r => r.kind === 'recurring_close_error')!.next_close_start)
+    assert.doesNotMatch(JSON.stringify(await queue()), /private-person|secret.example|"users":\[/)
+    tasksDb.exec('DELETE FROM errors_daily; DELETE FROM user_daily'); forgetAnswers()
 })

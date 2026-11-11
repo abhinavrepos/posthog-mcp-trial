@@ -38,7 +38,7 @@ const deps = {
 }
 const viewer = (dashboards: Viewer['dashboards'] = 'view', email = 'pm@example.com', admin = false): Viewer => ({ email, role: admin ? 'admin' : 'none', dashboards, name: 'PM', posthog_admin: admin, in_replay_project: true, session: 's' })
 type Response = { status: number; body: string; data: any }
-async function request(path = '', v = viewer(), method = 'GET', body?: unknown, injected = deps, header = '1'): Promise<Response> {
+async function request(path = '', v = viewer(), method = 'GET', body?: unknown, injected: NonNullable<Parameters<typeof handleDashboards>[4]> = deps, header = '1'): Promise<Response> {
     let status = 0, output = ''
     const req = Object.assign((async function* () { if (body !== undefined) yield typeof body === 'string' ? body : JSON.stringify(body) })(), { method, headers: { 'x-clip-page': header } })
     const res = { writeHead(s: number) { status = s }, end(s: string) { output = s } }
@@ -246,11 +246,11 @@ test('events without a client: listed as "Unknown client", never selected in the
     assert.match(r.body, /<b>Unknown client<\/b>/)
 })
 
-test('rescue is the default first tab; role forms, top three reasons, filters, coverage and pager', async () => {
+test('rescue is the second tab; role forms, top three reasons, filters, coverage and pager', async () => {
     const rescue = { coverage: { complete: true, unprocessed: [] as string[] }, window, baseline: window, data_through: window.to, hidden_snoozed: 2, note: 'Local history', clients: [{ client: 'acme', client_name: clientName, level: 'urgent' as const, trend: 'worse' as const, score: 50, reasons: ['First', 'Second', 'Third', 'Fourth'].map(text => ({ kind: 'missing' as const, text, now: 0, before: 5 })), critical_task: { task_id: 't_save', task_name: 'Save' }, next_step: 'Ask the team', action: { owner: 'pm@example.com', status: 'contacted' as const, due: null, note: '<note>', snooze_until: null, score_at_snooze: null, updated_by: 'pm@example.com', updated_at: '2026-01-01' } }] }
     const injected = { ...deps, rescueQueue: async () => rescue }
     for (const v of [viewer(), viewer('share'), viewer('none', 'admin@example.com', true)]) {
-        const r = await request('', v, 'GET', undefined, injected)
+        const r = await request('?view=rescue', v, 'GET', undefined, injected)
         assert.equal(r.status, 200); assert.match(r.body, /1 client needs someone/)
         assert.ok(r.body.indexOf('>Rescue queue</a>') < r.body.indexOf('>Client task map</a>'))
         assert.match(r.body, /&lt;img src=x onerror=1&gt;/); assert.doesNotMatch(r.body, /<img|<note>|<li>Fourth/)
@@ -258,12 +258,12 @@ test('rescue is the default first tab; role forms, top three reasons, filters, c
         assert.equal(r.body.includes('<form class="rescue-action"'), v.role === 'admin' || v.dashboards === 'share')
         assert.match(r.body, /role="status" aria-live="polite"/); scriptsParse(r.body)
     }
-    assert.doesNotMatch((await request('?level=watch', viewer(), 'GET', undefined, injected)).body, /<li>First/)
-    assert.doesNotMatch((await request('?status=unassigned', viewer(), 'GET', undefined, injected)).body, /<li>First/)
-    assert.match((await request('?status=mine', viewer(), 'GET', undefined, injected)).body, /<li>First/)
-    assert.equal((await request('?level=invalid', viewer(), 'GET', undefined, injected)).status, 400)
+    assert.doesNotMatch((await request('?view=rescue&level=watch', viewer(), 'GET', undefined, injected)).body, /<li>First/)
+    assert.doesNotMatch((await request('?view=rescue&status=unassigned', viewer(), 'GET', undefined, injected)).body, /<li>First/)
+    assert.match((await request('?view=rescue&status=mine', viewer(), 'GET', undefined, injected)).body, /<li>First/)
+    assert.equal((await request('?view=rescue&level=invalid', viewer(), 'GET', undefined, injected)).status, 400)
     const incomplete = { ...injected, rescueQueue: async () => ({ ...rescue, clients: [], coverage: { complete: false, unprocessed: ['2026-01-02'], text: 'Not processed yet' } }) }
-    const page = await request('', viewer(), 'GET', undefined, incomplete)
+    const page = await request('?view=rescue', viewer(), 'GET', undefined, incomplete)
     assert.match(page.body, /Not processed yet/); assert.match(page.body, /Unprocessed days/); assert.doesNotMatch(page.body, /rescue-level urgent/)
 })
 
@@ -313,4 +313,47 @@ test('rescue period: a chosen period replaces explicit dates, custom keeps them,
     assert.match(custom.body, /<option value="custom" selected>2026-01-01 to 2026-01-10<\/option>/)
     assert.match(custom.body, /<summary>Owner: pm@example\.com · Status: contacted · <span class="linkish">Update<\/span><\/summary>/)
     assert.doesNotMatch(custom.body, /snoozed client/, 'no snoozed line when none are hidden')
+})
+
+test('briefing is the first and default view for all dashboard roles; API access and review controls', async () => {
+    const brief = {generated_at:'2026-06-16',period:window,headline:'Two clients need help.',sections:{new_or_worse:[],close_soon:[],overdue:[],recovered:[],quiet_review:{client:'acme',client_name:clientName,text:'silence is not satisfaction',open:ROOT+'?view=rescue&client=acme'}},counts:{queue:2},queue_scores:{},verified_recoveries:[]}
+    const injected = {...deps,mondayBrief:async()=>brief}
+    for(const v of [viewer(),viewer('share'),viewer('none','admin@example.com',true)]) {
+        const r = await request('',v,'GET',undefined,injected)
+        assert.equal(r.status,200); assert.match(r.body,/<h1>Monday briefing/)
+        assert.ok(r.body.indexOf('>Briefing</a>')<r.body.indexOf('>Rescue queue</a>'))
+        assert.match(r.body,/silence is not satisfaction/); assert.doesNotMatch(r.body,/<img/)
+        assert.equal(r.body.includes('data-review-client='),v.dashboards==='share'||v.role==='admin'); scriptsParse(r.body)
+        assert.deepEqual((await request('/api/briefing',v,'GET',undefined,injected)).data,brief)
+    }
+    assert.equal((await request('/api/briefing',viewer('none'))).status,403)
+    const review = await request('/api/rescue/acme',viewer('share'),'POST',{note:'Quiet review completed'})
+    assert.equal(review.status,200); assert.equal(review.data.note,'Quiet review completed')
+})
+test('Ask them API needs survey edit access and the page header, and never needs dashboard share', async () => {
+    let calls=0
+    const injected = {...deps,surveysActive:()=>true,draftRescueSurvey:async(client: string,_by: string)=>{calls++; assert.equal(client,'acme'); return {survey_id:'draft',open:'/replays/surveys',message:'Draft created — review and launch it on the Surveys page'}}}
+    for(const role of ['none','view','edit','launch'] as const) {
+        const v={...viewer('view'),surveys:role}
+        assert.equal((await request('/api/rescue/acme/ask',v,'POST',{},injected)).status,['edit','launch'].includes(role)?201:403)
+    }
+    assert.equal(calls,2)
+    assert.equal((await request('/api/rescue/acme/ask',{...viewer(),surveys:'edit'},'POST',{},injected,'')).status,403)
+    assert.equal((await request('/api/rescue/acme/ask',{...viewer(),surveys:'edit'},'POST',{}, {...injected,surveysActive:()=>false})).status,503)
+    assert.equal(calls,2)
+})
+
+test('Ask them page creates a draft through injected saveSurvey and shows the button only to survey editors', async () => {
+    let saved: any
+    const rescue = {coverage:{complete:true,unprocessed:[]},window,baseline:window,data_through:window.to,hidden_snoozed:0,note:'',clients:[{client:'acme',client_name:'Acme',score:3,level:'watch' as const,trend:'new' as const,next_step:'Ask',reasons:[{kind:'work_moving_out' as const,text:'Exports grew',now:0,before:0}]}]}
+    const injected = {...deps,surveysActive:()=>true,rescueQueue:async()=>rescue,saveSurvey:async(spec: any)=>{saved=spec;return {survey:{id:'draft-export'} as any,compiled:{problems:[]} as any}},setRescueAction:async()=>({} as any)}
+    for(const role of ['none','view','edit','launch'] as const) {
+        const v={...viewer('view'),surveys:role}
+        const page=await request('?view=rescue',v,'GET',undefined,injected)
+        assert.equal(page.body.includes('data-ask-client='),['edit','launch'].includes(role)); scriptsParse(page.body)
+    }
+    const result=await request('/api/rescue/acme/ask',{...viewer(),surveys:'edit'},'POST',{},injected)
+    assert.equal(result.status,201); assert.equal(result.data.survey_id,'draft-export')
+    assert.deepEqual(saved.clients,['acme']); assert.equal(saved.questions[0].type,'single')
+    assert.match(result.data.message,/Draft created — review and launch/)
 })
