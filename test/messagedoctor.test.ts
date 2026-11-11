@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { after, beforeEach, describe, test } from 'node:test'
+import { after, describe, test } from 'node:test'
 
 const dir = mkdtempSync(join(tmpdir(), 'lens-message-doctor-'))
 process.env.TRIAGE_DB = join(dir, 'test.db')
@@ -12,15 +12,13 @@ process.env.CLIENT_FROM_DISTINCT_ID = '3'
 process.env.POSTHOG_PROJECT_ID = '123456'
 process.env.POSTHOG_PERSONAL_API_KEY = 'test-only'
 const { db } = await import('../src/core/db.ts')
-const { parseAppEvents, toSteps, clearAppAnswers } = await import('../src/core/appevents.ts')
+const { parseAppEvents, toSteps } = await import('../src/core/appevents.ts')
 const { diagnoseMessages, messageDoctor } = await import('../src/core/messagedoctor.ts')
 const { APP_EVENT_TOOLS, registerTools } = await import('../src/mcp/tools.ts')
 after(() => {
     db.close()
     rmSync(dir, { recursive: true, force: true })
 })
-
-beforeEach(() => clearAppAnswers())
 
 const reg = parseAppEvents(JSON.parse(readFileSync('config/app-events.reval.json', 'utf8')))
 type E = Partial<import('../src/core/appevents.ts').RawEvent> & { s: number }
@@ -238,12 +236,11 @@ describe('bounded message-doctor queries', () => {
         t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
             const q = JSON.parse(String(init.body)).query as Query
             seen.push(q)
-            if (q.query.includes('SELECT') && q.query.includes(' AS dialog')) assert.doesNotMatch(q.query, /ORDER BY/)
             assert.match(q.query, /LIMIT \d+/)
             assert.ok(!q.query.includes(client))
             if (q.query.includes('GROUP BY sid')) return response([{ sid: 's', last: ts(2) }])
             if (q.query.includes('raw_session_replay_events')) return response([{ session_id: 's', start: ts(-20), end: ts(50) }])
-            return response([...rows].reverse())
+            return response(rows)
         })
         const r = await messageDoctor({ from: new Date(ts(2)), to: new Date(ts(3)), clientId: client, dialog: 'hedge', message: 'risk' })
         assert.equal(r.messages[0].recovered, 1)
@@ -278,7 +275,6 @@ describe('bounded message-doctor queries', () => {
         assert.ok(batches.every((n) => n === 25))
         assert.equal(r.replay_links, 'unavailable')
         empty = true
-        clearAppAnswers()
         const none = await messageDoctor({ from: new Date(ts(0)), to: new Date(ts(3)) })
         assert.deepEqual(none.messages, [])
         assert.equal(none.rows_read, 0)

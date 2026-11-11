@@ -84,10 +84,55 @@ export const CORE_TOOLS = ['resolve_client', 'find_client_incidents', 'get_repla
 export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor']
 export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(appEvents() ? APP_EVENT_TOOLS : []), ...surveyToolNames(), ...dashboardToolNames()]
 
+// Answers of the read-only analysis tools, shared by every chat session: the same question within two
+// minutes is answered from memory, and identical questions asked at once share one run. Only these
+// tools: their answers do not depend on who asks or change anything. Errors are never kept.
+export const CACHED_TOOLS = new Set(['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor', 'screen_usage', 'find_silent_issues', 'error_blast_radius'])
+// Tools that change what other tools report: after one runs, kept answers are dropped.
+export const WRITE_TOOLS = new Set(['record_verdict', 'correct_ticket_link', 'refresh_releases', 'triage_ticket'])
+const TOOL_TTL_MS = Math.max(0, Number(process.env.LENS_TOOL_CACHE_SECONDS ?? 120)) * 1000
+const TOOL_CACHE_BYTES = 16 * 1024 * 1024
+const toolAnswers = new Map<string, { at: number; value: unknown; bytes: number }>()
+const toolFlights = new Map<string, Promise<unknown>>()
+let toolBytes = 0
+// Arguments as text with object keys sorted at every level, so {a, b} and {b, a} are the same question.
+const stable = (v: unknown): string => Array.isArray(v) ? `[${v.map(stable).join(',')}]`
+    : v && typeof v === 'object' ? `{${Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stable((v as Record<string, unknown>)[k])).join(',')}}`
+    : JSON.stringify(v) ?? 'null'
+export function clearToolAnswers(): void { toolAnswers.clear(); toolFlights.clear(); toolBytes = 0 }
+function remember(key: string, value: unknown): void {
+    const bytes = JSON.stringify(value).length
+    if (bytes > TOOL_CACHE_BYTES / 8) return // one huge answer must not push everything else out
+    const old = toolAnswers.get(key); if (old) { toolBytes -= old.bytes; toolAnswers.delete(key) }
+    toolAnswers.set(key, { at: Date.now(), value, bytes }); toolBytes += bytes
+    for (const [k, v] of toolAnswers) { if (toolBytes <= TOOL_CACHE_BYTES && toolAnswers.size <= 256) break; toolAnswers.delete(k); toolBytes -= v.bytes }
+}
+export async function cachedToolCall(name: string, args: unknown, run: () => Promise<unknown>): Promise<unknown> {
+    if (!TOOL_TTL_MS) return run()
+    const key = name + '\u0000' + stable(args ?? {})
+    const hit = toolAnswers.get(key)
+    if (hit && Date.now() - hit.at < TOOL_TTL_MS) { toolAnswers.delete(key); toolAnswers.set(key, hit); return structuredClone(hit.value) }
+    let flight = toolFlights.get(key)
+    if (!flight) {
+        flight = run().then((value) => {
+            if (!(value as { isError?: boolean } | undefined)?.isError) remember(key, value)
+            return value
+        }).finally(() => toolFlights.delete(key))
+        toolFlights.set(key, flight)
+    }
+    return structuredClone(await flight)
+}
+
 export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'dashboardRole' | 'admin'>>): void {
     const register = server.registerTool.bind(server)
-    server.registerTool = ((name: string, cfg: { description?: string }, cb: unknown) =>
-        register(name, { ...cfg, description: `${cfg.description ?? ''} ${DIRECT_CALL}`.trim() } as never, cb as never)) as typeof server.registerTool
+    server.registerTool = ((name: string, cfg: { description?: string }, cb: unknown) => {
+        const call = cb as (a: unknown, e: unknown) => unknown
+        const handler = typeof cb !== 'function' ? cb
+            : CACHED_TOOLS.has(name) ? (args: unknown, extra: unknown) => cachedToolCall(name, args, () => Promise.resolve(call(args, extra)))
+            : WRITE_TOOLS.has(name) ? async (args: unknown, extra: unknown) => { try { return await call(args, extra) } finally { clearToolAnswers() } }
+            : cb
+        return register(name, { ...cfg, description: `${cfg.description ?? ''} ${DIRECT_CALL}`.trim() } as never, handler as never)
+    }) as typeof server.registerTool
     server.registerTool(
         'resolve_client',
         {

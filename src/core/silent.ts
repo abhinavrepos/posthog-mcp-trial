@@ -1,7 +1,6 @@
 // "Nothing crashed, but something is wrong." Sessions where a client struggled on a screen without
 // any exception: rage clicks, dead clicks, the same action repeated, or a long stay.
-import { appAnswer, appQuery as hogql } from './appevents.ts'
-import { replayUrl } from './posthog.ts'
+import { hogql, replayUrl } from './posthog.ts'
 import { recordingSpans } from './incidents.ts'
 import { P } from './props.ts'
 
@@ -44,12 +43,8 @@ export function struggleScore(s: Pick<StruggleSession, 'rageclicks' | 'dead_clic
 }
 
 export async function struggleSessions(q: { clientId: string; pathname?: string; from: Date; to: Date; limit?: number }): Promise<StruggleSession[]> {
-    return appAnswer('struggleSessions', [q], () => computeStruggleSessions(q), 60_000)
-}
-
-async function computeStruggleSessions(q: { clientId: string; pathname?: string; from: Date; to: Date; limit?: number }): Promise<StruggleSession[]> {
     const rows = await hogql(
-        `SELECT toString($session_id) AS sid,
+        `SELECT toString(properties.$session_id) AS sid,
                 any(coalesce(nullIf(toString(${P.email}), ''), distinct_id)) AS user,
                 any(toString(properties.$pathname)) AS pathname,
                 min(timestamp) AS start, dateDiff('second', min(timestamp), max(timestamp)) AS duration_s,
@@ -58,7 +53,7 @@ async function computeStruggleSessions(q: { clientId: string; pathname?: string;
          FROM events
          WHERE toString(${P.client}) = {client}
            AND timestamp >= {from} AND timestamp < {to}
-           AND notEmpty(toString($session_id))
+           AND notEmpty(toString(properties.$session_id))
            AND ({path} = '' OR toString(properties.$pathname) = {path})
          GROUP BY sid
          HAVING exceptions = 0
@@ -70,9 +65,9 @@ async function computeStruggleSessions(q: { clientId: string; pathname?: string;
     const repeated = new Map<string, { event: string; count: number }>()
     if (rows.length) {
         const counts = await hogql(
-            `SELECT toString($session_id) AS sid, event, count() AS n
+            `SELECT toString(properties.$session_id) AS sid, event, count() AS n
              FROM events
-             WHERE toString($session_id) IN {ids} AND NOT startsWith(event, '$')
+             WHERE toString(properties.$session_id) IN {ids} AND NOT startsWith(event, '$')
                AND timestamp >= {from} AND timestamp < {to}
              GROUP BY sid, event
              LIMIT 50000`,

@@ -1,6 +1,5 @@
 // "Is it just them?" Blast radius of one error: who else hit it, since when, and on which release.
-import { appAnswer, appQuery as hogql } from './appevents.ts'
-import { issueUrl } from './posthog.ts'
+import { hogql, issueUrl } from './posthog.ts'
 import { P } from './props.ts'
 
 export interface ErrorImpact {
@@ -34,13 +33,6 @@ export async function errorImpact(
     e: { issue_id?: string; error_type?: string; error_message?: string },
     opts: { days?: number; pathname?: string } = {}
 ): Promise<ErrorImpact> {
-    return appAnswer('errorImpact', [e, opts], () => computeErrorImpact(e, opts), 60_000)
-}
-
-async function computeErrorImpact(
-    e: { issue_id?: string; error_type?: string; error_message?: string },
-    opts: { days?: number; pathname?: string } = {}
-): Promise<ErrorImpact> {
     const days = opts.days ?? 30
     const f = errorFilter(e)
     const values = { ...f.values, days }
@@ -48,11 +40,11 @@ async function computeErrorImpact(
 
     const [summary, clients, versions, daily] = await Promise.all([
         hogql(
-            `SELECT count() AS n, count(DISTINCT person_id) AS users, count(DISTINCT toString($session_id)) AS sessions,
+            `SELECT count() AS n, count(DISTINCT person_id) AS users, count(DISTINCT toString(properties.$session_id)) AS sessions,
                     min(timestamp) AS first_seen, max(timestamp) AS last_seen,
                     any(toString(properties.$exception_types[1])) AS etype, any(toString(properties.$exception_values[1])) AS evalue,
                     any(toString(properties.$exception_issue_id)) AS issue
-             FROM events WHERE ${base} LIMIT 1`,
+             FROM events WHERE ${base}`,
             values
         ),
         hogql(
@@ -64,11 +56,11 @@ async function computeErrorImpact(
         ),
         hogql(
             `SELECT toString(${P.version}) AS v, count() AS n, count(DISTINCT toString(${P.client})) AS clients
-             FROM events WHERE ${base} GROUP BY v ORDER BY n DESC LIMIT 100`,
+             FROM events WHERE ${base} GROUP BY v ORDER BY n DESC`,
             values
         ),
         hogql(
-            `SELECT toString(toDate(timestamp)) AS day, count() AS n FROM events WHERE ${base} GROUP BY day ORDER BY day LIMIT 100`,
+            `SELECT toString(toDate(timestamp)) AS day, count() AS n FROM events WHERE ${base} GROUP BY day ORDER BY day`,
             values
         ),
     ])
@@ -104,15 +96,15 @@ async function computeErrorImpact(
     if (opts.pathname) {
         const rows = await hogql(
             `SELECT v, count() AS sessions, countIf(failed) AS failed FROM (
-                 SELECT toString($session_id) AS sid, any(toString(${P.version})) AS v,
+                 SELECT toString(properties.$session_id) AS sid, any(toString(${P.version})) AS v,
                         countIf(event = '$exception' AND ${f.where}) > 0 AS failed
                  FROM events
                  WHERE timestamp > now() - toIntervalDay({days})
-                   AND notEmpty(toString($session_id))
+                   AND notEmpty(toString(properties.$session_id))
                    AND (toString(properties.$pathname) = {path} OR event = '$exception')
                  GROUP BY sid
                  HAVING countIf(event = '$pageview' AND toString(properties.$pathname) = {path}) > 0
-             ) GROUP BY v ORDER BY v LIMIT 100`,
+             ) GROUP BY v ORDER BY v`,
             { ...values, path: opts.pathname }
         )
         impact.failure_rate = {
@@ -129,10 +121,6 @@ async function computeErrorImpact(
 
 /** The most frequent errors on a screen, for risk reviews that name a screen but not an error. */
 export async function topErrorsOnScreen(pathname: string, days = 14, limit = 3): Promise<{ issue_id: string; error_type: string; error_message: string; occurrences: number; clients: number }[]> {
-    return appAnswer('topErrorsOnScreen', [pathname, days, limit], () => computeTopErrorsOnScreen(pathname, days, limit), 60_000)
-}
-
-async function computeTopErrorsOnScreen(pathname: string, days = 14, limit = 3): Promise<{ issue_id: string; error_type: string; error_message: string; occurrences: number; clients: number }[]> {
     const rows = await hogql(
         `SELECT toString(properties.$exception_issue_id) AS issue, any(toString(properties.$exception_types[1])) AS etype,
                 any(toString(properties.$exception_values[1])) AS evalue, count() AS n, count(DISTINCT toString(${P.client})) AS clients

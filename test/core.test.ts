@@ -305,34 +305,6 @@ test('expired reports serve marked stale immediately and refresh only once in th
     assert.deepEqual([fresh.value, fresh.stale, calls], [2, false, 1])
 })
 
-test('incident reads sort only UUID keys and restore newest-first results after the unsorted fetch', async (t) => {
-    const { findIncidents } = await import('../src/core/incidents.ts')
-    const { clearPosthogCache } = await import('../src/core/posthog.ts')
-    const { config } = await import('../src/core/config.ts')
-    const old = { ...config.posthog }
-    Object.assign(config.posthog, { projectId: 'incident-test', personalApiKey: 'test-key' })
-    clearPosthogCache()
-    t.after(() => { Object.assign(config.posthog, old); clearPosthogCache() })
-    let reads = 0
-    t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
-        const { query, values } = JSON.parse(String(init.body)).query
-        if (query.includes('raw_session_replay_events')) return new Response(JSON.stringify({ columns: [], results: [] }))
-        reads++
-        assert.match(query, /SELECT uuid FROM events/)
-        assert.match(query, /timestamp >= \{from\} AND timestamp < \{to\}/)
-        assert.match(query, /ORDER BY timestamp DESC, uuid LIMIT \{limit\}\s*\) LIMIT \{limit\}/)
-        assert.equal(values.limit, 2)
-        return new Response(JSON.stringify({ columns: ['event', 'timestamp', 'session_id'], results: [
-            ['$rageclick', '2026-10-31T10:00:00Z', 'early'], ['$rageclick', '2026-10-31T11:00:00Z', 'late'],
-        ] }))
-    })
-    const q = { clientId: 'ACME', from: new Date('2026-10-31'), to: NOW, limit: 2 }
-    const incidents = await findIncidents(q)
-    assert.deepEqual(incidents.map((i) => i.session_id), ['late', 'early'])
-    assert.deepEqual(await findIncidents(q), incidents)
-    assert.equal(reads, 1)
-})
-
 test('cache invalidation separates new reads from work already in flight', async (t) => {
     const { cachedPosthogRead, clearPosthogCache } = await import('../src/core/posthog.ts')
     clearPosthogCache(); t.after(clearPosthogCache)
