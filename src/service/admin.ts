@@ -247,10 +247,32 @@ function adminHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Admin · ${APP_NAME}</title><style>${PAGE_CSS()}
 .badge{display:inline-block;font-size:12px;padding:2px 8px;border-radius:999px;background:var(--chip);white-space:nowrap}.warn{background:#fef0c7;color:#7a2e0e}
 .people-table{table-layout:fixed;width:100%;min-width:1150px}.table-wrap{overflow-x:auto}.people-table td select{max-width:none}.people-table td:last-child button{padding:6px 4px}td select{min-width:0;width:100%;max-width:160px}#people td{overflow-wrap:anywhere}#people td:nth-child(3),#people td:nth-child(5),#people td:nth-child(6){width:13%;max-width:160px}.badge{white-space:normal}label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;cursor:pointer}label.check input{width:auto;margin:0}.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px}
-.toolbar>div{flex:1;min-width:160px}details summary{cursor:pointer;font-weight:600}ul.tight{margin:6px 0;padding-left:20px}ul.tight li{margin:3px 0}</style></head>
-<body>${headerHtml(v, 'Admin')}<main style="max-width:1100px"><h1>Admin</h1>
+.toolbar>div{flex:1;min-width:160px}details summary{cursor:pointer;font-weight:600}ul.tight{margin:6px 0;padding-left:20px}ul.tight li{margin:3px 0}
+main{min-width:0}main .card{border:0;border-radius:0;background:transparent;padding:24px 0;margin:0;border-bottom:1px solid var(--line)}
+main h1{margin:8px 0 0}main button:not(.ghost){background:var(--ink);border-color:var(--ink);color:var(--card)}main .ghost{border-color:transparent;color:var(--ink)}main table{table-layout:fixed}main td,main th{overflow-wrap:anywhere}main td{padding-top:14px;padding-bottom:14px}main .table-wrap{overflow:visible}
+.people-table{min-width:0}.people-table td select{max-width:100%;font-size:13px;padding:7px 4px}.people-table td{font-size:13px}.people-table td:first-child b{font-weight:600}
+#people-filter{max-width:360px}.add-person{margin:16px 0}.add-person[open] summary,.settings[open] summary{margin-bottom:16px}.toolbar>div{min-width:140px!important;flex:1!important;white-space:normal!important}.toolbar{gap:16px;margin-top:12px}
+.access-help{margin:20px 0;color:var(--muted);font-size:13px}.access-help summary{color:var(--ink)}summary{cursor:pointer}main> .access-help{padding:4px 0 20px;border-bottom:1px solid var(--line)}
+@media(max-width:1000px){.people-table colgroup{display:none}.people-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.people-table,.people-table tbody{display:block}.people-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px;padding:20px 0;border-bottom:1px solid var(--line)}.people-table td{display:block;border:0;padding:0;max-width:none!important;width:auto!important;min-width:0}.people-table td:first-child,.people-table td:nth-child(2){grid-column:1/-1}.people-table td[data-label]:before{content:attr(data-label);display:block;color:var(--muted);font-size:12px;margin-bottom:4px}.people-table td:first-child:before{display:none}.people-table td select{max-width:none}.people-table td[colspan]{grid-column:1/-1}}
+@media(max-width:560px){main table:not(.people-table){font-size:12px}main th,main td{padding-left:3px;padding-right:3px}main td button,main td .btn{font-size:12px;padding:6px 3px}main .toolbar>div{min-width:min(100%,200px)!important}main .toolbar{align-items:stretch}main button{max-width:100%}main input,main select{min-width:0}}
+</style></head>
+<body>${headerHtml(v, 'Admin')}<main style="max-width:1280px"><h1>Admin</h1>
 
-<div class="card"><details><summary>How access works</summary>
+<div class="card"><h2>People</h2><p class="small muted">Changes to access save automatically.</p><label for="people-filter">Find a person</label><input id="people-filter" type="search" placeholder="Name or email">
+<details class="add-person"><summary>Add a person</summary><div class="toolbar"><div><label for="new-email">PostHog email</label><input id="new-email" type="email" placeholder="name@company.com"></div>
+<div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-system"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0"><label for="new-surveys">Surveys</label><select id="new-surveys"></select></div><div style="flex:0"><label for="new-dashboards">Dashboards</label><select id="new-dashboards"></select></div><div style="flex:0"><button type="button" id="add">Add person</button></div></div></details>
+<p id="people-msg" class="small" aria-live="polite"></p>
+<div class="table-wrap" role="region" aria-label="People access table" tabindex="0"><table class="people-table" role="table"><colgroup><col style="width:16%"><col style="width:14%"><col style="width:13%"><col style="width:10%"><col style="width:13%"><col style="width:13%"><col style="width:7%"><col style="width:9%"><col style="width:5%"></colgroup><thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Person</th><th scope="col" role="columnheader">In PostHog</th><th scope="col" role="columnheader">Role here</th><th scope="col" role="columnheader">System page</th><th scope="col" role="columnheader">Surveys role</th><th scope="col" role="columnheader">Dashboards</th><th scope="col" role="columnheader">Clips</th><th scope="col" role="columnheader">Last activity</th><th scope="col" role="columnheader">Actions</th></tr></thead><tbody id="people" role="rowgroup"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody></table></div><div id="people-pager"></div></div>
+
+<section class="card"><details><summary>Access defaults</summary><p class="small muted">Changes save automatically.</p>
+<div class="toolbar"><div><label for="default-role">Role for other PostHog users</label><select id="default-role"></select></div>
+<div><label for="share">Share links</label><select id="share"><option value="1">Allowed (for people who can download)</option><option value="0">Turned off</option></select></div>
+<div><label for="survey-default">Survey role for other PostHog users</label><select id="survey-default"></select></div>
+<div><label for="survey-shared">Survey role for chat with the shared team token</label><select id="survey-shared"></select></div>
+<div><label for="dashboard-default">Dashboard role for other PostHog users</label><select id="dashboard-default"></select></div>
+<div><label for="dashboard-shared">Dashboard role for chat with the shared team token</label><select id="dashboard-shared"></select></div></div>
+<details class="access-help"><summary>How this works</summary><p class="small muted">The defaults apply to anyone who signs in with a PostHog account and is not listed above. "No access" is the safe choice. The shared team token cannot tell who asks: give it at most "See surveys and results", and give people personal tokens for more.</p></details><p id="settings-msg" class="small" aria-live="polite"></p></details></section>
+<details class="access-help"><summary>How access works</summary>
 <ul class="tight">
 <li><b>Signing in is PostHog's job.</b> Everyone signs in with their PostHog account. Passwords, two-factor login and removing people all happen in PostHog. Removing someone from PostHog locks them out here within a minute.</li>
 <li><b>What they may do is set here.</b> <i>Watch clips</i> lets a person make and watch clips on this site. <i>Watch, download and share</i> adds MP4 downloads and share links. <i>Admin</i> adds this page.</li>
@@ -261,27 +283,13 @@ function adminHtml(v: Viewer): string {
 <li><b>PostHog owners and admins</b> of the organization that owns the project are always admins here, so nobody can be locked out.</li>
 <li><b>Important:</b> on this PostHog plan, PostHog itself cannot limit replays per person. Anyone who is a member of the project's organization can watch every replay inside PostHog, whatever their role here. Those people are marked <span class="badge warn">sees all replays in PostHog</span>. To keep someone to clips only, give them a PostHog account in a separate organization (for example "Clip viewers") with no access to this project, then give them a role here.</li>
 <li><b>Storage.</b> A clip is stored once, however many people make the same part of the same recording. A clip nobody saved is deleted two weeks after it was last asked for. Saved clips stay until whoever saved them unsaves them, or you delete them here.</li>
-<li>Clips attached to Jira tickets follow Jira's permissions. Share links work for anyone who has them until they expire, so turn them off below if you need tighter control.</li></ul></details></div>
+<li>Clips attached to Jira tickets follow Jira's permissions. Share links work for anyone who has them until they expire, so turn them off below if you need tighter control.</li></ul></details>
 
-<div class="card"><h2>People</h2><label for="people-filter">Find a person</label><input id="people-filter" type="search" placeholder="Name or email">
-<div class="toolbar"><div><label for="new-email">Add a person (their PostHog email)</label><input id="new-email" type="email" placeholder="name@company.com"></div>
-<div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-system"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0"><label for="new-surveys">Surveys</label><select id="new-surveys"></select></div><div style="flex:0"><label for="new-dashboards">Dashboards</label><select id="new-dashboards"></select></div><div style="flex:0"><button type="button" id="add">Add</button></div></div>
-<p id="people-msg" class="small" aria-live="polite"></p>
-<div class="table-wrap" role="region" aria-label="People access table" tabindex="0"><table class="people-table"><colgroup><col style="width:16%"><col style="width:14%"><col style="width:13%"><col style="width:10%"><col style="width:13%"><col style="width:13%"><col style="width:7%"><col style="width:9%"><col style="width:5%"></colgroup><thead><tr><th scope="col">Person</th><th scope="col">In PostHog</th><th scope="col">Role here</th><th scope="col">System page</th><th scope="col">Surveys role</th><th scope="col">Dashboards</th><th scope="col">Clips</th><th scope="col">Last activity</th><th scope="col">Actions</th></tr></thead><tbody id="people"><tr><td colspan="9" class="muted">Loading…</td></tr></tbody></table></div><div id="people-pager"></div></div>
-
-<div class="card"><h2>Settings</h2>
-<div class="toolbar"><div><label for="default-role">Role for other PostHog users</label><select id="default-role"></select></div>
-<div><label for="share">Share links</label><select id="share"><option value="1">Allowed (for people who can download)</option><option value="0">Turned off</option></select></div>
-<div><label for="survey-default">Survey role for other PostHog users</label><select id="survey-default"></select></div>
-<div><label for="survey-shared">Survey role for chat with the shared team token</label><select id="survey-shared"></select></div>
-<div><label for="dashboard-default">Dashboard role for other PostHog users</label><select id="dashboard-default"></select></div>
-<div><label for="dashboard-shared">Dashboard role for chat with the shared team token</label><select id="dashboard-shared"></select></div></div>
-<p class="small muted">The defaults apply to anyone who signs in with a PostHog account and is not listed above. "No access" is the safe choice. The shared team token cannot tell who asks: give it at most "See surveys and results", and give people personal tokens for more.</p><p id="settings-msg" class="small" aria-live="polite"></p></div>
-
-<div class="card"><h2>Chat tokens</h2>
-<div class="toolbar" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label for="chat-url">Lens address for Copilot</label><input id="chat-url" placeholder="https://lens.example.com"></div><div><button type="button" id="chat-url-save">Save</button></div></div>
+<div class="card"><h2>Chat keys</h2>
+<details class="settings"><summary>Copilot settings</summary>
+<div class="toolbar" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label for="chat-url">Lens address for Copilot</label><input id="chat-url" placeholder="https://lens.example.com"></div><div><button type="button" id="chat-url-save">Save address</button></div></div>
 <p class="small muted">The Chat page gives people this address. Leave empty for the default.</p><p id="chat-url-msg" class="small" aria-live="polite"></p>
-<p class="small muted">Personal tokens people made on the Chat page. A revoked token stops working at once.</p>
+</details><p class="small muted">Revoking a key stops its chat access immediately.</p>
 <div class="table-wrap"><table><thead><tr><th scope="col">Person</th><th scope="col">Name</th><th scope="col">Made</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="tokens"><tr><td colspan="5">Loading tokens…</td></tr></tbody></table></div><div id="tokens-pager"></div></div>
 
 <div class="card"><h2>Clips</h2><p class="small muted" id="space"></p>
@@ -289,7 +297,7 @@ function adminHtml(v: Viewer): string {
 <div class="table-wrap"><table><thead><tr><th scope="col">Clip</th><th scope="col">Who has it</th><th scope="col">Size</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="clips"><tr><td colspan="5">Loading clips…</td></tr></tbody></table></div><div id="clips-pager"></div></div>
 
 <div class="card"><h2>Activity</h2><p class="small muted">Kept for a year. Search all activity; load older results below.</p><p id="audit-msg" class="small" aria-live="polite"></p><div class="toolbar"><div><label for="filter">Search</label><input id="filter" placeholder="Person, action or clip"></div></div>
-<div class="table-wrap"><table><thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">What</th><th scope="col">Details</th></tr></thead><tbody id="audit"><tr><td colspan="4">Loading activity…</td></tr></tbody></table></div><div id="audit-pager"></div><button type="button" id="audit-more" hidden>Load older activity</button></div>
+<div class="table-wrap"><table><thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">What</th><th scope="col">Details</th></tr></thead><tbody id="audit"><tr><td colspan="4">Loading activity…</td></tr></tbody></table></div><div id="audit-pager"></div><button type="button" id="audit-more" class="ghost" hidden>Load older activity</button></div>
 </main>
 <script>
 ${PAGER_JS}
@@ -297,7 +305,7 @@ const $=id=>document.getElementById(id);const api=(path,opts={})=>fetch(path,{..
 const when=t=>t?new Date(t).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}):'never';
 const day=t=>new Date(t).toLocaleDateString([], {dateStyle:'medium'});
 const mb=b=>!b?'0 KB':b>=1048576?(b/1048576).toFixed(1)+' MB':Math.max(1,Math.round(b/1024))+' KB';
-const n=(k,w)=>k+' '+w+(k===1?'':'s');
+const n=(k,w)=>Number(k).toLocaleString()+' '+w+(k===1?'':'s');
 const clock=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 const short=e=>(e||'').replace(/@.*/,'');
 const cell=(tr,t,cls)=>{const td=document.createElement('td');if(t instanceof Node)td.appendChild(t);else td.textContent=t??'';if(cls)td.className=cls;tr.appendChild(td);return td};
@@ -334,7 +342,7 @@ const peoplePg=makePager({mount:$('people-pager'),noun:'people',size:25,draw:sli
   cell(tr,p.clips.clips?n(p.clips.clips,'clip')+', '+p.clips.saved+' saved · '+mb(p.clips.bytes):'none','small');
   cell(tr,when(p.last_seen),'small');
   if(p.set_here&&!p.locked){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Reset';b.setAttribute('aria-label','Reset clip role for '+p.email);b.title='Remove the role set here, so the default applies';b.onclick=async()=>{if(!confirm('Reset the clip role for '+p.email+' to the default?'))return;try{await api('/replays/admin/api/person?email='+encodeURIComponent(p.email),{method:'DELETE'});msg('people-msg','Removed the role for '+p.email+'.',true);await load()}catch(e){msg('people-msg',e.message)}};cell(tr,b)}else cell(tr,'');
-  tb.appendChild(tr)});
+  tr.setAttribute('role','row');[...tr.children].forEach((td,i)=>{td.setAttribute('role','cell');td.dataset.label=['Person','In PostHog','Clip role','System page','Surveys','Dashboards','Clips','Last activity','Actions'][i]});tb.appendChild(tr)});
 
 if(!slice.length)$('people').innerHTML='<tr><td colspan="9">No people found. Change your search or add a person above.</td></tr>';guardControls()}});
 function renderPeople(keep=false){const q=$('people-filter').value.trim().toLowerCase();if(S)peoplePg.set(S.people.filter(p=>(p.email+' '+p.name+' '+p.note).toLowerCase().includes(q)),keep)}
@@ -349,7 +357,7 @@ async function load(){const focused=document.activeElement;const focusLabel=focu
  opts($('survey-default'),S.survey_roles.filter(r=>r.id!=='launch'),S.survey_default_role);opts($('survey-shared'),S.survey_roles,S.survey_shared_token_role);opts($('new-surveys'),[{id:'default',text:'Default'}].concat(S.survey_roles),'default');
  opts($('dashboard-default'),S.dashboard_roles.filter(r=>r.id!=='share'),S.dashboard_default_role);opts($('dashboard-shared'),S.dashboard_roles.filter(r=>r.id!=='share'),S.dashboard_shared_token_role);opts($('new-dashboards'),[{id:'default',text:'Default'}].concat(S.dashboard_roles),'default');
  tokensPg.set(S.chat_tokens,true);renderPeople(true);
- const st=S.storage;$('space').textContent=n(st.clips,'clip')+' using '+mb(st.bytes)+' on the server. Saved: '+st.saved+' ('+mb(st.saved_bytes)+'). The rest are deleted two weeks after they were last asked for.';
+ const st=S.storage;$('space').textContent=n(st.clips,'clip')+' using '+mb(st.bytes)+' on the server. Saved: '+st.saved+' ('+mb(st.saved_bytes)+'). Unsaved clips expire two weeks after their last request.';
  renderClips();
  renderAudit(true);guardControls();if(focusLabel){const next=[...document.querySelectorAll('[aria-label]')].find(el=>el.getAttribute('aria-label')===focusLabel);next?.focus()}}
 function renderClips(keep=true){const f=$('clip-filter').value;const soon=Date.now()+3*86400000;const cb=$('clips');cb.innerHTML='';
@@ -365,11 +373,11 @@ const clipsPg=makePager({mount:$('clips-pager'),noun:'clips',size:25,draw:slice=
   cell(tr,mb(c.bytes),'small');
   cell(tr,c.expires_at?day(c.expires_at):'Saved',c.expires_at?'small':'small ok');
   const w=document.createElement('a');w.className='btn ghost';w.textContent='Watch';w.href='/replays?clip='+encodeURIComponent(c.name);const d=document.createElement('button');d.type='button';d.className='ghost';d.textContent='Delete';d.onclick=async()=>{if(!confirm('Delete this clip for everyone who has it? Its share links stop working.'))return;try{await api('/replays/admin/api/clips/'+encodeURIComponent(c.name),{method:'DELETE'});await load()}catch(e){msg('people-msg',e.message+' Try the action again.')}};
-  const box=document.createElement('div');box.style.display='flex';box.style.gap='6px';box.append(w,d);cell(tr,box);cb.appendChild(tr)});guardControls()}});
+  const box=document.createElement('div');box.style.display='flex';box.style.gap='6px';box.style.flexWrap='wrap';box.append(w,d);cell(tr,box);cb.appendChild(tr)});guardControls()}});
 $('clip-filter').onchange=()=>renderClips(false);
 function renderAudit(keep=false){auditPg.set(S.audit,keep);$('audit-more').hidden=S.audit.length%300!==0||!S.audit.length}
 const auditPg=makePager({mount:$('audit-pager'),noun:'activity entries',size:25,draw:slice=>{const tb=$('audit');tb.innerHTML='';
- if(!slice.length)tb.innerHTML='<tr><td colspan="4" class="muted">Nothing found.</td></tr>';
+ if(!slice.length)tb.innerHTML='<tr><td colspan="4" class="muted">No activity found. Try another search.</td></tr>';
  slice.forEach(e=>{const tr=document.createElement('tr');cell(tr,when(e.t),'small');cell(tr,e.who);cell(tr,ACTIONS[e.action]||e.action);const {t,who,action,...rest}=e;cell(tr,Object.entries(rest).map(([k,v])=>k+': '+(typeof v==='object'?JSON.stringify(v):v)).join(' · '),'small muted');tb.appendChild(tr)})}});
 let searchVersion=0;
 async function searchAudit(more=false){const version=++searchVersion;msg('audit-msg','Loading…',true);try{const q=$('filter').value.trim();const audit=(await api('/replays/admin/api/audit?q='+encodeURIComponent(q)+'&offset='+(more?S.audit.length:0))).audit;if(version!==searchVersion)return;S.audit=more?S.audit.concat(audit):audit;renderAudit(more);msg('audit-msg',audit.length?'Activity loaded.':'No activity found. Try another search.',true)}catch(e){if(version===searchVersion)msg('audit-msg',e.message+' Try the search again.')}}

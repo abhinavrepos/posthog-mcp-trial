@@ -584,43 +584,45 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
 // ------------------------------------------------------------------ pages
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 
-const CSS = `:root{color-scheme:light;--bg:#f5f6f8;--card:#fff;--ink:#1c2230;--muted:#636b7c;--line:#e0e3ea;--accent:#1d4ed8;--accent-ink:#fff;--err:#b42318;--ok:#067647;--chip:#eef2ff}
+const CSS = `:root{color-scheme:light;--bg:#fafafa;--card:#fff;--ink:#242629;--muted:#62666b;--line:#e7e8e9;--accent:#30353b;--accent-ink:#fff;--err:#b42318;--ok:#067647;--chip:#f0f1f2}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-header{display:flex;align-items:center;gap:18px;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--card);flex-wrap:wrap}
+header{display:flex;align-items:center;gap:16px;padding:12px 24px;border-bottom:1px solid var(--line);background:var(--card);flex-wrap:wrap}
 .brand{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px;color:var(--ink);text-decoration:none;letter-spacing:.01em}
-.brand .mark{width:18px;height:18px;border-radius:50%;background:conic-gradient(from 210deg,var(--accent),#1baf7a,var(--accent));box-shadow:inset 0 0 0 4px var(--card)}
+.brand .mark{width:18px;height:18px;border-radius:50%;background:var(--ink);box-shadow:inset 0 0 0 5px var(--card);border:1px solid var(--ink)}
 .brand .tag{font-weight:500;font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 7px}
 nav{display:flex;gap:4px;flex:1}nav a{color:var(--muted);text-decoration:none;font-weight:600;padding:7px 11px;border-radius:7px;white-space:nowrap}nav a:hover{color:var(--ink);background:var(--bg)}
-nav a[aria-current=page]{color:var(--accent);background:var(--chip)}.hdr{display:flex;gap:10px;align-items:center;flex-wrap:wrap}header button{padding:5px 10px}
-@media (max-width:700px){nav{order:3;flex-basis:100%;flex-wrap:wrap;min-width:0}nav a{padding:6px 8px}.who{display:none}}.muted{color:var(--muted)}.small{font-size:13px}main{max-width:980px;margin:0 auto;padding:20px 16px 60px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-bottom:16px}
-h2{font-size:17px;margin:0 0 12px}label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
-input,select{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:9px 11px}
+nav a[aria-current=page]{color:var(--ink);background:var(--chip)}.hdr{display:flex;gap:10px;align-items:center;flex-wrap:wrap}header button{padding:5px 10px}
+@media (max-width:700px){nav{order:3;flex-basis:100%;flex-wrap:wrap;min-width:0}nav a{padding:6px 8px}.who{display:none}}.muted{color:var(--muted)}.small{font-size:13px}main{max-width:980px;margin:0 auto;padding:32px 20px 64px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:24px;margin-bottom:24px;min-width:0;box-shadow:none}.card .card{box-shadow:none}
+h1{font-size:26px;line-height:1.25;letter-spacing:-.025em;margin:0 0 24px}h3{font-size:15px}p{overflow-wrap:anywhere}details>summary{cursor:pointer;color:var(--muted);font-size:13px}details[open]>summary{margin-bottom:12px}details>summary:hover{color:var(--ink)}
+h2{font-size:17px;line-height:1.35;font-weight:650;margin:0 0 16px}label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+input,select{width:100%;font:inherit;color:inherit;background:var(--card);border:1px solid #c9ccd0;border-radius:6px;padding:9px 11px}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}.row>div{flex:1;min-width:140px}
 button,.btn{display:inline-flex;align-items:center;gap:6px;font:inherit;font-weight:600;border-radius:7px;padding:9px 14px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);cursor:pointer;text-decoration:none}
-button.ghost,.btn.ghost{background:transparent;color:var(--accent)}button:disabled{opacity:.5;cursor:default}
-.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:6px 0 12px}.facts div{background:var(--bg);border-radius:7px;padding:8px 10px}
+button.ghost,.btn.ghost{background:transparent;color:var(--ink);border-color:transparent}button.ghost:hover,.btn.ghost:hover{background:var(--chip)}button:hover:not(:disabled),.btn:hover{filter:brightness(.95)}button:disabled{opacity:.5;cursor:default}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:6px 0 12px}.facts div{padding:8px 0;min-width:0}
 .facts b{overflow-wrap:anywhere}.facts span{display:block;font-size:12px;color:var(--muted)}.chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{text-align:left;border:1px solid var(--line);background:var(--chip);color:var(--ink);font-weight:500;padding:5px 9px;border-radius:999px;font-size:13px}
 .chip.error{border-color:var(--err)}.chip .t{font-variant-numeric:tabular-nums;color:var(--muted);margin-right:4px}
 .err{color:var(--err)}.ok{color:var(--ok)}video{width:100%;border-radius:8px;background:#000;margin:8px 0}
-table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:500;font-size:12px}
-.table-wrap{overflow-x:auto}.hidden{display:none}code{background:var(--bg);padding:1px 5px;border-radius:4px}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{text-align:left;padding:12px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:500;font-size:12px}
+.table-wrap{overflow-x:auto;max-width:100%}main>*{min-width:0}input,select,textarea{max-width:100%}nav,.hdr{min-width:0}.who{overflow-wrap:anywhere}a{color:var(--accent)}.hidden{display:none}code{background:var(--bg);padding:1px 5px;border-radius:4px}
 .player{position:relative;background:#000;border-radius:8px;overflow:hidden;margin:8px 0}.player video{display:block;width:100%;margin:0;border-radius:0}
 .cap{position:absolute;left:4%;right:4%;bottom:15%;text-align:center;pointer-events:none}
 .cap span{display:inline-block;max-width:100%;background:rgba(0,0,0,.82);color:#fff;font-weight:700;font-size:clamp(17px,3.3vw,34px);line-height:1.3;padding:.35em .65em;border-radius:10px;white-space:pre-wrap;overflow-wrap:anywhere;box-shadow:0 2px 12px rgba(0,0,0,.35)}
 .player:fullscreen{display:flex;align-items:center;border-radius:0}.player:fullscreen video{height:100%;object-fit:contain}.player:fullscreen .cap span{font-size:clamp(24px,3.4vw,60px)}
 .fs{position:absolute;top:8px;right:8px;padding:5px 10px;background:rgba(0,0,0,.55);border:0;color:#fff;font-size:13px}
-textarea{width:100%;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:7px;padding:9px 11px;resize:vertical}
+textarea{width:100%;font:inherit;color:inherit;background:var(--card);border:1px solid #c9ccd0;border-radius:6px;padding:9px 11px;resize:vertical}
 .comments{border-top:1px solid var(--line);margin-top:14px;padding-top:12px}.comments h3{font-size:15px;margin:0 0 4px}
 .cm{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line)}.cm .at{flex:none;font-variant-numeric:tabular-nums;padding:2px 8px;font-size:13px}
-.cm .tx{flex:1;white-space:pre-wrap;overflow-wrap:anywhere}.cm .by{font-size:12px;color:var(--muted)}.cm.on{background:var(--chip)}.cm button{padding:2px 8px;font-size:13px}
+.cm .tx{min-width:0;flex:1;white-space:pre-wrap;overflow-wrap:anywhere}.cm .by{font-size:12px;color:var(--muted)}.cm.on{background:var(--chip)}.cm button{padding:2px 8px;font-size:13px}
 .spin{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:s 1s linear infinite;display:inline-block}@keyframes s{to{transform:rotate(1turn)}}
 :focus-visible{outline:3px solid var(--accent);outline-offset:2px}a:focus-visible,button:focus-visible{border-radius:7px}
 .skip{position:absolute;left:-9999px;top:0;color:var(--accent);font-weight:600}.skip:focus{position:static;display:block;padding:8px 20px;background:var(--chip);border-bottom:1px solid var(--line);outline-offset:-3px;border-radius:0}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .pager{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:10px;font-size:13px}.pager .pg{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .pager button,.pager .pg>span{padding:5px 10px;white-space:nowrap}.pager select{width:auto;padding:4px 8px}
+@media(max-width:600px){header{padding:12px 16px;gap:12px}main{padding:24px 16px 48px}.card{padding:18px;margin-bottom:20px}.row>div{max-width:100%;min-width:min(140px,100%)}.cm{flex-wrap:wrap}.cm>div{min-width:0}.facts{grid-template-columns:repeat(2,minmax(0,1fr))}.pager .pg{gap:4px}.pager button,.pager .pg>span{padding:5px 7px}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}`
 
 export const PAGE_CSS = () => CSS
@@ -651,7 +653,7 @@ export type Section = 'Replay clips' | 'Live' | 'Dashboards' | 'Surveys' | 'Chat
 export function headerHtml(v: Viewer | undefined, section: Section): string {
     const brand = `<a class="brand" href="/"><span class="mark" aria-hidden="true"></span>${esc(APP_NAME)}${APP_TAG ? `<span class="tag">${esc(APP_TAG)}</span>` : ''}</a>`
     const skip = `<a class="skip" href="#main">Skip to content</a>`
-    const mainId = `<script>addEventListener('DOMContentLoaded',()=>{const m=document.querySelector('main');if(m&&!m.id)m.id='main'})</script>`
+    const mainId = `<script>addEventListener('DOMContentLoaded',()=>{const m=document.querySelector('main');if(m){if(!m.id)m.id='main';if(!m.hasAttribute('tabindex'))m.tabIndex=-1}})</script>`
     if (!v) return `${skip}<header>${brand}</header>${mainId}`
     const tabs = (
         [
@@ -673,12 +675,12 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
 
 export function loginHtml(section: Section = 'Replay clips'): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
-<body>${headerHtml(undefined, section)}<main style="max-width:440px"><div class="card"><h1 style="font-size:20px">Sign in</h1>
-<p class="small muted">Use your PostHog account. Signing in here also signs you in to PostHog in this browser.</p>
+<body>${headerHtml(undefined, section)}<main style="max-width:440px"><div class="card"><h1 style="font-size:24px;margin-bottom:12px">Sign in to ${esc(APP_NAME)}</h1>
+<p class="small muted">Use your PostHog account to continue.</p>
 <form id="f"><p><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></p>
 <p><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required></p>
 <p><button id="go" type="submit">Sign in</button></p><p id="msg" class="small err" role="alert"></p></form>
-<p class="small muted">Use two-factor login, or already signed in to PostHog? <a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on PostHog</a>, then <a href="/replays">reload this page</a>.</p></div></main>
+<details><summary>Two-factor login or already signed in?</summary><p class="small muted"><a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on PostHog</a>, then <a href="/replays">reload this page</a>.</p><p class="small muted">Signing in here also signs you in to PostHog in this browser.</p></details></div></main>
 <script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('go');if(b.disabled)return;b.disabled=true;document.getElementById('msg').textContent='Signing in…';
 try{const r=await fetch('/replays/login',{method:'POST',headers:{'content-type':'application/json','x-clip-page':'1'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('pw').value})});
 const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Sign in failed.');location.href=location.pathname+location.search}catch(err){document.getElementById('msg').textContent=err.message}finally{b.disabled=false}}</script></body></html>`
@@ -686,20 +688,22 @@ const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Sign i
 
 function noAccessHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No access · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
-<body>${headerHtml(v, 'Replay clips')}<main style="max-width:560px"><div class="card"><h1 style="font-size:20px">You don't have access to replay clips</h1>
-<p>You're signed in as <b>${esc(v.email)}</b>, but no admin has given you access yet. Replays can show client data, so access is given person by person.</p>
-<p class="muted small">Ask a PostHog admin to give you the "Watch clips" role on the admin page.</p></div></main></body></html>`
+<body>${headerHtml(v, 'Replay clips')}<main style="max-width:560px"><div class="card"><h1 style="font-size:24px;margin-bottom:12px">Request access to replay clips</h1>
+<p class="small muted">Signed in as <b>${esc(v.email)}</b>.</p><p>Ask a PostHog admin for the “Watch clips” role on the admin page.</p>
+<details><summary>Why access is required</summary><p class="small muted">Replays can show client data, so an admin grants access to each person.</p></details></div></main></body></html>`
 }
 
 function pageHtml(v: Viewer): string {
     const bookmarklet = `javascript:(()=>{window.open(${JSON.stringify(config.service.publicUrl + '/replays?url=')}+encodeURIComponent(location.href))})()`
     const boot = JSON.stringify({ lengths: LENGTHS, ttl: config.service.clipLinkTtlHours, retention: RETENTION_DAYS, perHour: PER_HOUR, canDownload: can(v.role, 'download'), shareLinks: can(v.role, 'download') && loadAccess().allow_share_links }).replace(/</g, '\\u003c')
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
-<body>${headerHtml(v, 'Replay clips')}<main>
-<h1 class="sr-only">Replay clips</h1>
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips · ${esc(APP_NAME)}</title><style>${CSS}
+.clips-page>.card{border:0;border-top:1px solid var(--line);border-radius:0;background:transparent;padding:24px 0}.clips-page>.card:first-of-type{border-top:0;padding-top:0}
+</style></head>
+<body>${headerHtml(v, 'Replay clips')}<main class="clips-page">
+<h1>Replay clips</h1>
 
-<div class="card"><h2>1. Which replay?</h2>
-<label for="input">PostHog replay link or session id</label>
+<div class="card"><h2>1. Choose a replay</h2>
+<label for="input">PostHog replay link or session ID</label>
 <div class="row"><div style="flex:4"><input id="input" placeholder="${esc(config.posthog.publicHost)}/project/${esc(config.posthog.projectId)}/replay/…" autocomplete="off"></div>
 <div style="flex:0"><button id="check" type="button">Check replay</button></div></div>
 <p aria-live="polite" aria-atomic="true" id="inspect-msg" class="small"></p>
@@ -714,10 +718,10 @@ function pageHtml(v: Viewer): string {
 <div style="flex:0"><button id="go" type="button" disabled>Make clip</button></div></div>
 <p aria-live="polite" aria-atomic="true" id="job-msg" class="small"></p>
 <div id="result" class="hidden"><div class="player" id="player"><video aria-label="Replay clip" id="video" controls preload="metadata" controlslist="nodownload nofullscreen" oncontextmenu="return CFG.canDownload"><track kind="captions" srclang="en" label="Comments" id="track"></video><div class="cap" id="cap" aria-live="polite"></div><button class="fs" id="fs" type="button" title="Full screen, with the comments">Full screen</button></div>
-<div class="row" style="align-items:center"><button class="ghost" id="save" type="button">Save this</button><a class="btn" id="dl">Download MP4</a><button class="ghost" id="share" type="button">Copy share link</button><a class="btn ghost" id="open" target="_blank" rel="noopener">Open in PostHog</a></div>
+<div class="row" style="align-items:center"><button class="ghost" id="save" type="button">Save this</button><a class="btn ghost" id="dl">Download MP4</a><button class="ghost" id="share" type="button">Copy share link</button><a class="btn ghost" id="open" target="_blank" rel="noopener">Open in PostHog</a></div>
 <p aria-live="polite" aria-atomic="true" id="keep-msg" class="small muted"></p><p aria-live="polite" aria-atomic="true" id="share-msg" class="small muted"></p>
 <div class="comments"><h3>Comments on the video</h3>
-<p class="small muted" style="margin:0 0 6px">Each comment shows big over the video at its moment, like a subtitle. Downloads and share links include them, burned into the video.</p>
+<p class="small muted" style="margin:0 0 12px">Comments appear as captions in the video, downloads and share links.</p>
 <div id="c-list"></div><div id="comments-pager"></div>
 <div class="row" style="margin-top:10px"><div style="flex:0 0 120px"><label for="c-at">At (m:ss)</label><input id="c-at" value="0:00" autocomplete="off"></div>
 <div style="flex:0 0 140px"><label for="c-dur">Show for</label><select id="c-dur"></select></div>
@@ -727,11 +731,11 @@ function pageHtml(v: Viewer): string {
 <p class="small muted" id="c-plain"></p></div></div></div>
 
 <div class="card"><h2>Your clips</h2><div class="table-wrap"><table><thead><tr><th scope="col">Made</th><th scope="col">Client</th><th scope="col">User</th><th scope="col">Part</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="recent"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table><div id="recent-pager"></div></div>
-<p id="recent-msg" class="small" role="alert"></p><p class="small muted" id="retention"></p></div>
+<p id="recent-msg" class="small" role="alert"></p><details><summary>How this works</summary><p class="small muted" id="retention"></p></details></div>
 
-<div class="card"><h2>Get MP4 from PostHog in one click</h2>
+<details class="card"><summary>Open replays from PostHog in one click</summary>
 <p class="small">Drag this button to your bookmarks bar. While you watch a replay in PostHog, click it to open the replay here.</p>
-<p><a class="btn ghost" href="${esc(bookmarklet)}">Get MP4</a></p></div>
+<p><a class="btn ghost" href="${esc(bookmarklet)}">Get MP4</a></p></details>
 </main>
 <script>
 ${PAGER_JS}
