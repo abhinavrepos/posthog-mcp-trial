@@ -85,6 +85,18 @@ transaction(() => {
         CREATE TABLE week_done(week_end TEXT PRIMARY KEY, computed_at TEXT NOT NULL, signals_complete INTEGER NOT NULL);
         PRAGMA user_version = 4;
     `)
+    // Every user identity ever stored, for the privacy scrubber (src/core/rescueprivacy.ts). Kept after retention
+    // removes their days: hiding a name that no longer appears costs nothing.
+    if (version < 5) tasksDb.exec(`
+        CREATE TABLE known_users(user TEXT PRIMARY KEY) WITHOUT ROWID;
+        CREATE TRIGGER known_from_task_users AFTER INSERT ON task_users_daily WHEN NEW.user != ''
+            BEGIN INSERT OR IGNORE INTO known_users VALUES (NEW.user); END;
+        CREATE TRIGGER known_from_user_daily AFTER INSERT ON user_daily WHEN NEW.user != ''
+            BEGIN INSERT OR IGNORE INTO known_users VALUES (NEW.user); END;
+        INSERT OR IGNORE INTO known_users SELECT DISTINCT user FROM task_users_daily WHERE user != '';
+        INSERT OR IGNORE INTO known_users SELECT DISTINCT user FROM user_daily WHERE user != '';
+        PRAGMA user_version = 5;
+    `)
 })
 type Row = Record<string, unknown>
 const all = <T = Row>(sql: string, ...args: SQLInputValue[]) => tasksDb.prepare(sql).all(...args) as T[]
@@ -192,12 +204,13 @@ export function summariseSteps(sessions: Step[][], day: string, _reg: AppEvents)
         const submits = new Map<number, { step: Step; op: string; key: string }>()
         const pending = new Map<string, ErrorsDaily[]>(), seenErrors = new Set<number>()
         let lastError = -Infinity
+        // One user per session: look up their row once, not on every step.
+        const user = session[0].raw.user || '', uk = JSON.stringify([client, user])
+        let u = users.get(uk)
+        if (!u) { u = { day, client, user, events: 0, completed: 0 }; users.set(uk, u) }
+        if (user) people.get(client)!.add(user)
         for (const step of session) {
-            const user = session[0].raw.user || ''
-            const uk = JSON.stringify([client, user])
-            let u = users.get(uk)
-            if (!u) { u = { day, client, user, events: 0, completed: 0 }; users.set(uk, u) }
-            u.events++; if (user) people.get(client)!.add(user)
+            u.events++
             if (step.kind === 'submit') {
                 const op = step.label.toLowerCase(), family = operationFamily(op), key = JSON.stringify([step.dialog, op])
                 const ok = JSON.stringify([client, step.dialog, op])
