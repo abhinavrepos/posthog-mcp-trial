@@ -80,7 +80,7 @@ export function systemHtml(v: Viewer): string {
 .banner p{margin:2px 0 0;color:var(--muted);font-size:13px}
 .banner.ok{background:var(--good-bg)}
 .banner.ok .big{background:var(--good)}
-.banner.warn{background:var(--warn-bg)}
+.banner.warn{background:var(--down-bg)}
 .banner.warn .big{background:var(--down)}
 .banner.down{background:var(--down-bg)}
 .banner.down .big{background:var(--down)}
@@ -162,7 +162,7 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .tiles{display:grid;margin-bottom:14px;margin:0 0 24px;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
 .tile span{display:block;color:var(--muted);font-size:12px;font-weight:500;min-height:16px;line-height:16px}
 .tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px;line-height:16px}
-.tile.problem{border-color:var(--warn);background:var(--warn-bg)}
+.tile.problem{border-color:var(--down);background:var(--down-bg)}
 .tile.problem small{color:var(--warn)}
 .tile.failure{border-color:var(--err);background:var(--err-bg)}
 .section-details{border-bottom:1px solid var(--line);padding:14px 0}
