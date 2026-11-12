@@ -523,7 +523,7 @@ step_posthog() {
         finish posthog
         return
     fi
-    CURRENT=posthog; step "Installing PostHog (30-60 minutes the first time)"
+    CURRENT=posthog; step "Installing PostHog (1-2 hours the first time)"
     touch "$STATE_DIR/posthog-started"
     POSTHOG_APP_TAG="$TARGET_COMMIT" POSTHOG_PINNED_COMPOSE="$HERE/migrate/versions/docker-compose.pinned.yml" \
         POSTHOG_INSTALL_DIR="$POSTHOG_DIR" bash "$HERE/posthog/install-posthog-hobby.sh" "$POSTHOG_ADDRESS" </dev/null

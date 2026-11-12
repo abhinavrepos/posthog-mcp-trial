@@ -196,6 +196,7 @@ th,td{padding:7px 4px}
 .svc .d{grid-column:1/-1;grid-row:2;text-align:left}
 .tile b{font-size:21px}
 .card{padding:12px}
+.card>.table-wrap{margin-left:-12px;margin-right:-12px}.card>.table-wrap :is(th,td):first-child{padding-left:12px}.card>.table-wrap :is(th,td):last-child{padding-right:12px}
 .tools input{width:100%;min-width:0}
 .tools select{width:100%}
 .containers-table th:nth-child(2){width:32%}
@@ -209,7 +210,7 @@ th,td{padding:7px 4px}
 
 .containers-table .st{white-space:nowrap}
 }
-@media(max-width:1200px){.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:1200px) and (min-width:641px){.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}
 
 
 }

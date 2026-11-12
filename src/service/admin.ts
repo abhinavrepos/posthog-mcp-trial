@@ -372,6 +372,11 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 #audit td:first-child{white-space:nowrap}
 #audit td:last-child{color:var(--ink);font-size:13px;line-height:20px}
 #audit pre{white-space:pre-wrap;overflow-wrap:anywhere}
+@media(max-width:600px){#tab-activity .table-wrap>table,#audit{display:block}#tab-activity thead,#tab-activity colgroup{display:none}
+#audit>tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:14px 24px;border-bottom:1px solid var(--line)}#audit>tr:hover{background:transparent}
+#audit>tr>td{display:block;border:0;padding:0!important;min-width:0}#audit>tr>td:nth-child(1){grid-column:2;grid-row:1;color:var(--muted);text-align:right}#audit>tr>td:nth-child(1) br{display:none}
+#audit>tr>td:nth-child(3){grid-column:1;grid-row:1;font-weight:600}#audit>tr>td:nth-child(2){grid-column:1/-1;grid-row:2}#audit>tr>td:nth-child(4){grid-column:1/-1;grid-row:3;margin-top:4px}
+#audit>tr>td[colspan]{grid-column:1/-1;grid-row:auto;text-align:center;color:var(--muted)}}
 .audit-footer{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
 .audit-footer #audit-pager{flex:1;min-width:0}
 @media(max-width:1180px){.card>.table-wrap:has(.people-table){margin-left:0;margin-right:0}
@@ -386,6 +391,7 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .people-table td:first-child:before{display:none}
 .people-table td select{max-width:none}
 .people-table td[colspan]{grid-column:1/-1}.people-table td:empty{display:none}
+#people td:last-child{grid-column:1/-1;text-align:left}#people td:last-child:not(:empty){padding-top:4px}#people td:last-child button{padding-left:12px;padding-right:12px;border-color:var(--line-strong)}
 }
 @media(max-width:560px){main table:not(.people-table){font-size:12px}
 main th,main td{padding-left:3px;padding-right:3px}
@@ -554,7 +560,7 @@ const order=action.startsWith('privacy.')?['on','lens','posthog','triage','codes
 function renderAudit(keep=false){auditPg.set(S.audit,keep);$('audit-more').hidden=S.audit.length%300!==0||!S.audit.length}
 const auditPg=makePager({mount:$('audit-pager'),noun:'activity entries',size:25,draw:slice=>{const tb=$('audit');tb.innerHTML='';
  if(!slice.length)tb.innerHTML='<tr><td colspan="4" class="muted">No activity found. Try another search.</td></tr>';
- slice.forEach(e=>{const tr=document.createElement('tr');const time=document.createElement('time');time.dateTime=e.t;time.title=when(e.t);time.append(new Date(e.t).toLocaleDateString([], {month:'short',day:'numeric'}),document.createElement('br'),new Date(e.t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));cell(tr,time,'small');cell(tr,identity(e.who));cell(tr,ACTIONS[e.action]||e.action);const {t,who,action,...rest}=e;cell(tr,auditDetails(e.action,rest),'audit-detail');tb.appendChild(tr)})}});
+ slice.forEach(e=>{const tr=document.createElement('tr');const time=document.createElement('time');time.dateTime=e.t;time.title=when(e.t);time.append(new Date(e.t).toLocaleDateString([], {month:'short',day:'numeric'}),' ',document.createElement('br'),new Date(e.t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));cell(tr,time,'small');cell(tr,identity(e.who));cell(tr,ACTIONS[e.action]||e.action);const {t,who,action,...rest}=e;cell(tr,auditDetails(e.action,rest),'audit-detail');tb.appendChild(tr)})}});
 let searchVersion=0;
 async function searchAudit(more=false){const version=++searchVersion;msg('audit-msg','Loading…',true);try{const q=$('filter').value.trim();const audit=(await api('/replays/admin/api/audit?q='+encodeURIComponent(q)+'&offset='+(more?S.audit.length:0))).audit;if(version!==searchVersion)return;S.audit=more?S.audit.concat(audit):audit;renderAudit(more);msg('audit-msg',audit.length?'Activity loaded.':'No activity found. Try another search.',true)}catch(e){if(version===searchVersion)msg('audit-msg',e.message+' Try the search again.')}}
 $('audit-more').onclick=()=>searchAudit(true);

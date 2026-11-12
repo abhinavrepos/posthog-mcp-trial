@@ -90,7 +90,7 @@ sudo bash fresh-install.sh <kit tag>       # a particular kit
 - **Folders:** PostHog goes into `/opt/posthog`, PostHog Lens into `/opt/posthog-lens` (`POSTHOG_DIR`,
   `LENS_DIR` to change them). Settings are in `/etc/posthog-lens/posthog-lens.env`. More answers (Jira,
   Claude, ports...) can come from a file: `SETTINGS=my.env` (see `deploy/install.env.example`).
-- **Takes 30-60 minutes.** At the end it shows the status. The login, its password and the addresses
+- **Takes 1-2 hours** (most of it is PostHog's first database setup, about 1,000 migrations). At the end it shows the status. The login, its password and the addresses
   are in `sudo cat /var/lib/posthog-lens-install/summary.txt`.
 - **Refuses** when a PostHog already runs on the machine, so it can never install over one. Use
   script 3 there.
