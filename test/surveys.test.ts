@@ -381,7 +381,7 @@ test('written answer UI fetches successive server pages, keeps the shared pager,
     const script = html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>'))
     const start = script.indexOf('    if(q.recent){')
     const end = script.indexOf('\n  })', start)
-    const run = new Function('$', 'makePager', 'api', 'q', 'i', 'id', 'esc', 'num', 'period', script.slice(start, end))
+    const run = new Function('$', 'makePager', 'api', 'q', 'i', 'id', 'esc', 'num', 'period', 'when', script.slice(start, end))
     type Element = { innerHTML?: string; textContent?: string; disabled?: boolean; hidden?: boolean; onclick?: () => Promise<void> }
     const elements: Record<string, Element> = Object.fromEntries(['answers-0', 'answers-pager-0', 'answers-status-0', 'answers-more-0'].map((id) => [id, {}]))
     const urls: URL[] = [], batches: unknown[][] = []
@@ -391,7 +391,7 @@ test('written answer UI fetches successive server pages, keeps the shared pager,
         if (fail) throw new Error('Unavailable')
         const after = url.searchParams.get('after')
         return { answers: Array.from({ length: after ? 10 : 50 }, (_, i) => ({ text: '<answer ' + ((after ? 50 : 0) + i) + '>', client: 'ACME', at: '2026-11-10' })), total: 60, ...(after ? {} : { next: 'cursor-1' }) }
-    }, { id: 'written', recent: [] }, 0, resultSurvey.id, (s: string) => s.replaceAll('<', '&lt;'), String, '30')
+    }, { id: 'written', recent: [] }, 0, resultSurvey.id, (s: string) => s.replaceAll('<', '&lt;'), String, '30', (t: string) => new Date(t).toISOString())
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(urls[0].searchParams.get('after'), null)
     assert.equal(urls[0].searchParams.get('limit'), '50')
