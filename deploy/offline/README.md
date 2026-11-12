@@ -139,7 +139,7 @@ upgrade makes its own backup, but a snapshot is the way back if everything else 
 |---|---|
 | `sudo posthog-lens status` | what is installed, and whether PostHog and PostHog Lens answer |
 | `sudo posthog-lens doctor` | PostHog Lens's full check of its settings against the running services |
-| `sudo posthog-lens check [minutes]` | waits until PostHog, Lens and every status-page check are fine and prints READY, or says what is not; `upgrade.sh` and `fresh-install.sh` end with it |
+| `sudo posthog-lens check [minutes]` | waits until PostHog, Lens and every status-page check are fine and prints READY, or says what is not (it waits 10 min, or 25 min in the first half hour after a boot); `upgrade.sh` and `fresh-install.sh` end with it |
 | `sudo posthog-lens alert-test` | after putting a Teams or Slack webhook in `STATUS_ALERT_WEBHOOK` (deploy/status/status.env): applies it and sends a test alert |
 | `sudo posthog-lens restart` | restarts PostHog Lens |
 | `sudo posthog-lens update <kit tag>` | what `upgrade.sh` does, once the machine is set up |

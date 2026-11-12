@@ -141,13 +141,17 @@ status() {
 }
 # Waits until PostHog and Lens answer and the status page has no problem left, then one verdict line.
 check() {
-    local mins="${1:-10}" port spass sport ph lens st end
+    local mins="${1:-}" port spass sport ph lens st end up
+    # Right after a boot PostHog checks its ~1,000 migrations before it answers: 10-15 minutes on 4 CPUs.
+    up="$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 9999)"
+    [ -n "$mins" ] || { [ "$up" -lt 1800 ] && mins=25 || mins=10; }
     [[ "$mins" =~ ^[0-9]+$ ]] || die "usage: sudo posthog-lens check [minutes]"
     mins=$((10#$mins))
     port="$(conf_of "$LENS_DIR/.secrets.env" SERVICE_PORT)"; port="${port:-8080}"
     spass="$(conf_of "$LENS_DIR/deploy/status/status.env" STATUS_PASSWORD)"; sport="${STATUS_PORT:-8090}"
     end=$((SECONDS + mins * 60))
     say "checking PostHog, PostHog Lens and the status page (waiting up to $mins min while they start)"
+    [ "$up" -lt 1800 ] && [ -z "${1:-}" ] && echo "    This machine started $((up / 60)) min ago; PostHog takes 10-20 min to answer after a boot."
     while :; do
         ph="$(curl -s -o /dev/null -m 5 -w '%{http_code}' http://localhost/_health || true)"
         lens="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:$port/healthz" || true)"
