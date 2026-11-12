@@ -598,7 +598,7 @@ h1{font-size:26px;line-height:1.25;letter-spacing:-.025em;margin:0 0 24px}h3{fon
 h2{font-size:17px;line-height:1.35;font-weight:650;margin:0 0 16px}label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
 input,select{width:100%;font:inherit;color:inherit;background:var(--card);border:1px solid #c9ccd0;border-radius:6px;padding:9px 11px}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}.row>div{flex:1;min-width:140px}
-button,.btn{display:inline-flex;align-items:center;gap:6px;font:inherit;font-weight:600;border-radius:7px;padding:9px 14px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);cursor:pointer;text-decoration:none}
+[hidden]{display:none!important}button,.btn{display:inline-flex;align-items:center;gap:6px;font:inherit;font-weight:600;border-radius:7px;padding:9px 14px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);cursor:pointer;text-decoration:none}
 button.ghost,.btn.ghost{background:transparent;color:var(--ink);border-color:transparent}button.ghost:hover,.btn.ghost:hover{background:var(--chip)}button:hover:not(:disabled),.btn:hover{filter:brightness(.95)}button:disabled{opacity:.5;cursor:default}
 .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:6px 0 12px}.facts div{padding:8px 0;min-width:0}
 .facts b{overflow-wrap:anywhere}.facts span{display:block;font-size:12px;color:var(--muted)}.chips{display:flex;flex-wrap:wrap;gap:6px}
