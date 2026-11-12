@@ -271,7 +271,7 @@ function hover(box,points){box.onmousemove=e=>{const s=box.querySelector('svg');
 
 function bars(box,data,minute=false,at=Date.now()){W=box.clientWidth||560;if(!data){numbers(minute?'minutes':'events',[],'Events');box.innerHTML='<p class="note">No event counts yet.</p>';return}
   const hour=minute?60000:3600000,count=minute?60:24,now=Math.floor(at/hour)*hour,by=new Map(data),slots=[];for(let i=count-1;i>=0;i--){const t=now-i*hour;slots.push([t,by.get(t)||0])}
-  const max=nice(Math.max(...slots.map(s=>s[1]),1)),step=(W-L-R)/count,bw=Math.max(1,step-2)
+  const max=nice(Math.max(...slots.map(s=>s[1]),2)),step=(W-L-R)/count,bw=Math.max(1,step-2)
   const f=frame(max,v=>v>=1000?(v/1000)+'k':String(Math.round(v)),[[L+bw/2,clock(slots[0][0]),'start'],[L+(count/2)*step,clock(slots[count/2][0]),'middle'],[W-R,clock(slots[count-1][0]),'end']]);const pts=[];let b=''
   slots.forEach(([t,n],i)=>{const x=L+i*step+1,top=f.y(n),base=f.y(0);if(n){const h=Math.max(2,base-top),r=Math.min(4,bw/2,h);b+='<path fill="var(--act)" d="M'+x+' '+base+'v'+(-(h-r))+'q0 '+(-r)+' '+r+' '+(-r)+'h'+(bw-2*r)+'q'+r+' 0 '+r+' '+r+'v'+(h-r)+'z"/>'}
     pts.push({x:x+bw/2,y:top,text:clock(t)+' · '+num(n)+' events'})})
@@ -281,7 +281,7 @@ function bars(box,data,minute=false,at=Date.now()){W=box.clientWidth||560;if(!da
 
 function line(box,hist,idx,name,load=false){W=box.clientWidth||560;const p=(hist||[]).filter(h=>h[idx]!=null);if(p.length<2){numbers(({CPU:'cpu',Memory:'mem',Disk:'disk',Load:'load'})[name],[],name);box.innerHTML='<p class="note">Collecting, this fills in over the next few minutes.</p>';return}
   numbers(({CPU:'cpu',Memory:'mem',Disk:'disk',Load:'load'})[name],p.map(h=>[h[0],load?Number(h[idx]).toFixed(1):pct(h[idx])]),name);
-  const t0=p[0][0],t1=p[p.length-1][0],x=t=>L+(W-L-R)*(t-t0)/Math.max(1,t1-t0),f=frame(load?nice(Math.max(...p.map(h=>h[idx]),1)):100,v=>load?String(v):v+'%',[[L,clock(t0),'start'],[W-R,clock(t1),'end']])
+  const t0=p[0][0],t1=p[p.length-1][0],x=t=>L+(W-L-R)*(t-t0)/Math.max(1,t1-t0),f=frame(load?nice(Math.max(...p.map(h=>h[idx]),2)):100,v=>load?String(v):v+'%',[[L,clock(t0),'start'],[W-R,clock(t1),'end']])
   const pts=p.map(h=>({x:x(h[0]),y:f.y(h[idx]),text:clock(h[0])+' · '+name+' '+(load?Number(h[idx]).toFixed(1):pct(h[idx]))})),d=pts.map((q,i)=>(i?'L':'M')+q.x.toFixed(1)+' '+q.y.toFixed(1)).join('')
   const e=pts[pts.length-1];box.innerHTML='<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(name)+' for the last hour, now '+(load?Number(p.at(-1)[idx]).toFixed(1):pct(p.at(-1)[idx]))+'">'+f.g+'<path d="'+d+'" fill="none" stroke="var(--act)" stroke-width="2" stroke-linejoin="round"/><circle cx="'+e.x+'" cy="'+e.y+'" r="4" fill="var(--act)" stroke="var(--card)" stroke-width="2"/></svg>';hover(box,pts)}
 
