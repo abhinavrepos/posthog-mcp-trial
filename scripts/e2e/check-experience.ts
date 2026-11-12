@@ -35,7 +35,7 @@ const leaks = (t: string) => canaryStrings.flatMap((c) => [c, c.replace(/,/g, ''
 try {
     await mcp('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'xp', version: '1' } })
     const expect: Record<string, RegExp> = { smooth: /SMOOTH/, 'error-looping': /STRUGGLING|SOME FRICTION/, 'rage-dead': /STRUGGLING|SOME FRICTION/, 'scroll-hunting': /STRUGGLING|SOME FRICTION/, 'hesitant-circling': /STRUGGLING|SOME FRICTION/, idle: /STRUGGLING|SOME FRICTION/ }
-    const finding: Record<string, RegExp> = { 'error-looping': /Error loops|Errors shown/, 'rage-dead': /Rage clicks|Clicks without a detected response/, 'scroll-hunting': /Scrolling up and down/, 'hesitant-circling': /Long pauses|Cursor moving back and forth/i, idle: /Idle share/ }
+    const finding: Record<string, RegExp> = { 'error-looping': /Error loops|Errors shown/, 'rage-dead': /Rage clicks|Clicks that do nothing/, 'scroll-hunting': /Scrolling up and down/, 'hesitant-circling': /hesitations|circling/i, idle: /Idle share/ }
     for (const c of clients) {
         const t = await mcp('tools/call', { name: 'client_experience', arguments: { client: c.client_name } })
         ok(`${c.persona} (${c.client_name}): verdict`, expect[c.persona].test(t), (/: (SMOOTH|SOME FRICTION|STRUGGLING|NOT ENOUGH REPLAYS)/.exec(t) || [''])[0])
@@ -47,7 +47,7 @@ try {
     const err = clients.find((c) => c.persona === 'error-looping')!
     await page.goto(`${LENS}/replays/dashboards?view=story&client=${encodeURIComponent(err.client_id)}`, { waitUntil: 'networkidle0' })
     const body = await page.evaluate(() => document.body.innerText)
-    ok('Client story shows "Replay insights" with an observation and evidence', /Replay insights/.test(body) && /Small sample:/.test(body) && /Watch supporting replay/.test(body), body.slice(0, 120))
+    ok('Client story shows "Replay insights" with a verdict and next steps', /Replay insights/.test(body) && /Struggling|Some friction/.test(body) && /Next steps?/.test(body), body.slice(0, 120))
     ok('Client story page: nothing planted', !leaks(await page.content()).length)
 } finally {
     await api('/replays/connect/api/tokens/' + key.id, 'DELETE')
