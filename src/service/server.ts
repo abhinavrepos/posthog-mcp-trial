@@ -290,6 +290,12 @@ pruneOldClips()
 if (appEvents()) startTaskHistory()
 if (appEvents()) startBriefingDelivery()
 if (appEvents() && config.features.lensMcp) startPrewarm()
+// Client codenames (src/core/anonymise.ts): every client Lens sees gets one, also while anonymisation is off, so
+// it is ready the moment an admin turns it on. Every five minutes; requests refresh it too while it is on.
+if (config.features.lensMcp) {
+    setTimeout(() => void refreshRoster(0).catch(() => {}), 30_000).unref()
+    setInterval(() => void refreshRoster(5 * 60_000).catch(() => {}), 5 * 60_000).unref()
+}
 setInterval(() => pruneOldClips(), 6 * 3_600_000).unref()
 
 // The release dashboard reads Jira and PostHog at start (when its data is older than an hour)
