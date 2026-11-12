@@ -258,6 +258,16 @@ const MIGRATIONS: string[] = [
         note TEXT NOT NULL DEFAULT '' CHECK(length(note) <= 500),
         recorded_by TEXT NOT NULL, recorded_at TEXT NOT NULL
     );`,
+    // Client anonymisation for AI (src/core/anonymise.ts): each client's codename, extra names it goes by, and
+    // counts of what was blocked (counts only: never the text that was blocked).
+    `CREATE TABLE client_codenames (
+        client TEXT PRIMARY KEY NOT NULL CHECK(length(client) BETWEEN 1 AND 256),
+        name TEXT NOT NULL DEFAULT '',
+        codename TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK(length(codename) BETWEEN 3 AND 40),
+        aliases TEXT NOT NULL DEFAULT '[]',
+        set_by TEXT NOT NULL, set_at TEXT NOT NULL
+    );
+    CREATE TABLE anon_blocks (day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, kind));`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

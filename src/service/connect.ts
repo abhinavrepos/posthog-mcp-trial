@@ -3,6 +3,7 @@
 // revoke their own tokens here; admins see and revoke everyone's on the admin page.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+import { anonymiseOn } from '../core/anonymise.ts'
 import { config, posthogMcpActive } from '../core/config.ts'
 import { can, canSurvey, chatPolicy, chatUrl, createMcpToken, listMcpTokens, revokeMcpToken, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
 import { APP_NAME, headerHtml, PAGER_JS, PAGE_CSS } from './replays.ts'
@@ -71,7 +72,7 @@ ol.steps{padding-left:24px}ol.steps li{padding:8px 0 16px 8px}ol.steps li::marke
 </style></head>
 <body>${headerHtml(v, 'Chat')}<main style="max-width:820px">
 <div class="card"><h1>Connect GitHub Copilot</h1>
-<div class="policy" role="note" aria-labelledby="policy-title"><p id="policy-title"><b>⚠ Approved apps only.</b> Connect your key only to:</p><ul>${policy.apps.map(a => `<li>${esc(a)}</li>`).join('')}</ul><p>${esc(policy.note)}</p></div>
+<div class="policy" role="note" aria-labelledby="policy-title"><p id="policy-title"><b>⚠ Approved apps only.</b> Connect your key only to:</p><ul>${policy.apps.map(a => `<li>${esc(a)}</li>`).join('')}</ul><p>${esc(policy.note)}</p></div>${anonymiseOn() ? '<div class="policy" role="note"><p><b>Client names are hidden from AI.</b> Copilot sees each client\'s codename, never its name or code. Ask about a client by its codename, and do not type client names into chat. <a href="/replays/codenames">Look up codenames</a>.</p></div>' : ''}
 <p class="small muted">Your key is shown once. Copilot gets the same access you have in Lens${role ? `; for surveys: ${esc(role.charAt(0).toLowerCase() + role.slice(1))}` : ''}.</p>
 <ol class="steps">
 <li><button type="button" id="make">Connect Copilot</button> <span id="msg" class="small" aria-live="polite"></span></li>

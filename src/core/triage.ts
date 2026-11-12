@@ -1,4 +1,5 @@
 // The triage pipeline both entry points share: Jira webhooks and the MCP tools.
+import { clientOfCodename, codenameOf, countBlock, hideClientsDeep, namesForCodenames, anonymiseOn, syncClients } from './anonymise.ts'
 import { SCREENS } from './catalog.ts'
 import { renderClip, type Clip } from './clip.ts'
 import { errorImpact, topErrorsOnScreen, type ErrorImpact } from './impact.ts'
@@ -91,7 +92,13 @@ export async function triage(ticket: Ticket, opts: TriageOptions = {}): Promise<
         try {
             const { knownClients } = await import('./resolve.ts')
             const clients = (await knownClients()).map(({ id, name }) => ({ id, name }))
-            const read = await opts.ai.readTicket(ticket, { clients, screens: SCREENS.map(({ path, name }) => ({ path, name })) })
+            // Client anonymisation (Admin → Client privacy for AI): Claude sees codenames only, and its answer
+            // (a codename) is turned back into the client here.
+            const anon = anonymiseOn()
+            if (anon) syncClients(clients)
+            const shown = anon ? clients.map((c) => { const code = codenameOf(c.id) || c.id; return { id: code, name: code } }) : clients
+            const read = await opts.ai.readTicket(anon ? hideTicket(ticket) : ticket, { clients: shown, screens: SCREENS.map(({ path, name }) => ({ path, name })) })
+            if (anon && read.clientId) read.clientId = clientOfCodename(read.clientId) || undefined
             aiUsed = true
             // Structured Jira fields stay on top; Claude's reading beats the keyword heuristics.
             if (read.clientId && parsed.sources.client !== 'field') {
@@ -146,7 +153,13 @@ export async function triage(ticket: Ticket, opts: TriageOptions = {}): Promise<
     if (opts.ai?.hypothesis && (report.incident || report.struggle)) {
         try {
             // Event and error data only: replay frames never go to Claude.
-            report.hypothesis = await opts.ai.hypothesis(report, [])
+            if (anonymiseOn()) {
+                const h = hideClientsDeep(report)
+                if (h.n) countBlock('triage_cleaned')
+                const said = await opts.ai.hypothesis(h.value, [])
+                // People read the hypothesis: codenames become the real names again.
+                report.hypothesis = said && namesForCodenames(said)
+            } else report.hypothesis = await opts.ai.hypothesis(report, [])
         } catch (e) {
             notes.push(`Claude could not suggest a cause (${(e as Error).message}).`)
         }
@@ -276,4 +289,11 @@ async function riskReview(report: TriageReport, parsed: ParsedTicket, opts: Tria
         enterpriseAffected: impact ? impact.clients.some((c) => c.plan === 'enterprise') : false,
         silent: false,
     })
+}
+
+/** A ticket with every client name and code replaced by its codename (for Claude). */
+function hideTicket(t: Ticket): Ticket {
+    const h = hideClientsDeep(t)
+    if (h.n) countBlock('triage_cleaned')
+    return h.value
 }

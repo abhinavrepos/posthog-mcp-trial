@@ -11,6 +11,7 @@ import { briefingDeliveryStatus } from '../core/briefingdelivery.ts'
 // of the organization that owns the project, plus anyone given the admin role here.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+import { anonymiseOn } from '../core/anonymise.ts'
 import { config } from '../core/config.ts'
 import { all } from '../core/db.ts'
 import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSurveyRole, resetSurveyRole, setSurveySettings, chatPolicy, setChatPolicy, SURVEY_ROLES, SURVEY_ROLE_TEXT, defaultSurveyRole, sharedTokenSurveyRole, surveyRoleOf, listMcpTokens, revokeMcpToken, chatUrl, setChatUrl, type SurveyRole, setSystemAccess, surveyPeople, systemViewers, type Role, type Viewer } from './access.ts'
@@ -320,6 +321,7 @@ main h1{margin:8px 0 0}main button:not(.ghost){background:var(--ink);border-colo
 <p class="small muted">Briefing delivery: ${config.briefing.webhook ? `on (${e(config.briefing.kind)}, ${e(config.briefing.day)} at ${e(config.briefing.hour)}:00 UTC)` : 'off'} · Last sent: ${e(briefingDeliveryStatus().last_sent || 'never')}</p>
 <div class="toolbar" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label for="chat-url">Lens address for Copilot</label><input id="chat-url" placeholder="https://lens.example.com"></div><div><button type="button" id="chat-url-save">Save address</button></div></div>
 <p class="small muted">The Chat page gives people this address. Leave empty for the default.</p><p id="chat-url-msg" class="small" aria-live="polite"></p>
+<h3 style="font-size:15px;margin:18px 0 6px">Client privacy for AI</h3><p class="small">Client anonymisation is <b>${anonymiseOn() ? 'on' : 'off'}</b>${anonymiseOn() ? ': AI sees codenames, never client names or codes' : ''}. <a href="/replays/admin/privacy">Manage it and the codenames</a>.</p>
 <h3 style="font-size:15px;margin:18px 0 6px">Approved chat apps</h3>
 <p class="small muted">The Chat page warns everyone to connect their key only to these apps. One per line.</p>
 <label for="chat-apps">Approved apps</label><textarea id="chat-apps" rows="3" style="width:100%;box-sizing:border-box"></textarea>
