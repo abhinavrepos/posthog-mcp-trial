@@ -381,7 +381,7 @@ test('written answer UI fetches successive server pages, keeps the shared pager,
     const script = html.slice(html.lastIndexOf('<script>') + 8, html.lastIndexOf('</script>'))
     const start = script.indexOf('    if(q.recent){')
     const end = script.indexOf('\n  })', start)
-    const run = new Function('$', 'makePager', 'api', 'q', 'i', 'id', 'esc', 'num', script.slice(start, end))
+    const run = new Function('$', 'makePager', 'api', 'q', 'i', 'id', 'esc', 'num', 'period', script.slice(start, end))
     type Element = { innerHTML?: string; textContent?: string; disabled?: boolean; hidden?: boolean; onclick?: () => Promise<void> }
     const elements: Record<string, Element> = Object.fromEntries(['answers-0', 'answers-pager-0', 'answers-status-0', 'answers-more-0'].map((id) => [id, {}]))
     const urls: URL[] = [], batches: unknown[][] = []
@@ -391,10 +391,11 @@ test('written answer UI fetches successive server pages, keeps the shared pager,
         if (fail) throw new Error('Unavailable')
         const after = url.searchParams.get('after')
         return { answers: Array.from({ length: after ? 10 : 50 }, (_, i) => ({ text: '<answer ' + ((after ? 50 : 0) + i) + '>', client: 'ACME', at: '2026-11-10' })), total: 60, ...(after ? {} : { next: 'cursor-1' }) }
-    }, { id: 'written', recent: [] }, 0, resultSurvey.id, (s: string) => s.replaceAll('<', '&lt;'), String)
+    }, { id: 'written', recent: [] }, 0, resultSurvey.id, (s: string) => s.replaceAll('<', '&lt;'), String, '30')
     await new Promise((resolve) => setImmediate(resolve))
     assert.equal(urls[0].searchParams.get('after'), null)
     assert.equal(urls[0].searchParams.get('limit'), '50')
+    assert.equal(urls[0].searchParams.get('days'), '30')
     assert.equal(urls[0].searchParams.get('question'), 'written')
     assert.equal(batches[0].length, 50)
     assert.match(elements['answers-0'].innerHTML!, /&lt;answer/)
@@ -408,7 +409,7 @@ test('written answer UI fetches successive server pages, keeps the shared pager,
     assert.equal(urls.at(-1)?.searchParams.get('after'), 'cursor-1', 'failed page did not advance')
     assert.equal(batches.at(-1)?.length, 60)
     assert.equal(elements['answers-more-0'].hidden, true)
-    assert.equal(elements['answers-status-0'].textContent, '60 of 60 answers loaded.')
+    assert.equal(elements['answers-status-0'].textContent, '')
 })
 
 describe('shared survey read caches', () => {

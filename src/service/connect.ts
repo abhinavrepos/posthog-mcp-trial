@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { anonymiseOn } from '../core/anonymise.ts'
 import { config, posthogMcpActive } from '../core/config.ts'
-import { can, canSurvey, chatPolicy, chatUrl, createMcpToken, listMcpTokens, revokeMcpToken, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
+import { can, canSurvey, chatPolicy, DEFAULT_CHAT_APPS, chatUrl, createMcpToken, listMcpTokens, revokeMcpToken, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
 import { APP_NAME, headerHtml, PAGER_JS, PAGE_CSS } from './replays.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -64,25 +64,68 @@ function connectHtml(v: Viewer): string {
     const role = surveyRole === 'launch' ? 'Also make, change and stop surveys (launching is only on the Surveys page)' : SURVEY_ROLE_TEXT[surveyRole]
     const ph = posthogOn()
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connect chat · ${APP_NAME}</title><style>${PAGE_CSS()}
-table{width:100%;table-layout:fixed}td,th{overflow-wrap:anywhere}ol.steps{padding-left:20px}ol.steps li{margin:10px 0}
-.srv{border:1px solid var(--line,#ddd);border-radius:10px;padding:10px 12px;margin:10px 0}.srv h3{margin:0 0 6px;font-size:15px}
-.f{display:grid;grid-template-columns:130px 1fr auto;gap:8px;align-items:center;padding:4px 0}.f code{background:var(--chip);padding:5px 8px;border-radius:6px;overflow-wrap:anywhere;font-size:13px}
-@media (max-width:560px){.f{grid-template-columns:1fr auto}.f span{grid-column:1/-1}}
-main{min-width:0}.policy{border:1px solid #d9a441;background:#fff7e0;color:#4a3405;border-radius:8px;padding:12px 16px;margin:12px 0 16px}.policy p{margin:4px 0}.policy ul{margin:6px 0;padding-left:22px}@media(prefers-color-scheme:dark){.policy{background:#3a2c0b;color:#f6e3b4;border-color:#8a6a1f}}main .card+ .card{border-top:1px solid var(--line);margin-top:16px}main h1{margin-top:0}main .ghost{border-color:transparent;color:var(--ink)}
-ol.steps{padding-left:24px}ol.steps li{padding:8px 0 16px 8px}ol.steps li::marker{color:var(--muted);font-weight:600}.srv{border:0;border-radius:0;padding:16px 0;margin:8px 0}.srv+.srv{border-top:1px solid var(--line)}.f{grid-template-columns:100px minmax(0,1fr) auto;gap:12px}.f code{background:var(--bg)}main main td{padding-top:14px;padding-bottom:14px}
-@media(max-width:560px){.f{grid-template-columns:minmax(0,1fr) auto;gap:6px}.f span{grid-column:1/-1}main th,main td{padding-left:3px;padding-right:3px;font-size:13px}main td button{padding:6px 3px}ol.steps li{padding-left:2px}main h1{font-size:24px}}
+table{width:100%;table-layout:fixed}
+td,th{overflow-wrap:anywhere}
+.srv h3{margin:0 0 6px;font-size:15px}
+.policy{border:1px solid var(--warn);background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:12px 16px;margin:0 0 16px}
+.policy p{margin:0}
+.policy ul{margin:4px 0;padding-left:20px}
+.info{background:var(--hover);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:12px 16px;margin:0 0 16px}
+.info p{margin:0}
+main .card+.card{margin-top:24px}
+main .ghost{border-color:transparent;color:var(--ink)}
+ol.steps{margin:20px 0 0;padding-left:24px}
+ol.steps li{margin:0;padding:0 0 20px 8px;line-height:20px}
+ol.steps li:last-child{padding-bottom:0}
+ol.steps li::marker{color:var(--muted);font-weight:600}
+.srv{border:0;border-radius:0;padding:16px 0;margin:8px 0}
+.srv+.srv{border-top:1px solid var(--line)}
+.f{display:grid;align-items:center;padding:4px 0;grid-template-columns:100px minmax(0,1fr) auto;gap:12px}
+.f code{padding:5px 8px;border-radius:6px;overflow-wrap:anywhere;font-size:13px;background:var(--hover)}
+main td{padding-top:12px;padding-bottom:12px;vertical-align:middle}
+main{min-width:0}
+main h1{font-size:24px;line-height:32px;font-weight:650;margin:0}
+main .page-head{margin-bottom:24px;align-items:center}
+main .page-head p{margin:4px 0 0;font-size:14px;line-height:20px}
+main h2{font-size:16px;line-height:24px;font-weight:600;margin:0 0 12px}
+main h3{font-size:14px;line-height:20px;font-weight:600;margin:0 0 8px}
+main input:not([type=checkbox]):not([type=radio]),main select{height:36px;min-height:36px;padding:7px 10px;font-size:13px;line-height:20px;max-width:100%;box-sizing:border-box}
+main button,main .btn{min-height:36px;font-size:13px;line-height:20px;white-space:nowrap;word-break:normal;overflow-wrap:normal}
+main th{word-break:normal;overflow-wrap:normal}
+main .table-wrap{min-width:0;max-width:100%;overflow-x:auto}main .card>.table-wrap{max-width:none}
+main .pager button{min-height:32px;padding:5px 10px;border:1px solid var(--line-strong);background:var(--card);color:var(--ink);font-weight:500}
+main .pager select{height:32px;min-height:32px}
+main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
+#people-msg:empty,#outcome-msg:empty,#audit-msg:empty,#keys-msg:empty,#msg:empty{display:none}
+.tabs{overflow-x:auto;max-width:100%}
+.tabs :is(button,a){white-space:nowrap;flex-shrink:0}
+.tabs .tab-link,.tabs .tab-link0{color:var(--muted);text-decoration:none;font-weight:500;padding:8px 12px;border-bottom:2px solid transparent}
+.tabs :is([aria-current],[aria-selected=true]){color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+#revoked-box{margin-top:16px}
+#rows button.ghost{color:var(--err);font-weight:500}
+main table th:last-child,#rows td:last-child{text-align:right}
+@media (max-width:560px){.f{grid-template-columns:1fr auto}
+.f span{grid-column:1/-1}
+}
+@media(max-width:560px){.f{grid-template-columns:minmax(0,1fr) auto;gap:6px}
+.f span{grid-column:1/-1}
+main th,main td{padding-left:3px;padding-right:3px;font-size:13px}
+main td button{padding:6px 3px}
+ol.steps li{padding-left:2px}
+main h1{font-size:24px}
+}
 </style></head>
 <body>${headerHtml(v, 'Chat')}<main class="narrow">
-<div class="card"><h1>Connect GitHub Copilot</h1>
-<div class="policy" role="note" aria-labelledby="policy-title"><p id="policy-title"><b>⚠ Approved apps only.</b> Connect your key only to:</p><ul>${policy.apps.map(a => `<li>${esc(a)}</li>`).join('')}</ul><p>${esc(policy.note)}</p></div>${anonymiseOn() ? '<div class="policy" role="note"><p><b>Client names are hidden from AI.</b> Copilot sees each client\'s codename, never its name or code. Ask about a client by its codename, and do not type client names into chat. <a href="/replays/codenames">Look up codenames</a>.</p></div>' : ''}
-<p class="small muted">Your key is shown once. Copilot gets the same access you have in Lens${role ? `; for surveys: ${esc(role.charAt(0).toLowerCase() + role.slice(1))}` : ''}.</p>
+<div class="page-head"><h1>Connect GitHub Copilot</h1></div><div class="card">
+<div class="policy" role="note" aria-labelledby="policy-title"><p id="policy-title"><b>Approved apps only.</b></p>${policy.apps.length === 1 && policy.apps[0] === DEFAULT_CHAT_APPS[0] ? '<p>Use GitHub Copilot with your ION Microsoft enterprise account.</p>' : `<p>Connect your key only to:</p><ul>${policy.apps.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`}${policy.note ? `<p>${esc(policy.note)}</p>` : ''}</div>${anonymiseOn() ? '<div class="info" role="note"><p><b>Client names are hidden from AI.</b> Copilot sees each client\'s codename, never its name or code. Ask about a client by its codename, and do not type client names into chat. <a href="/replays/codenames">Look up codenames</a>.</p></div>' : ''}
+<p class="small muted">Your key is shown once and inherits your Lens access.${canSurvey(surveyRole, 'edit') ? ' You can create, edit and stop surveys in Copilot; launch them from Surveys.' : role ? ` Survey access: ${esc(role)}.` : ''}</p>
 <ol class="steps">
-<li><button type="button" id="make">Connect Copilot</button> <span id="msg" class="small" aria-live="polite"></span></li>
-<li>Open Copilot settings → <b>MCP Servers</b> → <b>Add Server</b> → <b>+ Add Custom server</b>. Copy these fields${ph ? ', once per server' : ''}.<div id="add"></div></li>
-<li>Start a new chat: <i>"Which clients need attention this month?"</i></li>
+<li><div>Make your personal key</div><button type="button" id="make">Connect Copilot</button> <span id="msg" class="small" aria-live="polite"></span></li>
+<li>Open Copilot settings.<div>MCP Servers → Add Server → + Add Custom server</div><div id="add"><span class="small muted">Create your key above to see the fields to copy${ph ? ", once per server" : ""}.</span></div></li>
+<li>Start a new chat: <span>“Which clients need attention this month?”</span></li>
 </ol>
 </div>
-<div class="card"><h2>Your keys</h2><div class="table-wrap"><table><thead><tr><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div><div id="keys-pager"></div><p id="keys-msg" class="small" aria-live="polite"></p>
+<div class="card"><h2>Your keys</h2><div class="table-wrap"><table><colgroup><col style="width:24%"><col style="width:29%"><col style="width:29%"><col style="width:18%"></colgroup><thead><tr><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div><div id="keys-pager"></div><p id="keys-msg" class="small" aria-live="polite"></p>
 <details id="revoked-box" hidden><summary class="small muted" id="revoked-sum"></summary><ul id="revoked" class="small muted"></ul></details>
 </div>
 </main>
