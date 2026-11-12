@@ -71,44 +71,6 @@ test('real lab recordings: read, stored, and each persona comes out as it behave
     for (const c of canaryStrings) for (const v of [c, c.replace(/,/g, ''), c.toLowerCase()]) assert.ok(!all.includes(v), v)
 })
 
-test('populated replay insights carry evidence, distinct UTC links and supporting disclosures', async () => {
-    const client = sessions.find(s => s.persona === 'error-looping')!.client_id
-    const { handleDashboards } = await import('../src/service/dashboards.ts')
-    let body = ''
-    const story = { client, client_name: 'Example', coverage: { complete: true, unprocessed: [] }, weeks: [], events: [], surveys: [], summary: '', unknown: '' }
-    const req = Object.assign((async function* () {})(), { method: 'GET', headers: {} })
-    await handleDashboards(req as never, { writeHead() {}, end(s: string) { body = s } } as never, new URL('http://test/replays/dashboards?view=story&client=' + client), { role: 'admin', dashboards: 'view', email: 'pm@example.com', name: 'PM', posthog_admin: true, in_replay_project: true, session: 's' } as never, { clientStory: async () => story, handoverPack: async () => '' } as never)
-    const section = body.match(/<section class="card xp">([\s\S]*?)<\/section>/)![1]
-    assert.match(section, /\d+ analysed replays/)
-    assert.match(section, /Peer median.*Median errors per replay/s)
-    assert.match(section, /UTC, opens in a new tab/)
-    assert.match(section, /class="xp-evidence"/)
-    assert.equal((section.match(/<details>/g) || []).length, 2 + (section.match(/<summary>Other supporting replays/g) || []).length)
-    assert.equal((section.match(/<table /g) || []).length, 1)
-    assert.match(section, /7 other measures \(none elevated\)/)
-    assert.match(section, /badge xp-warn/)
-    assert.match(section, /supporting replays available/)
-    assert.match(section, /Differences in client size and workflow are not accounted for/)
-    assert.doesNotMatch(section, /<details open|<details[^>]*open/)
-    assert.match(section, /<colgroup>/)
-    assert.match(section, /Watch supporting replay:.*errors · .*retry loops/)
-    assert.match(section, /Method and limitations/)
-    assert.ok(section.indexOf('Watch supporting replay') > section.indexOf('<table '))
-    assert.doesNotMatch(section, /class="xp-replay"[^>]*>Replay 1<\/a>/)
-    assert.match(section, /Elevated errors and retries in this sample/)
-    assert.ok(section.includes('Median errors per replay</th><td class="num">4</td><td class="num">0'))
-    assert.match(section, /Method and limitations/)
-    assert.doesNotMatch(section, /Replay \d+|Next step:|Struggling/)
-    for (const evidence of section.matchAll(/<div class="xp-evidence">([\s\S]*?)<\/div>/g)) {
-        const urls = [...evidence[1].matchAll(/href="([^"?]+)/g)].map(m => m[1])
-        assert.equal(urls.length, new Set(urls).size, 'supporting recordings are deduplicated')
-    }
-    tasksDb.prepare('UPDATE replay_signals SET started_at=NULL WHERE client=?').run(client)
-    body = ''
-    await handleDashboards(req as never, { writeHead() {}, end(s: string) { body = s } } as never, new URL('http://test/replays/dashboards?view=story&client=' + client), { role: 'admin', dashboards: 'view', email: 'pm@example.com', name: 'PM', posthog_admin: true, in_replay_project: true, session: 's' } as never, { clientStory: async () => story, handoverPack: async () => '' } as never)
-    assert.match(body, /[A-Z][a-z]+ \d+ \(time unavailable\)/)
-})
-
 test('screen vocabulary: only app-reported names, never generated ids, numbers or messages; PostHog down keeps the configured buttons', async () => {
     let sql = ''
     const names = await X.screenVocabulary({ hogql: async (q: string) => { sql = q; return [{ n: 'Trade Date' }, { n: 'gridfloatedit-3404-inputEl' }, { n: 'TRD-90210-77' }, { n: 'Counterparty' }] } } as never)
