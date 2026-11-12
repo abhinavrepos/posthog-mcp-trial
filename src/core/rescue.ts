@@ -32,7 +32,8 @@ export function rescueClients(text: string): { id: string; name: string }[] {
     // Resolve against local history as well: a rescue read/write must never query raw events.
     // client_names holds every client the history has named (a few rows); scanning task_daily for distinct
     // clients read ~730,000 rows per call and froze the server under load. Unnamed ids are checked directly.
-    const rows = query<{ id: string; name: string }>(`SELECT client AS id, name FROM client_names`)
+    // A client needs an id: a name recorded without one (events whose client could not be read) is no match.
+    const rows = query<{ id: string; name: string }>(`SELECT client AS id, name FROM client_names WHERE client != ''`)
     if (!rows.some(r => r.id.toLowerCase() === text.toLowerCase()) && query<{ x: number }>(`SELECT 1 AS x FROM task_daily WHERE client = ? LIMIT 1`, text).length) rows.push({ id: text, name: text })
     const exact = rows.filter(r => r.id.toLowerCase() === text.toLowerCase() || r.name.toLowerCase() === text.toLowerCase())
     return exact.length ? exact : rows.filter(r => r.name.toLowerCase().includes(text.toLowerCase()))

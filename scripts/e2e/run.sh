@@ -12,6 +12,8 @@ run check-all scripts/e2e/check-all.ts
 run check-rescue scripts/e2e/check-rescue.ts
 run check-signals scripts/e2e/check-signals.ts
 run check-privacy scripts/e2e/check-privacy.ts
+# With replay-lab recordings on this PostHog (scripts/replay-lab/run.ts): how is <client> doing, end to end.
+if [ -f "${LAB_TRUTH:-scripts/replay-lab/out/ground-truth.json}" ]; then run check-experience scripts/e2e/check-experience.ts; fi
 if [ -n "${E2E_TOKEN_FILE:-${E2E_TOKEN:-}}" ]; then run bench scripts/e2e/bench.ts e2e; fi
 grep -h -E '^FAIL' "$out"/check-*.txt >/dev/null 2>&1 && status=1
 echo; [ "$status" = 0 ] && echo "All end-to-end checks passed (details in $out/)." || echo "Some checks failed (details in $out/)."

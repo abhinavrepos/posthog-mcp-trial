@@ -21,7 +21,8 @@
         capture_dead_clicks: true,
         loaded(p) {
             p.register({ client_id: clientId, client_name: clientName, app_version: '27.0.0' })
-            p.identify(clientId + ':' + crypto.randomUUID())
+            // Reval's convention: the client is a part of the distinct id (CLIENT_FROM_DISTINCT_ID=3, separator |).
+            p.identify('lab|' + crypto.randomUUID() + '|' + clientId)
             p.startSessionRecording()
             window.labReady = true
         },

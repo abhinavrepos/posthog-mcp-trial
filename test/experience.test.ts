@@ -40,6 +40,8 @@ test('real lab recordings: read, stored, and each persona comes out as it behave
         candidates: async () => cands,
         jsonl: async (id) => fixture(cands.find((c) => c.session_id === id)!.real),
         durationMs: async (id) => cands.find((c) => c.session_id === id)!.duration,
+        // The lab's labels, as Reval's own events would report them across clients.
+        names: async () => ['Notional', 'Rate', 'Trade Date', 'Counterparty', 'Save', 'Preview'],
     })
     assert.equal(r.read, cands.length, JSON.stringify(r))
     const by = (persona: string) => X.clientExperience(sessions.find((s) => s.persona === persona)!.client_id)
@@ -56,6 +58,14 @@ test('real lab recordings: read, stored, and each persona comes out as it behave
     // Nothing planted in the replays comes out of any client's report.
     const all = JSON.stringify(sessions.map((s) => X.clientExperience(s.client_id))) + JSON.stringify(X.frictionHotspots())
     for (const c of canaryStrings) for (const v of [c, c.replace(/,/g, ''), c.toLowerCase()]) assert.ok(!all.includes(v), v)
+})
+
+test('screen vocabulary: only app-reported names, never generated ids, numbers or messages; PostHog down keeps the configured buttons', async () => {
+    let sql = ''
+    const names = await X.screenVocabulary({ hogql: async (q: string) => { sql = q; return [{ n: 'Trade Date' }, { n: 'gridfloatedit-3404-inputEl' }, { n: 'TRD-90210-77' }, { n: 'Counterparty' }] } } as never)
+    assert.ok(names.includes('Trade Date') && names.includes('Counterparty') && names.includes('Save'))
+    assert.ok(!names.includes('gridfloatedit-3404-inputEl') && !names.includes('TRD-90210-77'))
+    assert.match(sql, /HAVING uniq\(c\) >= 3/); assert.match(sql, /NOT IN \('messagebox','toast','menuCmb'\)/); assert.match(sql, /'SEARCH', 'SEARCHTYPE'/)
 })
 
 test('too few replays: no findings, a clear note; a failed read is skipped once and not retried', async () => {

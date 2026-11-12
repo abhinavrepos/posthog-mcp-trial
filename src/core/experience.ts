@@ -8,10 +8,12 @@
 // session (for replay links) and per client.
 import { createHash } from 'node:crypto'
 
+import { appEvents, isGeneratedId, prop } from './appevents.ts'
+
 import { snapshotsFile } from './clip.ts'
 import { getRecording, hogql, replayUrl } from './posthog.ts'
 import { P } from './props.ts'
-import { signalsFromReplay, type SessionSignals } from './replaysignals.ts'
+import { safeName, signalsFromReplay, type SessionSignals } from './replaysignals.ts'
 import { tasksDb } from './tasks.ts'
 
 tasksDb.exec(`
@@ -25,17 +27,45 @@ const day = (ms: number) => new Date(ms).toISOString().slice(0, 10)
 const hashUser = (u: string) => createHash('sha256').update('lens-replay:' + u).digest('hex').slice(0, 16)
 
 // ------------------------------------------------------------------ which replays to read
-export interface Candidate { session_id: string; client: string; user: string; start: string }
+export interface Candidate { session_id: string; client: string; user: string; start: string; end?: string }
 /** Recorded sessions of the last `days` with a client, newest first, not read yet. */
 export async function candidates(days = 30, limit = 400, deps = { hogql }): Promise<Candidate[]> {
-    const rows = await deps.hogql(`SELECT $session_id AS session_id, any(toString(${P.client})) AS client, any(distinct_id) AS user, min(timestamp) AS start
+    const rows = await deps.hogql(`SELECT $session_id AS session_id, any(toString(${P.client})) AS client, any(distinct_id) AS user, min(timestamp) AS start, max(timestamp) AS end
         FROM events WHERE timestamp > now() - INTERVAL ${Math.max(1, Math.min(90, days))} DAY AND notEmpty($session_id) AND notEmpty(toString(${P.client}))
           AND $session_id IN (SELECT session_id FROM raw_session_replay_events WHERE min_first_timestamp > now() - INTERVAL ${Math.max(1, Math.min(90, days)) + 1} DAY)
         GROUP BY $session_id ORDER BY start DESC LIMIT ${Math.max(1, Math.min(5000, limit * 5))}`, {}, { timeoutMs: 60_000 })
     const done = new Set((tasksDb.prepare('SELECT session_id FROM replay_signals UNION SELECT session_id FROM replay_skips').all() as { session_id: string }[]).map((r) => r.session_id))
-    return rows.map((r) => ({ session_id: String(r.session_id), client: String(r.client), user: String(r.user || ''), start: String(r.start) }))
+    return rows.map((r) => ({ session_id: String(r.session_id), client: String(r.client), user: String(r.user || ''), start: String(r.start), end: r.end ? String(r.end) : undefined }))
         .filter((c) => c.session_id && c.client && !done.has(c.session_id))
 }
+// ------------------------------------------------------------------ which names may come out
+// A replay's element ids and labels are the page's own text and can carry anything (a counterparty in an
+// id, a trade number in a label). Only names the app itself reports in its events - field labels, buttons,
+// dialogs, tabs - used by at least 3 clients are let through; everything else becomes "a button", "a field".
+// Messages, toasts, the search bar and typed search text are never part of it.
+const MIN_NAME_CLIENTS = 3
+let vocab: { at: number; names: string[] } | undefined
+const lit = (v: string) => `'${v.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
+export async function screenVocabulary(deps = { hogql }): Promise<string[]> {
+    if (vocab && Date.now() - vocab.at < 3_600_000) return vocab.names
+    const reg = appEvents()
+    const base = reg ? [...reg.submitButtons] : []
+    if (!reg) return base
+    const skipDialogs = [...reg.dialogs.messages, ...reg.dialogs.notices, ...reg.dialogs.menu].map(lit).join(',') || "''"
+    const roles = (['action', 'button', 'dialog', 'dialogName', 'tab'] as const).filter((r) => reg.properties[r]).map((r) => prop(reg, r))
+    let names = base
+    try {
+        const rows = await deps.hogql(`SELECT n FROM (
+                SELECT arrayJoin([${roles.join(', ')}]) AS n, toString(${P.client}) AS c FROM events
+                WHERE event IN (${lit(reg.events.interaction)}, ${lit(reg.events.screen)}) AND timestamp > now() - INTERVAL 90 DAY
+                  AND ${prop(reg, 'dialog')} NOT IN (${skipDialogs})${reg.properties.control ? ` AND ${prop(reg, 'control')} NOT IN ('SEARCH', 'SEARCHTYPE')` : ''})
+            WHERE notEmpty(n) AND length(n) <= 40 GROUP BY n HAVING uniq(c) >= ${MIN_NAME_CLIENTS} ORDER BY count() DESC LIMIT 3000`, {}, { timeoutMs: 60_000 })
+        names = base.concat(rows.map((r) => String(r.n)).filter((n) => safeName(n.replace(/\s+/g, '-')) && !isGeneratedId(n, reg)))
+    } catch { /* PostHog unreachable: the configured buttons only, until next time */ }
+    vocab = { at: Date.now(), names }
+    return names
+}
+
 /** Round-robin over clients, so every client gets some replays read before any client gets many. */
 export function fairOrder(list: Candidate[], perRun: number): Candidate[] {
     const by = new Map<string, Candidate[]>()
@@ -46,15 +76,20 @@ export function fairOrder(list: Candidate[], perRun: number): Candidate[] {
 }
 
 /** Reads up to `perRun` replays and stores their signals. Failures are remembered so they are not retried forever. */
-export async function processReplays(perRun = 30, deps: { candidates?: typeof candidates; jsonl?: (id: string) => Promise<string>; durationMs?: (id: string) => Promise<number | undefined> } = {}): Promise<{ read: number; skipped: number }> {
+export async function processReplays(perRun = 30, deps: { candidates?: typeof candidates; jsonl?: (id: string) => Promise<string>; durationMs?: (id: string) => Promise<number | undefined>; names?: () => Promise<string[]> } = {}): Promise<{ read: number; skipped: number }> {
     const list = fairOrder(await (deps.candidates || candidates)(), perRun)
+    if (!list.length) return { read: 0, skipped: 0 }
+    const names = await (deps.names || screenVocabulary)()
     const read = deps.jsonl || (async (id: string) => (await import('node:fs')).readFileSync(await snapshotsFile(id), 'utf8'))
     // PostHog's recorder pauses while nobody moves: the session's real length comes from its metadata.
     const length = deps.durationMs || (async (id: string) => { try { return Math.round(Number((await getRecording(id)).recording_duration) * 1000) || undefined } catch { return undefined } })
     let ok = 0, skipped = 0
     for (const c of list) {
         try {
-            const s = signalsFromReplay(await read(c.session_id), await length(c.session_id))
+            // The recorder pauses while nobody moves, so the recording can be much shorter than the session:
+            // its real length is the longer of the recording's and the events' span.
+            const span = c.end ? Date.parse(c.end) - Date.parse(c.start) : 0
+            const s = signalsFromReplay(await read(c.session_id), Math.max((await length(c.session_id)) || 0, Number.isFinite(span) ? span : 0) || undefined, { names })
             if (s.duration_ms < 5_000) throw new Error('too short')
             tasksDb.prepare('INSERT OR REPLACE INTO replay_signals VALUES (?,?,?,?,?,?,?)').run(c.session_id, c.client, hashUser(c.user), day(Date.parse(c.start)), Math.round(s.duration_ms), JSON.stringify(s), new Date().toISOString())
             ok++
