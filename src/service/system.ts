@@ -81,7 +81,7 @@ export function systemHtml(v: Viewer): string {
 .banner.ok{background:var(--good-bg)}
 .banner.ok .big{background:var(--good)}
 .banner.warn{background:var(--warn-bg)}
-.banner.warn .big{background:var(--warn)}
+.banner.warn .big{background:var(--down)}
 .banner.down{background:var(--down-bg)}
 .banner.down .big{background:var(--down)}
 .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px}
@@ -97,8 +97,8 @@ export function systemHtml(v: Viewer): string {
 .st{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;white-space:nowrap}
 .st i{font-style:normal;width:16px;height:16px;border-radius:50%;display:grid;place-items:center;color:var(--card);font-size:10px}
 .st.ok{color:var(--good)}
-.st.warn{color:var(--warn)}
-.st.warn i{background:var(--warn)}
+.st.warn{color:var(--down)}
+.st.warn i{background:var(--down)}
 .st.down{color:var(--down)}
 .st.down i{background:var(--down)}
 .st.info{color:var(--muted)}

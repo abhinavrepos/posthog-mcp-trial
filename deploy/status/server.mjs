@@ -556,8 +556,8 @@ function fragment() {
 }
 const rank = (l) => ({ down: 3, warn: 2, ok: 1, info: 0 })[l]
 
-const CSS = `:root{--bg:#f6f7f9;--card:#fff;--ink:#16181d;--muted:#5b6170;--line:#e3e6eb;--ok:#1a7f45;--ok-bg:#e7f5ec;--warn:#9a5b00;--warn-bg:#fff4dd;--down:#b42318;--down-bg:#fde9e7;--info:#3d5a99;--info-bg:#eaf0fb}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b21;--ink:#e8eaee;--muted:#9aa1ae;--line:#2a2f38;--ok:#4cc483;--ok-bg:#132a1d;--warn:#f0b54a;--warn-bg:#2d2412;--down:#ff7b6e;--down-bg:#331614;--info:#8fb0ee;--info-bg:#17213a}}
+const CSS = `:root{--bg:#f6f7f9;--card:#fff;--ink:#16181d;--muted:#5b6170;--line:#e3e6eb;--ok:#1a7f45;--ok-bg:#e7f5ec;--warn:#b42318;--warn-bg:#fde9e7;--down:#b42318;--down-bg:#fde9e7;--info:#3d5a99;--info-bg:#eaf0fb}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b21;--ink:#e8eaee;--muted:#9aa1ae;--line:#2a2f38;--ok:#4cc483;--ok-bg:#132a1d;--warn:#ff7b6e;--warn-bg:#331614;--down:#ff7b6e;--down-bg:#331614;--info:#8fb0ee;--info-bg:#17213a}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
 main{max-width:1180px;margin:0 auto;padding:20px 16px 40px}
 .banner{display:flex;gap:14px;align-items:center;padding:16px 18px;border-radius:12px;margin-bottom:16px;border:1px solid var(--line)}
