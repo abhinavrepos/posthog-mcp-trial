@@ -20,6 +20,7 @@ import { recordingInfo, type RecordingInfo } from '../core/recording-info.ts'
 import { downloadName, formatClock, HourlyLimit, parseReplayInput, parseStartTime } from '../core/replay-input.ts'
 import { audit, can, canSeeSystem, canUseDashboards, canUseSurveys, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
 import { handleAdmin } from './admin.ts'
+import { codenameRedirect, handlePrivacy } from './privacy.ts'
 import { handleLive, liveHtml } from './live.ts'
 import { handleSystem } from './system.ts'
 import { handleSurveys } from './surveyspage.ts'
@@ -367,6 +368,9 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         json(res, 401, { error: 'Sign in first.' })
         return true
     }
+    // Links from an AI carry codenames where clients go (client anonymisation): open the real client.
+    if (codenameRedirect(req, res, url)) return true
+    if (p === '/replays/codenames' || p.startsWith('/replays/codenames/') || p.startsWith('/replays/admin/privacy')) return handlePrivacy(req, res, url, viewer)
     if (p.startsWith('/replays/admin')) return handleAdmin(req, res, url, viewer)
     if (p === '/replays/system' || p.startsWith('/replays/system/')) return handleSystem(req, res, url, viewer)
     if (p === '/replays/surveys' || p.startsWith('/replays/surveys/')) return handleSurveys(req, res, url, viewer)

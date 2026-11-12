@@ -24,6 +24,9 @@ import { triage } from '../core/triage.ts'
 import { addAttachment, addComment, addLabels, getIssue, hasTriageComment, issueToTicket, verifyWebhookSignature } from '../jira/client.ts'
 import { bearerAuthorized, handlePosthogMcp } from '../mcp/posthog-proxy.ts'
 import { lensServerInfo } from '../mcp/server-info.ts'
+import { guardTransport, registryOf } from '../mcp/anonymise.ts'
+import { anonymiseOn } from '../core/anonymise.ts'
+import { refreshRoster } from '../core/anonroster.ts'
 import { serverInstructions } from '../mcp/instructions.ts'
 import { lensToolNames, registerTools } from '../mcp/tools.ts'
 import { appEvents } from '../core/appevents.ts'
@@ -165,6 +168,9 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse) {
         void server.close()
     })
     await server.connect(transport)
+    // Client anonymisation (Admin → Client privacy for AI): every message in and out goes through the guard.
+    if (anonymiseOn()) await refreshRoster()
+    guardTransport(transport, registryOf(server))
     const body = req.method === 'POST' ? JSON.parse((await readRaw(req, 5_000_000)).toString('utf8') || 'null') : undefined
     await transport.handleRequest(req, res, body)
 }

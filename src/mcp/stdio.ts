@@ -8,6 +8,8 @@ import { config } from '../core/config.ts'
 import { lensServerInfo } from './server-info.ts'
 import { serverInstructions } from './instructions.ts'
 import { registerTools } from './tools.ts'
+import { guardTransport, registryOf } from './anonymise.ts'
+import { refreshRoster } from '../core/anonroster.ts'
 
 // stdout belongs to the protocol. Anything else that logs goes to stderr.
 console.log = console.error
@@ -19,7 +21,13 @@ if (!config.features.lensMcp) {
 
 const server = new McpServer(lensServerInfo, { instructions: serverInstructions() })
 registerTools(server, makeAi())
-await server.connect(new StdioServerTransport())
+// Client anonymisation (Admin → Client privacy for AI) applies here too: every message in and out. The
+// client list is loaded before the first message is read.
+await refreshRoster().catch(() => {})
+const transport = new StdioServerTransport()
+await server.connect(transport)
+guardTransport(transport, registryOf(server))
+setInterval(() => void refreshRoster().catch(() => {}), 60_000).unref()
 
 const stop = async () => {
     await shutdownClips().catch(() => {})

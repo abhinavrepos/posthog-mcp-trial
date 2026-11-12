@@ -11,6 +11,7 @@ run() { local name="$1"; shift; echo "== $name"; if npx tsx "$@" > "$out/$name.t
 run check-all scripts/e2e/check-all.ts
 run check-rescue scripts/e2e/check-rescue.ts
 run check-signals scripts/e2e/check-signals.ts
+run check-privacy scripts/e2e/check-privacy.ts
 if [ -n "${E2E_TOKEN_FILE:-${E2E_TOKEN:-}}" ]; then run bench scripts/e2e/bench.ts e2e; fi
 grep -h -E '^FAIL' "$out"/check-*.txt >/dev/null 2>&1 && status=1
 echo; [ "$status" = 0 ] && echo "All end-to-end checks passed (details in $out/)." || echo "Some checks failed (details in $out/)."

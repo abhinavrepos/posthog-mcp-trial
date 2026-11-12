@@ -5,6 +5,11 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { StringDecoder } from 'node:string_decoder'
 
+import { anonymiseOn, hideClients, namesClient, posthogMode, REFUSAL, revealCodenames } from '../core/anonymise.ts'
+import { countBlock } from '../core/anonymise.ts'
+import { refreshRoster } from '../core/anonroster.ts'
+import { guardRequest, guardResponse } from './anonymise.ts'
+
 /** What the proxy says about Lens: its server name, the tracked app's name and its tool names. */
 export interface LensInfo {
     app: string
@@ -62,6 +67,37 @@ export function replayRefusal(value: unknown, name = 'lens'): Rpc | undefined {
         return { jsonrpc: '2.0', id: value.id ?? null, error: { code: -32602, message: `In-app surveys are managed only in Lens: use the ${name} server's survey tools (list_surveys, survey_results, design_survey, save_survey, stop_survey), which follow each person's survey role; launching is only on the Lens Surveys page. PostHog survey commands are refused.` } }
 }
 
+// ------------------------------------------------------------------ client anonymisation (src/core/anonymise.ts)
+// block (the default): exec may look up tools (help, tools, search, info, schema) and search PostHog's docs;
+// every other call is refused, since any query or list can return client names in a form no filter can
+// recognise (concatenated, encoded, aggregated). filter: calls run with codenames in the command turned
+// into client codes, client names and codes in the command refused, and results cleaned (best effort).
+const LOOKUP = new Set(['help', 'tools', 'search', 'info', 'schema'])
+const DOCS_ONLY = new Set(['docs-search'])
+export function anonRefusal(value: unknown, name = 'lens', mode = posthogMode()): { refusal?: Rpc; value?: unknown } {
+    if (!object(value)) return { value }
+    if (value.method === 'tools/call' && value.params?.name === 'exec') {
+        const command = String(value.params.arguments?.command ?? '')
+        const refuse = (why: string) => { countBlock('posthog_refused'); return { refusal: { jsonrpc: '2.0', id: value.id ?? null, result: { isError: true, content: [{ type: 'text', text: why }] } } } }
+        if (mode === 'block') {
+            for (const part of command.split(/[\n;&|]+/).map((x) => x.trim()).filter(Boolean)) {
+                const [verb, ...rest] = part.split(/\s+/)
+                const v = verb.toLowerCase()
+                if (LOOKUP.has(v)) continue
+                const tool = rest.find((w) => !w.startsWith('-'))?.toLowerCase()
+                if (v === 'call' && tool && DOCS_ONLY.has(tool)) continue
+                return refuse(`PostHog data commands are switched off while client anonymisation is on in Lens: their results can contain client names. Use the ${name} server's tools instead; they answer with client codenames. PostHog's docs search still works (call docs-search).`)
+            }
+            if (namesClient(command)) return refuse(REFUSAL)
+            return { value }
+        }
+        if (namesClient(command)) return refuse(REFUSAL)
+        return { value: { ...value, params: { ...value.params, arguments: { ...value.params.arguments, command: revealCodenames(command) } } } }
+    }
+    const g = guardRequest(value, 'posthog_refused')
+    return g.answer ? { refusal: g.answer } : { value: g.msg }
+}
+
 export function bearerAuthorized(req: IncomingMessage, token: string): boolean {
     if (!token) return false
     const got = Buffer.from(/^Bearer (.+)$/.exec(String(req.headers.authorization || ''))?.[1] || '')
@@ -111,7 +147,19 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
     const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000)
     const onClose = () => controller.abort()
     res.once('close', onClose)
+    // Client anonymisation (Admin → Client privacy for AI): requests checked, every answer cleaned.
+    // Checked again for every message: a stream opened before an admin turned it on is cleaned from then on.
+    const anon = anonymiseOn()
+    const clean = (v: unknown) => (anonymiseOn() ? guardResponse(v, 'posthog_cleaned') : v)
+    const out = (v: unknown) => clean(rewriteResponse(v, options.name, options.info))
+    const sseLine = (line: string) => {
+        if (!anonymiseOn()) return rewriteSseLine(line, options.name, options.info)
+        if (!line.startsWith('data:')) return hideClients(line).text
+        const m = /^(data: *)(.*?)(\r?)$/.exec(line)!
+        try { return `${m[1]}${JSON.stringify(out(JSON.parse(m[2])))}${m[3]}` } catch { return hideClients(line).text }
+    }
     try {
+        if (anon) await refreshRoster()
         let body: string | undefined
         let batch = false
         const refusals: Rpc[] = []
@@ -120,10 +168,13 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
             let value: unknown
             try { value = JSON.parse(raw) } catch { return send(res, 400, { error: 'invalid JSON' }) }
             batch = Array.isArray(value)
-            const allowed = (batch ? value as unknown[] : [value]).filter((item) => {
+            const allowed = (batch ? value as unknown[] : [value]).flatMap((item) => {
                 const refusal = replayRefusal(item, options.name)
-                if (refusal) refusals.push(refusal)
-                return !refusal
+                if (refusal) { refusals.push(refusal); return [] }
+                if (!anon) return [item]
+                const a = anonRefusal(item, options.name)
+                if (a.refusal) { refusals.push(a.refusal); return [] }
+                return [a.value]
             })
             if (!allowed.length && refusals.length) return send(res, 200, batch ? refusals : refusals[0])
             body = JSON.stringify(batch ? allowed : allowed[0])
@@ -154,14 +205,14 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
                     pending += decoder.write(chunk)
                     let end: number
                     while ((end = pending.indexOf('\n')) >= 0) {
-                        this.push(rewriteSseLine(pending.slice(0, end), options.name, options.info) + '\n')
+                        this.push(sseLine(pending.slice(0, end)) + '\n')
                         pending = pending.slice(end + 1)
                     }
                     cb()
                 },
                 flush(cb) {
                     pending += decoder.end()
-                    if (pending) this.push(rewriteSseLine(pending, options.name, options.info))
+                    if (pending) this.push(sseLine(pending))
                     if (refusals.length) this.push(`\n\ndata: ${JSON.stringify(refusals)}\n\n`)
                     cb()
                 },
@@ -171,11 +222,11 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
             const raw = upstream.body ? await readBody(Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream), limit) : ''
             let output = raw
             if (upstream.headers.get('content-type')?.includes('application/json') && raw) {
-                const value = rewriteResponse(JSON.parse(raw), options.name, options.info)
+                const value = out(JSON.parse(raw))
                 output = JSON.stringify(refusals.length ? [...(Array.isArray(value) ? value : [value]), ...refusals] : value)
             } else if (refusals.length) {
                 return send(res, 200, refusals)
-            }
+            } else if (anonymiseOn()) output = hideClients(raw).text
             res.writeHead(upstream.status)
             res.end(output)
         }
