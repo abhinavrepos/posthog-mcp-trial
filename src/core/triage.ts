@@ -1,5 +1,5 @@
 // The triage pipeline both entry points share: Jira webhooks and the MCP tools.
-import { clientOfCodename, codenameOf, countBlock, hideClientsDeep, namesForCodenames, anonymiseOn, syncClients } from './anonymise.ts'
+import { clientOfCodename, codenameOf, countBlock, hideClientsDeep, namesForCodenames, anonFor, syncClients } from './anonymise.ts'
 import { SCREENS } from './catalog.ts'
 import { renderClip, type Clip } from './clip.ts'
 import { errorImpact, topErrorsOnScreen, type ErrorImpact } from './impact.ts'
@@ -94,7 +94,7 @@ export async function triage(ticket: Ticket, opts: TriageOptions = {}): Promise<
             const clients = (await knownClients()).map(({ id, name }) => ({ id, name }))
             // Client anonymisation (Admin → Client privacy for AI): Claude sees codenames only, and its answer
             // (a codename) is turned back into the client here.
-            const anon = anonymiseOn()
+            const anon = anonFor('triage')
             if (anon) syncClients(clients)
             const shown = anon ? clients.map((c) => { const code = codenameOf(c.id) || c.id; return { id: code, name: code } }) : clients
             const read = await opts.ai.readTicket(anon ? hideTicket(ticket) : ticket, { clients: shown, screens: SCREENS.map(({ path, name }) => ({ path, name })) })
@@ -153,7 +153,7 @@ export async function triage(ticket: Ticket, opts: TriageOptions = {}): Promise<
     if (opts.ai?.hypothesis && (report.incident || report.struggle)) {
         try {
             // Event and error data only: replay frames never go to Claude.
-            if (anonymiseOn()) {
+            if (anonFor('triage')) {
                 const h = hideClientsDeep(report)
                 if (h.n) countBlock('triage_cleaned')
                 const said = await opts.ai.hypothesis(h.value, [])

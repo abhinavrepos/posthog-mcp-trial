@@ -13,17 +13,52 @@ import { randomInt } from 'node:crypto'
 import { CODENAMES } from './codenames.ts'
 import { all, getSetting, one, run, setSetting, tx } from './db.ts'
 
-export type PosthogMode = 'block' | 'filter'
-export const anonymiseOn = (): boolean => getSetting<boolean>('anon_ai', false) === true
-export const posthogMode = (): PosthogMode => (getSetting<string>('anon_posthog', 'block') === 'filter' ? 'filter' : 'block')
-export function setAnonymise(p: { on?: boolean; posthog?: string }): void {
-    if (p.on !== undefined) setSetting('anon_ai', !!p.on)
-    if (p.posthog !== undefined) {
-        if (p.posthog !== 'block' && p.posthog !== 'filter') throw new AnonInputError('PostHog mode is block or filter.')
-        setSetting('anon_posthog', p.posthog)
-    }
-    bump()
+export type PosthogMode = 'block' | 'filter' | 'off'
+/** What an admin chose (Admin → Client privacy for AI). Defaults: everything covered, PostHog's data blocked. */
+export interface AnonSettings {
+    on: boolean          // the main switch
+    lens: boolean        // Lens's tools in Copilot
+    posthog: PosthogMode // PostHog's tools in Copilot: block data commands, filter results, or leave as they are
+    triage: boolean      // Claude's ticket triage
+    codes: boolean       // hide client codes too (names are always hidden)
+    emails: boolean      // hide client users' email addresses
+    message: string      // what the AI is told when it asks with a client name ('' = the default)
 }
+const DEFAULTS: AnonSettings = { on: false, lens: true, posthog: 'block', triage: true, codes: true, emails: true, message: '' }
+export function anonSettings(): AnonSettings {
+    const s = { ...DEFAULTS, ...getSetting<Partial<AnonSettings>>('anon', {}) }
+    // Earlier separate keys, kept working.
+    if (getSetting<boolean | null>('anon_ai', null) !== null && getSetting<Partial<AnonSettings>>('anon', {}).on === undefined) s.on = getSetting<boolean>('anon_ai', false) === true
+    if (getSetting<string | null>('anon_posthog', null) !== null && getSetting<Partial<AnonSettings>>('anon', {}).posthog === undefined) s.posthog = getSetting<string>('anon_posthog', 'block') === 'filter' ? 'filter' : 'block'
+    return s
+}
+export const anonymiseOn = (): boolean => anonSettings().on
+export const posthogMode = (): PosthogMode => anonSettings().posthog
+/** Is the layer on for this path? */
+export const anonFor = (path: 'lens' | 'posthog' | 'triage'): boolean => {
+    const s = anonSettings()
+    return s.on && (path === 'posthog' ? s.posthog !== 'off' : s[path])
+}
+export function setAnonymise(p: Partial<Record<keyof AnonSettings, unknown>>): AnonSettings {
+    const next = { ...anonSettings() }
+    const bool = (k: 'on' | 'lens' | 'triage' | 'codes' | 'emails') => { if (p[k] !== undefined) { if (typeof p[k] !== 'boolean') throw new AnonInputError(`${k} is true or false.`); next[k] = p[k] as boolean } }
+    for (const k of ['on', 'lens', 'triage', 'codes', 'emails'] as const) bool(k)
+    if (p.posthog !== undefined) {
+        if (!['block', 'filter', 'off'].includes(String(p.posthog))) throw new AnonInputError('PostHog is block, filter or off.')
+        next.posthog = p.posthog as PosthogMode
+    }
+    if (p.message !== undefined) {
+        const m = String(p.message).trim()
+        if (m.length > 500) throw new AnonInputError('The message to the AI is at most 500 characters.')
+        next.message = m
+    }
+    setSetting('anon', next)
+    bump()
+    return next
+}
+const DEFAULT_REFUSAL = 'Client names and client codes are hidden from AI here (client anonymisation is on in Lens). Use the client\'s codename, such as "Teal Wren": the person finds it in Lens, on the Codenames page (/replays/codenames). Do not ask the person to type client names or codes in chat.'
+/** The refusal an AI gets for a client name or code: the same for known and unknown names. */
+export const refusalText = (): string => anonSettings().message || DEFAULT_REFUSAL
 export class AnonInputError extends Error {}
 
 // ------------------------------------------------------------------ codenames
@@ -154,7 +189,7 @@ export function setCodename(client: string, p: { codename?: string; aliases?: st
 // Before matching, look-alike letters are made plain: full-width (ＡＣＭＥ), zero-width spaces and soft
 // hyphens, and Cyrillic or Greek letters that look Latin. Email addresses of anyone but Lens's own people are
 // hidden too: a domain names its company.
-interface Matcher { names?: RegExp; codesAnyCase?: RegExp; codesExact?: RegExp; byKey: Map<string, Row>; codenames: Map<string, Row>; staff: Set<string> }
+interface Matcher { names?: RegExp; codesAnyCase?: RegExp; codesExact?: RegExp; byKey: Map<string, Row>; codenames: Map<string, Row>; staff: Set<string>; emails: boolean }
 /** Email domains of Lens's own people (admins, PMs): their addresses may show; everyone else's may not. */
 function staffDomains(): Set<string> {
     const out = new Set<string>()
@@ -208,6 +243,7 @@ const shortCode = (c: string) => /^[A-Za-z]+$/.test(c) && COMMON.has(c.toLowerCa
 function matcher(): Matcher {
     if (cache?.version === version) return cache.m
     const rows = all<Row>('SELECT * FROM client_codenames')
+    const settings = anonSettings()
     const byKey = new Map<string, Row>(), codenames = new Map<string, Row>()
     const names: string[] = [], anyCase: string[] = [], exact: string[] = []
     for (const r of rows) {
@@ -217,6 +253,7 @@ function matcher(): Matcher {
             if (!pattern) continue
             byKey.set('n:' + keyOf(n), r); byKey.set('n:' + keyOf(n.replace(/&/g, ' ')), r); names.push(pattern)
         }
+        if (!settings.codes) continue
         if (shortCode(r.client)) { byKey.set('x:' + r.client, r); exact.push(esc(r.client)) }
         else { byKey.set('c:' + r.client.toLowerCase(), r); anyCase.push(esc(r.client)) }
     }
@@ -226,7 +263,7 @@ function matcher(): Matcher {
         names: names.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${longest(names)})(?![\\p{L}\\p{N}])`, 'giu') : undefined,
         codesAnyCase: anyCase.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${longest(anyCase)})(?![\\p{L}\\p{N}])`, 'giu') : undefined,
         codesExact: exact.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${longest(exact)})(?![\\p{L}\\p{N}])`, 'gu') : undefined,
-        staff: staffDomains(),
+        staff: staffDomains(), emails: settings.emails,
     }
     cache = { version, m }
     return m
@@ -241,7 +278,8 @@ export function hideClients(text: string): { text: string; n: number } {
     if (!text) return { text, n: 0 }
     const m = matcher()
     let n = 0
-    text = plain(text).replace(EMAIL, (hit, domain: string) => (m.staff.has(domain.toLowerCase()) ? hit : (n++, '[email hidden]')))
+    text = plain(text)
+    if (m.emails) text = text.replace(EMAIL, (hit, domain: string) => (m.staff.has(domain.toLowerCase()) ? hit : (n++, '[email hidden]')))
     const swap = (inUrl: boolean) => (s: string) => {
         let out = s
         const sub = (re: RegExp | undefined, key: (x: string) => string) => {
@@ -269,7 +307,7 @@ export function hideClientsDeep<T>(value: T): { value: T; n: number } {
     const walk = (v: unknown, field = false): unknown => {
         if (typeof v === 'string') {
             const h = hideClients(v); n += h.n
-            if (field && h.n === 0 && v.trim() && !clientOfCodename(v)) { n++; return '[client]' }
+            if (field && h.n === 0 && v.trim() && !clientOfCodename(v) && (anonSettings().codes || !isClientCode(v.trim()))) { n++; return '[client]' }
             return h.text
         }
         if (Array.isArray(v)) return v.map((x) => walk(x, field))
@@ -287,6 +325,7 @@ export const namesClient = (text: string): boolean => hideClients(text).n > 0
 /** An email address of someone outside Lens's own people (a client's user). */
 export function outsideEmail(text: string): boolean {
     const m = matcher()
+    if (!m.emails) return false
     for (const hit of plain(text).matchAll(EMAIL)) if (!m.staff.has(hit[1].toLowerCase())) return true
     return false
 }
@@ -313,6 +352,8 @@ export function namesForCodenames(text: string): string {
         return r ? (r.name || r.client) : hit
     })
 }
+/** A client code Lens knows (whatever the case). */
+export const isClientCode = (s: string): boolean => !!s && !!one<{ client: string }>('SELECT client FROM client_codenames WHERE client=? COLLATE NOCASE', s)
 export const codenameOf = (client: string): string | undefined => one<{ codename: string }>('SELECT codename FROM client_codenames WHERE client=?', client)?.codename
 
 // ------------------------------------------------------------------ counts of what was blocked
@@ -325,5 +366,5 @@ export function blockCounts(days = 30): Record<string, number> {
     return Object.fromEntries(all<{ kind: string; n: number }>('SELECT kind, sum(n) AS n FROM anon_blocks WHERE day>=? GROUP BY kind', since).map((r) => [r.kind, r.n]))
 }
 
-/** The refusal an AI gets for a client name or code: the same for known and unknown names. */
-export const REFUSAL = 'Client names and client codes are hidden from AI here (client anonymisation is on in Lens). Use the client\'s codename, such as "Amber Falcon": the person finds it in Lens, on the Codenames page (/replays/codenames). Do not ask the person to type client names or codes in chat.'
+/** The default refusal (tests and callers that do not need the admin's own wording). */
+export const REFUSAL = DEFAULT_REFUSAL
