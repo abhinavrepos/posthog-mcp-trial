@@ -37,6 +37,6 @@ export async function draftRescueSurvey(client: string, by: string, injected: Pa
     }
     if (!result.survey) throw new RescueInputError('Could not create draft: ' + result.compiled.problems.map(p => p.text).join('; '))
     rememberClientSurvey(result.survey.id, spec.name, [client], 'draft')
-    await d.setRescueAction(client, { note: `Draft rescue survey created: ${result.survey.id}. Review and launch on the Surveys page.` }, by, view)
-    return { survey_id: result.survey.id, open: '/replays/surveys', message: 'Draft created — review and launch it on the Surveys page' }
+    await d.setRescueAction(client, { note: `Draft survey "${spec.name}" made on ${day}. Review and launch it on the Surveys page.` }, by, view)
+    return { survey_id: result.survey.id, open: '/replays/surveys#' + encodeURIComponent(result.survey.id), message: `Draft survey "${spec.name}" is ready to review.` }
 }

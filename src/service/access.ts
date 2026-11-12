@@ -157,6 +157,26 @@ export function setChatUrl(value: unknown, by: string): string {
     })
     return chatUrl()
 }
+/** Which chat apps may be connected with a Lens key. Central admins edit it; the Chat page shows it as a warning. */
+export const DEFAULT_CHAT_APPS = ['GitHub Copilot with your ION Microsoft enterprise account']
+export const DEFAULT_CHAT_NOTE = 'This is ION enterprise data. Other AI agents and chat apps are not approved: do not connect them with your key.'
+export const chatPolicy = (): { apps: string[]; note: string } => ({
+    apps: getSetting<string[]>('chat_apps', []).length ? getSetting<string[]>('chat_apps', []) : DEFAULT_CHAT_APPS,
+    note: getSetting<string>('chat_note', '') || DEFAULT_CHAT_NOTE,
+})
+export function setChatPolicy(change: { apps?: unknown; note?: unknown }, by: string): { apps: string[]; note: string } {
+    const apps = change.apps === undefined ? undefined : (Array.isArray(change.apps) ? change.apps : String(change.apps).split('\n')).map(a => String(a).trim()).filter(Boolean)
+    if (apps && apps.length > 10) throw new Error('List at most 10 approved apps.')
+    if (apps?.some(a => a.length > 100)) throw new Error('Keep each approved app under 100 characters.')
+    const note = change.note === undefined ? undefined : String(change.note).trim()
+    if (note && note.length > 400) throw new Error('Keep the warning under 400 characters.')
+    tx(() => {
+        if (apps) setSetting('chat_apps', apps)
+        if (note !== undefined) setSetting('chat_note', note)
+        audit(by, 'access.chat_policy', { apps: apps ?? '(unchanged)', note: note === undefined ? '(unchanged)' : note || '(default)' })
+    })
+    return chatPolicy()
+}
 export function setSurveySettings(change: { default_role?: SurveyRole; shared_token_role?: SurveyRole }, by: string): void {
     tx(() => {
         if (change.default_role !== undefined) {

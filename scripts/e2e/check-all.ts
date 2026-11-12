@@ -161,15 +161,18 @@ let token = ''
 
 // ---------------------------------------------------------------- 4. Live (the memory fix)
 {
-    const t0 = Date.now(); const day = await admin.api(`/replays/live/api/time?from=${Y}&to=${Y}&tz=UTC&gap=60`)
-    ok('Live: one day report', day.status === 200 && day.body.totals?.actions > 0, `${Date.now() - t0} ms, ${day.body.totals?.actions} actions, ${day.body.clients?.length} clients`)
+    // The most recent day with activity in the last week: test data may stop a day or two before today.
+    let D = Y, day: any
+    for (let n = 1; n <= 7; n++) { D = dayAgo(n); day = await admin.api(`/replays/live/api/time?from=${D}&to=${D}&tz=UTC&gap=60`); if (day.body?.totals?.actions > 0) break }
+    const t0 = Date.now(); day = await admin.api(`/replays/live/api/time?from=${D}&to=${D}&tz=UTC&gap=60`)
+    ok('Live: one day report', day.status === 200 && day.body.totals?.actions > 0, `${D}: ${Date.now() - t0} ms, ${day.body.totals?.actions} actions, ${day.body.clients?.length} clients`)
     const t1 = Date.now(); const month = await admin.api(`/replays/live/api/time?from=${dayAgo(30)}&to=${Y}&tz=UTC&gap=60`)
     ok('Live: 30-day report (failed before the fix)', month.status === 200, `${Date.now() - t1} ms, ${month.body.totals?.actions} actions`)
     const client = (day.body.clients || []).find((c: any) => c.client_id)?.client_id
-    const sess = await admin.api(`/replays/live/api/sessions?from=${Y}&to=${Y}&tz=UTC&gap=60&client=${encodeURIComponent(client)}`)
+    const sess = await admin.api(`/replays/live/api/sessions?from=${D}&to=${D}&tz=UTC&gap=60&client=${encodeURIComponent(client)}`)
     ok('Live: session list for a client', sess.status === 200 && sess.body.sessions?.length > 0, `${client}: ${sess.body.sessions?.length} sessions`)
     const user = sess.body.sessions?.[0]?.user
-    const person = await admin.api(`/replays/live/api/person?from=${Y}&tz=UTC&gap=60&client=${encodeURIComponent(client)}&user=${encodeURIComponent(user)}`)
+    const person = await admin.api(`/replays/live/api/person?from=${D}&tz=UTC&gap=60&client=${encodeURIComponent(client)}&user=${encodeURIComponent(user)}`)
     ok('Live: one person\'s timeline', person.status === 200 && person.body.actions?.length > 0, `${person.body.actions?.length} actions`)
 }
 

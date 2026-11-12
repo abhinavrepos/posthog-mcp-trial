@@ -98,6 +98,9 @@ if (byClient.has('S002') || !expect) {
             ok('the draft targets that client, is not running, and asks the right questions', sv.status === 200 && txt.includes(target) && !/"status":"running"/.test(txt) && (target !== 'S002' || /export/i.test(txt)), txt.slice(0, 200))
             const arch = await admin.api('/replays/surveys/api/survey/' + id + '/archive', 'POST', {})
             ok('test draft archived', arch.status === 200)
+            // Leave the demo client's card as it was: clear the note Ask them wrote.
+            const W = `from=${new Date(Date.now() - 28 * 864e5).toISOString().slice(0, 10)}&to=${new Date(Date.now() - 864e5).toISOString().slice(0, 10)}`
+            ok('test note cleared from the client card', (await admin.api(`/replays/dashboards/api/rescue/${encodeURIComponent(target)}?${W}`, 'POST', { note: '' })).status === 200)
         }
     }
 }
@@ -117,6 +120,8 @@ if (byClient.has('S002') || !expect) {
     // outcomes: Harbor left today (its exports climbed weeks earlier), Quiet Mills renewed
     const today = new Date().toISOString().slice(0, 10)
     ok('viewer cannot record an outcome', (await viewer.api('/replays/admin/api/outcomes', 'POST', { client: 'S002', outcome: 'left', decided_on: today })).status >= 400)
+    // Real outcomes someone entered for these clients are put back afterwards.
+    const earlier = ((await admin.api('/replays/admin/api/outcomes')).body || []).filter((x: any) => ['S002', 'S005'].includes(x.client))
     const o1 = await admin.api('/replays/admin/api/outcomes', 'POST', { client: 'S002', outcome: 'left', decided_on: today, note: 'e2e check' })
     const o2 = await admin.api('/replays/admin/api/outcomes', 'POST', { client: 'S005', outcome: 'renewed', decided_on: today, note: 'e2e check' })
     ok('admin records outcomes', o1.status === 200 && o2.status === 200)
@@ -128,7 +133,9 @@ if (byClient.has('S002') || !expect) {
     console.log('  overall:', JSON.stringify(overall))
     await admin.api('/replays/admin/api/outcomes', 'DELETE', { client: 'S002' })
     await admin.api('/replays/admin/api/outcomes', 'DELETE', { client: 'S005' })
-    ok('test outcomes removed', ((await admin.api('/replays/admin/api/outcomes')).body || []).filter((x: any) => ['S002', 'S005'].includes(x.client)).length === 0)
+    for (const o of earlier) await admin.api('/replays/admin/api/outcomes', 'POST', { client: o.client, outcome: o.outcome, decided_on: o.decided_on, note: o.note || '' })
+    const after = ((await admin.api('/replays/admin/api/outcomes')).body || []).filter((x: any) => ['S002', 'S005'].includes(x.client))
+    ok('test outcomes removed, earlier ones restored', JSON.stringify(after.map((x: any) => [x.client, x.outcome, x.decided_on]).sort()) === JSON.stringify(earlier.map((x: any) => [x.client, x.outcome, x.decided_on]).sort()))
 }
 
 // 4. chat

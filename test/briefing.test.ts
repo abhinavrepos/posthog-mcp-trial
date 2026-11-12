@@ -7,7 +7,7 @@ const dir = mkdtempSync(join(tmpdir(), 'briefing-'))
 Object.assign(process.env, { TRIAGE_DB: join(dir,'main.db'), TASKS_DB: join(dir,'tasks.db'), APP_EVENTS_FILE: 'config/app-events.reval.json' })
 const { tasksDb, forgetAnswers } = await import('../src/core/tasks.ts')
 const { db } = await import('../src/core/db.ts')
-const { mondayBrief } = await import('../src/core/briefing.ts')
+const { mondayBrief, briefHeadline } = await import('../src/core/briefing.ts')
 const { draftRescueSurvey } = await import('../src/core/rescuesurveys.ts')
 const { compileSurvey } = await import('../src/core/surveys.ts')
 const shift = (d: string,n: number) => new Date(Date.parse(d)+n*86400000).toISOString().slice(0,10)
@@ -73,10 +73,10 @@ test('Ask them saves targeted valid drafts with task and export questions, notes
     const queue = {coverage:{complete:true,unprocessed:[]},window:{from:'2026-06-01',to:'2026-06-28'},baseline:{from:'2026-05-04',to:'2026-05-31'},data_through:'2026-06-28',clients:[client],hidden_snoozed:0,note:''}
     const deps = { surveysActive:()=>true,rescueQueue:async()=>queue,saveSurvey:async(spec: any,opts: any)=>{saved=spec;options=opts;return {survey:{id:'draft-123'} as any,compiled:compileSurvey(spec,opts)}},setRescueAction:async(_c: string,change: any)=>{note=change;return {} as any} }
     const result = await draftRescueSurvey('acme','pm@example.com',deps)
-    assert.equal(result.survey_id,'draft-123'); assert.match(result.message,/Draft created/)
+    assert.equal(result.survey_id,'draft-123'); assert.match(result.message,/Draft survey ".*" is ready to review/)
     assert.deepEqual(saved.clients,['acme']); assert.deepEqual(options.clientIds,['acme']); assert.deepEqual(saved.steps,[{opens:'Hedge'}])
     assert.deepEqual(saved.questions,[{type:'rating',scale:5,text:'How easy was Hedge Designation for you this month?'},{type:'open',text:'What would make it easier?'}])
-    assert.match(saved.name,/\[Rescue\] Acme/); assert.match(note.note,/draft-123/)
+    assert.match(saved.name,/\[Rescue\] Acme/); assert.match(note.note,/Draft survey "\[Rescue\] Acme/); assert.equal(result.open,"/replays/surveys#draft-123")
     assert.equal(compileSurvey(saved,options).problems.some(p=>p.level==='error'),false)
     const exported = {...queue,clients:[{...client,reasons:[{kind:'work_moving_out' as const,text:'Exports rose',now:0,before:0}]}]}
     await draftRescueSurvey('acme','pm@example.com',{...deps,rescueQueue:async()=>exported})
@@ -126,21 +126,27 @@ test('portfolio grid uses 28-day rescue reasons, includes signal-only and quiet 
     assert.ok(b.grid!.some(r=>r.client==='signal-only'))
     assert.ok(b.grid!.some(r=>r.client==='quiet'))
     const risk=b.grid!.find(r=>r.client==='risk-b')!
-    assert.deepEqual(risk.cells.map(c=>c.column),['missing','users_lost','failing','slower','work_moving_out','recurring_close_error','giving_up','trend'])
+    assert.deepEqual(risk.cells.map(c=>c.column),['missing','activity_drop','users_lost','key_person_gap','failing','giving_up','slower','peer_gap','work_moving_out','recurring_close_error','trend'])
     assert.match(risk.cells[0].label,/Yes: Stopped doing Hedge/)
     assert.match(risk.open,/view=story/)
     assert.doesNotMatch(JSON.stringify(b),/private-user|hidden.example/)
 })
 
 
-test('older saved briefings gain a portfolio grid without replacing personal sections',async()=>{
+test('older saved briefings are rebuilt with the grid and new headline, keeping one snapshot and the personal diff',async()=>{
     reset();row('2026-05-01','risk',8)
     const now=new Date('2026-06-16')
     const b=await mondayBrief({by:'legacy@example.com',now})
-    const {grid: _grid,...legacy}=b
+    const {grid: _grid,version: _v,...legacy}=b
     db.prepare('UPDATE briefing_snapshots SET payload=? WHERE "by"=?').run(JSON.stringify(legacy),'legacy@example.com')
     const upgraded=await mondayBrief({by:'legacy@example.com',now})
-    assert.ok(Array.isArray(upgraded.grid));assert.deepEqual(upgraded.sections,legacy.sections)
+    assert.ok(Array.isArray(upgraded.grid));assert.equal(upgraded.version,2);assert.deepEqual(upgraded.sections,legacy.sections)
+    assert.match(upgraded.headline,/^\d+ clients? needs? someone/)
     assert.deepEqual(upgraded.queue_scores,legacy.queue_scores)
     assert.equal((db.prepare('SELECT count(*) AS n FROM briefing_snapshots').get() as any).n,1)
+})
+
+test('briefing headline counts the same clients as the table and uses correct singular and plural',()=>{
+    assert.equal(briefHeadline({queue:1,urgent:0,new_or_worse:1,overdue:1,recovered:1}),'1 client needs someone. Since your last briefing: 1 new or worse, 1 action overdue, 1 recovery.')
+    assert.equal(briefHeadline({queue:9,urgent:3,new_or_worse:0,overdue:2,recovered:0}),'9 clients need someone (3 urgent). Since your last briefing: 0 new or worse, 2 actions overdue, 0 recoveries.')
 })

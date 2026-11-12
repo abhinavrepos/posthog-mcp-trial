@@ -355,7 +355,7 @@ test('Ask them page creates a draft through injected saveSurvey and shows the bu
     const result=await request('/api/rescue/acme/ask',{...viewer(),surveys:'edit'},'POST',{},injected)
     assert.equal(result.status,201); assert.equal(result.data.survey_id,'draft-export')
     assert.deepEqual(saved.clients,['acme']); assert.equal(saved.questions[0].type,'single')
-    assert.match(result.data.message,/Draft created — review and launch/)
+    assert.match(result.data.message,/Draft survey ".*" is ready to review/)
 })
 
 test('Ask them shows the real reason it cannot draft, and asks about the period being viewed', async () => {
@@ -392,12 +392,12 @@ test('client story and handover APIs follow dashboard view roles; accessible cha
     for(const path of ['?view=story','/api/story?client=acme&weeks=53','/api/story?client=acme&weeks=1.5','/api/handover-pack']) assert.equal((await request(path)).status,400)
     assert.match((await request('?view=task_map')).body,/view=story/)
 })
-test('briefing grid renders all eight columns, explanatory labels, story links and standard pagination',async()=>{
-    const grid=[{client:'acme',client_name:'ACME',score:50,open:ROOT+'?view=story&client=acme',cells:['missing','users_lost','failing','slower','work_moving_out','recurring_close_error','giving_up','trend'].map(column=>({column,mark:column==='missing'?'●':'–',label:column==='missing'?'Yes: Hedge Designation stopped':column+': not flagged'}))}]
+test('briefing grid renders every warning column, explanatory labels, story links and standard pagination',async()=>{
+    const grid=[{client:'acme',client_name:'ACME',score:50,open:ROOT+'?view=story&client=acme',cells:['missing','activity_drop','users_lost','key_person_gap','failing','giving_up','slower','peer_gap','work_moving_out','recurring_close_error','trend'].map(column=>({column,mark:column==='missing'?'●':'–',label:column==='missing'?'Yes: Hedge Designation stopped':column+': not flagged'}))}]
     const brief={generated_at:'2026-06-16',period:window,headline:'Review clients',sections:{new_or_worse:[],close_soon:[],overdue:[],recovered:[],quiet_review:null},counts:{},queue_scores:{},verified_recoveries:[],grid}
     const r=await request('',viewer(),'GET',undefined,{...deps,mondayBrief:async()=>brief})
     assert.equal(r.status,200)
-    for(const name of ['Stopped task','Users stopped','Failing','Slower','Exports','Close errors','Giving up','Trend']) assert.ok(r.body.includes('<th scope="col">'+name+'</th>'))
+    for(const name of ['Stopped tasks','Less use','Users stopped','Key person gone','Failing','Giving up','Slower','Behind others','Exports up','Close errors','Trend']) assert.ok(r.body.includes('<th scope="col">'+name+'</th>'))
     assert.match(r.body,/aria-label="Yes: Hedge Designation stopped"/)
     assert.match(r.body,/data-page-list="portfolio-pager"/);assert.match(r.body,/view=story/);scriptsParse(r.body)
 })
