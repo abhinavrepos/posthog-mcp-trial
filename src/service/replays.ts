@@ -658,7 +658,7 @@ main .tabs a[aria-current="page"]{font-weight:600;border-bottom-color:var(--acce
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}a:focus-visible,button:focus-visible{border-radius:var(--r-sm)}
 .skip{position:absolute;left:-9999px;top:0;color:var(--accent);font-weight:600}.skip:focus{position:static;display:block;padding:8px 20px;background:var(--chip);border-bottom:1px solid var(--line);outline-offset:-3px;border-radius:0}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-.pager{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px;font-size:12.5px;color:var(--muted)}.pager .pg{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.pager:empty{display:none}.pager{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px;font-size:12.5px;color:var(--muted)}.pager .pg{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .pager button,.pager .pg>span{padding:4px 10px;min-height:30px;white-space:nowrap;font-size:12.5px}.pager button{background:var(--card);color:var(--ink);border-color:var(--line-strong)}.pager select{width:auto;padding:3px 8px;min-height:30px}
 
 @media(max-width:600px){table:has(>tbody>tr:only-child>td[colspan]) thead{display:none}header.shell{height:auto;flex-wrap:wrap;padding:10px 16px;row-gap:8px}header.shell nav{order:3;flex-basis:100%}main{padding:20px 16px 48px}.row>div{max-width:100%;min-width:min(140px,100%)}.cm{flex-wrap:wrap}.cm>div{min-width:0}.facts{grid-template-columns:repeat(2,minmax(0,1fr))}.pager .pg{gap:4px}.pager button,.pager .pg>span{padding:4px 7px}}

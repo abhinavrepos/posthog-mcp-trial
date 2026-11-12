@@ -55,7 +55,7 @@ const STYLE = `.top{display:flex;justify-content:space-between;align-items:cente
 .set{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:48px;box-sizing:border-box;padding:6px 0;border-bottom:1px solid var(--line)}
 .set:last-child{border-bottom:0}
 .set label{margin:0;font-weight:500;color:var(--ink);font-size:13px;line-height:20px}
-.grp{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600;margin:4px 0 0}
+.grp{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600;margin:16px 0 0}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:8px 40px}
 .sw{appearance:none;-webkit-appearance:none;width:42px!important;height:24px;min-height:0!important;padding:0!important;border-radius:999px;background:var(--line-strong);position:relative;cursor:pointer;flex:none;margin:0;border:0!important;transition:background .15s}
 .sw::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:var(--card);box-shadow:0 1px 2px var(--line);transition:left .15s}
