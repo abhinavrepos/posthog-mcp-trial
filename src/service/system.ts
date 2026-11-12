@@ -82,7 +82,7 @@ export function systemHtml(v: Viewer): string {
 .banner h1{margin:0;font-size:20px}.banner p{margin:2px 0 0;color:var(--muted);font-size:13px}
 .banner .big{font-size:20px;font-weight:700;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;flex:none;color:#fff;background:var(--muted)}
 .banner.ok{background:var(--good-bg)}.banner.ok .big{background:var(--good)}.banner.warn{background:var(--warn-bg)}.banner.warn .big{background:var(--warn)}.banner.down{background:var(--down-bg)}.banner.down .big{background:var(--down)}
-.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;margin-bottom:14px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:14px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}.tile span{display:block;font-size:13px;color:var(--muted)}.tile b{display:block;font-size:24px;font-weight:600;font-variant-numeric:tabular-nums}.tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
 .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px}.charts .card,.split .card{margin:0;min-width:0}.charts h2,.split h2{margin-top:0}
 .chart{position:relative}.chart svg{display:block;max-width:100%}.note{color:var(--muted);font-size:13px;padding:30px 0;text-align:center}
@@ -103,7 +103,7 @@ select{max-width:100%;padding:6px;border:1px solid var(--line);border-radius:6px
 
 :root{--act:var(--muted)}main .ghost{border-color:transparent;color:var(--ink)}
 .banner{border:0;border-radius:0;background:transparent;padding:16px 0 24px;align-items:flex-start}.banner.ok,.banner.warn,.banner.down{background:transparent}.banner .big{width:28px;height:28px;font-size:16px}.banner h1{font-size:22px}.banner>div{min-width:0}
-.tiles{gap:0 24px;margin:20px 0}.tile{background:transparent;border:0;border-radius:0;padding:14px 0;border-bottom:1px solid var(--line)}.tile.problem{background:transparent;border-color:var(--down)}.tile b{font-size:23px}.tile span{margin-bottom:4px}
+.tiles{gap:16px;margin:0 0 24px}.tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 20px}.tile.problem{background:transparent;border-color:var(--down)}.tile b{font-size:26px;line-height:32px;font-weight:650;letter-spacing:-.02em;margin:6px 0 2px;white-space:nowrap}.tile span{font-size:12px;font-weight:500}
 .section-details{border-bottom:1px solid var(--line);padding:20px 0}.section-details>summary{font-size:17px;font-weight:600;cursor:pointer}.section-details[open]>summary{margin-bottom:20px}.section-details .card{border:0;margin:0}.charts,.split{gap:16px 32px}details summary{cursor:pointer}.tools{gap:16px}.tools select{width:auto;min-width:0}.svc{padding:10px 0}.table-wrap{min-width:0}
 @media(max-width:640px){.banner h1{font-size:20px}.tools select{width:100%}.containers-table th:nth-child(2){width:32%}.containers-table th:first-child{width:65px}.containers-table th:last-child,.containers-table td:last-child{display:table-cell}.containers-table th:last-child{width:15%}.st{white-space:normal}.banner{gap:10px}}
 </style></head>
