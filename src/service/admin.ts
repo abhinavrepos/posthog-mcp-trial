@@ -105,7 +105,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
             const posthogAdmin = !!inProject && inProject.level >= 8
             const role = roleOf(email, posthogAdmin, access)
             return {
-                // Admins always see the System page; for anyone else it is the tick on this page.
+                // Admins always see System monitoring; for anyone else it is the tick on this page.
                 system: can(role, 'admin') || sys.has(email),
                 system_granted: sys.has(email),
                 // Replay insights: admins always; anyone else only when ticked here.
@@ -161,7 +161,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         return (json(res, 200, { ok: true }), true)
     }
 
-    // System page and replay insights: switches of their own, so ticking one never touches a role.
+    // System monitoring and replay insights: switches of their own, so ticking one never touches a role.
     if (p === '/replays/admin/api/extra-access' && req.method === 'POST') {
         const body = await readJson(req)
         const email = String(body.email || '').trim().toLowerCase()
@@ -171,7 +171,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         return (json(res, 200, { ok: true }), true)
     }
 
-    // A person's survey role (separate from the clip role); "default" removes it so the default applies.
+    // A person's survey role (separate from the replay clips role); "default" removes it so the default applies.
     if (p === '/replays/admin/api/survey-role' && req.method === 'POST') {
         const body = await readJson(req)
         const email = String(body.email || '').trim().toLowerCase()
@@ -182,7 +182,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         return (json(res, 200, { ok: true }), true)
     }
 
-    // A person's dashboard role (separate from the clip role); "default" removes it so the default applies.
+    // A person's dashboard role (separate from the replay clips role); "default" removes it so the default applies.
     if (p === '/replays/admin/api/dashboard-role' && req.method === 'POST') {
         const body = await readJson(req)
         const email = String(body.email || '').trim().toLowerCase()
@@ -290,10 +290,8 @@ function adminHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Admin · ${APP_NAME}</title><style>${PAGE_CSS()}
 .badge.warn{background:var(--warn-bg);color:var(--warn)}
 .table-wrap{overflow-x:auto}
-.people-table td:last-child button{padding:6px 4px;white-space:nowrap;overflow-wrap:normal}
 td select{min-width:0;width:100%;max-width:160px}
-#people td{overflow-wrap:anywhere}
-#people td:nth-child(3),#people td:nth-child(5),#people td:nth-child(6){width:13%;max-width:160px}
+
 .badge{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 7px;border-radius:999px;background:var(--hover);white-space:normal}
 label.check{display:inline-flex;gap:6px;align-items:center;font-weight:400;cursor:pointer}
 label.check input{width:auto;margin:0}
@@ -305,21 +303,12 @@ main .ghost{border-color:transparent;color:var(--ink)}
 main table{table-layout:fixed}
 main td,main th{overflow-wrap:anywhere}
 main td{padding-top:12px;padding-bottom:12px}
-.people-table{table-layout:fixed;width:100%;min-width:0}
-.person-meta{margin-top:2px}
-.people-table td:nth-child(6){white-space:nowrap;font-size:12px}
-.people-table td select{max-width:100%;font-size:13px;padding:7px 4px}
-.people-table td{font-size:13px}
-.people-table td:first-child b{font-weight:600}
-#people-filter{max-width:360px}
-.add-person[open] summary,.settings[open] summary{margin-bottom:16px}
 .toolbar>div{min-width:140px!important;flex:1!important;white-space:normal!important}
 .toolbar{display:flex;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;gap:16px;margin-top:12px}
 .access-help{margin:20px 0;color:var(--muted);font-size:13px}
 .access-help summary{color:var(--ink)}
 summary{cursor:pointer}
 main> .access-help{padding:4px 0 20px;border-bottom:1px solid var(--line)}
-#people td b{overflow-wrap:normal;word-break:normal}.people-table :is(th,td):nth-child(6){padding-left:8px;padding-right:8px}.people-table :is(th,td):last-child{padding-left:8px;padding-right:16px}
 .revoked-toggle input{width:auto;margin:0}
 main{min-width:0}
 main h1{font-size:24px;line-height:32px;font-weight:650;margin:0}
@@ -339,18 +328,8 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .tabs :is(button,a){white-space:nowrap;flex-shrink:0}
 .tabs .tab-link{margin-left:0;color:var(--muted);text-decoration:none;font-weight:500;padding:8px 12px;border-bottom:2px solid transparent}
 .tabs :is([aria-current],[aria-selected=true]){color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
-.person-meta>.badge{display:block;width:max-content;max-width:100%;margin-top:4px}
-.identity-name{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.people-table th:nth-child(6){white-space:nowrap}
-.people-table label.check{min-height:36px;margin:0;align-items:center}
-.extra-access{display:flex;flex-direction:column;gap:0}.extra-access label.check{min-height:30px;white-space:nowrap}
-#people td select{text-overflow:clip}
-.people-toolbar,.chat-head,.token-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
-.people-toolbar{position:relative}
-.people-toolbar>div{flex:1}
-.add-person{margin:0}
-.add-person[open]{flex-basis:100%;order:2}
-.add-person>summary{min-height:36px;padding:7px 12px;border:1px solid var(--line-strong);border-radius:6px;box-sizing:border-box}
+.chat-head,.token-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .settings,.access-help{margin:0;border-bottom:1px solid var(--line);padding:16px 0}
 .chat-head{align-items:flex-start}
 .chat-head>.settings{padding:0;border:0;max-width:100%}
@@ -360,7 +339,7 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .token-toolbar{margin-bottom:12px}
 #tokens button.ghost{color:var(--err);font-weight:500}
 #tokens tr:last-child td{border-bottom:0}
-#tokens td:last-child,#tab-chat th:last-child,#tab-outcomes th:last-child,#outcome-rows td:last-child,.people-table th:last-child,#people td:last-child{text-align:right;font-weight:500;vertical-align:top}
+#tokens td:last-child,#tab-chat th:last-child,#tab-outcomes th:last-child,#outcome-rows td:last-child{text-align:right;font-weight:500;vertical-align:top}
 #outcome-rows td:last-child button+button{margin-left:4px}
 #outcome-rows td:last-child button:last-child,#clips td:last-child button{color:var(--err)}
 #outcome-form{display:grid;grid-template-columns:minmax(220px,2fr) minmax(120px,1fr) 160px minmax(180px,1.5fr);gap:16px;align-items:end}
@@ -374,19 +353,6 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 #audit pre{white-space:pre-wrap;overflow-wrap:anywhere}
 .audit-footer{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
 .audit-footer #audit-pager{flex:1;min-width:0}
-@media(max-width:1180px){.card>.table-wrap:has(.people-table){margin-left:0;margin-right:0}
-.card>.table-wrap:has(.people-table) :is(th,td){padding-left:0!important;padding-right:0!important}
-.people-table colgroup{display:none}
-.people-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
-.people-table,.people-table tbody{display:block;min-width:0}
-.people-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px;padding:20px 0;border-bottom:1px solid var(--line)}
-.people-table td{display:block;border:0;padding:0;max-width:none!important;width:auto!important;min-width:0}
-.people-table td:first-child,.people-table td:nth-child(2){grid-column:1/-1}
-.people-table td[data-label]:before{content:attr(data-label);display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
-.people-table td:first-child:before{display:none}
-.people-table td select{max-width:none}
-.people-table td[colspan]{grid-column:1/-1}.people-table td:empty{display:none}
-}
 @media(max-width:560px){main table:not(.people-table){font-size:12px}
 main th,main td{padding-left:3px;padding-right:3px}
 main td button,main td .btn{font-size:12px;padding:6px 3px}
@@ -395,44 +361,122 @@ main .toolbar{align-items:stretch}
 main button{max-width:100%}
 main input,main select{min-width:0}
 #outcome-form{grid-template-columns:minmax(0,1fr)}
-.people-toolbar{align-items:flex-end}
 }
 @media(max-width:1100px){#outcome-form{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+/* People and add-person base styles. */
+#tab-people{font-size:14px;container-type:inline-size}
+.people-toolbar{display:grid;grid-template-columns:1fr auto;align-items:center;gap:12px}.people-search-row{grid-column:1/-1;display:flex;align-items:end;gap:16px;margin-bottom:4px}.people-search label{display:block;margin-bottom:6px}
+.people-toolbar h2{margin:0;margin-right:auto;white-space:nowrap}
+.people-search{flex:1;max-width:360px;min-width:0}
+.people-search input{width:100%}
+.people-toolbar a{white-space:nowrap}
+.people-guidance{margin:12px 0 8px}.people-meanings{margin-bottom:16px}#tab-people .people-meanings summary{cursor:pointer;min-height:44px}.people-meanings p{margin:4px 0}
+#tab-people :is(input:not([type=checkbox]),select,button){font-size:14px;min-height:40px}
+#tab-people :is(input:not([type=checkbox]),select){height:40px}
+.people-table{width:100%;table-layout:fixed;min-width:760px}
+.people-table :is(td,th){text-align:left;overflow-wrap:normal;padding:12px 8px;vertical-align:top;font-size:14px}
+.people-table th{text-align:left;overflow-wrap:normal}
+.people-table :is(td,th):last-child{white-space:normal}
+#tab-people .people-table select{width:100%;max-width:100%;white-space:normal;height:auto;min-height:40px;padding:7px 4px}
+.people-table fieldset{border:0;padding:0;margin:0;min-width:0}
+.people-table legend{display:none}
+.people-table label.check{display:flex;align-items:center;justify-content:flex-start;gap:8px;min-width:44px;min-height:44px;margin:0;cursor:pointer}
+.people-table input[type=checkbox],.add-person input[type=checkbox]{width:16px;height:16px;margin:0}
+.people-table label.check span{font-weight:400}
+.identity-name{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-weight:600}.identity-name .badge{white-space:nowrap;flex-shrink:0;overflow-wrap:normal}
+.person-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.mobile-last-seen{display:none}.person-meta{margin-top:4px}.identity-name+div{overflow-wrap:anywhere}
+.control-wrap{display:flex;flex-wrap:wrap;align-items:center;gap:4px;min-width:0}
+.control-wrap select{flex:1;min-width:0}
+.control-wrap:has(label.check){justify-content:flex-start}
+.control-wrap label.check{margin:0;flex-shrink:0}
+.control-status{display:block;flex-basis:100%;font-size:13px;overflow-wrap:anywhere}
+.control-status:empty{display:none}#tab-people .secondary-button{background:var(--card);color:var(--ink);border:1px solid var(--line-strong);border-radius:6px;padding:8px 12px}
+#tab-people .link-button{display:inline;background:none;border:0;color:var(--accent);font:inherit;min-height:0;padding:0;white-space:normal;text-align:left;text-decoration:underline;cursor:pointer}
+.person-source{display:flex;flex-wrap:wrap;gap:2px 8px;align-items:baseline;white-space:normal;font-size:13px;margin-top:4px}.person-source .link-button{font-size:13px;min-height:24px;padding:2px 0}.included{font-size:14px;font-weight:400}.people-actions{display:flex;align-items:center;gap:16px}.mobile-guidance{display:none}.access-summary dl{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px}.access-summary :is(dt,dd){margin:0}.access-summary dd{color:var(--ink)}
+.access-summary,.mobile-editor{display:none}.edit-access{display:block;margin-top:12px}.editing .mobile-editor{display:grid;gap:16px;margin-top:16px}.mobile-editor legend{display:block;font-weight:600}.mobile-editor fieldset{min-width:0}
+.people-settings{margin-top:24px}
+.people-settings>details{border-bottom:1px solid var(--line);padding:0;color:var(--ink);font-size:14px}
+#tab-people .people-settings summary{cursor:pointer;min-height:44px;align-content:center}
+.people-settings summary:focus-visible{outline:2px solid var(--accent)}
+#tab-people .small{font-size:13px}#tab-people .access-summary dd{font-size:14px}.add-person #new-features{display:grid;gap:16px}.editing .access-summary{display:none}.add-person{box-sizing:border-box;width:calc(100% - 32px);max-width:640px;max-height:calc(100dvh - 24px);overflow:hidden;margin:auto;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);padding:0}
+.add-person::backdrop{position:fixed;inset:0;background:rgb(0 0 0 / 40%)}
+.add-person form{display:flex;flex-direction:column;max-height:calc(100dvh - 24px);overflow:hidden}.add-header{display:block;width:auto;height:auto;flex-shrink:0;position:relative;padding:20px 24px 0}.add-header h2{margin:0 48px 8px 0}.add-header p{margin:0}.add-close{position:absolute;right:16px;top:16px;width:44px;height:44px}.add-body{flex:1;overflow-y:auto;min-height:0;padding:16px 24px;display:grid;gap:16px;scrollbar-gutter:stable}.add-body>div:not(#new-features),.add-section>div{display:grid;gap:6px}.add-body p{margin:0}.add-body label+select,.add-body label+input{margin-top:0}.add-person fieldset .check{min-height:44px;margin:0 0 8px}.add-person #new-clip{display:grid;gap:6px;margin-bottom:16px}.add-scroll-cue{font-size:12px;color:var(--muted);text-align:center;padding:4px;flex-shrink:0}.add-person label{font-size:14px}.add-person .small{font-size:13px}.add-person [hidden]{display:none}.add-person h2{margin:0 0 8px}.add-person-error:empty,#new-email-error:empty{display:none}
+.add-person fieldset{border:0;padding:0;margin:0;min-width:0}
+.add-person legend{font-weight:600;margin-bottom:12px}
+.add-section{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+.add-section .full{grid-column:1/-1}
+.add-section :is(input[type=email],select){width:100%}
+.add-section p{margin:4px 0 0}
+.add-person .check{display:grid;grid-template-columns:16px 1fr;align-items:start;align-self:start;align-content:start;color:var(--ink);column-gap:10px;row-gap:4px;min-height:44px;cursor:pointer}.add-person .check input{grid-row:1/3;margin-top:3px}#tab-people .add-person input[type=radio]{width:16px;height:16px;min-height:16px;margin:3px 0 0}.add-person .check .small{grid-column:2}
+.add-actions{flex-shrink:0;border-top:1px solid var(--line);background:var(--card);padding:16px;padding-bottom:max(16px,env(safe-area-inset-bottom));display:flex;justify-content:flex-end;gap:16px}
+/* People responsive styles: cards, then single-column forms. */
+@container(max-width:800px){.card>.table-wrap:has(.people-table){margin:0}
+.mobile-last-seen{display:block}.people-table colgroup{display:none}
+.people-table thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+.people-table,.people-table tbody{display:block;min-width:0}
+.people-table tr{display:block;padding:16px 0;border-bottom:1px solid var(--line)}
+#people td{display:none;border:0;padding:0}
+#people td:first-child{display:block}
+.person-detail{display:none}
+.access-summary{display:block;margin:16px 0 0}.access-summary p{margin:4px 0}
+.edit-access{display:block;margin-top:12px;flex-shrink:0}
+.editing .mobile-editor{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+.mobile-editor legend{display:block;font-weight:600;margin-bottom:4px}
+.mobile-editor .control-wrap:has(label.check){justify-content:flex-start}
+.mobile-editor label.check{width:auto;justify-content:flex-start;margin:0;gap:8px}
+.mobile-editor label.check span{position:static;width:auto;height:auto;clip-path:none}
+.mobile-editor>button{justify-self:start}
+#tab-people :is(button,select,.link-button){min-height:44px}.people-search{width:100%}}
+@media(max-width:700px){.add-header{padding:16px 16px 0}.add-body{padding:16px}.add-person{width:calc(100% - 24px);margin:auto;padding:0}#tab-people .add-person :is(input,select){font-size:16px}.add-section,.editing .mobile-editor{grid-template-columns:minmax(0,1fr)}
+.people-toolbar{gap:12px}
+.people-search-row{flex-wrap:wrap;gap:12px}
+.people-search{max-width:360px;flex-basis:100%;width:100%}
+.people-actions{flex-basis:100%}.desktop-guidance{display:none}.mobile-guidance{display:block}}
 </style></head>
-<body>${headerHtml(v, 'Admin')}<main><div class="page-head"><div><h1>Admin</h1><p>Who can use Lens, and what it keeps.</p></div></div>
+<body>${headerHtml(v, 'Admin')}<main><div class="page-head"><div><h1>Admin</h1><p>Manage people and what they can use in Lens.</p></div></div>
 ${adminTabs()}
 
 <div class="tabpanel" role="tabpanel" id="tab-people" data-panel="people">
-<div class="card"><h2>People</h2><p class="small muted">Changes to access save automatically.</p><div class="people-toolbar"><div><label for="people-filter">Find a person</label><input id="people-filter" type="search" placeholder="Name or email"></div><details class="add-person"><summary>Add a person</summary><div class="toolbar"><div><label for="new-email">PostHog email</label><input id="new-email" type="email" placeholder="name@company.com"></div>
-<div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-system"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-insights"><input id="new-insights" type="checkbox"> Replay insights</label></div><div style="flex:0"><label for="new-surveys">Surveys</label><select id="new-surveys"></select></div><div style="flex:0"><label for="new-dashboards">Dashboards</label><select id="new-dashboards"></select></div><div style="flex:0"><button type="button" id="add">Add person</button></div></div></details></div>
+<div class="card"><div class="people-toolbar"><h2 id="people-heading">People</h2><div class="people-actions"><button type="button" id="show-add-person" aria-haspopup="dialog" aria-controls="add-person-dialog">Grant access</button></div><div class="people-search-row"><div class="people-search"><label for="people-filter">Search people</label><input id="people-filter" type="search" placeholder="Name or email"></div><a href="#access-defaults" id="manage-access-defaults">Default permissions</a></div></div>
+<p class="muted people-guidance">Changes save automatically. Administrators have all permissions.</p>
+<dialog id="add-person-dialog" class="add-person" aria-labelledby="add-person-heading" aria-describedby="add-person-subtitle"><form id="add-person-form" novalidate><header class="add-header"><h2 id="add-person-heading">Grant access</h2><p id="add-person-subtitle" class="muted">Set access for a PostHog account connected to Lens.</p><button type="button" id="close-add-person" class="secondary-button add-close" aria-label="Close grant access">×</button></header><div class="add-body">
+<div><label for="new-email">PostHog account email</label><input id="new-email" type="email" required placeholder="name@company.com" aria-describedby="new-email-help new-email-error"><p id="new-email-help" class="small muted">Enter the email address of that PostHog account.</p><p id="new-email-error" class="small err"></p></div>
+<fieldset><legend>Account role</legend><label class="check" for="new-member"><input id="new-member" name="account-role" type="radio" checked><span>Member</span></label><label class="check" for="new-admin"><input id="new-admin" name="account-role" type="radio" aria-describedby="new-admin-help"><span>Administrator</span><span id="new-admin-help" class="small muted">Can manage people and use every Lens feature, including replay insights.</span></label></fieldset><fieldset><legend>Feature access</legend><div id="new-clip"><label for="new-role">Clip access</label><select id="new-role"></select></div>
+<p id="new-admin-features" class="muted" hidden>All feature permissions: Allowed · Via administrator</p>
+<div id="new-features"><label class="check" for="new-insights"><input id="new-insights" type="checkbox" aria-describedby="new-insights-help"><span>Replay insights</span><span id="new-insights-help" class="small muted">View findings about how clients’ people work, derived from session replays. Independent of clip access.</span></label><div class="add-section"><div><label for="new-surveys">Surveys</label><select id="new-surveys" aria-describedby="new-surveys-current"></select><p id="new-surveys-current" class="small muted"></p></div><div><label for="new-dashboards">Dashboards</label><select id="new-dashboards" aria-describedby="new-dashboards-current"></select><p id="new-dashboards-current" class="small muted"></p></div><label class="check" for="new-system"><input id="new-system" type="checkbox" aria-describedby="new-system-help"><span>System monitoring</span><span id="new-system-help" class="small muted">Server and container status</span></label></div></div>
+</fieldset><p id="new-effective" hidden class="small" aria-live="polite"></p><div id="add-person-error" class="add-person-error err" role="alert" tabindex="-1"></div></div><div class="add-scroll-cue">Scroll to review all access settings</div><div class="add-actions"><button type="button" id="cancel-add-person" class="secondary-button">Cancel</button><button type="submit" id="add">Grant access</button></div></form></dialog>
 <p id="people-msg" class="small" aria-live="polite"></p>
-<div class="table-wrap" role="region" aria-label="People access table" tabindex="0"><table class="people-table" role="table"><colgroup><col style="width:29%"><col style="width:16%"><col style="width:12%"><col style="width:15%"><col style="width:15%"><col style="width:7%"><col style="width:6%"></colgroup><thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Person</th><th scope="col" role="columnheader">Clip role</th><th scope="col" role="columnheader">Extra access</th><th scope="col" role="columnheader">Surveys</th><th scope="col" role="columnheader">Dashboards</th><th scope="col" role="columnheader">Last seen</th><th scope="col" role="columnheader">Actions</th></tr></thead><tbody id="people" role="rowgroup"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table></div><div id="people-pager"></div></div>
+<span id="system-description" class="visually-hidden">Server and container status</span><span id="insights-description" class="visually-hidden">Client findings from session replays. Granted separately from clip access.</span>
+<div class="table-wrap" role="region" aria-label="People access table"><table class="people-table" role="table"><colgroup><col style="width:28%"><col style="width:10%"><col style="width:12%"><col style="width:10%"><col style="width:10%"><col style="width:10%"><col style="width:10%"><col style="width:9%"></colgroup><thead><tr><th scope="col">Person</th><th scope="col">Account role</th><th scope="col">Clip access</th><th scope="col">Surveys</th><th scope="col">Dashboards</th><th scope="col">System monitoring</th><th scope="col" aria-describedby="insights-description">Replay insights</th><th scope="col">Last seen<br>in Lens</th></tr></thead><tbody id="people"><tr><td colspan="8" data-label="Person" class="muted">Loading…</td></tr></tbody></table></div><div id="people-pager"></div></div>
 
-<details class="settings"><summary>Access defaults</summary><p class="small muted">Changes save automatically.</p>
-<div class="toolbar"><div><label for="default-role">Role for other PostHog users</label><select id="default-role"></select></div>
-<div><label for="share">Share links</label><select id="share"><option value="1">Allowed (for people who can download)</option><option value="0">Turned off</option></select></div>
+<section class="people-settings" aria-labelledby="people-settings-heading"><h3 id="people-settings-heading">Settings</h3><details class="settings" id="access-defaults"><summary>Default permissions</summary><p class="small muted">Changes save automatically.</p>
+<div class="toolbar"><div><label for="default-role">Clip access for other PostHog users</label><select id="default-role"></select></div>
+<div><label for="share">Share links</label><select id="share"><option value="1">Allowed (for people who can download)</option><option value="0">Not allowed</option></select></div>
 <div><label for="survey-default">Survey role for other PostHog users</label><select id="survey-default"></select></div>
 <div><label for="survey-shared">Survey role for chat with the shared team token</label><select id="survey-shared"></select></div>
 <div><label for="dashboard-default">Dashboard role for other PostHog users</label><select id="dashboard-default"></select></div>
 <div><label for="dashboard-shared">Dashboard role for chat with the shared team token</label><select id="dashboard-shared"></select></div></div>
-<details class="access-help"><summary>How this works</summary><p class="small muted">The defaults apply to anyone who signs in with a PostHog account and is not listed above. "No access" is the safe choice. The shared team token cannot tell who asks: give it at most "See surveys and results", and give people personal tokens for more.</p></details><p id="settings-msg" class="small" aria-live="polite"></p></details>
+<p id="settings-msg" class="small" aria-live="polite"></p></details>
 <details class="access-help"><summary>How access works</summary>
+<p>Clip access controls clips: No access, Watch clips, or Download clips. Surveys, Dashboards, System monitoring and Replay insights need separate feature grants. Administrators have every feature. PostHog owners and admins are administrators automatically.</p>
+<p class="small muted">Replay insights: findings about how a client's people work, from session replays. Admins always have them; others only when ticked.</p>
 <ul class="tight">
 <li><b>Signing in is PostHog's job.</b> Everyone signs in with their PostHog account. Passwords, two-factor login and removing people all happen in PostHog. Removing someone from PostHog locks them out here within a minute.</li>
-<li><b>What they may do is set here.</b> <i>Watch clips</i> lets a person make and watch clips on this site. <i>Watch, download and share</i> adds MP4 downloads and share links. <i>Admin</i> adds this page.</li>
-<li><b>The System page</b> shows whether the server and every container are up, with machine, ClickHouse and Lens numbers. It never shows replay or event content. Admins always see it. Tick <i>System page</i> to let anyone else see it too, for example whoever looks after the server. It is separate from the role, so someone can see the System page with <i>No access</i> to clips.</li>
-<li><b>Surveys</b> are made, launched and read only in Lens: PostHog's own survey screens and API are closed (they send people here). Each person has a survey role, separate from the clip role: <i>See surveys and results</i>, <i>Also make and change surveys</i>, or <i>Also launch and stop surveys</i> (what reaches Reval users). Admins always have the last. It applies on the Surveys page and in chat, except that launching is only possible on the Surveys page, never from chat.</li>
+<li><b>What they may do is set here.</b> <i>Watch clips</i> lets a person make and watch clips on this site. <i>Download clips</i> adds MP4 downloads and share links. <i>Administrator</i> grants every feature. Other roles need separate feature grants.</li>
+<li><b>System monitoring</b> shows whether the server and every container are up, with machine, ClickHouse and Lens numbers. It never shows replay or event content. Admins always see it. Tick <i>System monitoring</i> to let anyone else see it too, for example whoever looks after the server. It is separate from the role, so someone can see System monitoring with <i>No access</i> to clips.</li>
+<li><b>Surveys</b> are made, launched and read only in Lens: PostHog's own survey screens and API are closed (they send people here). Each person has a survey role, separate from the replay clips role: <i>See surveys and results</i>, <i>Also make and change surveys</i>, or <i>Also launch and stop surveys</i> (what reaches Reval users). Admins always have the last. It applies on the Surveys page and in chat, except that launching is only possible on the Surveys page, never from chat.</li>
 <li><b>Dashboards</b> have a separate role on the Dashboards page and in chat: <i>See dashboards</i> or <i>Also pin and share</i>. Admins always pin and share. The shared team token gets at most viewing access; pinning and sharing need a personal token.</li>
 <li><b>Chat</b> knows who is asking only with a personal token, which each person makes on the <i>Chat</i> page (you can revoke any token below). The shared team token says nothing about who asks, so it gets the survey role you choose in Settings.</li>
-<li><b>PostHog owners and admins</b> of the organization that owns the project are always admins here, so nobody can be locked out.</li>
-<li><b>Important:</b> on this PostHog plan, PostHog itself cannot limit replays per person. Anyone who is a member of the project's organization can watch every replay inside PostHog, whatever their role here. Those people are marked <span class="badge warn">sees all replays in PostHog</span>. To keep someone to clips only, give them a PostHog account in a separate organization (for example "Clip viewers") with no access to this project, then give them a role here.</li>
+<li><b>PostHog owners and admins</b> of the organization that owns the project are automatically administrators here, so nobody can be locked out.</li>
+<li><b>Important:</b> on this PostHog plan, PostHog itself cannot limit replays per person. Anyone who is a member of the project's organization can watch every replay inside PostHog, whatever their role here. Their PostHog access line says “all recordings”. To keep someone to clips only, give them a PostHog account in a separate organization (for example "Clip viewers") with no access to this project, then give them a role here.</li>
 <li><b>Storage.</b> A clip is stored once, however many people make the same part of the same recording. A clip nobody saved is deleted two weeks after it was last asked for. Saved clips stay until whoever saved them unsaves them, or you delete them here.</li>
-<li>Clips attached to Jira tickets follow Jira's permissions. Share links work for anyone who has them until they expire, so turn them off below if you need tighter control.</li></ul></details>
+<li>Clips attached to Jira tickets follow Jira's permissions. Share links work for anyone who has them until they expire, so turn them off below if you need tighter control.</li></ul></details></section>
 
 </div>
 <div class="tabpanel" role="tabpanel" id="tab-outcomes" data-panel="outcomes">
-<section class="card"><h2>Client outcomes</h2><p class="small muted">Clients that left, shrank, renewed or stayed. The Scorecard checks which warnings came first.</p><form id="outcome-form" class="toolbar"><div><label for="outcome-client">Client</label><input id="outcome-client" name="client" required maxlength="256" list="outcome-clients" placeholder="Find a client"><datalist id="outcome-clients">${knownClients().map(c=>`<option value="${e(c.client)}">${e(c.name)}</option>`).join('')}</datalist></div><div><label for="outcome-kind">Outcome</label><select id="outcome-kind" name="outcome">${OUTCOMES.map(o=>`<option value="${o}">${o === 'contracted' ? 'Reduced' : o.charAt(0).toUpperCase()+o.slice(1)}</option>`).join('')}</select></div><div><label for="outcome-date">Decision date</label><input id="outcome-date" name="decided_on" type="date" required></div><div><label for="outcome-note">Note (optional)</label><input id="outcome-note" name="note" maxlength="500"></div><button type="submit">Save outcome</button></form><p id="outcome-msg" role="status" aria-live="polite"></p><div class="table-wrap"><table><colgroup><col style="width:25%"><col style="width:16%"><col style="width:18%"><col style="width:25%"><col style="width:16%"></colgroup><caption>Recorded client outcomes</caption><thead><tr><th>Client</th><th>Outcome</th><th>Decision date</th><th>Note</th><th>Actions</th></tr></thead><tbody id="outcome-rows"></tbody></table></div></section>
+<section class="card"><h2>Client outcomes</h2><p class="small muted">Clients that left, shrank, renewed or stayed. The Scorecard checks which warnings came first.</p><form id="outcome-form" class="toolbar"><div><label for="outcome-client">Client</label><input id="outcome-client" name="client" required maxlength="256" list="outcome-clients" placeholder="Find a client"><datalist id="outcome-clients">${knownClients().map(c=>`<option value="${e(c.client)}">${e(c.name)}</option>`).join('')}</datalist></div><div><label for="outcome-kind">Outcome</label><select id="outcome-kind" name="outcome">${OUTCOMES.map(o=>`<option value="${o}">${o === 'contracted' ? 'Reduced' : o.charAt(0).toUpperCase()+o.slice(1)}</option>`).join('')}</select></div><div><label for="outcome-date">Decision date</label><input id="outcome-date" name="decided_on" type="date" required></div><div><label for="outcome-note">Note (optional)</label><input id="outcome-note" name="note" maxlength="500"></div><button type="submit">Save outcome</button></form><p id="outcome-msg" role="status" aria-live="polite"></p><div class="table-wrap"><table><colgroup><col style="width:25%"><col style="width:16%"><col style="width:17%"><col style="width:25%"><col style="width:16%"></colgroup><caption>Recorded client outcomes</caption><thead><tr><th>Client</th><th>Outcome</th><th>Decision date</th><th>Note</th><th>Actions</th></tr></thead><tbody id="outcome-rows"></tbody></table></div></section>
 </div>
 <div class="tabpanel" role="tabpanel" id="tab-chat" data-panel="chat">
 <div class="card"><div class="chat-head"><h2>Chat keys</h2>
@@ -477,13 +521,22 @@ const clock=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 const short=e=>(e||'').replace(/@.*/,'');
 const cell=(tr,t,cls)=>{const td=document.createElement('td');if(t instanceof Node)td.appendChild(t);else td.textContent=t??'';if(cls)td.className=cls;tr.appendChild(td);return td};
 const msg=(id,t,ok)=>{$(id).textContent=t;$(id).className='small '+(ok?'ok':'err');$(id).setAttribute('role',ok?'status':'alert')};
-const ACTIONS={'privacy.anonymise_set':'Changed client privacy','outcome.recorded':'Recorded client outcome','rescue.updated':'Updated client follow-up','signin':'Signed in','signout':'Signed out','signin.failed':'Failed sign in','recording.inspected':'Looked up a recording','clip.requested':'Asked for a clip','clip.created':'Clip made','clip.viewed':'Watched a clip','clip.downloaded':'Downloaded a clip','clip.link_shared':'Created a share link','clip.deleted':'Deleted a clip','clip.saved':'Saved a clip','clip.unsaved':'Unsaved a clip','clip.comment_added':'Commented on a clip','clip.comment_edited':'Edited a clip comment','clip.comment_deleted':'Deleted a clip comment','clips.pruned':'Old clips deleted','access.role_set':'Changed a role','access.role_removed':'Removed a role','access.settings':'Changed settings','access.system_set':'Changed System page access','access.insights_set':'Changed replay insights access','access.surveys_set':'Changed Surveys page access','access.survey_role_set':'Changed a survey role','access.survey_role_reset':'Reset a survey role','access.survey_settings':'Changed survey settings','access.dashboard_role_set':'Changed a dashboard role','access.dashboard_role_reset':'Reset a dashboard role','access.dashboard_settings':'Changed dashboard settings','access.chat_url':'Changed the Copilot address','dashboard.pinned':'Pinned a dashboard','dashboard.changed':'Changed a dashboard','dashboard.deleted':'Deleted a dashboard','dashboard.shared':'Shared a dashboard','chat.token_created':'Made a chat token','chat.token_revoked':'Revoked a chat token','survey.created':'Made a survey','survey.changed':'Changed a survey','survey.launched':'Launched a survey','survey.stopped':'Stopped a survey','survey.archived':'Archived a survey'};
+const ACTIONS={'privacy.anonymise_set':'Changed client privacy','outcome.recorded':'Recorded client outcome','rescue.updated':'Updated client follow-up','signin':'Signed in','signout':'Signed out','signin.failed':'Failed sign in','recording.inspected':'Looked up a recording','clip.requested':'Asked for a clip','clip.created':'Clip made','clip.viewed':'Watched a clip','clip.downloaded':'Downloaded a clip','clip.link_shared':'Created a share link','clip.deleted':'Deleted a clip','clip.saved':'Saved a clip','clip.unsaved':'Unsaved a clip','clip.comment_added':'Commented on a clip','clip.comment_edited':'Edited a clip comment','clip.comment_deleted':'Deleted a clip comment','clips.pruned':'Old clips deleted','access.role_set':'Changed a role','access.role_removed':'Removed a role','access.settings':'Changed settings','access.system_set':'Changed System monitoring access','access.insights_set':'Changed replay insights access','access.surveys_set':'Changed Surveys page access','access.survey_role_set':'Changed a survey role','access.survey_role_reset':'Reset a survey role','access.survey_settings':'Changed survey settings','access.dashboard_role_set':'Changed a dashboard role','access.dashboard_role_reset':'Reset a dashboard role','access.dashboard_settings':'Changed dashboard settings','access.chat_url':'Changed the Copilot address','dashboard.pinned':'Pinned a dashboard','dashboard.changed':'Changed a dashboard','dashboard.deleted':'Deleted a dashboard','dashboard.shared':'Shared a dashboard','chat.token_created':'Made a chat token','chat.token_revoked':'Revoked a chat token','survey.created':'Made a survey','survey.changed':'Changed a survey','survey.launched':'Launched a survey','survey.stopped':'Stopped a survey','survey.archived':'Archived a survey'};
 let S=null;
+let statusSequence=0;
+async function savePerson(email,url,options,message,control,previous){
+ const key=control?.getAttribute('aria-label');const originalDescription=(control?.getAttribute('aria-describedby')||'').split(' ').filter(id=>!id.startsWith('control-status-')).join(' ');
+ const status=control?.closest('.control-wrap')?.querySelector('.control-status')||document.createElement('span');status.className='control-status muted';status.id='control-status-'+(++statusSequence);status.setAttribute('role','status');(control?.closest('label.check')||control)?.after(status);status.textContent='Saving…';if(control?.type==='checkbox'){const text=control.closest('label.check')?.querySelector('span');if(text)text.textContent=control.dataset.permission==='role'?'Administrator':permissionState({[control.dataset.permission]:control.checked},control.dataset.permission);}
+ try{await api(url,options)}catch(e){if(control?.type==='checkbox'){control.checked=previous;const text=control.closest('label.check')?.querySelector('span');if(text)text.textContent=control.dataset.permission==='role'?'Administrator':permissionState({[control.dataset.permission]:previous},control.dataset.permission);}else if(control?.tagName==='SELECT')control.value=previous;status.textContent=e.message;status.className='control-status err';control?.setAttribute('aria-describedby',(originalDescription+' '+status.id).trim());msg('people-msg',e.message);return}
+ msg('people-msg',message,true);await load();const next=key?[...$('people').querySelectorAll('[aria-label]')].find(el=>el.getAttribute('aria-label')===key)||[...$('people').querySelectorAll('select')].find(el=>el.getAttribute('aria-label')==='Clip access for '+email):null;
+ if(next){next.closest('.control-wrap')?.querySelector('.control-status')?.remove();(next.closest('label.check')||next).after(status);next.setAttribute('aria-describedby',originalDescription)}status.textContent='Saved';status.className='control-status ok';setTimeout(()=>{status.textContent=''},3000)
+}
+
 function identity(email){const box=document.createElement('div'),person=S?.people.find(p=>p.email===email),name=document.createElement('div');name.className='identity-name';name.textContent=person?.name||email;box.append(name);if(person?.name){const sub=document.createElement('div');sub.className='small muted';sub.textContent=email;box.append(sub)}if(email===S?.me){const badge=document.createElement('span');badge.className='badge';badge.textContent='You';name.append(badge)}return box}
-const roleLabel=(id,fallback)=>({admin:'Admin',watch:'Watch clips',download:'Watch, download and share',none:'No access',view:'View',edit:'Manage',launch:'Launch',share:'Publish',default:'Default'}[id]||fallback);
+const roleLabel=(id,fallback)=>({admin:'Administrator',watch:'Watch clips',download:'Download clips',none:'No access',view:'View',edit:'Manage',launch:'Launch',share:'Publish',default:'Default'}[id]||fallback);
 
 
-function guardControls(){document.querySelectorAll('main button,main select,main input[type=checkbox]').forEach(el=>{for(const event of ['onclick','onchange']){const handler=el[event];if(!handler||handler.guarded)continue;const wrapped=async function(e){if(el.disabled)return;const label=el.getAttribute('aria-label'),id=el.id,focused=document.activeElement===el;el.disabled=true;try{await handler.call(el,e)}catch(err){msg('people-msg',err.message+' Reload the page to try again.')}finally{if(el.isConnected)el.disabled=false;if(focused){const next=el.isConnected?el:id?$(id):label?[...document.querySelectorAll('[aria-label]')].find(x=>x.getAttribute('aria-label')===label):null;next?.focus()}}};wrapped.guarded=true;el[event]=wrapped}})}
+function guardControls(){document.querySelectorAll('main button,main select,main input[type=checkbox]').forEach(el=>{for(const event of ['onclick','onchange']){const handler=el[event];if(!handler||handler.guarded)continue;const wrapped=async function(e){if(el.disabled)return;const label=el.getAttribute('aria-label'),id=el.id,focused=document.activeElement===el;el.disabled=true;try{await handler.call(el,e)}catch(err){msg('people-msg',err.message+' Reload the page to try again.')}finally{if(el.isConnected)el.disabled=false;if(focused&&(!el.isConnected||document.activeElement===el||document.activeElement===document.body)){const next=el.isConnected?el:id?$(id):label?[...document.querySelectorAll('[aria-label]')].find(x=>x.getAttribute('aria-label')===label):null;next?.focus()}}};wrapped.guarded=true;el[event]=wrapped}})}
 function drawTokens(reset){const gone=S.chat_tokens.filter(t=>t.revoked_at).length;$('show-revoked-text').textContent='Include revoked ('+gone+')';const active=S.chat_tokens.length-gone;$('active-key-count').textContent=n(active,'active key');tokensPg.set($('show-revoked').checked?S.chat_tokens:S.chat_tokens.filter(t=>!t.revoked_at),reset)}
 const tokensPg=makePager({mount:$('tokens-pager'),noun:'tokens',size:25,draw:slice=>{
  const tt=$('tokens');tt.innerHTML='';if(!slice.length)tt.innerHTML='<tr><td colspan="5" class="muted">No active keys. People make one on the Chat page.</td></tr>';
@@ -491,45 +544,66 @@ const tokensPg=makePager({mount:$('tokens-pager'),noun:'tokens',size:25,draw:sli
   if(!t.revoked_at){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Revoke';b.setAttribute('aria-label','Revoke '+t.label+' token for '+t.email+' made '+when(t.created_at));b.onclick=async()=>{if(!confirm('Revoke the chat token '+t.label+' of '+t.email+'? Chat with it stops at once.'))return;try{await api('/replays/admin/api/chat-tokens/'+t.id,{method:'DELETE'});await load()}catch(e){msg('people-msg',e.message+' Try the action again.')}};cell(tr,b)}else cell(tr,'');tt.appendChild(tr)});
 
 guardControls()}});
-const peoplePg=makePager({mount:$('people-pager'),noun:'people',size:25,draw:slice=>{
- const tb=$('people');tb.innerHTML='';
- slice.forEach(p=>{const tr=document.createElement('tr');
-  const who=identity(p.email);if(p.note){const note=document.createElement('div');note.className='small muted';note.textContent=p.note;who.append(note)}cell(tr,who);
-  const ph=document.createElement('div');ph.textContent=p.posthog.replace(/ \\((owner|admin|member)\\)/g,' $1');if(p.sees_all_replays_in_posthog){const badge=document.createElement('span');badge.className='badge';badge.title='Can watch every replay inside PostHog itself';badge.textContent='All PostHog replays';ph.append(badge)}ph.className='small muted person-meta';who.append(ph);
-  const sel=roleSelect(p.role,p.locked);sel.setAttribute('aria-label','Clip role for '+p.email);if(p.locked){const w=document.createElement('div');const locked=document.createElement('span');locked.textContent=roleLabel(p.role,p.role);locked.setAttribute('aria-label','Clip role for '+p.email);w.appendChild(locked);const n=document.createElement('div');n.className='small muted';n.textContent='Inherited from PostHog';w.appendChild(n);cell(tr,w)}else{if(!p.set_here){const w=document.createElement('div');w.appendChild(sel);const n=document.createElement('div');n.className='small muted';n.textContent='Default';w.appendChild(n);cell(tr,w)}else cell(tr,sel)}
-  sel.onchange=async()=>{try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email:p.email,role:sel.value})});msg('people-msg','Saved: '+p.email+' now has "'+sel.selectedOptions[0].textContent+'".',true);await load()}catch(e){msg('people-msg',e.message);await load()}};
-  const extra=document.createElement('div');extra.className='extra-access';
-  [['system','System page','see the System page'],['insights','Replay insights','see replay insights']].forEach(([key,label,what])=>{const sw=document.createElement('label');sw.className='check small';const cb=document.createElement('input');cb.type='checkbox';cb.setAttribute('aria-label',label+' for '+p.email);cb.checked=!!p[key];sw.append(cb,document.createTextNode(' '+label));
-   if(p.role==='admin'){cb.disabled=true;sw.title='Admins always have this'}
-   cb.onchange=async()=>{try{await api('/replays/admin/api/extra-access',{method:'POST',body:JSON.stringify({email:p.email,[key]:cb.checked})});msg('people-msg',(cb.checked?'Saved: '+p.email+' can now '+what+'.':'Saved: '+p.email+' can no longer '+what+'.'),true);await load()}catch(e){msg('people-msg',e.message);await load()}};
-   extra.append(sw)});
-  cell(tr,extra);
-  const ss=document.createElement('select');ss.setAttribute('aria-label','Survey role for '+p.email);[{id:'default',text:'Default'}].concat(S.survey_roles).forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.id==='default'?'Default ('+roleLabel(S.survey_default_role,'No access')+')':roleLabel(r.id,r.text);ss.appendChild(o)});
-  ss.value=p.role==='admin'?'launch':(p.survey_role_set_here||'default');if(p.role==='admin'){ss.disabled=true;ss.title='Admins can always launch and stop surveys'}
-  ss.onchange=async()=>{try{await api('/replays/admin/api/survey-role',{method:'POST',body:JSON.stringify({email:p.email,role:ss.value})});msg('people-msg','Saved: '+p.email+' survey role is now "'+ss.selectedOptions[0].textContent+'".',true);await load()}catch(e){msg('people-msg',e.message);await load()}};
-  cell(tr,ss);
-  const ds=document.createElement('select');ds.setAttribute('aria-label','Dashboard role for '+p.email);[{id:'default',text:'Default'}].concat(S.dashboard_roles).forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.id==='default'?'Default ('+roleLabel(S.dashboard_default_role,'No access')+')':roleLabel(r.id,r.text);ds.appendChild(o)});
-  ds.value=p.role==='admin'?'share':(p.dashboard_role_set_here||'default');if(p.role==='admin'){ds.disabled=true;ds.title='Admins can always pin and share dashboards'}
-  ds.onchange=async()=>{try{await api('/replays/admin/api/dashboard-role',{method:'POST',body:JSON.stringify({email:p.email,role:ds.value})});msg('people-msg','Saved: '+p.email+' dashboard role is now "'+ds.selectedOptions[0].textContent+'".',true);await load()}catch(e){msg('people-msg',e.message);await load()}};
-  cell(tr,ds);
-  if(p.clips.clips){const c=document.createElement('div');c.className='small muted';c.textContent=n(p.clips.clips,'clip')+', '+p.clips.saved+' saved · '+mb(p.clips.bytes);who.appendChild(c)}
-  {const td=cell(tr,p.last_seen?new Date(p.last_seen).toLocaleDateString([], {month:'short',day:'numeric'}):'never','small');if(td&&p.last_seen)td.title=when(p.last_seen)}
-  if(p.set_here&&!p.locked){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Reset';b.setAttribute('aria-label','Reset clip role for '+p.email);b.title='Remove the role set here, so the default applies';b.onclick=async()=>{if(!confirm('Reset the clip role for '+p.email+' to the default?'))return;try{await api('/replays/admin/api/person?email='+encodeURIComponent(p.email),{method:'DELETE'});msg('people-msg','Removed the role for '+p.email+'.',true);await load()}catch(e){msg('people-msg',e.message)}};cell(tr,b)}else cell(tr,'');
-  tr.setAttribute('role','row');[...tr.children].forEach((td,i)=>{td.setAttribute('role','cell');td.dataset.label=['Person','Clip role','Extra access','Surveys','Dashboards','Last activity','Actions'][i]});tb.appendChild(tr)});
+const expandedPeople=new Set();
+const defaultText=role=> 'Use default — '+roleLabel(role,role);
+function provenance(value,defaultRole){const source=document.createElement('div');source.className='person-source muted';source.textContent=(value?'Override · ':'')+'Default: '+roleLabel(defaultRole,defaultRole);return source}
+const permissionState=(p,key)=>key==='role'?(p.role==='admin'?'Administrator':'Member'):p.role==='admin'?'Allowed':key==='system'||key==='insights'?(p[key]?'Allowed':'Not allowed'):(p[key]&&p[key]!=='none'?'Allowed':'Not allowed');
+const peopleCards=()=>$('tab-people').clientWidth<=800;new ResizeObserver(()=>{for(const row of $('people').children)row._layout?.();const wrap=$('people').closest('.table-wrap');if(wrap.scrollWidth>wrap.clientWidth)wrap.tabIndex=0;else wrap.removeAttribute('tabindex')}).observe($('tab-people'));
+const peoplePg=makePager({mount:$('people-pager'),noun:'people',size:10,draw:slice=>{
+ const tb=$('people');tb.replaceChildren();
+ slice.forEach(p=>{const tr=document.createElement('tr');tr.dataset.email=p.email;if(expandedPeople.has(p.email))tr.classList.add('editing');
+  const who=identity(p.email),header=document.createElement('div');header.className='person-header';header.append(who.firstChild);who.prepend(header);cell(tr,who);
+  const ph=document.createElement('div');ph.className='small muted person-meta';ph.textContent=p.posthog.includes('(owner)')?'PostHog owner':'PostHog member';who.append(ph);
+  const fields=[];
+  function controlWrap(node){const wrap=document.createElement('div'),status=document.createElement('span');wrap.className='control-wrap';status.className='control-status';status.setAttribute('role','status');wrap.append(node,status);return wrap}
+  function accessField(label,node){if(node instanceof Element&&node.matches('select,label.check'))node=controlWrap(node);const field=document.createElement('fieldset'),legend=document.createElement('legend');legend.textContent=label;field.append(legend,node);fields.push(field);const td=cell(tr,field);td.className='access-control';return td}
+  const admin=p.role==='admin';
+  if(p.locked||admin&&p.email===S.me){const roleBox=document.createElement('div');roleBox.append(Object.assign(document.createElement('div'),{textContent:permissionState(p,'role')}),Object.assign(document.createElement('div'),{className:'small muted',textContent:p.locked?'Via PostHog':'Custom'}));accessField('Account role',roleBox)}else{
+   const label=document.createElement('label'),cb=document.createElement('select');label.className='role-control';for(const [value,title] of [['member','Member'],['admin','Administrator']]){const option=document.createElement('option');option.value=value;option.textContent=title;cb.append(option)}cb.value=admin?'admin':'member';cb.dataset.permission='role';cb.setAttribute('aria-label','Account role for '+p.email);label.append(cb);
+   cb.onchange=()=>{const on=cb.value==='admin';if(!confirm(on?'Make '+p.email+' an administrator? They can manage people and use every Lens feature, including replay insights.':p.email+' will no longer be an administrator and gets clip access: Watch clips. Other features keep their own settings.')){cb.value=admin?'admin':'member';return}return savePerson(p.email,'/replays/admin/api/person',{method:'POST',body:JSON.stringify({email:p.email,role:on?'admin':'watch'})},'Saved administrator access for '+p.email+'.',cb,admin?'admin':'member')};const roleBox=document.createElement('div');roleBox.append(controlWrap(label));roleBox.append(Object.assign(document.createElement('div'),{className:'small muted',textContent:'Custom'}));accessField('Account role',roleBox)
+  }
+  const sel=roleSelect(p.set_here?p.role:'default',false,true);sel.setAttribute('aria-label','Clip access for '+p.email);
+  const base=document.createElement('div');
+  if(admin){base.textContent=permissionState(p,'system');base.className='included';base.append(Object.assign(document.createElement('div'),{className:'small muted',textContent:'Via administrator'}))}else{base.append(controlWrap(sel),provenance(p.set_here,S.default_role));
+  }
+  accessField('Clip access',base);
+  sel.onchange=()=>savePerson(p.email,'/replays/admin/api/person'+(sel.value==='default'?'?email='+encodeURIComponent(p.email):''),sel.value==='default'?{method:'DELETE'}:{method:'POST',body:JSON.stringify({email:p.email,role:sel.value})},'Saved clip access for '+p.email+'.',sel,p.role);
+  for(const [kind,roles,defaultRole,value] of [['survey',S.survey_roles,S.survey_default_role,p.survey_role_set_here],['dashboard',S.dashboard_roles,S.dashboard_default_role,p.dashboard_role_set_here]]){
+   if(p.role==='admin'){accessField(kind==='survey'?'Surveys':'Dashboards',Object.assign(document.createElement('span'),{textContent:'Allowed',className:'included',title:'Via administrator'}));continue}
+   const select=document.createElement('select');select.setAttribute('aria-label',(kind==='survey'?'Survey':'Dashboard')+' role for '+p.email);[{id:'default',text:'Default'}].concat(roles).forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.id==='default'?defaultText(defaultRole):roleLabel(r.id,r.text);select.append(o)});select.value=value||'default';
+   select.onchange=()=>savePerson(p.email,'/replays/admin/api/'+kind+'-role',{method:'POST',body:JSON.stringify({email:p.email,role:select.value})},'Saved: '+p.email+' '+kind+' role.',select,value||'default');const box=document.createElement('div');box.append(controlWrap(select),provenance(value,defaultRole));accessField(kind==='survey'?'Surveys':'Dashboards',box)}
+  for(const [key,label] of [['system','System monitoring'],['insights','Replay insights']]){
+   if(p.role==='admin'){accessField(label,Object.assign(document.createElement('span'),{textContent:'Allowed',className:'included',title:'Via administrator'}));continue}
+   const sw=document.createElement('label');sw.className='check';const cb=document.createElement('input'),text=document.createElement('span');cb.type='checkbox';cb.setAttribute('aria-label',label+' for '+p.email);cb.checked=!!p[key];cb.dataset.permission=key;cb.setAttribute('aria-describedby',key==='system'?'system-description':'insights-description');text.textContent=permissionState(p,key);sw.append(cb,text);
+   cb.onchange=()=>savePerson(p.email,'/replays/admin/api/extra-access',{method:'POST',body:JSON.stringify({email:p.email,[key]:cb.checked})},'Saved: '+label+' access for '+p.email+'.',cb,!!p[key]);const box=document.createElement('div');if(key==='insights')box.append(Object.assign(document.createElement('p'),{className:'small muted',textContent:'View findings about how clients’ people work, derived from session replays. Independent of clip access.'}));box.append(controlWrap(sw),Object.assign(document.createElement('div'),{className:'small muted',textContent:'Custom'}));accessField(label,box);
+  }
+  if(p.clips.clips){const c=document.createElement('div');c.className='small muted person-detail';c.textContent=n(p.clips.clips,'clip')+', '+p.clips.saved+' saved · '+mb(p.clips.bytes);who.appendChild(c)}
+  function lastSeenNode(){if(!p.last_seen)return document.createTextNode('Never');const time=document.createElement('time'),date=new Date(p.last_seen);time.dateTime=date.toISOString();time.textContent=date.toLocaleDateString([], {month:'short',day:'numeric'});time.title=date.toLocaleString([], {dateStyle:'full',timeStyle:'long'});time.setAttribute('aria-label',time.title);return time}
+  cell(tr,lastSeenNode(),'small');const seen=document.createElement('div');seen.className='small muted mobile-last-seen';seen.append('Last seen ',lastSeenNode());who.append(seen);
+  const list=document.createElement('div');list.className='access-summary';const dl=document.createElement('dl');
+  const summaryRows=[['Account role',permissionState(p,'role')],['Clip access',admin||p.role!=='none'?'Allowed':'Not allowed'],['Surveys',permissionState(p,'survey_role')],['Dashboards',permissionState(p,'dashboard_role')],['System monitoring',permissionState(p,'system')],['Replay insights',permissionState(p,'insights')]];
+  for(const [label,value] of summaryRows){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=value;const source=document.createElement('div');source.className='small muted';source.textContent=label==='Account role'?(p.locked?'Via PostHog':'Custom'):admin?'Via administrator':label==='Clip access'?(p.set_here?'Custom':'Default'):label==='Surveys'?(p.survey_role_set_here?'Custom':'Default'):label==='Dashboards'?(p.dashboard_role_set_here?'Custom':'Default'):'Custom';dd.append(source);dl.append(dt,dd)}list.append(dl);who.append(list);
+  if(!p.locked&&!(admin&&p.email===S.me)){const edit=document.createElement('button');edit.type='button';edit.className='secondary-button edit-access';edit.textContent='Edit access';edit.setAttribute('aria-label','Edit access for '+p.email);edit.setAttribute('aria-expanded',tr.classList.contains('editing'));const editor=document.createElement('div');editor.className='mobile-editor';const hint=document.createElement('p');hint.className='small muted';hint.textContent='Changes save automatically';editor.append(hint);editor.id='person-editor-'+encodeURIComponent(p.email);edit.setAttribute('aria-controls',editor.id);
+   const done=document.createElement('button');done.type='button';done.className='secondary-button';done.textContent='Close editor';done.onclick=()=>{tr.classList.remove('editing');expandedPeople.delete(p.email);edit.setAttribute('aria-expanded','false');edit.focus()};
+   const layout=()=>{for(const [i,field] of fields.entries()){editor.append(field);const td=tr.querySelectorAll('.access-control')[i];td.replaceChildren(Object.assign(document.createElement('span'),{textContent:summaryRows[i][1]}));if(admin&&i>0)td.append(Object.assign(document.createElement('div'),{className:'small muted',textContent:'Via administrator'}))}editor.append(done);const cards=peopleCards();tr.setAttribute('role',cards?'listitem':'row');for(const td of tr.children)td.setAttribute('role',cards?'presentation':'cell');tb.setAttribute('role',cards?'list':'rowgroup');tb.closest('table').setAttribute('role',cards?'presentation':'table')};
+   edit.onclick=()=>{const open=tr.classList.toggle('editing');if(open)expandedPeople.add(p.email);else expandedPeople.delete(p.email);edit.setAttribute('aria-expanded',open);if(open)editor.querySelector('select,input,button')?.focus()};who.append(edit,editor);tr._layout=layout;
+  }
+  tr.setAttribute('role','row');[...tr.children].forEach((td,i)=>{td.setAttribute('role','cell');td.dataset.label=['Person','Account role','Clip access','Surveys','Dashboards','System monitoring','Replay insights','Last seen in Lens'][i]});tb.appendChild(tr);if(!tr._layout)tr._layout=()=>{const cards=peopleCards();tr.setAttribute('role',cards?'listitem':'row');for(const td of tr.children)td.setAttribute('role',cards?'presentation':'cell');tb.setAttribute('role',cards?'list':'rowgroup');tb.closest('table').setAttribute('role',cards?'presentation':'table')};tr._layout()});
 
-if(!slice.length)$('people').innerHTML='<tr><td colspan="7">No people found. Change your search or add a person above.</td></tr>';guardControls()}});
-function renderPeople(keep=false){const q=$('people-filter').value.trim().toLowerCase();if(S)peoplePg.set(S.people.filter(p=>(p.email+' '+p.name+' '+p.note).toLowerCase().includes(q)),keep)}
+if(!slice.length){const tr=document.createElement('tr');const empty=cell(tr,'No people found. Change your search or grant access above.');empty.colSpan=8;empty.dataset.label='Person';tb.append(tr);}guardControls()}});
+function renderPeople(keep=false){const q=$('people-filter').value.trim().toLowerCase();if(S){$('people-heading').textContent='People ('+S.people.length+')';peoplePg.set(S.people.filter(p=>(p.email+' '+p.name+' '+p.note).toLowerCase().includes(q)),keep)}}
 $('people-filter').oninput=()=>renderPeople();
 
-function roleSelect(value,disabled){const s=document.createElement('select');S.roles.forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=roleLabel(r.id,r.text);if(r.id===value)o.selected=true;s.appendChild(o)});s.disabled=!!disabled;return s}
-async function load(){const focused=document.activeElement;const focusLabel=focused?.getAttribute('aria-label');const previousAudit=S?.audit;S=await api('/replays/admin/api/state');if(previousAudit&&($('filter').value.trim()||previousAudit.length>300))S.audit=previousAudit;
- $('new-role').innerHTML='';S.roles.forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.text;if(r.id==='watch')o.selected=true;$('new-role').appendChild(o)});
- $('default-role').innerHTML='';S.roles.filter(r=>r.id!=='admin').forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.text;if(r.id===S.default_role)o.selected=true;$('default-role').appendChild(o)});
+function roleSelect(value,disabled,withDefault=false){const s=document.createElement('select');(withDefault?[{id:'default',text:defaultText(S.default_role)},...S.roles.filter(r=>r.id!=='admin')]:S.roles.filter(r=>r.id!=='admin')).forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.id==='default'?r.text:roleLabel(r.id,r.text);if(r.id===value)o.selected=true;s.appendChild(o)});s.disabled=!!disabled;return s}
+async function load(){const draft=!$('add-person-dialog').open?null:Object.fromEntries(['new-role','new-surveys','new-dashboards'].map(id=>[id,$(id).value]));const focused=document.activeElement;const focusLabel=focused?.getAttribute('aria-label');const previousAudit=S?.audit;S=await api('/replays/admin/api/state');if(previousAudit&&($('filter').value.trim()||previousAudit.length>300))S.audit=previousAudit;
+ $('new-role').replaceChildren(...roleSelect('default',false,true).children);$('new-role').value=draft?.['new-role']||'default';
+ $('default-role').innerHTML='';S.roles.filter(r=>r.id!=='admin').forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=roleLabel(r.id,r.text);if(r.id===S.default_role)o.selected=true;$('default-role').appendChild(o)});
  $('share').value=S.allow_share_links?'1':'0';
- const opts=(sel,list,value)=>{sel.innerHTML='';list.forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=roleLabel(r.id,r.text);if(r.id===value)o.selected=true;sel.appendChild(o)})};
- opts($('survey-default'),S.survey_roles.filter(r=>r.id!=='launch'),S.survey_default_role);opts($('survey-shared'),S.survey_roles,S.survey_shared_token_role);opts($('new-surveys'),[{id:'default',text:'Default'}].concat(S.survey_roles),'default');
- opts($('dashboard-default'),S.dashboard_roles.filter(r=>r.id!=='share'),S.dashboard_default_role);opts($('dashboard-shared'),S.dashboard_roles.filter(r=>r.id!=='share'),S.dashboard_shared_token_role);opts($('new-dashboards'),[{id:'default',text:'Default'}].concat(S.dashboard_roles),'default');
- drawTokens(true);renderPeople(true);
+ const opts=(sel,list,value)=>{sel.replaceChildren();list.forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.id==='default'?r.text:roleLabel(r.id,r.text);if(r.id===value)o.selected=true;sel.appendChild(o)})};
+ opts($('survey-default'),S.survey_roles.filter(r=>r.id!=='launch'),S.survey_default_role);opts($('survey-shared'),S.survey_roles,S.survey_shared_token_role);opts($('new-surveys'),[{id:'default',text:defaultText(S.survey_default_role)}].concat(S.survey_roles),'default');
+ opts($('dashboard-default'),S.dashboard_roles.filter(r=>r.id!=='share'),S.dashboard_default_role);opts($('dashboard-shared'),S.dashboard_roles.filter(r=>r.id!=='share'),S.dashboard_shared_token_role);opts($('new-dashboards'),[{id:'default',text:defaultText(S.dashboard_default_role)}].concat(S.dashboard_roles),'default');
+ if(draft)for(const [id,value] of Object.entries(draft))$(id).value=value;
+ updateNewFeatures();drawTokens(true);renderPeople(true);
  const st=S.storage;$('space').textContent=n(st.clips,'clip')+' using '+mb(st.bytes)+' on the server. Saved: '+st.saved+' ('+mb(st.saved_bytes)+'). Unsaved clips expire two weeks after their last request.';
  renderClips();
  renderAudit(true);guardControls();if(focusLabel){const next=[...document.querySelectorAll('[aria-label]')].find(el=>el.getAttribute('aria-label')===focusLabel);next?.focus()}}
@@ -559,7 +633,18 @@ let searchVersion=0;
 async function searchAudit(more=false){const version=++searchVersion;msg('audit-msg','Loading…',true);try{const q=$('filter').value.trim();const audit=(await api('/replays/admin/api/audit?q='+encodeURIComponent(q)+'&offset='+(more?S.audit.length:0))).audit;if(version!==searchVersion)return;S.audit=more?S.audit.concat(audit):audit;renderAudit(more);msg('audit-msg',audit.length?'Activity loaded.':'No activity found. Try another search.',true)}catch(e){if(version===searchVersion)msg('audit-msg',e.message+' Try the search again.')}}
 $('audit-more').onclick=()=>searchAudit(true);
 let searchTimer;$('filter').oninput=()=>{++searchVersion;clearTimeout(searchTimer);searchTimer=setTimeout(()=>searchAudit(),250)};
-$('add').onclick=async()=>{const email=$('new-email').value.trim();if(!$('new-email').reportValidity()||!email){msg('people-msg','Enter a valid email address.');return;}try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email,role:$('new-role').value,system:$('new-system').checked,insights:$('new-insights').checked,dashboard_role:$('new-dashboards').value==='default'?'':$('new-dashboards').value,survey_role:$('new-surveys').value==='default'?'':$('new-surveys').value})});$('new-email').value='';$('new-system').checked=false;$('new-insights').checked=false;$('new-surveys').value='default';$('new-dashboards').value='default';msg('people-msg','Added '+email+'.',true);await load()}catch(e){msg('people-msg',e.message)}};
+function updateNewFeatures(){const admin=$('new-admin').checked;$('new-clip').hidden=admin;$('add').textContent=admin?'Grant administrator access':'Grant access';$('new-features').hidden=admin;$('new-admin-features').hidden=!admin;updateEffective()}
+function updateEffective(){if(!S)return;for(const kind of ['surveys','dashboards']){$('new-'+kind+'-current').textContent=$('new-'+kind).value==='default'?'Default: '+roleLabel(S[kind==='surveys'?'survey_default_role':'dashboard_default_role'],'No access'):''}$('new-effective').textContent=''}
+for(const id of ['new-role','new-surveys','new-dashboards','new-insights','new-system'])$(id).addEventListener('change',updateEffective);
+$('new-admin').onchange=updateNewFeatures;$('new-member').onchange=updateNewFeatures;
+$('new-email').oninput=()=>{$('new-email-error').textContent='';$('new-email').removeAttribute('aria-invalid')};
+const addBody=document.querySelector('.add-body'),scrollCue=document.querySelector('.add-scroll-cue');function updateScrollCue(){const more=addBody.scrollHeight-addBody.clientHeight-addBody.scrollTop>2;scrollCue.hidden=!more;document.querySelector('.add-actions').style.boxShadow=more?'0 -6px 12px rgb(0 0 0 / 6%)':'none'}addBody.addEventListener('scroll',updateScrollCue);new ResizeObserver(updateScrollCue).observe(addBody);
+function closeAddPerson(){$('add-person-dialog').close()}
+$('show-add-person').onclick=()=>{$('add-person-error').textContent='';if(!$('new-email').value)$('new-role').value='default';updateNewFeatures();$('add-person-dialog').showModal();$('new-email').focus()};
+$('cancel-add-person').onclick=closeAddPerson;$('close-add-person').onclick=closeAddPerson;
+$('add-person-dialog').addEventListener('close',()=>$('show-add-person').focus());
+$('manage-access-defaults').onclick=event=>{event.preventDefault();$('access-defaults').open=true;$('access-defaults').scrollIntoView({behavior:'smooth'});$('access-defaults').querySelector('summary').focus()};
+$('add-person-form').onsubmit=async event=>{event.preventDefault();if($('add').disabled)return;$('add').disabled=true;const email=$('new-email').value.trim();if(!$('new-email').checkValidity()||!email){$('new-email-error').textContent='Enter a valid email address.';$('new-email').setAttribute('aria-invalid','true');$('new-email').focus();$('add').disabled=false;return;}$('add').textContent='Granting access…';const clipValue=$('new-role').value;try{if($('new-admin').checked)$('new-role').append(Object.assign(document.createElement('option'),{value:'admin',textContent:'Administrator',selected:true}));await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email,role:$('new-admin').checked?'admin':$('new-role').value==='default'?S.default_role:$('new-role').value,system:$('new-system').checked,insights:$('new-insights').checked,dashboard_role:$('new-dashboards').value==='default'?'':$('new-dashboards').value,survey_role:$('new-surveys').value==='default'?'':$('new-surveys').value})});if(!$('new-admin').checked&&$('new-role').value==='default')await api('/replays/admin/api/person?email='+encodeURIComponent(email),{method:'DELETE'});$('new-email').value='';$('new-admin').checked=false;$('new-member').checked=true;$('new-role').value='default';$('new-system').checked=false;$('new-insights').checked=false;$('new-surveys').value='default';$('new-dashboards').value='default';msg('people-msg','Granted Lens access for '+email+'.',true);closeAddPerson();await load()}catch(e){$('add-person-error').textContent=e.message;$('add-person-error').focus()}finally{if($('new-role').value==='admin')$('new-role').value=clipValue;$('new-role').querySelectorAll('option[value=admin]').forEach(option=>option.remove());$('add').disabled=false;updateNewFeatures()}};
 $('show-revoked').onchange=()=>drawTokens(true);
 $('chat-url').value=${JSON.stringify(chatUrl()).replace(/</g, '\\u003c')};
 {const p=${JSON.stringify(chatPolicy()).replace(/</g, '\\u003c')};$('chat-apps').value=p.apps.join('\\n');$('chat-note').value=p.note}
@@ -576,6 +661,6 @@ async function loadOutcomes(){const rows=await api('/replays/admin/api/outcomes'
 $('outcome-client').oninput=()=>{const field=$('outcome-client'),option=[...$('outcome-clients').options].find(o=>o.value===field.value);let helper=$('resolved-client');if(!helper){helper=document.createElement('div');helper.id='resolved-client';helper.className='small muted';field.parentElement.append(helper)}helper.textContent=option?option.textContent+' · '+option.value:''};
 $('outcome-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;try{await api('/replays/admin/api/outcomes',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(form)))});$('outcome-msg').textContent='Outcome saved.';form.reset();await loadOutcomes()}catch(err){$('outcome-msg').textContent=err.message}}
 loadOutcomes().catch(e=>{$('outcome-msg').textContent=e.message})
-load().catch(e=>{msg('people-msg',e.message+' Reload the page to try again.');$('people').innerHTML='<tr><td colspan="7" class="err"></td></tr>';$('people').querySelector('td').textContent=e.message});
+load().catch(e=>{msg('people-msg',e.message+' Reload the page to try again.');$('people').innerHTML='<tr><td colspan="8" class="err"></td></tr>';$('people').querySelector('td').textContent=e.message});
 </script></body></html>`
 }

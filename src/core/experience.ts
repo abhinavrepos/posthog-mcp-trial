@@ -20,8 +20,12 @@ tasksDb.exec(`
 CREATE TABLE IF NOT EXISTS replay_signals(session_id TEXT PRIMARY KEY, client TEXT NOT NULL, user_hash TEXT NOT NULL,
     day TEXT NOT NULL, duration_ms INTEGER NOT NULL, signals TEXT NOT NULL, processed_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS replay_signals_client_day ON replay_signals(client, day);
+CREATE TABLE IF NOT EXISTS replay_analysis_runs (id INTEGER PRIMARY KEY CHECK(id=1), at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS replay_runs(at TEXT NOT NULL, read INTEGER NOT NULL, skipped INTEGER NOT NULL, candidates INTEGER NOT NULL, error TEXT);
 CREATE TABLE IF NOT EXISTS replay_skips(session_id TEXT PRIMARY KEY, reason TEXT NOT NULL, at TEXT NOT NULL);
 `)
+
+if (!(tasksDb.prepare('PRAGMA table_info(replay_signals)').all() as { name: string }[]).some(c => c.name === 'started_at')) tasksDb.exec('ALTER TABLE replay_signals ADD COLUMN started_at TEXT')
 
 const day = (ms: number) => new Date(ms).toISOString().slice(0, 10)
 const hashUser = (u: string) => createHash('sha256').update('lens-replay:' + u).digest('hex').slice(0, 16)
@@ -75,32 +79,48 @@ export function fairOrder(list: Candidate[], perRun: number): Candidate[] {
     return out
 }
 
+export interface ReplayRun { at: string; read: number; skipped: number; candidates: number; error: string | null }
+function recordReplayRun(read: number, skipped: number, candidates: number, error: string | null = null): void {
+    const at = new Date().toISOString()
+    tasksDb.prepare('INSERT INTO replay_runs VALUES (?,?,?,?,?)').run(at, read, skipped, candidates, error)
+    tasksDb.prepare('DELETE FROM replay_runs WHERE rowid NOT IN (SELECT rowid FROM replay_runs ORDER BY rowid DESC LIMIT 200)').run()
+    tasksDb.prepare('INSERT OR REPLACE INTO replay_analysis_runs(id,at) VALUES (1,?)').run(at)
+}
+export function lastReplayRun(): ReplayRun | undefined {
+    return tasksDb.prepare('SELECT at,read,skipped,candidates,error FROM replay_runs ORDER BY rowid DESC LIMIT 1').get() as ReplayRun | undefined
+}
+
 /** Reads up to `perRun` replays and stores their signals. Failures are remembered so they are not retried forever. */
 export async function processReplays(perRun = 30, deps: { candidates?: typeof candidates; jsonl?: (id: string) => Promise<string>; durationMs?: (id: string) => Promise<number | undefined>; names?: () => Promise<string[]> } = {}): Promise<{ read: number; skipped: number }> {
-    const list = fairOrder(await (deps.candidates || candidates)(), perRun)
-    if (!list.length) return { read: 0, skipped: 0 }
-    const names = await (deps.names || screenVocabulary)()
-    const read = deps.jsonl || (async (id: string) => (await import('node:fs')).readFileSync(await snapshotsFile(id), 'utf8'))
-    // PostHog's recorder pauses while nobody moves: the session's real length comes from its metadata.
-    const length = deps.durationMs || (async (id: string) => { try { return Math.round(Number((await getRecording(id)).recording_duration) * 1000) || undefined } catch { return undefined } })
-    let ok = 0, skipped = 0
-    for (const c of list) {
-        try {
-            // The recorder pauses while nobody moves, so the recording can be much shorter than the session:
-            // its real length is the longer of the recording's and the events' span.
-            const span = c.end ? Date.parse(c.end) - Date.parse(c.start) : 0
-            const s = signalsFromReplay(await read(c.session_id), Math.max((await length(c.session_id)) || 0, Number.isFinite(span) ? span : 0) || undefined, { names })
-            if (s.duration_ms < 5_000) throw new Error('too short')
-            tasksDb.prepare('INSERT OR REPLACE INTO replay_signals VALUES (?,?,?,?,?,?,?)').run(c.session_id, c.client, hashUser(c.user), day(Date.parse(c.start)), Math.round(s.duration_ms), JSON.stringify(s), new Date().toISOString())
-            ok++
-        } catch (e) {
-            const reason = String((e as Error).message || e).slice(0, 120)
-            // A recording still being written gets another chance later; everything else is skipped for good.
-            if (!/no stored snapshots yet/i.test(reason)) tasksDb.prepare('INSERT OR REPLACE INTO replay_skips VALUES (?,?,?)').run(c.session_id, reason, new Date().toISOString())
-            skipped++
+    let ok = 0, skipped = 0, count = 0, error: string | null = null
+    try {
+        const candidatesFound = await (deps.candidates || candidates)()
+        count = candidatesFound.length
+        const list = fairOrder(candidatesFound, perRun)
+        if (!list.length) return { read: 0, skipped: 0 }
+        const names = await (deps.names || screenVocabulary)()
+        const read = deps.jsonl || (async (id: string) => (await import('node:fs')).readFileSync(await snapshotsFile(id), 'utf8'))
+        // PostHog's recorder pauses while nobody moves: the session's real length comes from its metadata.
+        const length = deps.durationMs || (async (id: string) => { try { return Math.round(Number((await getRecording(id)).recording_duration) * 1000) || undefined } catch { return undefined } })
+        for (const c of list) {
+            try {
+                // The recorder pauses while nobody moves, so the recording can be much shorter than the session:
+                // its real length is the longer of the recording's and the events' span.
+                const span = c.end ? Date.parse(c.end) - Date.parse(c.start) : 0
+                const s = signalsFromReplay(await read(c.session_id), Math.max((await length(c.session_id)) || 0, Number.isFinite(span) ? span : 0) || undefined, { names })
+                if (s.duration_ms < 5_000) throw new Error('too short')
+                tasksDb.prepare('INSERT OR REPLACE INTO replay_signals (session_id,client,user_hash,day,duration_ms,signals,processed_at,started_at) VALUES (?,?,?,?,?,?,?,?)').run(c.session_id, c.client, hashUser(c.user), day(Date.parse(c.start)), Math.round(s.duration_ms), JSON.stringify(s), new Date().toISOString(), new Date(Date.parse(c.start)).toISOString())
+                ok++
+            } catch (e) {
+                const reason = String((e as Error).message || e).slice(0, 120)
+                // A recording still being written gets another chance later; everything else is skipped for good.
+                if (!/no stored snapshots yet/i.test(reason)) tasksDb.prepare('INSERT OR REPLACE INTO replay_skips VALUES (?,?,?)').run(c.session_id, reason, new Date().toISOString())
+                skipped++
+            }
         }
-    }
-    return { read: ok, skipped }
+        return { read: ok, skipped }
+    } catch (e) { error = String((e as Error).message || e).slice(0, 120); throw e }
+    finally { recordReplayRun(ok, skipped, count, error) }
 }
 
 let timer: NodeJS.Timeout | undefined, running = false
@@ -108,41 +128,41 @@ let timer: NodeJS.Timeout | undefined, running = false
 export function startReplaySignals(): void {
     if (process.env.REPLAY_SIGNALS === 'off' || timer) return
     const per = Math.max(1, Math.min(200, Number(process.env.REPLAY_SIGNALS_PER_RUN) || 30))
-    const round = async () => { if (running) return; running = true; try { await processReplays(per) } catch { /* PostHog unreachable: next round */ } finally { running = false } }
+    const round = async () => { if (running) return; running = true; try { await processReplays(per) } catch { /* processReplays records the failed round, including candidate lookup failures. */ } finally { running = false } }
     setTimeout(() => void round(), 60_000).unref()
     timer = setInterval(() => void round(), 15 * 60_000); timer.unref()
 }
 
 // ------------------------------------------------------------------ per client
-interface Stored { session_id: string; client: string; user_hash: string; day: string; duration_ms: number; s: SessionSignals }
+interface Stored { session_id: string; client: string; user_hash: string; day: string; started_at: string | null; duration_ms: number; s: SessionSignals }
 function stored(from: string, to: string, client?: string): Stored[] {
     const rows = (client
         ? tasksDb.prepare('SELECT * FROM replay_signals WHERE client=? AND day BETWEEN ? AND ?').all(client, from, to)
-        : tasksDb.prepare('SELECT * FROM replay_signals WHERE day BETWEEN ? AND ?').all(from, to)) as { session_id: string; client: string; user_hash: string; day: string; duration_ms: number; signals: string }[]
+        : tasksDb.prepare('SELECT * FROM replay_signals WHERE day BETWEEN ? AND ?').all(from, to)) as { session_id: string; client: string; user_hash: string; day: string; started_at: string | null; duration_ms: number; signals: string }[]
     return rows.flatMap((r) => { try { return [{ ...r, s: JSON.parse(r.signals) as SessionSignals }] } catch { return [] } })
 }
 
 /** The measures, per hour of active use (or per session), so short and long sessions compare fairly. */
 export const MEASURES = {
-    rage: { label: 'Rage clicks', unit: 'per hour', worse: 'higher', floor: 2, of: (x: Stored) => perHour(x, x.s.rage_clicks.length) },
-    dead: { label: 'Clicks that do nothing', unit: 'per hour', worse: 'higher', floor: 4, of: (x: Stored) => perHour(x, x.s.dead_clicks.length) },
-    errors: { label: 'Errors shown', unit: 'per session', worse: 'higher', floor: 1, of: (x: Stored) => x.s.errors_shown.length },
-    loops: { label: 'Error loops (fix, retry, fail again)', unit: 'per session', worse: 'higher', floor: 0.5, of: (x: Stored) => x.s.error_loops.reduce((a, l) => a + l.count, 0) },
-    hesitation: { label: 'Long hesitations before acting', unit: 'per hour', worse: 'higher', floor: 3, of: (x: Stored) => perHour(x, x.s.hesitations.length) },
-    circling: { label: 'Cursor circling (searching the screen)', unit: 'per hour', worse: 'higher', floor: 3, of: (x: Stored) => perHour(x, x.s.cursor.circling_bursts) },
-    hunting: { label: 'Scrolling up and down to find something', unit: 'per hour', worse: 'higher', floor: 3, of: (x: Stored) => perHour(x, x.s.scroll.hunting_bursts) },
-    idle: { label: 'Idle share of the session', unit: '%', worse: 'higher', floor: 35, of: (x: Stored) => x.s.duration_ms ? 100 * x.s.idle_ms / x.s.duration_ms : 0 },
-    failures: { label: 'Failed or slow server calls', unit: 'per session', worse: 'higher', floor: 1, of: (x: Stored) => x.s.network_errors + x.s.slow_calls },
+    rage: { definition: 'Repeated clicks close together on the same target.', label: 'Rage clicks', unit: 'per hour', worse: 'higher', floor: 2, of: (x: Stored) => perHour(x, x.s.rage_clicks.length) },
+    dead: { definition: 'Clicks without a detected structural response.', label: 'Clicks without a detected response', unit: 'per hour', worse: 'higher', floor: 4, of: (x: Stored) => perHour(x, x.s.dead_clicks.length) },
+    errors: { definition: 'Detected error presentations in the replay structure.', label: 'Errors shown', unit: 'per session', worse: 'higher', floor: 1, of: (x: Stored) => x.s.errors_shown.length },
+    loops: { definition: 'Error sequences followed by correction, retry and another error.', label: 'Error loops (fix, retry, fail again)', unit: 'per session', worse: 'higher', floor: 0.5, of: (x: Stored) => x.s.error_loops.reduce((a, l) => a + l.count, 0) },
+    hesitation: { definition: 'Long pauses before a detected action.', label: 'Long pauses before acting', unit: 'per hour', worse: 'higher', floor: 3, of: (x: Stored) => perHour(x, x.s.hesitations.length) },
+    circling: { definition: 'Bursts of cursor movement back and forth.', label: 'Cursor moving back and forth', unit: 'per hour', worse: 'higher', floor: 3, of: (x: Stored) => perHour(x, x.s.cursor.circling_bursts) },
+    hunting: { definition: 'Repeated reversals in scrolling direction.', label: 'Scrolling up and down repeatedly', unit: 'per hour', worse: 'higher', floor: 3, of: (x: Stored) => perHour(x, x.s.scroll.hunting_bursts) },
+    idle: { definition: 'Share of recorded session time without activity.', label: 'Idle share of the session', unit: '%', worse: 'higher', floor: 35, of: (x: Stored) => x.s.duration_ms ? 100 * x.s.idle_ms / x.s.duration_ms : 0 },
+    failures: { definition: 'Network calls detected as failed or slow.', label: 'Failed or slow server calls', unit: 'per session', worse: 'higher', floor: 1, of: (x: Stored) => x.s.network_errors + x.s.slow_calls },
 } as const
 export type MeasureKey = keyof typeof MEASURES
 function perHour(x: Stored, n: number) { const h = Math.max(x.s.active_ms, 60_000) / 3_600_000; return n / h }
 const median = (a: number[]) => { if (!a.length) return 0; const s = [...a].sort((p, q) => p - q), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2 }
 const round1 = (n: number) => Math.round(n * 10) / 10
 
-export interface Finding { measure: MeasureKey; label: string; client: number; peers: number | null; unit: string; severity: 'high' | 'medium'; text: string; where: string[]; replays: { url: string; why: string }[] }
+export interface Finding { sessions_with_it: number; sessions: number; measure: MeasureKey; label: string; client: number; peers: number | null; unit: string; severity: 'high' | 'medium'; text: string; where: string[]; replays: { url: string; why: string; day: string; started_at: string | null }[] }
 export interface ClientExperience {
     client: string; window: { from: string; to: string }
-    sessions: number; people: number; active_minutes: number
+    sessions: number; people: number; active_minutes: number; peer_clients: number
     verdict: 'smooth' | 'some friction' | 'struggling' | 'not enough replays'
     summary: string
     findings: Finding[]
@@ -172,11 +192,11 @@ export function clientExperience(client: string, opts: { days?: number; now?: nu
     const others = new Map<string, Stored[]>()
     for (const x of all) if (x.client !== client) { const l = others.get(x.client); if (l) l.push(x); else others.set(x.client, [x]) }
     const peerClients = [...others.values()].filter((l) => l.length >= MIN_SESSIONS)
-    const base: ClientExperience = { client, window: { from, to }, sessions: mine.length, people: new Set(mine.map((x) => x.user_hash)).size, active_minutes: Math.round(mine.reduce((a, x) => a + x.s.active_ms, 0) / 60_000), verdict: 'not enough replays', summary: '', findings: [], measures: [], hotspots: [], next_steps: [], usage: usageOf(client, from, to), note: '' }
+    const base: ClientExperience = { client, window: { from, to }, peer_clients: peerClients.length, sessions: mine.length, people: new Set(mine.map((x) => x.user_hash)).size, active_minutes: Math.round(mine.reduce((a, x) => a + x.s.active_ms, 0) / 60_000), verdict: 'not enough replays', summary: '', findings: [], measures: [], hotspots: [], next_steps: [], usage: usageOf(client, from, to), note: '' }
     base.note = `From ${mine.length} replay${mine.length === 1 ? '' : 's'} read in ${from} to ${to}; compared with ${peerClients.length} other client${peerClients.length === 1 ? '' : 's'}. Structure only: no values, typed text or on-screen text were read.`
     if (mine.length < MIN_SESSIONS) {
-        base.summary = `Only ${mine.length} replay${mine.length === 1 ? '' : 's'} read for this client so far; findings need at least ${MIN_SESSIONS}.`
-        base.next_steps = ['Check again after more replays are read (Lens reads new replays every 15 minutes).']
+        base.summary = `Only ${mine.length} replay${mine.length === 1 ? '' : 's'} analysed for this client; findings need at least ${MIN_SESSIONS}.`
+        base.next_steps = ['Review analysis coverage; at least 3 analysed replays are required.']
         return base
     }
     for (const key of Object.keys(MEASURES) as MeasureKey[]) {
@@ -190,18 +210,18 @@ export function clientExperience(client: string, opts: { days?: number; now?: nu
         const worst = [...mine].sort((a, b) => m.of(b) - m.of(a)).slice(0, 3)
         const hit = mine.filter((x) => m.of(x) >= m.floor / 2 && m.of(x) > 0).length
         const perSession = m.unit === 'per hour' ? median(mine.map((x) => m.of(x) * Math.max(x.s.active_ms, 60_000) / 3_600_000)) : value
-        const shown = m.unit === '%' ? `${Math.round(value)}% of the time` : `about ${perSession >= 10 ? Math.round(perSession) : round1(perSession)} per session`
-        base.findings.push({ measure: key, label: m.label, client: round1(value), peers: peers === null ? null : round1(peers), unit: m.unit, severity,
-            text: `${m.label} in ${hit} of ${mine.length} sessions, ${shown}${peers !== null ? (peers === 0 ? '; other clients: almost never' : `; other clients: ${round1(peers)} ${m.unit}`) : ''}.`,
-            where: whereOf(key, mine), replays: worst.map((x) => ({ url: replayUrl(x.session_id, Math.max(0, momentOf(key, x) / 1000 - 5)), why: `${round1(m.of(x))} ${m.unit}` })) })
+        const shown = m.unit === '%' ? `${Math.round(value)}% of the time` : `median ${perSession >= 10 ? Math.round(perSession) : round1(perSession)} per replay`
+        base.findings.push({ sessions_with_it: hit, sessions: mine.length, measure: key, label: m.label, client: round1(value), peers: peers === null ? null : round1(peers), unit: m.unit, severity,
+            text: `${m.label} in ${hit} of ${mine.length} analysed replays, ${shown}${peers !== null ? (peers === 0 ? '; peer median: 0' : `; peer median: ${round1(peers)} ${m.unit}`) : ''}.`,
+            where: whereOf(key, mine), replays: worst.map((x) => ({ day: x.day, started_at: x.started_at, url: replayUrl(x.session_id, Math.max(0, momentOf(key, x) / 1000 - 5)), why: `${round1(m.of(x))} ${m.unit}` })) })
     }
     base.findings.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === 'high' ? -1 : 1))
     base.hotspots = hotspots(mine)
     const high = base.findings.filter((f) => f.severity === 'high').length
     base.verdict = !base.findings.length ? 'smooth' : high || base.findings.length >= 3 ? 'struggling' : 'some friction'
     base.summary = !base.findings.length
-        ? `Their people work smoothly: no measure stands out from other clients in ${mine.length} replays.`
-        : `${base.verdict === 'struggling' ? 'Struggling' : 'Some friction'}: ${base.findings.slice(0, 3).map((f) => f.label.toLowerCase() + (f.where[0] ? ` (mostly ${f.where[0]})` : '')).join('; ')}.`
+        ? `No elevated friction detected: no measure meets the reporting threshold in ${mine.length} analysed replays.`
+        : base.findings.slice(0, 2).map(f => `${f.label} median: ${f.client} ${f.unit}${f.where[0] ? ` at ${f.where[0]}` : ''}${f.peers !== null ? ` (peer median ${f.peers})` : ''}`).join('; ') + '.'
     base.next_steps = nextSteps(base.findings)
     return base
 }
@@ -224,7 +244,7 @@ export function humanName(target: string | undefined): string | undefined {
 }
 function count(items: (string | undefined)[]): string[] {
     const m = new Map<string, number>()
-    for (const raw of items) { const i = humanName(raw); if (i) m.set(i, (m.get(i) || 0) + 1) }
+    for (const raw of items) { const i = humanName(raw); if (i && !/^(?:(?:a|an|the) )?(?:field|button|error message|element|input|div|span|alert|banner|toast)$/i.test(i)) m.set(i, (m.get(i) || 0) + 1) }
     return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k]) => k)
 }
 function whereOf(key: MeasureKey, xs: Stored[]): string[] {
@@ -250,14 +270,16 @@ function hotspots(xs: Stored[]): ClientExperience['hotspots'] {
     return [...m.values()].sort((a, b) => b.count - a.count).slice(0, 6)
 }
 function nextSteps(f: Finding[]): string[] {
-    const out: string[] = []
-    const has = (k: MeasureKey) => f.find((x) => x.measure === k)
-    if (has('loops') || has('errors')) out.push(`Watch the first error replay${has('loops')?.where[0] ? ` (${has('loops')!.where[0]})` : ''}: does the message say clearly what to fix? If several clients loop on the same field, raise it with the team that owns that dialog.`)
-    if (has('rage') || has('dead')) out.push(`A button that seems not to respond${(has('rage') || has('dead'))!.where[0] ? ` (${(has('rage') || has('dead'))!.where[0]})` : ''}: check whether it is slow or disabled without saying why.`)
-    if (has('circling') || has('hunting') || has('hesitation')) out.push('People search the screen before acting: offer a short walkthrough of the workflow, or ask them in-app what they were looking for (Rescue queue → Send survey).')
-    if (has('idle')) out.push('Long idle stretches inside sessions: they may be waiting on something outside Reval (approvals, data). Ask the account team.')
-    if (has('failures')) out.push('Server calls fail or are slow for them: check the System page and the error tools for their sessions.')
-    return out.slice(0, 3)
+    const top = f[0]
+    if (!top) return []
+    const date = new Date(top.replays[0].day + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+    const actions: Record<MeasureKey, string> = {
+        errors: 'Review the error → correction → retry sequence', loops: 'Review the error → correction → retry sequence',
+        rage: 'Review the response after repeated clicks', dead: 'Review the response after clicks that do nothing',
+        hesitation: 'Review the moment before the pause', circling: 'Review the controls around the cursor circling',
+        hunting: 'Review the scrolling sequence', idle: 'Review the start of the idle stretch', failures: 'Review progress around the failed or slow call',
+    }
+    return [`${actions[top.measure]} in the ${date} replay.`]
 }
 
 /** Across all clients: where friction gathers (button or field), for "what should we fix first". */
@@ -270,4 +292,4 @@ export function frictionHotspots(opts: { days?: number; now?: number } = {}): { 
     }
     return [...m.values()].map((e) => ({ where: e.where, what: e.what, count: e.count, clients: e.clients.size })).sort((a, b) => b.clients - a.clients || b.count - a.count).slice(0, 15)
 }
-export const replayCoverage = () => tasksDb.prepare('SELECT count(*) AS sessions, count(DISTINCT client) AS clients, max(processed_at) AS last FROM replay_signals').get() as { sessions: number; clients: number; last: string | null }
+export const replayCoverage = () => tasksDb.prepare('SELECT count(*) AS sessions, count(DISTINCT client) AS clients, (SELECT max(at) FROM replay_analysis_runs) AS last FROM replay_signals').get() as { sessions: number; clients: number; last: string | null }
