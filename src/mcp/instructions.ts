@@ -1,5 +1,6 @@
 // Claude Code cuts instructions at 2,048 characters. Keep privacy first.
 import { appEvents } from '../core/appevents.ts'
+import { anonFor } from '../core/anonymise.ts'
 import { config, posthogMcpActive } from '../core/config.ts'
 import { P } from '../core/props.ts'
 import { surveyToolNames } from './surveytools.ts'
@@ -14,7 +15,9 @@ export function serverInstructions(withPosthog = posthogMcpActive(), surveyRole:
     const app = appEvents()?.app || 'the app'
     const surveys = surveyToolNames(surveyRole)
     const dashboards = dashboardToolNames(dashboardRole, surveyRole)
-    return `Replays are private: never call PostHog's session-recording-*, query-session-recordings-list or vision-* tools. Use get_replay_link; give the person the link, never view replay content.
+    // Client anonymisation (Admin → Client privacy for AI): codenames only.
+    const privacy = anonFor('lens') ? `Clients are known here only by codename (two words, e.g. Teal Wren). Never write a real client name or code, even if the person does: ask for the codename (Lens → Codenames).\n` : ''
+    return `${privacy}Replays are private: never call PostHog's session-recording-*, query-session-recordings-list or vision-* tools. Use get_replay_link; give the person the link, never view replay content.
 
 Lens (${config.mcp.name}) = ${app} clients/users, tasks and flows, trades, dialogs/buttons, sessions, Jira tickets, releases, client risk and app errors.
 ${withPosthog ? `Use PostHog's server (posthog) for generic analytics, trends, funnels, retention, insights, PostHog dashboards, flags, experiments, cohorts, annotations, actions, error issues, exports, SDK docs and raw SQL (execute-sql).

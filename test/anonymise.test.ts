@@ -286,6 +286,34 @@ describe('an admin\'s own choices', () => {
     })
 })
 
+describe('gaps closed', () => {
+    test('initials, typos, capitalised word-codes, session ids, signed clip links and rounded counts', () => {
+        A.setAnonymise({ on: true, codes: true, emails: true, round: false })
+        const k = cn('KWAMBE'), z = cn('QZX901'), b = cn('BETA')
+        A.syncClients([{ id: 'NQP9', name: 'Nimbus Quarry Partners' }])
+        const nq = cn('NQP9')
+        assert.equal(A.hideClients('NQP asked again').text, `${nq} asked again`, 'initials of a long name')
+        assert.equal(A.hideClients('Nqp is not them').text, 'Nqp is not them', 'initials only in capitals')
+        assert.ok(k)
+        assert.equal(A.hideClients('Zorbalx and Zorblaxx and Zrblax').text, `${z} and ${z} and ${z}`, 'one letter off')
+        assert.equal(A.hideClients('Betamax and Beta and beta').text, `${b} and ${b} and beta`, 'a word-code capitalised counts')
+        const sid = '01a19b90-8c82-7185-ba5a-8333dd59c200'
+        A.syncClients([{ id: '8c82', name: 'Hexy Corp' }])
+        assert.equal(A.hideClients(`session ${sid}`).text, `session ${sid}`, 'a session id never changes')
+        assert.equal(A.hideClients('https://lens.x/clips/01a1_0-30.mp4?exp=99&sig=abcdef').text, 'https://lens.x/replays?clip=01a1_0-30.mp4', 'no open clip links')
+        assert.equal(A.roundCounts('```json\n{"attempts":148,"users":1234,"day":"2026-01-01","done_rate":87,"version":2345}\n```'), '```json\n{\n  "attempts": 150,\n  "users": 1200,\n  "day": "2026-01-01",\n  "done_rate": 87,\n  "version": 2345\n}\n```')
+        A.setAnonymise({ round: true })
+        const r = guardResponse({ result: { content: [{ type: 'text', text: 'Result\n```json\n{"events":9876}\n```' }] } }) as any
+        assert.match(r.result.content[0].text, /"events": 9900/)
+        A.setAnonymise({ round: false, on: false })
+    })
+    test('instructions tell the AI to use codenames only while it is on', async () => {
+        const { serverInstructions } = await import('../src/mcp/instructions.ts')
+        A.setAnonymise({ on: true }); assert.match(serverInstructions(false), /known here only by codename/)
+        A.setAnonymise({ on: false }); assert.doesNotMatch(serverInstructions(false), /codename/)
+    })
+})
+
 describe('web links', () => {
     test('a codename slug in ?client= opens the real client for signed-in people', async () => {
         const { codenameRedirect } = await import('../src/service/privacy.ts')

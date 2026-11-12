@@ -251,7 +251,7 @@ let token = ''
 
 // ---------------------------------------------------------------- 8. pagination and System
 {
-    const p = admin.page; await p.goto(LENS + '/replays/admin', { waitUntil: 'networkidle0' }); await wait(2000)
+    const p = admin.page; await p.goto(LENS + '/replays/admin#activity', { waitUntil: 'networkidle0' }); await wait(2000)
     const pagers = await p.evaluate(() => [...document.querySelectorAll('.pager:not([hidden])')].map((x: any) => x.innerText.replace(/\s+/g, ' ')))
     ok('Admin: activity paginated', pagers.some((t) => /activity/.test(t)), pagers.join(' | '))
     const next = await p.$('.pager:not([hidden]) button[aria-label="Next page"]')

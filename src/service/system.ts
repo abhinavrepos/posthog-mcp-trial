@@ -77,7 +77,7 @@ export async function handleSystem(req: IncomingMessage, res: ServerResponse, ur
 export function systemHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>System · ${APP_NAME}</title><style>${PAGE_CSS()}
 :root{--act:#2a78d6;--grid:#e1e0d9;--axis:#c3c2b7;--good:#067647;--good-bg:#e7f5ec;--warn:#9a5b00;--warn-bg:#fff4dd;--down:#b42318;--down-bg:#fde9e7;--info-bg:#eef2ff}
-main.wide{max-width:1180px}
+
 .banner{display:flex;gap:14px;align-items:center;padding:14px 18px;border-radius:12px;margin-bottom:14px;border:1px solid var(--line);background:var(--card)}
 .banner h1{margin:0;font-size:20px}.banner p{margin:2px 0 0;color:var(--muted);font-size:13px}
 .banner .big{font-size:20px;font-weight:700;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;flex:none;color:#fff;background:var(--muted)}
@@ -96,12 +96,12 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}td.w{overflow-wrap:
 @media (max-width:640px){.tools input{max-width:none}th.r,td.r{display:none}td small{display:block}.st{font-size:12px;gap:3px}.svc .st{font-size:12.5px;gap:5px}table{font-size:13px}th,td{padding:7px 4px}}
 details.nums summary{cursor:pointer;color:var(--muted);font-size:13px;margin-top:6px}details.nums table{font-size:13px}
 .tile.problem{border-color:var(--down);background:var(--down-bg)}.tile.problem small{color:var(--down)}
-#problems:empty{display:none}.card{overflow-wrap:anywhere}main.wide{min-width:0}.table-wrap{overflow:visible}table{width:100%;table-layout:fixed}.containers-table th:first-child{width:72px}.containers-table th:nth-child(2){width:26%}.containers-table th.r{width:22%}td,th{overflow-wrap:anywhere}
+#problems:empty{display:none}.card{overflow-wrap:anywhere}main.wide{min-width:0}table{width:100%;table-layout:fixed}.containers-table th:first-child{width:72px}.containers-table th:nth-child(2){width:26%}.containers-table th.r{width:22%}td,th{overflow-wrap:anywhere}
 .spark{display:block;width:90px;max-width:100%;height:24px}.container-detail{font-size:12px;color:var(--muted)}.container-detail p{margin:4px 0}.container-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
 select{max-width:100%;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)}
 @media(max-width:640px){.containers-table th:nth-child(2){width:42%}.svc{grid-template-columns:minmax(0,1fr) auto}.svc .d{grid-column:1/-1;grid-row:2;text-align:left}.containers-table th:last-child,.containers-table td:last-child{display:none}.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.tile b{font-size:21px}.banner{padding:12px}.card{padding:12px}.containers-table th:first-child{width:65px}.tools input{width:100%;min-width:0}}
 
-:root{--act:var(--muted)}main .ghost{border-color:transparent;color:var(--ink)}main .card{border:0;border-radius:0;background:transparent;padding:20px 0;margin-bottom:16px;border-bottom:1px solid var(--line)}
+:root{--act:var(--muted)}main .ghost{border-color:transparent;color:var(--ink)}
 .banner{border:0;border-radius:0;background:transparent;padding:16px 0 24px;align-items:flex-start}.banner.ok,.banner.warn,.banner.down{background:transparent}.banner .big{width:28px;height:28px;font-size:16px}.banner h1{font-size:22px}.banner>div{min-width:0}
 .tiles{gap:0 24px;margin:20px 0}.tile{background:transparent;border:0;border-radius:0;padding:14px 0;border-bottom:1px solid var(--line)}.tile.problem{background:transparent;border-color:var(--down)}.tile b{font-size:23px}.tile span{margin-bottom:4px}
 .section-details{border-bottom:1px solid var(--line);padding:20px 0}.section-details>summary{font-size:17px;font-weight:600;cursor:pointer}.section-details[open]>summary{margin-bottom:20px}.section-details .card{border:0;margin:0}.charts,.split{gap:16px 32px}details summary{cursor:pointer}.tools{gap:16px}.tools select{width:auto;min-width:0}.svc{padding:10px 0}.table-wrap{min-width:0}

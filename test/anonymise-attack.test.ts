@@ -20,7 +20,7 @@ process.env.TRIAGE_DB = join(dir, 'triage.db')
 process.env.TASKS_DB = join(dir, 'tasks.db')
 process.env.POSTHOG_PROJECT_ID ||= '1'
 process.env.POSTHOG_PERSONAL_API_KEY ||= 'phx_test'
-const { db } = await import('../src/core/db.ts')
+const DB = await import('../src/core/db.ts'); const { db } = DB
 const A = await import('../src/core/anonymise.ts')
 const G = await import('../src/mcp/anonymise.ts')
 const P = await import('../src/mcp/posthog-proxy.ts')
@@ -163,3 +163,160 @@ test('same transport observes activation; rename and roster invalidation',async(
  } finally {await client.close();await server.close()}
 })
 test('reversed/hex strings are outside best-effort filter guarantees',t=>t.skip('Filter mode explicitly documents arbitrary SQL re-encoding as unsupported; block mode is tested instead.'))
+
+// Round 2: keep each fixture/settings change local; earlier rounds rename ZX901.
+const round2Defaults = { on: true, lens: true, posthog: 'block', triage: true, codes: true, emails: true, message: '', round: false } as const
+function round2Test(name: string, run: () => void | Promise<void>) {
+ test(`round 2: ${name}`, async () => {
+  const before = A.anonSettings()
+  try { A.setAnonymise(round2Defaults); await run() } finally { A.setAnonymise(before) }
+ })
+}
+function round2Fixture() { A.syncClients([{ id: 'RTK91', name: 'Kwambe Fintrust Holdings' }, { id: 'RTN92', name: 'Northwind Treasury' }, { id: 'BETA', name: 'Zorquill Financial' }]) }
+for (const input of ['Nortwind', 'Northwnid', 'Northwiind', 'NorthwXnd']) round2Test(`one-edit spelling ${input}`, () => {
+ round2Fixture(); hidden(input, G.guardResponse(input))
+ assert.ok(G.guardRequest(call({ note: input })).answer, `one-edit input=${input} must be refused`)
+})
+for (const [input, reason] of [
+ ['Nxrthwxnd', 'Two substitutions exceed the documented one-typo limit.'],
+ ['Nor.thwind', 'Punctuation inside a word is outside letter-only fuzzy token matching.'],
+ ['North-wind', 'Splitting one word is outside the documented word-level typo matcher.'],
+ ['North wind', 'Splitting one word into two is outside the documented word-level typo matcher.'],
+ ['N0rthw1nd', 'Two leetspeak substitutions exceed the one-typo limit.'],
+ ['K.F.H.', 'Automatic initials are documented as contiguous capitals (KFH); dotted aliases require configuration.'],
+ ['K F H', 'Automatic initials are documented as contiguous capitals (KFH); spaced aliases require configuration.'],
+] as const) test(`round 2 known limit: ${input}`, t => t.skip(reason))
+round2Test('capital initials and Title-case common codes', () => {
+ round2Fixture()
+ for (const input of ['KFH', 'BETA', 'Beta']) hidden(input, G.guardResponse(input))
+ assert.equal(G.guardResponse('beta release'), 'beta release')
+})
+round2Test('codes off still hides names, initials and typos', () => {
+ round2Fixture(); A.setAnonymise({ codes: false })
+ assert.equal(G.guardResponse('RTK91'), 'RTK91')
+ assert.equal(G.guardRequest(call({ client: 'RTK91' })).msg?.params.arguments.client, 'RTK91')
+ for (const input of ['Kwambe Fintrust Holdings', 'KFH', 'Northwnid']) hidden(input, G.guardResponse(input))
+})
+round2Test('emails off preserves email and re-enabling invalidates cached matcher', () => {
+ const input = 'person@outside-example.test'
+ A.setAnonymise({ emails: false }); assert.equal(G.guardResponse(input), input)
+ assert.ok(G.guardRequest(call({ note: input })).msg)
+ A.setAnonymise({ emails: true }); hidden(input, G.guardResponse(input))
+ assert.ok(G.guardRequest(call({ note: input })).answer)
+})
+round2Test('lens off leaves PostHog block and triage active', () => {
+ A.setAnonymise({ lens: false, posthog: 'block' })
+ assert.deepEqual(['lens','posthog','triage'].map(p => A.anonFor(p as 'lens' | 'posthog' | 'triage')), [false,true,true])
+ assert.equal(G.guardResponse('ZX901'), 'ZX901')
+ assert.ok(P.anonRefusal(exec('call execute-sql {}')).refusal)
+ hidden('ZX901', G.guardResponse('ZX901', 'posthog_cleaned'))
+})
+for (const method of ['tools/call', 'prompts/get']) round2Test(`custom refusal does not leak names through ${method}`, () => {
+ const input = 'Contact Quenlark Acme Holdings Ltd for access.'
+ // Saving a message that names a client is refused; one stored before that rule is cleaned when sent.
+ assert.throws(() => A.setAnonymise({ message: input }), /names a client/)
+ const { setSetting } = DB
+ setSetting('anon', { ...A.anonSettings(), message: input }); A.forgetMatcher()
+ const request = { ...call({ client: 'ZQX' }), method }
+ const output = G.guardRequest(request).answer
+ assert.ok(output, 'refusal path reached')
+ hidden(input, output, 'Quenlark Acme Holdings Ltd')
+ setSetting('anon', { ...A.anonSettings(), message: '' }); A.forgetMatcher()
+})
+round2Test('UUID parts remain unchanged, standalone hex client code is hidden', () => {
+ A.syncClients([{ id: 'deadbeef', name: 'Hexquartz Treasury' }])
+ const uuid = 'deadbeef-1234-4567-89ab-0123456789ab'
+ assert.equal(G.guardResponse(uuid), uuid)
+ hidden('deadbeef', G.guardResponse('deadbeef'))
+})
+test('round 2 known limit: UUID-shaped code smuggling', t => t.skip('UUIDs are explicitly never altered, even when a hex component equals a client code; changing this would violate UUID protection.'))
+const jsonFence = (value: unknown) => '```json\n' + JSON.stringify(value) + '\n```'
+const fromFence = (text: string) => JSON.parse(text.slice(8, text.lastIndexOf('\n```')))
+round2Test('JSON camelCase count keys and deeply nested arrays', () => {
+ const input = { eventCount: 1234, users: [[1234, 5678]], rows: [[{ sessionCount: 9876 }]], userId: 1234, eventRate: 1234 }
+ assert.deepEqual(fromFence(A.roundCounts(jsonFence(input))), { eventCount: 1200, users: [[1200,5700]], rows: [[{sessionCount:9900}]], userId:1234,eventRate:1234 })
+})
+for (const [input, reason] of [
+ ['There were 1234 events.', 'Prose counts are explicitly outside JSON-block rounding.'],
+ [jsonFence({eventCount:'1234'}), 'Numeric strings are strings, outside numeric count rounding.'],
+] as const) test(`round 2 known rounding limit: ${input}`, t => t.skip(reason))
+round2Test('round switch changes response JSON counts immediately', () => {
+ const input = { content: [{ type: 'text', text: jsonFence({ eventCount:1234 }) }] }
+ assert.equal(G.guardResponse(input).content[0].text, input.content[0].text)
+ A.setAnonymise({ round:true })
+ assert.equal(fromFence(G.guardResponse(input).content[0].text).eventCount,1200)
+})
+round2Test('structured numeric arrays obey the same count policy as JSON fences', () => {
+ A.setAnonymise({ round:true })
+ const input = { users:[[1234]], eventCount:1234 }
+ const output = G.guardResponse(input)
+ assert.deepEqual(output, {users:[[1200]],eventCount:1200}, `rounding bypass input=${JSON.stringify(input)} output=${JSON.stringify(output)}`)
+})
+round2Test('structured counts include errors and hits, like JSON fences', () => {
+ A.setAnonymise({ round:true })
+ const input = { errors:1234, hits:5678 }
+ const output = G.guardResponse(input)
+ assert.deepEqual(output, {errors:1200,hits:5700}, `rounding bypass input=${JSON.stringify(input)} output=${JSON.stringify(output)}`)
+})
+// Generate cryptographically valid URLs, then change only URL syntax accepted by the real verifier.
+for (const variant of ['canonical', 'query order', 'extra parameter', 'encoded filename', 'encoded query keys', 'relative'] as const) round2Test(`signed clip URL ${variant}`, async () => {
+ const L = await import('../src/core/links.ts')
+ const secret = 'round-two-test-secret'
+ const { createHmac } = await import('node:crypto')
+ const name = 'attack_0-10.mp4'
+ const exp = String(Math.floor(Date.now()/1000)+3600)
+ const sig = createHmac('sha256',secret).update(`${name}.${exp}`).digest('base64url')
+ const original = `https://lens.example/clips/${name}?exp=${exp}&sig=${sig}`
+ const url = new URL(original, 'https://lens.example')
+ assert.ok(L.verifyClipLink(name,url.searchParams.get('exp'),url.searchParams.get('sig'),secret))
+ if (variant === 'query order') url.search = `?sig=${url.searchParams.get('sig')}&exp=${url.searchParams.get('exp')}`
+ if (variant === 'extra parameter') url.search = '?download=1&' + url.search.slice(1)
+ let input = url.href
+ if (variant === 'encoded filename') input = input.replace(name,'%61ttack_0-10.mp4')
+ if (variant === 'encoded query keys') input = input.replace('exp=','%65xp=').replace('sig=','%73ig=')
+ if (variant === 'relative') input = url.pathname + url.search
+ const parsed = new URL(input, 'https://lens.example')
+ assert.ok(L.verifyClipLink(decodeURIComponent(parsed.pathname.split('/').at(-1)!),parsed.searchParams.get('exp'),parsed.searchParams.get('sig'),secret))
+ const output = G.guardResponse(input)
+ assert.ok(!output.includes('/clips/'), `signed clip leak input=${input} output=${output}`)
+ assert.ok(output.includes('/replays?clip='), `sign-in link input=${input} output=${output}`)
+ assert.equal(output, `${variant === 'relative' ? '' : 'https://lens.example'}/replays?clip=${name}`, `rewrite must consume the entire signed URL input=${input} output=${output}`)
+})
+round2Test('unknown-client hook masks nested client fields even if callback throws', () => {
+ let calls = 0
+ A.whenUnknownClient(() => { calls++; throw new Error('refresh unavailable') })
+ try {
+  assert.deepEqual(A.hideClientsDeep({ clients:[['UNLISTED_ROUND_TWO']] }).value, {clients:[['[client]']]})
+  assert.equal(calls,1)
+ } finally { A.whenUnknownClient(() => {}) }
+})
+round2Test('MCP instructions put privacy first only when Lens coverage is on', async () => {
+ const { serverInstructions } = await import('../src/mcp/instructions.ts')
+ assert.ok(serverInstructions(false).startsWith('Clients are known here only by codename'))
+ A.setAnonymise({ lens:false })
+ assert.ok(!serverInstructions(false).includes('Clients are known here only by codename'))
+})
+round2Test('false-positive observations (notes, not failures)', () => {
+ round2Fixture()
+ for (const input of ['Beta testing is complete.', 'A north wind is forecast.', 'The northwinds are cold.', 'The KFH protocol is enabled.']) {
+  const output = G.guardResponse(input)
+  if (output !== input) console.log(`ROUND2_FALSE_POSITIVE input=${JSON.stringify(input)} output=${JSON.stringify(output)}`)
+ }
+})
+// Last: include cold matcher construction, exclude roster provisioning; no earlier case pays for this roster.
+round2Test('200 KB answer with 2,000 clients cleans within 1.5 seconds', () => {
+ const roster = Array.from({length:2000}, (_,i) => {
+  let n=i, suffix=''; do { suffix=String.fromCharCode(97+n%26)+suffix; n=Math.floor(n/26) } while(n)
+  return {id:`PERF${i.toString().padStart(4,'0')}`,name:`Zyvq${suffix.padStart(4,'a')} Treasury`}
+ })
+ A.syncClients(roster)
+ const lead = roster.map(c => c.id).join(' ') + '\n'
+ const input = lead + 'ordinary telemetry measurements completed successfully. '.repeat(Math.ceil((204800-lead.length)/55)).slice(0,204800-lead.length)
+ assert.equal(Buffer.byteLength(input),204800)
+ const start=performance.now()
+ const output=G.guardResponse(input)
+ const elapsed=performance.now()-start
+ console.log(`ROUND2_PERFORMANCE bytes=${input.length} clients=${roster.length} elapsed_ms=${elapsed.toFixed(1)}`)
+ assert.ok(!/PERF\d{4}/.test(output), 'all 2,000 client codes must be cleaned')
+ assert.ok(elapsed<1500, `200 KB / 2,000 clients took ${elapsed.toFixed(1)}ms; budget 1500ms`)
+})

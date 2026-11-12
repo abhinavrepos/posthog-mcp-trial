@@ -23,8 +23,9 @@ export interface AnonSettings {
     codes: boolean       // hide client codes too (names are always hidden)
     emails: boolean      // hide client users' email addresses
     message: string      // what the AI is told when it asks with a client name ('' = the default)
+    round: boolean       // round counts in answers (so exact sizes cannot point to a client)
 }
-const DEFAULTS: AnonSettings = { on: false, lens: true, posthog: 'block', triage: true, codes: true, emails: true, message: '' }
+const DEFAULTS: AnonSettings = { on: false, lens: true, posthog: 'block', triage: true, codes: true, emails: true, message: '', round: false }
 export function anonSettings(): AnonSettings {
     const s = { ...DEFAULTS, ...getSetting<Partial<AnonSettings>>('anon', {}) }
     // Earlier separate keys, kept working.
@@ -41,8 +42,8 @@ export const anonFor = (path: 'lens' | 'posthog' | 'triage'): boolean => {
 }
 export function setAnonymise(p: Partial<Record<keyof AnonSettings, unknown>>): AnonSettings {
     const next = { ...anonSettings() }
-    const bool = (k: 'on' | 'lens' | 'triage' | 'codes' | 'emails') => { if (p[k] !== undefined) { if (typeof p[k] !== 'boolean') throw new AnonInputError(`${k} is true or false.`); next[k] = p[k] as boolean } }
-    for (const k of ['on', 'lens', 'triage', 'codes', 'emails'] as const) bool(k)
+    const bool = (k: 'on' | 'lens' | 'triage' | 'codes' | 'emails' | 'round') => { if (p[k] !== undefined) { if (typeof p[k] !== 'boolean') throw new AnonInputError(`${k} is true or false.`); next[k] = p[k] as boolean } }
+    for (const k of ['on', 'lens', 'triage', 'codes', 'emails', 'round'] as const) bool(k)
     if (p.posthog !== undefined) {
         if (!['block', 'filter', 'off'].includes(String(p.posthog))) throw new AnonInputError('PostHog is block, filter or off.')
         next.posthog = p.posthog as PosthogMode
@@ -50,6 +51,7 @@ export function setAnonymise(p: Partial<Record<keyof AnonSettings, unknown>>): A
     if (p.message !== undefined) {
         const m = String(p.message).trim()
         if (m.length > 500) throw new AnonInputError('The message to the AI is at most 500 characters.')
+        if (m && namesClient(m)) throw new AnonInputError('The message to the AI names a client. Use a codename or no client at all.')
         next.message = m
     }
     setSetting('anon', next)
@@ -58,7 +60,7 @@ export function setAnonymise(p: Partial<Record<keyof AnonSettings, unknown>>): A
 }
 const DEFAULT_REFUSAL = 'Client names and client codes are hidden from AI here (client anonymisation is on in Lens). Use the client\'s codename, such as "Teal Wren": the person finds it in Lens, on the Codenames page (/replays/codenames). Do not ask the person to type client names or codes in chat.'
 /** The refusal an AI gets for a client name or code: the same for known and unknown names. */
-export const refusalText = (): string => anonSettings().message || DEFAULT_REFUSAL
+export const refusalText = (): string => (anonSettings().message ? hideClients(anonSettings().message).text : DEFAULT_REFUSAL)
 export class AnonInputError extends Error {}
 
 // ------------------------------------------------------------------ codenames
@@ -189,7 +191,7 @@ export function setCodename(client: string, p: { codename?: string; aliases?: st
 // Before matching, look-alike letters are made plain: full-width (ＡＣＭＥ), zero-width spaces and soft
 // hyphens, and Cyrillic or Greek letters that look Latin. Email addresses of anyone but Lens's own people are
 // hidden too: a domain names its company.
-interface Matcher { names?: RegExp; codesAnyCase?: RegExp; codesExact?: RegExp; byKey: Map<string, Row>; codenames: Map<string, Row>; staff: Set<string>; emails: boolean }
+interface Matcher { names?: RegExp; codesAnyCase?: RegExp; codesExact?: RegExp; byKey: Map<string, Row>; codenames: Map<string, Row>; staff: Set<string>; emails: boolean; fuzzy: Map<string, Row>; deletions: Map<string, string[]> }
 /** Email domains of Lens's own people (admins, PMs): their addresses may show; everyone else's may not. */
 function staffDomains(): Set<string> {
     const out = new Set<string>()
@@ -240,11 +242,44 @@ const keyOf = (s: string) => plain(s.replace(/%([0-9a-fA-F]{2})/g, (_, h) => Str
 const COMMON = new Set(['alpha', 'beta', 'gamma', 'delta', 'omega', 'test', 'demo', 'main', 'core', 'base', 'open', 'data', 'bank', 'fund', 'cash', 'risk', 'trade', 'deal', 'swap', 'loan', 'bond', 'live', 'prod', 'user', 'admin', 'team', 'home', 'next', 'new', 'old', 'one', 'two', 'all', 'any', 'and', 'the', 'for', 'not', 'yes', 'no', 'ok', 'id', 'api', 'app', 'web', 'acc', 'ref', 'tmp', 'dev'])
 const shortCode = (c: string) => /^[A-Za-z]+$/.test(c) && COMMON.has(c.toLowerCase())
 
+// Words that say what kind of company it is, not which one: never used on their own.
+const GENERIC = new Set(['treasury', 'industries', 'industrial', 'energy', 'capital', 'holdings', 'holding', 'financial', 'finance', 'international', 'global', 'systems', 'solutions', 'services', 'partners', 'management', 'group', 'limited', 'company', 'corporation', 'technologies', 'technology', 'investments', 'investment', 'securities', 'insurance', 'banking', 'markets', 'trading', 'national', 'general', 'american', 'european', 'canadian'])
+const STOP = new Set(['and', 'of', 'the', 'for', 'de', 'la', 'le', 'du', 'des', 'et'])
+/** Initials of a name of three or more words, in capitals (KFH). */
+function acronyms(name: string): string[] {
+    const words = plain(name).split(/[^\p{L}\p{N}]+/u).filter((w) => w && !STOP.has(w.toLowerCase()))
+    if (words.length < 3) return []
+    const a = words.map((w) => w[0].toUpperCase()).join('')
+    return a.length >= 3 && /^[A-Z]+$/.test(a) && !COMMON.has(a.toLowerCase()) ? [a] : []
+}
+/** Words of 6 letters or more that point to one company (not "Treasury"): matched with one typo too. */
+function distinctive(names: string[]): string[] {
+    const out = new Set<string>()
+    for (const n of names) for (const w of plain(n).toLowerCase().split(/[^\p{L}]+/u)) if (w.length >= 6 && !GENERIC.has(w) && !COMMON.has(w)) out.add(w)
+    return [...out]
+}
+/** Each word under itself and every one-letter deletion: a word one typo away shares a key with it. */
+const dels = (w: string) => { const out = [w]; for (let i = 0; i < w.length; i++) out.push(w.slice(0, i) + w.slice(i + 1)); return out }
+function deletionIndex(words: string[]): Map<string, string[]> {
+    const idx = new Map<string, string[]>()
+    for (const w of words) for (const k of dels(w)) { const l = idx.get(k); if (l) { if (!l.includes(w)) l.push(w) } else idx.set(k, [w]) }
+    return idx
+}
+/** Optimal-string-alignment distance, stopping early above 1. */
+function withinOne(a: string, b: string): boolean {
+    if (Math.abs(a.length - b.length) > 1) return false
+    let i = 0
+    while (i < a.length && i < b.length && a[i] === b[i]) i++
+    if (i === a.length && i === b.length) return true
+    const rest = (x: number, y: number) => a.slice(x) === b.slice(y)
+    return rest(i + 1, i + 1) || rest(i + 1, i) || rest(i, i + 1) || (a[i] === b[i + 1] && a[i + 1] === b[i] && rest(i + 2, i + 2))
+}
+
 function matcher(): Matcher {
     if (cache?.version === version) return cache.m
     const rows = all<Row>('SELECT * FROM client_codenames')
     const settings = anonSettings()
-    const byKey = new Map<string, Row>(), codenames = new Map<string, Row>()
+    const byKey = new Map<string, Row>(), codenames = new Map<string, Row>(), fuzzy = new Map<string, Row>()
     const names: string[] = [], anyCase: string[] = [], exact: string[] = []
     for (const r of rows) {
         codenames.set(r.codename.toLowerCase(), r); codenames.set(slug(r.codename), r)
@@ -253,8 +288,16 @@ function matcher(): Matcher {
             if (!pattern) continue
             byKey.set('n:' + keyOf(n), r); byKey.set('n:' + keyOf(n.replace(/&/g, ' ')), r); names.push(pattern)
         }
+        // Initials of a long name, in capitals: "Kwambe Fintrust Holdings" is also KFH.
+        for (const a of acronyms(r.name)) { byKey.set('x:' + a, r); exact.push(esc(a)) }
+        // Distinctive words of the name, for misspellings ("Nortwind").
+        for (const w of distinctive([r.name, ...parseAliases(r.aliases)])) if (!fuzzy.has(w)) fuzzy.set(w, r)
         if (!settings.codes) continue
-        if (shortCode(r.client)) { byKey.set('x:' + r.client, r); exact.push(esc(r.client)) }
+        if (shortCode(r.client)) {
+            // A code that is also a word: as written, or capitalised (Beta), never in lower case.
+            const title = r.client[0].toUpperCase() + r.client.slice(1).toLowerCase()
+            for (const c of new Set([r.client, title])) { byKey.set('x:' + c, r); exact.push(esc(c)) }
+        }
         else { byKey.set('c:' + r.client.toLowerCase(), r); anyCase.push(esc(r.client)) }
     }
     const longest = (a: string[]) => [...new Set(a)].sort((x, y) => y.length - x.length).join('|')
@@ -263,7 +306,7 @@ function matcher(): Matcher {
         names: names.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${longest(names)})(?![\\p{L}\\p{N}])`, 'giu') : undefined,
         codesAnyCase: anyCase.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${longest(anyCase)})(?![\\p{L}\\p{N}])`, 'giu') : undefined,
         codesExact: exact.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${longest(exact)})(?![\\p{L}\\p{N}])`, 'gu') : undefined,
-        staff: staffDomains(), emails: settings.emails,
+        staff: staffDomains(), emails: settings.emails, fuzzy, deletions: deletionIndex([...fuzzy.keys()]),
     }
     cache = { version, m }
     return m
@@ -279,7 +322,20 @@ export function hideClients(text: string): { text: string; n: number } {
     const m = matcher()
     let n = 0
     text = plain(text)
+    // Links that open a clip without signing in become sign-in links.
+    text = text.replace(/((?:https?:\/\/[^\s"'<>\/]+)?)\/clips\/([^\s"'<>?#]+)\?([^\s"'<>#]*)/g, (hit, base: string, name: string, query: string) => {
+        let q: URLSearchParams
+        try { q = new URLSearchParams(decodeURIComponent(query)) } catch { q = new URLSearchParams(query) }
+        if (!q.has('sig') && !q.has('exp')) return hit
+        n++
+        let file = name
+        try { file = decodeURIComponent(name) } catch { /* keep as written */ }
+        return `${base}/replays?clip=${encodeURIComponent(file)}`
+    })
     if (m.emails) text = text.replace(EMAIL, (hit, domain: string) => (m.staff.has(domain.toLowerCase()) ? hit : (n++, '[email hidden]')))
+    // Session and other UUIDs stay exactly as they are (a part of one can look like a code).
+    const kept: string[] = []
+    text = text.replace(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g, (u) => `\u0000${kept.push(u) - 1}\u0000`)
     const swap = (inUrl: boolean) => (s: string) => {
         let out = s
         const sub = (re: RegExp | undefined, key: (x: string) => string) => {
@@ -294,12 +350,23 @@ export function hideClients(text: string): { text: string; n: number } {
         sub(m.names, (x) => { const k = keyOf(x); for (const c of [k, k.replace(/es$/, ''), k.replace(/s$/, '')]) if (m.byKey.has('n:' + c)) return 'n:' + c; return 'n:' + k })
         sub(m.codesAnyCase, (x) => 'c:' + x.toLowerCase())
         sub(m.codesExact, (x) => 'x:' + x)
+        // Misspelt distinctive words, one letter off ("Nortwind", "Northwnid").
+        if (m.fuzzy.size) out = out.replace(/(?<![\p{L}\p{N}])\p{L}{5,}(?![\p{L}\p{N}])/gu, (word) => {
+            const w = word.toLowerCase()
+            if (m.fuzzy.has(w)) { n++; const r = m.fuzzy.get(w)!; return inUrl ? encodeURIComponent(slug(r.codename)) : r.codename }
+            for (const k of dels(w)) for (const d of m.deletions.get(k) || []) if (withinOne(w, d)) { const r = m.fuzzy.get(d)!; n++; return inUrl ? encodeURIComponent(slug(r.codename)) : r.codename }
+            return word
+        })
         return out
     }
     const inUrls = text.replace(URLISH, swap(true))
-    return { text: swap(false)(inUrls), n }
+    return { text: swap(false)(inUrls).replace(/\u0000(\d+)\u0000/g, (_, i) => kept[+i]), n }
 }
 /** Same, through any JSON value: strings and object keys. */
+// A client field held a client Lens has no codename for yet: look for new clients now (src/core/anonroster.ts).
+let onUnknown: (() => void) | undefined
+export const whenUnknownClient = (fn: () => void) => { onUnknown = fn }
+function unknownClientSeen() { try { onUnknown?.() } catch { /* never breaks an answer */ } }
 // Fields that hold a client: a value the matcher does not know (a client Lens has not listed yet) is masked.
 const CLIENT_FIELD = /^(client|clients|client_?id|client_?ids|client_?code|client_?name|client_?names|clientId|clientName)$/i
 export function hideClientsDeep<T>(value: T): { value: T; n: number } {
@@ -307,7 +374,7 @@ export function hideClientsDeep<T>(value: T): { value: T; n: number } {
     const walk = (v: unknown, field = false): unknown => {
         if (typeof v === 'string') {
             const h = hideClients(v); n += h.n
-            if (field && h.n === 0 && v.trim() && !clientOfCodename(v) && (anonSettings().codes || !isClientCode(v.trim()))) { n++; return '[client]' }
+            if (field && h.n === 0 && v.trim() && !clientOfCodename(v) && (anonSettings().codes || !isClientCode(v.trim()))) { n++; unknownClientSeen(); return '[client]' }
             return h.text
         }
         if (Array.isArray(v)) return v.map((x) => walk(x, field))
@@ -319,6 +386,26 @@ export function hideClientsDeep<T>(value: T): { value: T; n: number } {
         return v
     }
     return { value: walk(value) as T, n }
+}
+// Counts in answers rounded to two significant figures (148 → 150, 1,234 → 1,200), when an admin chose it:
+// in JSON blocks of tool answers, for count-like fields only (never ids, dates, versions, rates or shares).
+const COUNT_KEY = /(count|events|users|people|sessions|attempts|opens|done|failed|total|clients|shown|answered|dismissed|actions|calls|errors|hits|visits|clicks|exports|^n$)/i
+const NOT_COUNT = /(id|day|date|time|version|percent|pct|rate|share|score|ratio|median|p\d\d|_ms$|_s$|seconds|minutes|hours|offset|start|end)/i
+export const round2 = (x: number) => (Number.isInteger(x) && Math.abs(x) >= 10 ? Number(x.toPrecision(2)) : x)
+const isCountKey = (k: string) => COUNT_KEY.test(k) && !NOT_COUNT.test(k)
+/** Counts rounded anywhere in a value: numbers under count-like keys (also inside arrays under them, and
+ * numeric strings), and JSON blocks inside texts. */
+export function roundValue(v: unknown, key = ''): unknown {
+    if (typeof v === 'number') return isCountKey(key) ? round2(v) : v
+    if (typeof v === 'string') return /^-?\d+$/.test(v) && isCountKey(key) ? String(round2(Number(v))) : v.includes('```json') ? roundCounts(v) : v
+    if (Array.isArray(v)) return v.map((x) => roundValue(x, key))
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, roundValue(x, k)]))
+    return v
+}
+export function roundCounts(text: string): string {
+    return text.replace(/```json\n([\s\S]*?)\n```/g, (block, body: string) => {
+        try { return '```json\n' + JSON.stringify(roundValue(JSON.parse(body)), null, 2) + '\n```' } catch { return block }
+    })
 }
 /** Does this text name a client (name, other name or code)? */
 export const namesClient = (text: string): boolean => hideClients(text).n > 0
