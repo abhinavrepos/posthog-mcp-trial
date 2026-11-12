@@ -7,6 +7,7 @@ import { startBriefingDelivery } from '../core/briefingdelivery.ts'
 //   GET  /status          recent jobs
 //   GET  /replays         the replay clip page (PostHog login), see replays.ts
 import { startPrewarm } from '../mcp/prewarm.ts'
+import { startReplaySignals } from '../core/experience.ts'
 import { existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { basename, join } from 'node:path'
@@ -290,6 +291,8 @@ pruneOldClips()
 if (appEvents()) startTaskHistory()
 if (appEvents()) startBriefingDelivery()
 if (appEvents() && config.features.lensMcp) startPrewarm()
+// Session replays read as structure only, into per-client experience signals (src/core/experience.ts).
+if (appEvents()) startReplaySignals()
 // Client codenames (src/core/anonymise.ts): every client Lens sees gets one, also while anonymisation is off, so
 // it is ready the moment an admin turns it on. Every five minutes; requests refresh it too while it is on.
 if (config.features.lensMcp) {

@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Reval Replay Lab</title>
+<style>
+body{margin:0;font:15px system-ui;color:#182b41;background:#edf1f5}header{background:#183c61;color:white;padding:20px}main{padding:24px}button,input{font:inherit;padding:9px;margin:6px}button{cursor:pointer}section{background:white;padding:20px;border:1px solid #ccd4df;margin:18px 0}label{display:inline-block}table{width:100%;border-collapse:collapse}td,th{padding:15px;border-bottom:1px solid #ccd4df;text-align:left}#editor{position:sticky;top:0;z-index:2}#banner{background:#ffe0df;padding:12px}.toast{position:fixed;bottom:15px;right:15px;background:#ddf4df;padding:15px}
+</style></head><body><header>REVAL 27.0.0 · Synthetic replay lab</header><main>
+<nav><button id="open-ir">IR Swap</button><button id="open-fx">FX Trade</button><button id="open-hedge">Hedge Designation</button></nav>
+<section id="editor" hidden data-dialog="trade"><h2 id="dialog-title">IR Swap</h2><form id="trade-form">
+<label>Notional<input id="notional" data-field="notional" name="notional"></label>
+<label>Rate<input id="rate" data-field="rate" name="rate"></label>
+<label>Trade Date<input id="trade-date" data-field="trade-date" name="trade-date" type="date" value="2026-11-12"></label>
+<label>Counterparty<input id="counterparty" data-field="counterparty" name="counterparty"></label>
+<button id="save" data-action="save" type="submit">Save</button><button id="dead" data-action="dead" type="button">Preview</button><button id="close" type="button">Close</button>
+</form><div id="messages"></div></section>
+<section><h2>Trades</h2><table><thead><tr><th>Trade</th><th>Notional</th><th>Cash</th><th>Rate</th><th>Counterparty</th></tr></thead><tbody id="trades"></tbody></table></section>
+</main><script>window.LAB_CONFIG = __LAB_CONFIG__;</script><script src="/app.js"></script></body></html>
