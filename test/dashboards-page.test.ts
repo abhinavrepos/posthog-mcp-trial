@@ -311,7 +311,7 @@ test('rescue period: a chosen period replaces explicit dates, custom keeps them,
     const custom = await request('?view=rescue&from=2026-01-01&to=2026-01-10&days=custom', viewer('share'), 'GET', undefined, spy as any)
     assert.deepEqual(seen.window, { from: '2026-01-01', to: '2026-01-10' })
     assert.match(custom.body, /<option value="custom" selected>2026-01-01 to 2026-01-10<\/option>/)
-    assert.match(custom.body, /<span class="rq-owner">pm@example\.com<\/span><span class="rq-status"><span class="badge info">contacted<\/span>/, 'each client is one row: owner and status in the summary')
+    assert.match(custom.body, /<span class="rq-owner">pm@example\.com<\/span><span class="rq-status"><span class="badge info">Contacted<\/span>/, 'each client is one row: owner and status in the summary')
     assert.doesNotMatch(custom.body, /snoozed client/, 'no snoozed line when none are hidden')
 })
 
@@ -383,7 +383,7 @@ test('client story and handover APIs follow dashboard view roles; accessible cha
             if(!path.startsWith('/api/')&&allowed) {
                 assert.match(r.body,/<h1>&lt;img src=x onerror=1&gt;<\/h1>/)
                 assert.match(r.body,/Weekly work counts \(chart alternative\)/);assert.match(r.body,/<svg[^>]+role="img"/)
-                assert.match(r.body,/<th scope="col">users<\/th>/);assert.match(r.body,/&lt;private&gt; note/)
+                assert.match(r.body,/<th class="num" scope="col">People<\/th>/);assert.match(r.body,/&lt;private&gt; note/)
                 assert.match(r.body,/Copy handover pack/);assert.match(r.body,/<pre id="handover-pack"/);assert.match(r.body,/&lt;escaped&gt; pack/)
                 assert.doesNotMatch(r.body,/<img|<private>|<escaped>/);scriptsParse(r.body)
             }

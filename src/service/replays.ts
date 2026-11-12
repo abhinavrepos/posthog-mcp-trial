@@ -607,20 +607,21 @@ nav a:hover{color:var(--ink);background:var(--chip)}nav a[aria-current=page]{col
 .acct-menu .who{font-weight:600;overflow-wrap:anywhere}.acct-menu button{margin-top:8px;justify-content:center}
 @media(min-width:900px){body:has(header.shell){padding-left:var(--side)}
 header.shell{position:fixed;inset:0 auto 0 0;width:var(--side);height:auto;flex-direction:column;align-items:stretch;gap:0;padding:20px 12px 12px;border-bottom:0;border-right:1px solid var(--line);background:var(--side-bg);z-index:20}
-header.shell .brand{padding:0 8px 24px}header.shell nav{flex-direction:column;flex:1;overflow-y:auto}header.shell .hdr{margin-top:auto;border-top:1px solid var(--line);padding-top:10px}
+header.shell .brand{gap:8px;padding:0 8px 24px}header.shell nav{flex-direction:column;flex:1;overflow-y:auto}header.shell .hdr{margin-top:auto;border-top:1px solid var(--line);padding-top:10px}
 header.shell .acct-menu{left:0;bottom:calc(100% + 6px)}.shell-only{display:block}}
 @media(max-width:899px){header.shell{position:sticky;top:0;z-index:20;gap:12px;padding:0 16px}header.shell nav{flex:1;overflow-x:auto;scrollbar-width:none}header.shell nav::-webkit-scrollbar{display:none}
 header.shell nav a{padding:6px 8px;gap:6px}header.shell .ico{width:16px;height:16px}.acct .who-short{display:none}header.shell .acct-menu{right:0;top:calc(100% + 8px)}}
 .muted{color:var(--muted)}.small{font-size:12.5px}main{max-width:var(--page);margin:0 auto;padding:32px 32px 64px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:20px 24px;margin-bottom:24px;min-width:0}.card .card{box-shadow:none;border:0;padding:0;background:transparent}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:20px 24px;margin-bottom:20px;min-width:0}.card .card{box-shadow:none;border:0;padding:0;background:transparent}
 h1{font-size:24px;line-height:32px;letter-spacing:-.02em;font-weight:650;margin:0 0 24px}h2{font-size:16px;line-height:24px;font-weight:600;margin:0 0 12px;letter-spacing:-.005em}h3{font-size:14px;line-height:20px;font-weight:600}
-p{overflow-wrap:anywhere}details>summary{cursor:pointer;color:var(--muted);font-size:13px}details[open]>summary{margin-bottom:12px}details>summary:hover{color:var(--ink)}
-label{display:block;font-size:12.5px;font-weight:500;color:var(--muted);margin-bottom:4px}
+p,.card,main{overflow-wrap:normal}.who,.rq-owner,code,pre,#share-msg,#pages{overflow-wrap:anywhere}.card>p{margin:0 0 12px}.card>p:last-child{margin-bottom:0}details>summary{cursor:pointer;color:var(--muted);font-size:13px;line-height:20px}details.card>summary{width:100%}details[open]>summary{margin-bottom:12px}details>summary:hover{color:var(--ink)}
+label{display:block;font-size:12px;line-height:16px;font-weight:500;color:var(--muted);margin-bottom:4px}
+label input:not([type=checkbox]):not([type=radio]),label select,label textarea{display:block;margin-top:6px}
 input,select,textarea{width:100%;font:inherit;color:inherit;background:var(--card);border:1px solid var(--control);border-radius:var(--r-sm);padding:7px 10px;min-height:36px;max-width:100%}
 input[type=checkbox],input[type=radio]{width:auto;min-height:0;accent-color:var(--accent)}textarea{resize:vertical}
 input:hover,select:hover,textarea:hover{border-color:var(--line-strong)}input:focus,select:focus,textarea:focus{border-color:var(--accent);outline:2px solid var(--accent-soft);outline-offset:0}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end}.row>div{flex:1;min-width:140px}
-[hidden]{display:none!important}button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;font:inherit;font-weight:600;font-size:13.5px;border-radius:var(--r-sm);padding:7px 14px;min-height:36px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);cursor:pointer;text-decoration:none;white-space:nowrap}
+[hidden]{display:none!important}button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;font:inherit;font-weight:500;font-size:13px;border-radius:var(--r-sm);padding:7px 12px;min-height:36px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);cursor:pointer;text-decoration:none;white-space:nowrap}
 button.secondary,.btn.secondary{background:var(--card);color:var(--ink);border-color:var(--line-strong)}button.ghost,.btn.ghost{background:transparent;color:var(--ink);border-color:transparent}
 button.ghost:hover,.btn.ghost:hover,button.secondary:hover,.btn.secondary:hover{background:var(--chip)}button.danger{background:var(--card);color:var(--err);border-color:var(--err)}
 button:hover:not(:disabled),.btn:hover{filter:brightness(.96)}button:disabled{opacity:.5;cursor:default}
@@ -632,16 +633,17 @@ button:hover:not(:disabled),.btn:hover{filter:brightness(.96)}button:disabled{op
 .badge.ok{background:var(--ok-bg);color:var(--ok)}.badge.warn{background:var(--warn-bg);color:var(--warn)}.badge.err{background:var(--err-bg);color:var(--err)}.badge.info{background:var(--accent-soft);color:var(--accent)}
 .err{color:var(--err)}.ok{color:var(--ok)}video{width:100%;border-radius:8px;background:#000;margin:8px 0}
 table{width:100%;border-collapse:collapse;font-size:13.5px;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
-th{color:#475467;font-weight:500;font-size:12px;background:var(--hover)}@media(prefers-color-scheme:dark){th{color:var(--muted)}}tbody tr:hover{background:var(--hover)}td{font-size:13px}
+th{color:var(--muted);font-weight:500;font-size:12px;line-height:18px;vertical-align:bottom;background:var(--hover)}tbody tr:hover{background:var(--hover)}td{font-size:13px;line-height:20px}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}td.empty-state{padding:24px;text-align:center;color:var(--muted)}
 .table-wrap{overflow-x:auto;max-width:100%;position:relative}th{overflow-wrap:normal!important;word-break:keep-all}main>*{min-width:0}.who{overflow-wrap:anywhere}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}main td a,main li a,main h3 a{color:var(--ink);font-weight:500}main td a:hover,main li a:hover,main h3 a:hover{color:var(--accent)}.hidden{display:none}code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12.5px}
 .narrow>*{max-width:860px}.narrow>.wide-ok{max-width:none}
 .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 0 20px;overflow-x:auto;scrollbar-width:none}.tabs::-webkit-scrollbar{display:none}
 .tabs [role=tab],.tabs .tab-link{background:transparent;border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--muted);font-weight:500;padding:8px 12px;min-height:0;text-decoration:none;white-space:nowrap;font-size:14px}
 .tabs [role=tab]:hover,.tabs .tab-link:hover{color:var(--ink);filter:none}.tabs [aria-selected=true]{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}.tabs .tab-link{margin-left:auto}
 .card>.table-wrap{margin-left:-24px;margin-right:-24px;width:auto;max-width:none}.card>.table-wrap :is(th,td):first-child{padding-left:24px}.card>.table-wrap :is(th,td):last-child{padding-right:24px}
-.page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:0 0 20px}.page-head h1{margin:0}.page-head p{margin:4px 0 0;color:var(--muted)}
+.page-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:0 0 20px}.page-head h1{margin:0}.page-head p{margin:4px 0 0;color:var(--muted)}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin:0 0 24px}.kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 20px;min-width:0;text-decoration:none;color:inherit;display:block}a.kpi:hover{border-color:var(--line-strong);text-decoration:none;background:var(--hover)}
-.kpi .l{display:flex;align-items:center;gap:6px;font-size:12px;line-height:16px;color:var(--muted);font-weight:500}.kpi .v{display:block;font-size:28px;line-height:32px;font-weight:650;letter-spacing:-.02em;margin-top:8px}.kpi .s{display:block;font-size:12px;line-height:16px;color:var(--faint);margin-top:4px}.kpi.crit .v{color:var(--err)}.kpi.warn .v{color:var(--warn)}.kpi .dot{width:8px;height:8px;border-radius:50%;background:currentColor}
+.kpi .l{display:flex;min-height:32px;align-items:flex-start;gap:6px;font-size:12px;line-height:16px;color:var(--muted);font-weight:500}.kpi .v{display:block;font-size:28px;line-height:32px;font-weight:650;letter-spacing:-.02em;margin-top:8px}.kpi .s{display:block;font-size:12px;line-height:16px;color:var(--faint);margin-top:4px}.kpi.crit .v{color:var(--err)}.kpi.warn .v{color:var(--warn)}.kpi .dot{flex:0 0 6px;width:6px;height:6px;margin-top:5px;border-radius:50%;background:currentColor}.kpi.crit .dot{color:var(--err)}.kpi.warn .dot{color:var(--warn)}.kpi:not(.crit):not(.warn) .dot{display:none}
+main .tabs a[aria-current="page"]{font-weight:600;border-bottom-color:var(--accent);color:var(--accent)}
 .alert{background:var(--err-bg);border:1px solid color-mix(in srgb,var(--err) 35%,transparent);color:var(--err);border-radius:var(--r);padding:10px 14px;margin:8px 0}
 .note{background:var(--warn-bg);border:1px solid color-mix(in srgb,var(--warn) 30%,transparent);color:var(--warn);border-radius:var(--r);padding:10px 14px;margin:8px 0}
 .player{position:relative;background:#000;border-radius:8px;overflow:hidden;margin:8px 0}.player video{display:block;width:100%;margin:0;border-radius:0}
@@ -659,7 +661,11 @@ th{color:#475467;font-weight:500;font-size:12px;background:var(--hover)}@media(p
 .pager{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px;font-size:12.5px;color:var(--muted)}.pager .pg{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .pager button,.pager .pg>span{padding:4px 10px;min-height:30px;white-space:nowrap;font-size:12.5px}.pager button{background:var(--card);color:var(--ink);border-color:var(--line-strong)}.pager select{width:auto;padding:3px 8px;min-height:30px}
 
-@media(max-width:600px){.card>.table-wrap{margin-left:-16px;margin-right:-16px}.card>.table-wrap :is(th,td):first-child{padding-left:16px}.card>.table-wrap :is(th,td):last-child{padding-right:16px}header.shell{height:auto;flex-wrap:wrap;padding:10px 16px;row-gap:8px}header.shell nav{order:3;flex-basis:100%}main{padding:20px 16px 48px}.card{padding:16px;margin-bottom:16px}.row>div{max-width:100%;min-width:min(140px,100%)}.cm{flex-wrap:wrap}.cm>div{min-width:0}.facts{grid-template-columns:repeat(2,minmax(0,1fr))}.pager .pg{gap:4px}.pager button,.pager .pg>span{padding:4px 7px}}
+@media(max-width:600px){header.shell{height:auto;flex-wrap:wrap;padding:10px 16px;row-gap:8px}header.shell nav{order:3;flex-basis:100%}main{padding:20px 16px 48px}.row>div{max-width:100%;min-width:min(140px,100%)}.cm{flex-wrap:wrap}.cm>div{min-width:0}.facts{grid-template-columns:repeat(2,minmax(0,1fr))}.pager .pg{gap:4px}.pager button,.pager .pg>span{padding:4px 7px}}
+main.login-page{width:min(440px,calc(100% - 32px));max-width:none;padding:0;margin:64px auto}.login-page>.card{padding:28px;margin:0}.login-page h1{font-size:22px;line-height:28px;margin:0 0 8px}.login-page .card>p{font-size:14px;line-height:20px;margin:0 0 24px}.login-page #f{display:grid;gap:16px}.login-page #f>p{margin:0}.login-page #f label{margin-bottom:6px}.login-page #email,.login-page #pw{height:40px}.login-page #go{width:100%;min-height:40px}.login-page .card>details{margin-top:24px;padding-top:16px;border-top:1px solid var(--line)}.login-page .card>details>summary{font-size:13px;line-height:20px}.login-page #msg:empty{display:none}
+.clips-page.narrow>*{max-width:none}.clips-page .row>button{flex:0 0 auto}#make>.row{display:grid;grid-template-columns:160px minmax(180px,1fr) auto;align-items:end;gap:12px}#inspect-msg:empty,#job-msg:empty,#recent-msg:empty{display:none}.clips-page td.empty-state{padding:24px;text-align:center;color:var(--muted)}.clips-help>details>summary{padding:8px 0}.clips-help>details+details{border-top:1px solid var(--line);margin-top:8px;padding-top:8px}
+.clips-page .table-wrap:has(#recent .empty-state) td.empty-state{border-bottom:0}
+@media(max-width:600px){#make>.row{grid-template-columns:1fr}.card>.table-wrap{margin-left:-24px;margin-right:-24px}.card>.table-wrap :is(th,td):first-child{padding-left:24px}.card>.table-wrap :is(th,td):last-child{padding-right:24px}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}`
 
 export const PAGE_CSS = () => CSS
@@ -678,7 +684,7 @@ const info=document.createElement('span');info.setAttribute('aria-live','polite'
 const pg=document.createElement('span');pg.className='pg'
 const btn=(t,dis,go,lab)=>{const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent=t;b.disabled=dis;b.setAttribute('aria-label',lab);b.onclick=()=>{page=go;draw();(mount.querySelector('button:not(:disabled)')||mount).focus()};return b}
 pg.appendChild(btn('‹ Previous',page===0,page-1,'Previous page'));const at=document.createElement('span');at.textContent='Page '+(page+1)+' of '+pages;pg.appendChild(at);pg.appendChild(btn('Next ›',page>=pages-1,page+1,'Next page'))
-const sel=document.createElement('select');sel.setAttribute('aria-label','Rows per page');[25,50,100].forEach(n=>{const op=document.createElement('option');op.value=n;op.textContent=n+' per page';if(n===size)op.selected=true;sel.appendChild(op)})
+const sel=document.createElement('select');sel.setAttribute('aria-label','Rows per page');[...new Set([o.size||25,25,50,100])].sort((a,b)=>a-b).forEach(n=>{const op=document.createElement('option');op.value=n;op.textContent=n+' per page';if(n===size)op.selected=true;sel.appendChild(op)})
 sel.onchange=()=>{size=+sel.value;page=0;draw()};pg.appendChild(sel);mount.appendChild(info);mount.appendChild(pg)}
 return{set(list,keep){items=list||[];if(!keep)page=0;draw()},redraw:draw,get page(){return page}}}`
 
@@ -728,12 +734,12 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
 
 export function loginHtml(section: Section = 'Replay clips'): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
-<body>${headerHtml(undefined, section)}<main style="max-width:440px"><div class="card"><h1 style="font-size:24px;margin-bottom:12px">Sign in to ${esc(APP_NAME)}</h1>
+<body>${headerHtml(undefined, section)}<main class="login-page"><div class="card"><h1>Sign in to ${esc(APP_NAME)}</h1>
 <p class="small muted">Use your PostHog account to continue.</p>
 <form id="f"><p><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></p>
 <p><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required></p>
 <p><button id="go" type="submit">Sign in</button></p><p id="msg" class="small err" role="alert"></p></form>
-<details><summary>Two-factor login or already signed in?</summary><p class="small muted"><a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on PostHog</a>, then <a href="/replays">reload this page</a>.</p><p class="small muted">Signing in here also signs you in to PostHog in this browser.</p></details></div></main>
+<details><summary>Use PostHog sign-in instead</summary><p class="small muted"><a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on PostHog</a>, then <a href="/replays">reload this page</a>.</p><p class="small muted">Signing in here also signs you in to PostHog in this browser.</p></details></div></main>
 <script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('go');if(b.disabled)return;b.disabled=true;document.getElementById('msg').textContent='Signing in…';
 try{const r=await fetch('/replays/login',{method:'POST',headers:{'content-type':'application/json','x-clip-page':'1'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('pw').value})});
 const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Sign in failed.');location.href=location.pathname+location.search}catch(err){document.getElementById('msg').textContent=err.message}finally{b.disabled=false}}</script></body></html>`
@@ -757,18 +763,18 @@ function pageHtml(v: Viewer): string {
 
 <div class="card"><h2>1. Choose a replay</h2>
 <label for="input">PostHog replay link or session ID</label>
-<div class="row"><div style="flex:4"><input id="input" placeholder="${esc(config.posthog.publicHost)}/project/${esc(config.posthog.projectId)}/replay/…" autocomplete="off"></div>
-<div style="flex:0"><button id="check" type="button">Check replay</button></div></div>
+<div class="row"><div><input id="input" placeholder="Paste a replay link or session ID" autocomplete="off"></div>
+<button id="check" type="button">Check replay</button></div>
 <p aria-live="polite" aria-atomic="true" id="inspect-msg" class="small"></p>
 <div id="info" class="hidden">
 <div class="facts"><div><span>Client</span><b id="f-client"></b></div><div><span>User</span><b id="f-user"></b></div><div><span>Recorded</span><b id="f-when"></b></div><div><span>Length</span><b id="f-len"></b></div></div>
 <p class="small muted">Key moments: choose one to start just before it.</p><div id="moments" class="chips"></div><div id="moments-pager"></div>
 <p class="small muted" id="pages"></p></div></div>
 
-<div class="card" id="make" aria-disabled="true"><h2>2. Make the clip</h2>
+<div class="card" id="make" aria-disabled="true"><h2>2. Make the clip</h2><p class="small muted" id="make-help">Check a replay to enable clip creation.</p>
 <div class="row"><div><label for="start">Start at (m:ss)</label><input id="start" value="0:00"></div>
 <div><label for="length">Length</label><select id="length"></select></div>
-<div style="flex:0"><button id="go" type="button" disabled>Make clip</button></div></div>
+<button id="go" type="button" disabled>Make clip</button></div>
 <p aria-live="polite" aria-atomic="true" id="job-msg" class="small"></p>
 <div id="result" class="hidden"><div class="player" id="player"><video aria-label="Replay clip" id="video" controls preload="metadata" controlslist="nodownload nofullscreen" oncontextmenu="return CFG.canDownload"><track kind="captions" srclang="en" label="Comments" id="track"></video><div class="cap" id="cap" aria-live="polite"></div><button class="fs" id="fs" type="button" title="Full screen, with the comments">Full screen</button></div>
 <div class="row" style="align-items:center"><button class="ghost" id="save" type="button">Save this</button><a class="btn ghost" id="dl">Download MP4</a><button class="ghost" id="share" type="button">Copy share link</button><a class="btn ghost" id="open" target="_blank" rel="noopener">Open in PostHog</a></div>
@@ -784,11 +790,12 @@ function pageHtml(v: Viewer): string {
 <p class="small muted" id="c-plain"></p></div></div></div>
 
 <div class="card"><h2>Your clips</h2><div class="table-wrap"><table><thead><tr><th scope="col">Made</th><th scope="col">Client</th><th scope="col">User</th><th scope="col">Part</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="recent"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table><div id="recent-pager"></div></div>
-<p id="recent-msg" class="small" role="alert"></p><details><summary>How this works</summary><p class="small muted" id="retention"></p></details></div>
+<p id="recent-msg" class="small" role="alert"></p></div>
+<section class="card clips-help"><details><summary>How this works</summary><p class="small muted" id="retention"></p></details>
 
-<details class="card"><summary>Open replays from PostHog in one click</summary>
+<details><summary>Open replays from PostHog in one click</summary>
 <p class="small">Drag this button to your bookmarks bar. While you watch a replay in PostHog, click it to open the replay here.</p>
-<p><a class="btn ghost" href="${esc(bookmarklet)}">Get MP4</a></p></details>
+<p><a class="btn ghost" href="${esc(bookmarklet)}">Get MP4</a></p></details></section>
 </main>
 <script>
 ${PAGER_JS}
@@ -807,14 +814,14 @@ const momentsPager=makePager({mount:$('moments-pager'),noun:'key moments',size:2
   if(!moments.length){box.innerHTML='<span class="muted small">No errors or frustrated clicks in this recording.</span>'}
   moments.forEach(m=>{const b=document.createElement('button');b.type='button';b.className='chip'+(m.kind==='error'?' error':'');b.innerHTML='<span class="t"></span>';b.querySelector('.t').textContent=clock(m.offset_s);b.append(m.kind+' '+m.label);b.onclick=()=>{$('start').value=clock(Math.max(0,m.offset_s-5))};box.appendChild(b)});
 }});
-async function check(){if($('check').disabled)return;const input=$('input').value.trim();if(!input){txt($('inspect-msg'),'Paste a replay link or session ID first.','err');$('input').focus();return}info=null;$('check').disabled=true;$('input').disabled=true;$('make').setAttribute('aria-disabled','true');txt($('inspect-msg'),'Checking…','muted');$('info').classList.add('hidden');$('go').disabled=true;
+async function check(){if($('check').disabled)return;const input=$('input').value.trim();if(!input){txt($('inspect-msg'),'Paste a replay link or session ID first.','err');$('input').focus();return}info=null;$('check').disabled=true;$('input').disabled=true;$('make').setAttribute('aria-disabled','true');$('make-help').hidden=false;txt($('inspect-msg'),'Checking…','muted');$('info').classList.add('hidden');$('go').disabled=true;
  try{const r=await api('/replays/api/inspect',{method:'POST',body:JSON.stringify({input})});info=r.info;
   $('f-client').textContent=info.client||'unknown';$('f-user').textContent=info.user||'unknown';$('f-when').textContent=when(info.start);$('f-len').textContent=clock(info.duration_s);
   momentsPager.set(info.moments.filter(m=>m.kind!=='page'));
   $('pages').textContent=info.pages.length?'Pages: '+info.pages.join(' → '):'';
-  $('start').value=clock(r.suggested_start_s);$('info').classList.remove('hidden');$('go').disabled=false;$('make').setAttribute('aria-disabled','false');txt($('inspect-msg'),'Replay checked. Choose a start time and length.','ok')
+  $('start').value=clock(r.suggested_start_s);$('info').classList.remove('hidden');$('go').disabled=false;$('make').setAttribute('aria-disabled','false');$('make-help').hidden=true;txt($('inspect-msg'),'Replay checked. Choose a start time and length.','ok')
  }catch(e){txt($('inspect-msg'),e.message+' Check the link and try again.','err')}finally{$('check').disabled=false;$('input').disabled=false}}
-$('input').addEventListener('input',()=>{info=null;$('go').disabled=true;$('make').setAttribute('aria-disabled','true');$('info').classList.add('hidden');txt($('inspect-msg'),'Check this replay before making a clip.','muted')});
+$('input').addEventListener('input',()=>{info=null;$('go').disabled=true;$('make').setAttribute('aria-disabled','true');$('make-help').hidden=false;$('info').classList.add('hidden');txt($('inspect-msg'),'Check this replay before making a clip.','muted')});
 $('check').onclick=check;$('input').addEventListener('keydown',e=>{if(e.key==='Enter')check()});$('input').addEventListener('paste',()=>setTimeout(check,50));
 $('go').onclick=async()=>{if($('go').disabled)return;$('go').disabled=true;$('check').disabled=true;$('input').disabled=true;$('result').classList.add('hidden');txt($('job-msg'),'Queued…','muted');
  try{let j=await api('/replays/api/clips',{method:'POST',body:JSON.stringify({input:$('input').value.trim(),start:$('start').value,length:Number($('length').value)})});
@@ -826,7 +833,7 @@ function show(c){$('dl').classList.toggle('hidden',!CFG.canDownload);$('share').
 $('share').onclick=async()=>{if($('share').disabled)return;$('share').disabled=true;txt($('share-msg'),'Creating link…','muted');try{const r=await api('/replays/api/share/'+encodeURIComponent($('share').dataset.name),{method:'POST',body:JSON.stringify({comments:true})});let copied=false;try{await navigator.clipboard.writeText(r.url);copied=true}catch{};$('share-msg').textContent=(copied?'Link copied':'Copy this link')+(r.comments?', with the comments in the video':'')+'. Anyone with it can watch this clip for '+Math.round(r.expires_hours/24)+' days: '+r.url}catch(e){txt($('share-msg'),e.message+' Try again.','err')}finally{$('share').disabled=false}};
 $('save').onclick=async()=>{if(!cur||$('save').disabled)return;$('save').disabled=true;try{const c=await toggleSave(cur);cur=c;$('save').textContent=c.saved?'Saved ✓ (unsave)':'Save this';txt($('keep-msg'),keepText(c),c.saved?'ok':'muted');loadRecent()}catch(e){txt($('keep-msg'),e.message,'err')}finally{$('save').disabled=false}};
 const recentPager=makePager({mount:$('recent-pager'),noun:'clips',size:25,draw:clips=>{const tb=$('recent');tb.innerHTML='';
- if(!clips.length){tb.innerHTML='<tr><td colspan="6" class="muted">No clips yet. Check a replay above to make your first clip.</td></tr>';return}
+ if(!clips.length){tb.innerHTML='<tr><td colspan="6" class="empty-state">No clips yet. Check a replay above to make your first clip.</td></tr>';return}
  clips.forEach(c=>{const tr=document.createElement('tr');[when(c.created_at),c.client||'',(c.user||'').replace(/@.*/,''),c.range+(c.comments?' · '+c.comments+' comment'+(c.comments===1?'':'s'):''),c.saved?'Saved':c.expires_at?day(c.expires_at):'Saved by someone else'].forEach(t=>{const td=document.createElement('td');td.textContent=t;tr.appendChild(td)});
   const td=document.createElement('td');td.style.whiteSpace='nowrap';const w=document.createElement('button');w.type='button';w.className='ghost';w.textContent='Watch';w.onclick=()=>{show(c);$('video').focus()};
   const k=document.createElement('button');k.type='button';k.className='ghost';k.textContent=c.saved?'Unsave':'Save';k.onclick=async()=>{k.disabled=true;try{const n=await toggleSave(c);if(cur&&cur.name===n.name)show(n);loadRecent()}catch(e){$('recent-msg').textContent=e.message+' Try saving again.'}finally{k.disabled=false}};

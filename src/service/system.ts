@@ -76,41 +76,148 @@ export async function handleSystem(req: IncomingMessage, res: ServerResponse, ur
 
 export function systemHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>System · ${APP_NAME}</title><style>${PAGE_CSS()}
-:root{--act:#2a78d6;--grid:#e1e0d9;--axis:#c3c2b7;--good:#067647;--good-bg:#e7f5ec;--warn:#9a5b00;--warn-bg:#fff4dd;--down:#b42318;--down-bg:#fde9e7;--info-bg:#eef2ff}
-
-.banner{display:flex;gap:14px;align-items:center;padding:14px 18px;border-radius:12px;margin-bottom:14px;border:1px solid var(--line);background:var(--card)}
-.banner h1{margin:0;font-size:20px}.banner p{margin:2px 0 0;color:var(--muted);font-size:13px}
-.banner .big{font-size:20px;font-weight:700;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;flex:none;color:#fff;background:var(--muted)}
-.banner.ok{background:var(--good-bg)}.banner.ok .big{background:var(--good)}.banner.warn{background:var(--warn-bg)}.banner.warn .big{background:var(--warn)}.banner.down{background:var(--down-bg)}.banner.down .big{background:var(--down)}
-.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:14px}
-.tile{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}.tile span{display:block;font-size:13px;color:var(--muted)}.tile b{display:block;font-size:24px;font-weight:600;font-variant-numeric:tabular-nums}.tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
-.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px}.charts .card,.split .card{margin:0;min-width:0}.charts h2,.split h2{margin-top:0}
-.chart{position:relative}.chart svg{display:block;max-width:100%}.note{color:var(--muted);font-size:13px;padding:30px 0;text-align:center}
-.tip{position:absolute;pointer-events:none;background:#1c2230;color:#fff;font-size:12px;padding:4px 8px;border-radius:6px;white-space:nowrap;transform:translate(-50%,-110%);z-index:2}
+:root{--act:var(--accent);--grid:var(--line);--axis:var(--faint);--good:var(--ok);--good-bg:var(--ok-bg);--down:var(--err);--down-bg:var(--err-bg);--info-bg:var(--accent-soft)}
+.banner p{margin:2px 0 0;color:var(--muted);font-size:13px}
+.banner.ok{background:var(--good-bg)}
+.banner.ok .big{background:var(--good)}
+.banner.warn{background:var(--warn-bg)}
+.banner.warn .big{background:var(--warn)}
+.banner.down{background:var(--down-bg)}
+.banner.down .big{background:var(--down)}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px}
+.charts .card,.split .card{margin:0;min-width:0}
+.charts h2,.split h2{margin-top:0}
+.chart{position:relative}
+.chart svg{display:block;max-width:100%}
+.note{color:var(--muted);font-size:13px;padding:30px 0;text-align:center}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--card);font-size:12px;padding:4px 8px;border-radius:6px;white-space:nowrap;transform:translate(-50%,-110%);z-index:2}
 .split{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px}
-.svc{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:4px 12px;align-items:center;padding:7px 0;border-top:1px solid var(--line);font-size:14px}.svc:first-of-type{border-top:0}.svc .d{color:var(--muted);font-size:12.5px;text-align:right}
-.st{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;white-space:nowrap}.st i{font-style:normal;width:16px;height:16px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:10px}
-.st.ok{color:var(--good)}.st.ok i{background:var(--good)}.st.warn{color:var(--warn)}.st.warn i{background:var(--warn)}.st.down{color:var(--down)}.st.down i{background:var(--down)}.st.info{color:var(--muted)}.st.info i{background:var(--muted)}
-.tools{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:8px}.tools h2{margin:0}.tools input{max-width:240px}
-td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}td.w{overflow-wrap:anywhere}td small{display:none;color:var(--muted)}
-@media (max-width:640px){.tools input{max-width:none}th.r,td.r{display:none}td small{display:block}.st{font-size:12px;gap:3px}.svc .st{font-size:12.5px;gap:5px}table{font-size:13px}th,td{padding:7px 4px}}
-details.nums summary{cursor:pointer;color:var(--muted);font-size:13px;margin-top:6px}details.nums table{font-size:13px}
-.tile.problem{border-color:var(--down);background:var(--down-bg)}.tile.problem small{color:var(--down)}
-#problems:empty{display:none}.card{overflow-wrap:anywhere}main.wide{min-width:0}table{width:100%;table-layout:fixed}.containers-table th:first-child{width:72px}.containers-table th:nth-child(2){width:26%}.containers-table th.r{width:22%}td,th{overflow-wrap:anywhere}
-.spark{display:block;width:90px;max-width:100%;height:24px}.container-detail{font-size:12px;color:var(--muted)}.container-detail p{margin:4px 0}.container-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
+.svc:first-of-type{border-top:0}
+.svc .d{color:var(--muted);font-size:12.5px;text-align:right}
+.st{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;white-space:nowrap}
+.st i{font-style:normal;width:16px;height:16px;border-radius:50%;display:grid;place-items:center;color:var(--card);font-size:10px}
+.st.ok{color:var(--good)}
+.st.warn{color:var(--warn)}
+.st.warn i{background:var(--warn)}
+.st.down{color:var(--down)}
+.st.down i{background:var(--down)}
+.st.info{color:var(--muted)}
+.st.info i{background:var(--muted)}
+.tools h2{margin:0}
+.tools input{max-width:240px}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+td.w{overflow-wrap:anywhere}
+td small{display:none;color:var(--muted)}
+details.nums summary{cursor:pointer;color:var(--muted);font-size:13px;margin-top:6px}
+details.nums table{font-size:13px}
+#problems:empty{display:none}
+.card{overflow-wrap:anywhere}
+main.wide{min-width:0}
+table{width:100%;table-layout:fixed}
+.containers-table th:first-child{width:72px}
+.containers-table th:nth-child(2){width:26%}
+.containers-table th.r{width:22%}
+td,th{overflow-wrap:anywhere}
+.spark{display:block;width:90px;max-width:100%;height:24px}
+.container-detail{font-size:12px;color:var(--muted)}
+.container-detail p{margin:4px 0}
+.container-detail pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
 select{max-width:100%;padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink)}
-@media(max-width:640px){.containers-table th:nth-child(2){width:42%}.svc{grid-template-columns:minmax(0,1fr) auto}.svc .d{grid-column:1/-1;grid-row:2;text-align:left}.containers-table th:last-child,.containers-table td:last-child{display:none}.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.tile b{font-size:21px}.banner{padding:12px}.card{padding:12px}.containers-table th:first-child{width:65px}.tools input{width:100%;min-width:0}}
+main .ghost{border-color:transparent;color:var(--ink)}
+.banner.ok,.banner.warn,.banner.down{background:transparent}
+.banner>div{min-width:0}
+.tile{min-width:0;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 20px}
+.section-details[open]>summary{margin-bottom:20px}
+.section-details .card{border:0;margin:0}
+.charts,.split{gap:16px 32px}
+details summary{cursor:pointer}
+.tools{display:flex;justify-content:space-between;flex-wrap:wrap;align-items:center;margin-bottom:8px;gap:16px}
+.tools select{width:auto;min-width:0}
+.svc{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:4px 12px;align-items:center;border-top:1px solid var(--line);font-size:14px;padding:10px 0}
+.table-wrap{min-width:0}
+main{min-width:0}
+main h1{font-size:24px;line-height:32px;font-weight:650;margin:0}
+main .page-head{margin-bottom:24px;align-items:center}
+main .page-head p{margin:4px 0 0;font-size:14px;line-height:20px}
+main h2{font-size:16px;line-height:24px;font-weight:600;margin:0 0 12px}
+main h3{font-size:14px;line-height:20px;font-weight:600;margin:0 0 8px}
+main input:not([type=checkbox]):not([type=radio]),main select{height:36px;min-height:36px;padding:7px 10px;font-size:13px;line-height:20px;max-width:100%;box-sizing:border-box}
+main button,main .btn{min-height:36px;font-size:13px;line-height:20px;white-space:nowrap;word-break:normal;overflow-wrap:normal}
+main th{word-break:normal;overflow-wrap:normal}
+main .table-wrap{min-width:0;max-width:100%;overflow-x:auto}main .card>.table-wrap{max-width:none}
+main .pager button{min-height:32px;padding:5px 10px;border:1px solid var(--line-strong);background:var(--card);color:var(--ink);font-weight:500}
+main .pager select{height:32px;min-height:32px}
+main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
+#people-msg:empty,#outcome-msg:empty,#audit-msg:empty,#keys-msg:empty,#msg:empty{display:none}
+.tabs{overflow-x:auto;max-width:100%}
+.tabs :is(button,a){white-space:nowrap;flex-shrink:0}
+.tabs .tab-link,.tabs .tab-link0{color:var(--muted);text-decoration:none;font-weight:500;padding:8px 12px;border-bottom:2px solid transparent}
+.tabs :is([aria-current],[aria-selected=true]){color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
+.banner{display:flex;border:0;border-radius:0;background:transparent;align-items:flex-start;padding:0 0 24px;margin-bottom:16px;gap:12px}
+.banner h1{margin:0;font-size:24px;line-height:32px}
+.banner .big{font-weight:700;border-radius:50%;display:grid;place-items:center;flex:none;color:var(--card);background:var(--muted);width:28px;height:28px;font-size:16px;margin-top:2px}
+#problems>.card{padding:16px 24px;margin-bottom:24px}
+#problems h2{margin-bottom:8px}
+#problems .svc{padding:4px 0;border:0}
+.tiles{display:grid;margin-bottom:14px;margin:0 0 24px;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+.tile span{display:block;color:var(--muted);font-size:12px;font-weight:500;min-height:16px;line-height:16px}
+.tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px;line-height:16px}
+.tile.problem{border-color:var(--warn);background:var(--warn-bg)}
+.tile.problem small{color:var(--warn)}
+.tile.failure{border-color:var(--err);background:var(--err-bg)}
+.section-details{border-bottom:1px solid var(--line);padding:14px 0}
+.section-details>summary{cursor:pointer;font-size:14px;line-height:20px;font-weight:600}
+.containers-card{margin-top:24px}
+.containers-card>.tools{display:block}
+.container-controls{display:flex;align-items:center;gap:12px;margin-top:16px}
+.container-controls input{flex:1;width:auto;max-width:none;min-width:0}
+.container-controls .view-control{flex:none;margin:0}
+.containers-table th:nth-child(5){width:180px}
+.containers-table{min-width:860px}.containers-table td{vertical-align:middle}
+.containers-table .metric-inline{display:inline-grid;grid-template-columns:max-content 64px;white-space:nowrap;align-items:center;gap:12px}
+.containers-table .spark{margin:0;width:64px;height:18px}
+.containers-table td.w>details>summary{color:var(--ink);font-size:13px;line-height:20px;font-weight:500}
+.st.ok i{background:var(--good);width:6px;height:6px}
+.view-control>summary{min-height:36px;padding:7px 12px;border:1px solid var(--line-strong);border-radius:6px;font-size:13px;line-height:20px;box-sizing:border-box}
+.view-control{position:relative}
+.view-control[open]>.tools{position:absolute;right:0;z-index:2;min-width:220px;background:var(--card);border:1px solid var(--line);padding:12px}
+.machine-details{margin:0 0 16px}
+.tile b{display:block;font-variant-numeric:tabular-nums;font-size:26px;line-height:32px;font-weight:650;letter-spacing:-.02em;margin:6px 0 2px;white-space:normal}
+.containers-table .badge{white-space:nowrap;font-size:11px}
+@media (max-width:640px){.tools input{max-width:none}
+th.r,td.r{display:none}
+td small{display:block}
+.st{font-size:12px;gap:3px}
+.svc .st{font-size:12.5px;gap:5px}
+table{font-size:13px}
+th,td{padding:7px 4px}
+}
+@media(max-width:640px){.svc{grid-template-columns:minmax(0,1fr) auto}
+.svc .d{grid-column:1/-1;grid-row:2;text-align:left}
+.tile b{font-size:21px}
+.card{padding:12px}
+.tools input{width:100%;min-width:0}
+.tools select{width:100%}
+.containers-table th:nth-child(2){width:32%}
+.containers-table th:first-child{width:65px}
+.containers-table th:last-child,.containers-table td:last-child{display:table-cell}
+.containers-table th:last-child{width:15%}
+.st{white-space:normal}
+.banner{padding:12px;gap:10px}
+.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+.banner h1{font-size:24px}
 
-:root{--act:var(--muted)}main .ghost{border-color:transparent;color:var(--ink)}
-.banner{border:0;border-radius:0;background:transparent;padding:16px 0 24px;align-items:flex-start}.banner.ok,.banner.warn,.banner.down{background:transparent}.banner .big{width:28px;height:28px;font-size:16px}.banner h1{font-size:22px}.banner>div{min-width:0}
-.tiles{gap:16px;margin:0 0 24px}.tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 20px}.tile.problem{background:transparent;border-color:var(--down)}.tile b{font-size:26px;line-height:32px;font-weight:650;letter-spacing:-.02em;margin:6px 0 2px;white-space:nowrap}.tile span{font-size:12px;font-weight:500}
-.section-details{border-bottom:1px solid var(--line);padding:20px 0}.section-details>summary{font-size:17px;font-weight:600;cursor:pointer}.section-details[open]>summary{margin-bottom:20px}.section-details .card{border:0;margin:0}.charts,.split{gap:16px 32px}details summary{cursor:pointer}.tools{gap:16px}.tools select{width:auto;min-width:0}.svc{padding:10px 0}.table-wrap{min-width:0}
-@media(max-width:640px){.banner h1{font-size:20px}.tools select{width:100%}.containers-table th:nth-child(2){width:32%}.containers-table th:first-child{width:65px}.containers-table th:last-child,.containers-table td:last-child{display:table-cell}.containers-table th:last-child{width:15%}.st{white-space:normal}.banner{gap:10px}}
+.containers-table .st{white-space:nowrap}
+}
+@media(max-width:1200px){.tiles{grid-template-columns:repeat(3,minmax(0,1fr))}
+
+
+}
 </style></head>
 <body>${headerHtml(v, 'System')}<main class="wide">
 <div class="banner" id="banner"><span class="big" id="b-icon" aria-hidden="true">…</span><div><h1 id="b-head" role="status" aria-live="polite">Checking…</h1><p id="b-sub"></p></div></div>
 <div id="problems"></div><div id="problems-pager"></div>
-<div class="tiles" id="tiles"></div>
+<div id="tiles"></div>
 <details class="section-details"><summary>Trends</summary><div class="charts">
 <div class="card"><h2>Events per hour, last 24 hours</h2><div class="chart" id="c-events"></div><details class="nums" id="n-events"><summary>Show the numbers</summary><div id="t-events"></div><div id="p-events"></div></details></div>
 <div class="card"><h2>Events per minute, last 60 minutes</h2><div class="chart" id="c-minutes"></div><details class="nums" id="n-minutes"><summary>Show the numbers</summary><div id="t-minutes"></div><div id="p-minutes"></div></details></div>
@@ -124,7 +231,7 @@ select{max-width:100%;padding:6px;border:1px solid var(--line);border-radius:6px
 </details>
 <details class="section-details"><summary>Database and Lens activity</summary><div class="split"><div class="card" id="clickhouse"></div><div class="card" id="lens"></div></div>
 </details>
-<div class="card"><div class="tools"><h2 id="c-title">Containers</h2><details><summary>More filters</summary><div class="tools"><select id="view" aria-label="Container view"><option value="all">All containers · problems first</option><option value="mem_bytes">Top 5 by memory</option><option value="cpu_pct">Top 5 by CPU</option></select><input id="find" type="search" placeholder="Find a container" aria-label="Find a container"></div></details></div>
+<div class="card containers-card"><div class="tools"><h2 id="c-title">Containers</h2><div class="container-controls"><input id="find" type="search" placeholder="Find a container" aria-label="Find a container"><details class="view-control"><summary>View</summary><div class="tools"><select id="view" aria-label="Container view"><option value="all">All containers · problems first</option><option value="mem_bytes">Top 5 by memory</option><option value="cpu_pct">Top 5 by CPU</option></select></div></details></div></div>
 <div class="table-wrap"><table class="containers-table"><thead><tr><th scope="col">Status</th><th scope="col">Container</th><th scope="col" class="r">Running</th><th scope="col" class="n">CPU</th><th scope="col" class="n">Memory</th><th scope="col" class="n">Restarts</th></tr></thead><tbody id="rows"><tr><td colspan="6">Loading containers…</td></tr></tbody></table></div><div id="containers-pager"></div></div>
 <details class="section-details"><summary>Recent changes</summary><div id="changes">Loading recent changes…</div><div id="changes-pager"></div></details>
 <details class="section-details"><summary>About this server</summary><div id="about"></div><details class="nums"><summary>How this works</summary><p class="small muted">Only counts and machine figures are read, never event or replay content. CPU and memory history restarts with the status service.</p></details></details>
@@ -143,8 +250,8 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 const num=n=>esc(n==null?'–':Number(n).toLocaleString('en-US'))
 const gb=b=>esc(b==null?'–':b>=1024**3?(b/1024**3).toFixed(1)+' GB':Math.round(b/1024**2)+' MB')
 const pct=n=>esc(n==null?'–':(Number(n)<10?Number(n).toFixed(1):Math.round(Number(n)))+'%')
-const LABEL={ok:'Up',warn:'Warning',down:'Down',info:'Info'},ICON={ok:'✓',warn:'!',down:'✕',info:'i'},RANK={down:3,warn:2,ok:1,info:0}
-const st=value=>{const l=Object.hasOwn(LABEL,value)?value:'info';return '<span class="st '+l+'"><i aria-hidden="true">'+ICON[l]+'</i>'+LABEL[l]+'</span>'}
+const LABEL={ok:'Up',warn:'Warning',down:'Down',info:'Info'},ICON={ok:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>',warn:'!',down:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>',info:'i'},RANK={down:3,warn:2,ok:1,info:0}
+const st=value=>{const l=Object.hasOwn(LABEL,value)?value:'info';return '<span class="st '+l+'"><i aria-hidden="true">'+(l==='ok'?'':ICON[l])+'</i>'+LABEL[l]+'</span>'}
 const clock=t=>new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})
 const nice=m=>{if(m<=0)return 1;const p=10**Math.floor(Math.log10(m));for(const s of [1,2,5,10])if(s*p>=m)return s*p;return 10*p}
 
@@ -177,27 +284,28 @@ function line(box,hist,idx,name,load=false){W=box.clientWidth||560;const p=(hist
   const pts=p.map(h=>({x:x(h[0]),y:f.y(h[idx]),text:clock(h[0])+' · '+name+' '+(load?Number(h[idx]).toFixed(1):pct(h[idx]))})),d=pts.map((q,i)=>(i?'L':'M')+q.x.toFixed(1)+' '+q.y.toFixed(1)).join('')
   const e=pts[pts.length-1];box.innerHTML='<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(name)+' for the last hour, now '+(load?Number(p.at(-1)[idx]).toFixed(1):pct(p.at(-1)[idx]))+'">'+f.g+'<path d="'+d+'" fill="none" stroke="var(--act)" stroke-width="2" stroke-linejoin="round"/><circle cx="'+e.x+'" cy="'+e.y+'" r="4" fill="var(--act)" stroke="var(--card)" stroke-width="2"/></svg>';hover(box,pts)}
 
-const tile=(name,value,sub,problem=false)=>'<div class="tile'+(problem?' problem':'')+'"><span>'+esc(name)+'</span><b>'+esc(value)+'</b>'+(sub?'<small>'+esc(sub)+'</small>':'')+'</div>'
+const tile=(name,value,sub,problem=false)=>'<div class="tile'+(problem===true?' failure':problem?' problem':'')+'"><span>'+esc(name)+'</span><b>'+esc(value)+'</b>'+(sub?'<small>'+esc(sub)+'</small>':'')+'</div>'
 const pagers={}
 function paged(id,items,noun,draw,keep=true){if(items.length>25||pagers[id]){const mount=$(id+'-pager'),active=document.activeElement,restore=mount.contains?.(active),tag=active?.tagName,text=active?.textContent;if(!pagers[id])pagers[id]=makePager({mount,noun,size:25,draw});pagers[id].set(items,keep);if(restore){const next=[...mount.querySelectorAll('button,select')].find(el=>el.tagName===tag&&(tag==='SELECT'||el.textContent===text)&&!el.disabled);(next||mount.querySelector('button:not(:disabled)'))?.focus()}}else draw(items)}
 function numbers(id,rows,label){const details=$('n-'+id);details.ontoggle=()=>{if(!details.open)return;const draw=slice=>{$('t-'+id).innerHTML='<table><thead><tr><th scope="col">Time</th><th scope="col">'+esc(label)+'</th></tr></thead><tbody>'+slice.map(r=>'<tr><td>'+clock(r[0])+'</td><td>'+esc(r[1])+'</td></tr>').join('')+'</tbody></table>';if(!slice.length)$('t-'+id).innerHTML='<p class="muted">No readings yet. Check again in a few minutes.</p>'};if(!pagers['n-'+id])pagers['n-'+id]=makePager({mount:$('p-'+id),noun:'readings',size:25,draw});pagers['n-'+id].set(rows,true)};if(details.open)details.ontoggle()}
 let containers=[]
 const opened=new Set()
 function spark(hist,idx,label){const p=(hist||[]).filter(h=>Number.isFinite(h[idx]));if(p.length<2)return '';const max=Math.max(...p.map(h=>h[idx]),1),t0=p[0][0],dt=Math.max(1,p.at(-1)[0]-t0);return '<svg class="spark" viewBox="0 0 90 24" role="img" aria-label="'+esc(label)+' over the last hour"><path d="'+p.map((h,i)=>(i?'L':'M')+(90*(h[0]-t0)/dt).toFixed(1)+' '+(23-22*h[idx]/max).toFixed(1)).join('')+'" fill="none" stroke="var(--act)" stroke-width="1.5"/></svg>'}
+function uptime(detail){const text=String(detail||''),match=text.match(/(?:up\s+)?(\d+(?:\.\d+)?\s*(?:seconds?|minutes?|hours?|days?|weeks?|[smhdw]))/i),compact=match?match[1].replace(/\s*seconds?/i,'s').replace(/\s*minutes?/i,'m').replace(/\s*hours?/i,'h').replace(/\s*days?/i,'d').replace(/\s*weeks?/i,'w'):text.replace(/,?\s*healthy/i,'').replace(/^up\s+/i,'');return '<span title="'+esc(text)+'">'+esc(compact)+'</span>'+(/\bhealthy\b/i.test(text)?' <span class="badge ok">Healthy</span>':'')}
 function table(keep=true){const active=document.activeElement;const focusedKey=active?.closest?.('details[data-key]')?.dataset.key;const q=$('find').value.trim().toLowerCase();let list=containers.filter(c=>c.name.toLowerCase().includes(q));const view=$('view').value
   if(view!=='all')list=list.slice().sort((a,b)=>(b[view]??-1)-(a[view]??-1)).slice(0,5)
   paged('containers',list,'containers',slice=>{$('rows').innerHTML=slice.map(c=>{const key=c.group+'/'+c.name;return '<tr><td>'+st(c.level)+'</td><td class="w"><details data-key="'+esc(key)+'"'+(opened.has(key)?' open':'')+'><summary>'+esc(c.name)+'</summary><div class="container-detail">'+[
     ['Image',c.image],['Started',c.started_at],['OOM killed',c.oom_killed==null?null:String(c.oom_killed)],['Exit code',c.exit_code],
     ['Memory limit',c.mem_limit_bytes?gb(c.mem_limit_bytes)+' ('+pct(c.mem_limit_pct)+' used)':'No limit'],
     ['Network rx / tx',gb(c.network_rx_bytes)+' / '+gb(c.network_tx_bytes)],['Block read / write',gb(c.block_read_bytes)+' / '+gb(c.block_write_bytes)],['PIDs',c.pids]
-  ].map(([k,v])=>'<p>'+esc(k)+': '+esc(v??'–')+'</p>').join('')+(c.health_output?'<pre>Last health check: '+esc(c.health_output)+'</pre>':'')+'</div></details><small>'+esc(c.detail)+'</small></td><td class="r">'+esc(c.detail)+'</td><td class="n">'+pct(c.cpu_pct)+spark(c.history,1,'CPU')+'</td><td class="n">'+gb(c.mem_bytes)+spark(c.history,2,'Memory')+'</td><td class="n">'+num(c.restarts)+'</td></tr>'}).join('')||'<tr><td colspan="6" class="muted">No containers match. Change your search or view.</td></tr>'
+  ].map(([k,v])=>'<p>'+esc(k)+': '+esc(v??'–')+'</p>').join('')+(c.health_output?'<pre>Last health check: '+esc(c.health_output)+'</pre>':'')+'</div></details><small>'+esc(c.detail)+'</small></td><td class="r">'+uptime(c.detail)+'</td><td class="n"><span class="metric-inline">'+pct(c.cpu_pct)+spark(c.history,1,'CPU')+'</span></td><td class="n"><span class="metric-inline">'+gb(c.mem_bytes)+spark(c.history,2,'Memory')+'</span>'+'</td><td class="n">'+num(c.restarts)+'</td></tr>'}).join('')||'<tr><td colspan="6" class="muted">No containers match. Change your search or view.</td></tr>'
   $('rows').querySelectorAll('details').forEach(d=>d.ontoggle=()=>d.open?opened.add(d.dataset.key):opened.delete(d.dataset.key));if(focusedKey)$('rows').querySelectorAll('details').forEach(d=>{if(d.dataset.key===focusedKey)d.querySelector('summary')?.focus()})},keep)}
 $('find').oninput=()=>table(false);$('view').onchange=()=>table(false)
 let lastStatus=null,connectionError=null
 function freshness(){if(!lastStatus)return;const s=lastStatus,age=s.checked_at?Math.max(0,Math.floor((Date.now()-Date.parse(s.checked_at))/1000)):null,stale=age!=null&&age>60
-  $('banner').className='banner '+(stale?'warn':connectionError?'down':s.level);$('b-icon').textContent=stale?'!':connectionError?'✕':ICON[s.level]||'…'
-  const heading=stale?'Status data is stale — checks have stopped':connectionError?connectionError:!s.checked_at?'Checking…':s.down?plural(s.down,'problem')+(s.warn?', '+plural(s.warn,'warning'):''):s.warn?'Everything is up, '+plural(s.warn,'warning'):'Everything is up';if($('b-head').textContent!==heading)$('b-head').textContent=heading
-  $('b-sub').textContent=age==null?'Waiting for the first check':'Updated '+age+' s ago · '+new Date(s.checked_at).toLocaleString()}
+  $('banner').className='banner '+(stale?'warn':connectionError?'down':s.level);$('b-icon').innerHTML=stale?'!':connectionError?ICON.down:ICON[s.level]||''
+  const heading=stale?'Status data is stale — checks have stopped':connectionError?connectionError:!s.checked_at?'Checking…':s.down?plural(s.down,'problem')+(s.warn?', '+plural(s.warn,'warning'):''):s.warn?'All services operational · '+plural(s.warn,'warning'):'All services operational';if($('b-head').textContent!==heading)$('b-head').textContent=heading
+  $('b-sub').textContent=age==null?'Waiting for the first check':'Updated '+age+' s ago';$('b-sub').title=s.checked_at?new Date(s.checked_at).toLocaleString():''}
 const pairs=entries=>entries.map(([k,v])=>'<div class="svc"><span>'+esc(k)+'</span><span class="d">'+esc(v??'–')+'</span></div>').join('')
 
 function charts(m){bars($('c-events'),m.events_by_hour,false,m.extras_at||Date.now());bars($('c-minutes'),m.events_by_minute,true,m.extras_at||Date.now());line($('c-disk'),m.history,3,'Disk');line($('c-load'),m.history,4,'Load',true);line($('c-cpu'),m.history,1,'CPU');line($('c-mem'),m.history,2,'Memory')}
@@ -206,13 +314,12 @@ function draw(s){const rows=s.checks||[],m=s.metrics||{},mc=m.machine||{},byName
   const box=rows.filter(r=>r.group.startsWith('Containers')).sort((a,b)=>RANK[b.level]-RANK[a.level]||a.name.localeCompare(b.name));containers=box
   const counts=containerSummary(box);lastStatus=s;connectionError=null;freshness()
   const problems=rows.filter(r=>r.level==='down'||r.level==='warn').sort((a,b)=>RANK[b.level]-RANK[a.level])
-  paged('problems',problems,'problems',slice=>{$('problems').innerHTML=slice.length?'<div class="card"><h2>Needs attention</h2>'+slice.map(r=>'<div class="svc"><span>'+esc(r.group)+' · '+esc(r.name)+'</span><span class="d">'+esc(r.detail)+'</span>'+st(r.level)+'</div>').join('')+'</div>':''})
+  paged('problems',problems,'problems',slice=>{$('problems').innerHTML=slice.length?'<div class="card"><h2>Needs attention</h2>'+slice.map(r=>'<div class="svc"><span>'+(r.group==='Machine'&&r.name==='Memory'?'Low available memory':esc(r.group)+' · '+esc(r.name))+'</span><span class="d">'+esc(r.detail)+'</span>'+st(r.level)+'</div>').join('')+'</div>':''})
   const hours=m.events_by_hour,last=hours?hours.filter(h=>h[0]>=Math.floor(Date.now()/3600000)*3600000).reduce((a,h)=>a+h[1],0):null,day=hours?hours.reduce((a,h)=>a+h[1],0):null
   const memUsed=mc.mem_total?mc.mem_total-mc.mem_available:null,disk=mc.disk_total?mc.disk_total-mc.disk_free:null
-  $('tiles').innerHTML=[tile('Containers running',counts.running+' of '+counts.expected,[[counts.unhealthy,'unhealthy'],[counts.restarting,'restarting'],[counts.stopped,'stopped']].filter(x=>x[0]).map(x=>x[0]+' '+x[1]).join(' · ')||'all healthy',counts.problems>0),
-    tile('Events this hour',num(last),'since the hour began'),tile('Events, 24 hours',num(day),'all event types'),tile('People, 24 hours',num(m.people_24h),'distinct ids'),tile('Recordings, 24 hours',num(m.recordings_24h),'counted, never opened'),
-    tile('Ingestion warnings',num(m.ingestion_warnings_24h),'last 24 hours'),tile('CPU',pct(mc.cpu_pct),mc.cores?mc.cores+' cores, load '+(mc.load_5??0).toFixed(1):''),tile('Memory',memUsed==null?'–':gb(memUsed),mc.mem_total?'of '+gb(mc.mem_total):''),
-    tile('Disk used',disk==null?'–':pct(disk/mc.disk_total*100),mc.disk_free!=null?gb(mc.disk_free)+' free of '+gb(mc.disk_total):''),tile('Swap used',gb(mc.swap_used),'of '+gb(mc.swap_total)),tile('ClickHouse data',gb(m.clickhouse_bytes),'on disk')].join('')
+  $('tiles').innerHTML='<h2>Infrastructure</h2><div class="tiles">'+[tile('Containers running',counts.running+' of '+counts.expected,([[counts.unhealthy,'unhealthy'],[counts.restarting,'restarting'],[counts.stopped,'stopped']].filter(x=>x[0]).map(x=>x[0]+' '+x[1]).join(' · ')||'all healthy')+(box.length>counts.expected?' · '+(box.length-counts.expected)+' auxiliary excluded':''),counts.problems>0),
+    tile('CPU',pct(mc.cpu_pct),mc.cores?mc.cores+' cores, load '+(mc.load_5??0).toFixed(1):''),tile('Memory',memUsed==null?'–':gb(memUsed),mc.mem_total?'of '+gb(mc.mem_total):'',rows.some(r=>r.group==='Machine'&&r.name==='Memory'&&r.level==='down')?true:rows.some(r=>r.group==='Machine'&&r.name==='Memory'&&r.level==='warn')?'warn':false),
+    tile('Disk used',disk==null?'–':pct(disk/mc.disk_total*100),mc.disk_free!=null?gb(mc.disk_free)+' free of '+gb(mc.disk_total):'')].join('')+'</div><h2>Activity</h2><div class="tiles">'+[    tile('Events this hour',num(last),'Current hour'),tile('Events, 24 hours',num(day),'all event types'),tile('People, 24 hours',num(m.people_24h),'Unique users'),tile('Recordings, 24 hours',num(m.recordings_24h),'Last 24 hours')].join('')+'</div><p class="small muted">Ingestion warnings, last 24 hours: '+num(m.ingestion_warnings_24h)+'</p><details class="machine-details"><summary>Machine details</summary><p>ClickHouse data: '+gb(m.clickhouse_bytes)+'. Swap used: '+gb(mc.swap_used)+' of '+gb(mc.swap_total)+'. Recording metrics are counted, never opened.</p></details>'
   charts(m)
   const svc=(name,list)=>list.length?'<div class="card"><h2>'+name+'</h2>'+list.map(r=>'<div class="svc"><span>'+esc(r.name)+'</span><span class="d">'+esc(r.detail)+'</span>'+st(r.level)+'</div>').join('')+'</div>':''
   paged('services',rows.filter(r=>['PostHog','Lens','Data arriving','Machine'].includes(r.group)),'checks',slice=>{$('services').innerHTML=['PostHog','Lens','Data arriving','Machine'].map(g=>svc(g,slice.filter(r=>r.group===g))).join('')})
@@ -222,10 +329,10 @@ function draw(s){const rows=s.checks||[],m=s.metrics||{},mc=m.machine||{},byName
   paged('changes',s.changes||[],'changes',slice=>{$('changes').innerHTML=slice.map(c=>'<div class="svc"><span>'+esc(c.group)+' · '+esc(c.name)+'</span><span class="d">'+esc(new Date(c.at).toLocaleString())+' · '+esc(LABEL[c.from]||c.from)+' → '+esc(LABEL[c.level]||c.level)+'</span></div>').join('')||'<p class="muted">No changes observed yet. The last 100 transitions are kept until the status service restarts.</p>'})
   const a=s.about||{},dd=m.docker_disk
   $('about').innerHTML=pairs([['PostHog web image',a.posthog_image],['ClickHouse version',a.clickhouse_version],['Docker engine',a.docker_version],['Status service uptime',a.uptime_s==null?null:Math.floor(a.uptime_s/60)+' minutes'],['Check interval',a.interval_s==null?null:a.interval_s+' s'],['Last check duration',a.took_ms==null?null:a.took_ms+' ms'],['Alerts',a.alerts==null?null:a.alerts==='off'?'Off: no webhook in the status page settings':'On ('+a.alerts.format+', after '+a.alerts.after_minutes+' min)'+(a.alerts.last_sent_at?', last sent '+new Date(a.alerts.last_sent_at).toLocaleString():', none sent yet')+(a.alerts.alerting&&a.alerts.alerting.length?', open: '+a.alerts.alerting.join('; '):'')+(a.alerts.last_error?'. Last failure: '+a.alerts.last_error:'')]])+'<details><summary>Docker disk usage · cached 10 minutes</summary>'+(dd?pairs([['Images',gb(dd.images_bytes)],['Containers (writable layers)',gb(dd.containers_bytes)],['Volumes',gb(dd.volumes_bytes)],['Build cache',gb(dd.build_cache_bytes)],['Measured',new Date(dd.at).toLocaleString()]]):'<p>Unavailable</p>')+'</details><p class="small muted">Large counts and table sizes refresh every five minutes. CPU is a share of the whole machine. Histories and recent changes are held in memory.</p>'
-  $('c-title').textContent='Containers ('+box.length+')';table()}
+  $('c-title').textContent='All containers ('+box.length+')';table()}
 let everDrawn=false
 async function tick(){try{const r=await fetch('/replays/system/api',{cache:'no-store'}),d=await r.json().catch(()=>({}));if(r.status===401)return location.reload();if(!r.ok)throw new Error(d.error||'The status service is not answering.');draw(d);everDrawn=true;document.querySelectorAll('.split.empty-wait').forEach(x=>{x.hidden=false;x.classList.remove('empty-wait')})}
-  catch(e){connectionError=e.message;$('banner').className='banner down';$('b-icon').textContent='✕';$('b-head').textContent=e.message;$('b-sub').textContent='Trying again in 15 seconds. If this continues, contact the server administrator.'
+  catch(e){connectionError=e.message;$('banner').className='banner down';$('b-icon').innerHTML=ICON.down;$('b-head').textContent=e.message;$('b-sub').textContent='Trying again in 15 seconds. If this continues, contact the server administrator.'
   if(!everDrawn){$('rows').innerHTML='<tr><td colspan="6" class="muted">Not available until the status service answers.</td></tr>';$('changes').textContent='Not available until the status service answers.';['clickhouse','lens'].forEach(id=>{const c=$(id);if(c&&!c.textContent.trim()){const sp=c.closest('.split');if(sp){sp.hidden=true;sp.classList.add('empty-wait')}}})}}}
 document.querySelector?.('.section-details')?.addEventListener('toggle',function(){if(this.open&&lastStatus)charts(lastStatus.metrics||{})})
 tick();setInterval(tick,15000);setInterval(freshness,1000)

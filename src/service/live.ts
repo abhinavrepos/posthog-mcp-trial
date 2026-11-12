@@ -74,18 +74,19 @@ export function liveHtml(v: Viewer): string {
     const s = presenceSettings()
     const boot = JSON.stringify({ gap: s.gap_s, gaps: [...new Set([...GAP_CHOICES, s.gap_s])].sort((a, b) => a - b), liveMinutes: s.live_minutes, replayBase: `${config.posthog.publicHost}/project/${config.posthog.projectId}/replay/` }).replace(/</g, '\\u003c')
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Live · ${APP_NAME}</title><style>${PAGE_CSS()}
-:root{--act:#535b65;--idle:#d1d5da;--grid:#e7e8e9;--axis:#b9bec4;--live:#067647}
+:root{--act:var(--muted);--idle:var(--line-strong);--grid:var(--line);--axis:var(--faint);--live:var(--ok)}
+.table-wrap:has(#now-rows .empty-state,#list .empty-state) td.empty-state{border-bottom:0}
 
-.now{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}#now-sub{flex:1;min-width:220px}.hero{font-size:36px;font-weight:650;line-height:1}
+.now{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}#now-sub{flex:1;min-width:220px;font-size:14px}#now-updated{margin-left:auto;text-align:right}.hero{font-size:36px;font-weight:650;line-height:1}
 .pulse{width:12px;height:12px;border-radius:50%;background:var(--live);flex:none}.pulse.off{background:var(--axis);animation:none}
-.filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin:4px 0 16px}.filters>div{min-width:150px}.filters>div.grow{flex:1}
+.filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin:4px 0 16px}.filters>div,.filters>div.grow{min-width:0;flex:1 1 0}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
-.tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 20px;min-width:0}.tile span{display:block;font-size:12px;font-weight:500;color:var(--muted)}.tile b{display:block;font-size:26px;line-height:32px;font-weight:650;letter-spacing:-.02em;margin-top:6px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;min-height:112px;min-width:0}.tile span{display:block;font-size:12px;line-height:16px;font-weight:500;color:var(--muted)}.tile b{display:block;font-size:28px;line-height:32px;font-weight:650;letter-spacing:-.02em;margin-top:8px}
 .tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
 .seg{display:flex;gap:2px;height:8px;width:100%;margin-top:8px}.seg i{display:block;height:8px;border-radius:999px}.seg .a{background:var(--act)}.seg .i{background:var(--idle)}
 td .seg{width:90px;margin:0;display:inline-flex;vertical-align:middle}
-.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--muted);margin:-4px 0 6px}.legend span{white-space:nowrap}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
-.chart svg{display:block;width:100%;overflow:visible}.chart text{font:12px system-ui,sans-serif;fill:var(--muted);font-variant-numeric:tabular-nums}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--muted);margin:0 0 12px}.legend span{white-space:nowrap}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.chart svg{display:block;width:100%;overflow:visible}.chart text{font-size:12px;font-family:inherit;fill:var(--muted);font-variant-numeric:tabular-nums}
 .chart .hit{fill:transparent;cursor:default;outline:none}.chart g.col:hover path,.chart g.col.on path{filter:brightness(1.12)}
 .chart g.col:focus-visible .hit{stroke:var(--accent);stroke-width:1}
 .heat{display:grid;gap:2px;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}.heat div{height:16px;border-radius:3px}
@@ -99,18 +100,19 @@ tr.click{cursor:pointer}tr.click:hover td{background:var(--bg)}td.num,th.num{tex
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--live);margin-right:6px}
 .loading{opacity:.55;transition:opacity .2s}.pill{display:inline-flex;gap:6px;align-items:center;background:var(--chip);border-radius:999px;padding:3px 10px;font-size:13px}
 .pill button{padding:0 4px;border:0;background:none;color:var(--accent);font-size:15px;line-height:1}
-details.how summary{cursor:pointer;font-weight:600}details.how li{margin:4px 0}
+details.how summary{cursor:pointer;font-weight:500}details.how li{margin:4px 0}
 .tl-head{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}.tl-nav{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .tl-nav input[type=date]{width:auto;padding:6px 8px}.tl-nav button{padding:6px 11px}.tl-whole{display:flex;gap:5px;align-items:center;margin:0 4px;font-size:13px;color:var(--muted)}.tl-whole input{width:auto}
 .tl-facts{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tl-facts span{padding:5px 0;font-size:13px;color:var(--muted)}.tl-facts b{color:var(--ink);font-variant-numeric:tabular-nums}
 #tl-chart{outline:none;border-radius:6px}#tl-chart:focus-visible{box-shadow:0 0 0 2px var(--accent)}#tl-chart svg{cursor:crosshair}
 .tlbtn{padding:3px 9px;font-size:13px}#tl-pick{min-height:34px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.live-settings{align-self:flex-end;padding:10px 0;min-width:150px}.live-settings[open]{flex-basis:100%}.live-settings>div{max-width:260px;margin-top:12px}.filters>div{min-width:0;flex:1 1 150px}.heat-scroll{overflow-x:auto;max-width:100%}.heat{min-width:640px}.tiles{gap:16px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}.tl-facts{gap:6px 20px}
+.live-settings{align-self:flex-end;min-width:0;padding:0;flex:0 0 auto}.live-settings>summary{display:flex;align-items:center;min-height:36px;padding:7px 12px;border:1px solid var(--control);border-radius:var(--r-sm)}.live-settings[open]{flex-basis:100%}.live-settings>div{max-width:260px;margin-top:12px}.heat-scroll{overflow-x:auto;max-width:100%}.heat{min-width:640px}.tiles{gap:16px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}.tl-facts{gap:6px 20px}
 @media(max-width:600px){.hero{font-size:30px}.now{gap:10px}#now-sub{min-width:0;flex-basis:180px}.live-settings{flex-basis:100%;padding:0}.tl-nav{gap:4px}.tl-nav input[type=date]{max-width:145px}.tl-facts{gap:4px 14px}}
+#chart-title{margin-bottom:4px}#chart-title+p{margin:0 0 16px}.chart-empty{height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center}#list thead button.ghost{min-height:24px;padding:0;font-size:12px;line-height:20px;font-weight:500;color:var(--muted)}#list-csv{font-size:13px;font-weight:500;min-height:32px;padding:5px 10px}#list-note:empty,#live-status:empty{display:none}
 </style></head>
 <body>${headerHtml(v, 'Live')}<main class="wide"><h1>Live activity</h1><p id="live-status" class="small" aria-live="polite"></p>
 
-<div class="card"><h2>In the app now</h2><div class="now"><span aria-hidden="true" class="pulse off" id="pulse"></span><span class="hero" id="now-count">–</span><span class="muted" aria-live="polite" id="now-sub">Loading…</span></div>
+<div class="card"><h2>In the app now</h2><div class="now"><span aria-hidden="true" class="pulse off" id="pulse"></span><span class="hero" id="now-count">–</span><span class="muted" aria-live="polite" id="now-sub">Loading…</span><span id="now-updated" class="small muted"></span></div>
 <div class="table-wrap"><table><thead><tr><th scope="col">Client</th><th scope="col">Person</th><th scope="col">Last action</th><th scope="col">In the app since</th><th scope="col" class="num">Today in the app</th><th scope="col" class="num">Today active</th><th scope="col">Actions</th></tr></thead><tbody id="now-rows"></tbody></table><div id="now-pager"></div></div></div>
 
 <div class="filters" id="filters">
@@ -133,10 +135,10 @@ details.how summary{cursor:pointer;font-weight:600}details.how li{margin:4px 0}
 
 <div id="report">
 <div class="tiles" id="tiles"></div>
-<div class="card"><h2 id="chart-title">Time in the app</h2><p class="small muted" style="margin-top:-6px">Total time across all people.</p><div class="legend"><span><i aria-hidden="true" style="background:var(--act)"></i>Active</span><span><i aria-hidden="true" style="background:var(--idle)"></i>Idle</span></div>
+<div class="card"><h2 id="chart-title">Time in the app</h2><p class="small muted">Total time across all people.</p><div class="legend"><span><i aria-hidden="true" style="background:var(--act)"></i>Active</span><span><i aria-hidden="true" style="background:var(--idle)"></i>Idle</span></div>
 <div class="chart" id="chart"></div><p class="small muted" id="chart-note"></p>
 <details><summary class="small">Show as a table</summary><div class="table-wrap"><table id="chart-table"></table><div id="chart-table-pager"></div></div></details></div>
-<div class="card" id="heat-card"><h2>Active time by hour</h2><p class="small muted" style="margin-top:-6px">Darker hours have more active time across all people.</p><div class="heat-scroll" tabindex="0" role="region" aria-label="Hourly activity; scroll to see all hours"><div class="heat" id="heat" role="group" aria-label="Active time by hour. Use arrow keys to move between hours."></div></div><div class="scale" id="scale"></div></div>
+<div class="card" id="heat-card"><h2>Active time by hour</h2><p class="small muted">Darker hours have more active time across all people.</p><div class="heat-scroll" tabindex="0" role="region" aria-label="Hourly activity; scroll to see all hours"><div class="heat" id="heat" role="group" aria-label="Active time by hour. Use arrow keys to move between hours."></div></div><div class="scale" id="scale"></div></div>
 <div class="card"><div class="row" style="align-items:center;margin-bottom:8px"><h2 id="list-title" style="margin:0;flex:1">Clients</h2><span id="who-pill"></span><button class="ghost" id="list-csv" type="button">Download CSV</button></div>
 <div class="table-wrap"><table id="list"></table><div id="list-pager"></div></div><p class="small muted" id="list-note"></p></div>
 <div class="card hidden" id="sessions-card"><div class="row" style="align-items:center;margin-bottom:8px"><h2 style="margin:0;flex:1" id="sessions-title">Sessions</h2><button class="ghost" id="sessions-csv" type="button">Download CSV</button></div>
@@ -193,17 +195,18 @@ function hover(node,title,rows){node.addEventListener('pointerenter',()=>{node.c
 // ---------------------------------------------------------------- live now
 let LIVE=new Set();
 const nowPager=makePager({mount:$('now-pager'),noun:'people',size:25,draw:people=>{ const tb=$('now-rows');tb.innerHTML='';
- if(!people.length){const tr=el('tr');const td=el('td','muted','Nobody has done anything in the app in the last few minutes.');td.colSpan=7;tr.appendChild(td);tb.appendChild(tr)}
+ if(!people.length){const tr=el('tr');const td=el('td','empty-state','No active people in the last 5 minutes.');td.colSpan=7;tr.appendChild(td);tb.appendChild(tr)}
  people.forEach(p=>{const tr=el('tr');const choose=()=>{S.client=p.client_id;S.user='';S.range='today';syncControls();load()};
   const c=el('td');c.appendChild(el('span','dot'));const b=el('button','ghost',p.client_name);b.setAttribute('aria-label','Show people at '+p.client_name);b.onclick=choose;c.appendChild(b);tr.appendChild(c);
   tr.appendChild(el('td',null,p.user));tr.appendChild(el('td',null,ago(p.last_seen)));tr.appendChild(el('td',null,timeOf(p.session_start)));
   tr.appendChild(el('td','num',dur(p.today.open_s)));tr.appendChild(el('td','num',dur(p.today.active_s)));tr.appendChild(tlCell(p.user,p.client_id,dayOf(new Date()),p.client_name));tb.appendChild(tr)});}});
 async function loadNow(){try{const r=await api('/replays/live/api/now?tz='+encodeURIComponent(TZ)+'&gap='+S.gap);
- LIVE=new Set(r.people.map(p=>p.client_id));const clients=LIVE.size;
+ LIVE=new Set(r.people.map(p=>p.client_id));
  $('now-count').textContent=r.people.length.toLocaleString();$('pulse').classList.toggle('off',!r.people.length);
- $('now-sub').textContent=(r.people.length===1?'person':'people')+' in the app now'+(r.people.length?', from '+clients+' client'+(clients===1?'':'s'):'')+' · an action in the last '+r.minutes+' minutes · updated '+new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+ $('now-sub').textContent=(r.people.length===1?'person':'people')+' active in the last '+r.minutes+' minutes';
+ $('now-updated').textContent='Updated '+new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
  nowPager.set(r.people,true);$('now-sub').className='muted';$('now-sub').removeAttribute('role');
- }catch(e){$('now-sub').textContent=e.message;$('now-sub').className='err';$('now-sub').setAttribute('role','alert')}}
+ }catch(e){$('now-updated').textContent='';$('now-sub').textContent=e.message;$('now-sub').className='err';$('now-sub').setAttribute('role','alert')}}
 
 // ---------------------------------------------------------------- the report
 let R=null,SESS=[],sortKey='open_s',sortDir=-1,busy=0,sbusy=0;
@@ -223,8 +226,8 @@ function fillClients(){const s=$('client'),cur=S.client;s.innerHTML='';s.appendC
 function tile(label,value,note,bar){const t=el('div','tile');t.appendChild(el('span',null,label));t.appendChild(el('b',null,value));if(note)t.appendChild(el('small',null,note));if(bar)t.appendChild(bar);$('tiles').appendChild(t)}
 function renderTiles(){const T=R.totals;$('tiles').innerHTML='';const[f,t]=period();const days=(Date.parse(t)-Date.parse(f))/864e5+1;
  tile('In the app',hrs(T.open_s),days>1?hrs(T.open_s/days)+' a day':null);
- tile('Active',hrs(T.active_s),pct(T.active_s,T.open_s)+' of the time',segBar(T.active_s,T.idle_s));
- tile('Idle',hrs(T.idle_s),pct(T.idle_s,T.open_s)+' of the time');
+ tile('Active',hrs(T.active_s),T.open_s===0?'No activity':pct(T.active_s,T.open_s)+' of the time',T.open_s>0?segBar(T.active_s,T.idle_s):null);
+ tile('Idle',hrs(T.idle_s),T.open_s===0?'No activity':pct(T.idle_s,T.open_s)+' of the time');
  if(!S.client)tile('Clients',T.clients.toLocaleString());
  tile('People',T.people.toLocaleString(),T.people?dur(T.open_s/T.people)+' each on average':null);
  tile('Sessions',T.sessions.toLocaleString(),T.sessions?dur(T.open_s/T.sessions)+' on average':null)}
@@ -241,7 +244,7 @@ function colPath(x,y,w,h,r){r=Math.min(r,h,w/2);return'M'+x+','+(y+h)+'V'+(y+r)+
 function renderChart(){const{unit,items}=series();const box=$('chart');box.innerHTML='';
  $('chart-title').textContent=unit==='hour'?'Time in the app, hour by hour':'Time in the app, day by day';
  const W=Math.max(320,box.clientWidth||900),H=230,L=52,B=28,T=8,Rr=6,ph=H-T-B,pw=W-L-Rr;
- const max=Math.max(...items.map(i=>i.open),0);const step=niceStep(Math.max(max,60));const top=Math.max(step,Math.ceil(max/step)*step);
+ const max=Math.max(...items.map(i=>i.open),0);box.previousElementSibling.hidden=max===0;if(max===0){box.appendChild(el('div','chart-empty','No activity recorded for this period.'));$('chart-note').textContent='';chartPager.set(items,keepPage('chart',params(false).toString()));return}const step=niceStep(Math.max(max,60));const top=Math.max(step,Math.ceil(max/step)*step);
  const svg=sv('svg',{viewBox:'0 0 '+W+' '+H,height:H,role:'img','aria-label':$('chart-title').textContent});
  for(let v=0;v<=top+1e-9;v+=step){const y=T+ph-(v/top)*ph;svg.appendChild(sv('line',{x1:L,x2:W-Rr,y1:y,y2:y,stroke:v===0?'var(--axis)':'var(--grid)','stroke-width':1}));const tx=sv('text',{x:L-8,y:y+4,'text-anchor':'end'});tx.textContent=axisLabel(v);svg.appendChild(tx)}
  const band=pw/items.length,bw=Math.max(3,Math.min(24,band*0.62)),every=Math.max(1,Math.ceil(items.length/Math.floor(pw/(unit==='hour'?28:64))));
@@ -259,7 +262,7 @@ function renderChart(){const{unit,items}=series();const box=$('chart');box.inner
 const chartPager=makePager({mount:$('chart-table-pager'),noun:'time periods',size:25,draw:items=>{const unit=series().unit; const tb=$('chart-table');tb.innerHTML='';const hr=el('tr');[unit==='hour'?'Hour':'Day','In the app','Active','Idle','People'].forEach((h,i)=>hr.appendChild(el('th',i?'num':null,h)));const th=el('thead');th.appendChild(hr);tb.appendChild(th);const bd=el('tbody');
  items.forEach(it=>{const tr=el('tr');tr.appendChild(el('td',null,it.title));[dur(it.open),dur(it.active),dur(it.idle),String(it.people)].forEach(v=>tr.appendChild(el('td','num',v)));bd.appendChild(tr)});tb.appendChild(bd)}});
 
-const RAMP=['#eef0f2','#e1e4e8','#d4d8de','#c7ccd3','#bac1c9','#adb5bf','#a0a9b5','#939eab','#8692a1','#798697','#6c7a8d','#5f6e83','#526279'];
+const RAMP=Array.from({length:13},(_,i)=>'color-mix(in srgb,var(--muted) '+Math.round(8+i*7)+'%,var(--card))');
 function renderHeat(){const[f,t]=period();const card=$('heat-card');if(f===t){card.classList.add('hidden');return}card.classList.remove('hidden');
  const box=$('heat');box.innerHTML='';box.style.gridTemplateColumns='92px repeat(24,minmax(0,1fr))';
  const by=new Map(R.hours.map(h=>[h.day+'|'+h.hour,h]));const max=Math.max(1,...R.hours.map(h=>h.active_s));
@@ -280,12 +283,12 @@ function renderList(slice){const pick=R.clients.find(c=>c.client_id===S.client);
  $('list-title').textContent=S.client?'People at '+(pick?pick.client_name:S.client):'Clients';
  const pill=$('who-pill');pill.innerHTML='';if(S.client){const p=el('span','pill',pick?pick.client_name:S.client);const x=el('button',null,'×');x.title='Show all clients';x.setAttribute('aria-label','Show all clients');x.onclick=()=>{S.client='';S.user='';load()};p.appendChild(x);pill.appendChild(p)}
  const t=$('list');t.innerHTML='';const hr=el('tr');
- cols().forEach(([k,label,num])=>{if(k==='tl'){hr.appendChild(el('th',null,'Timeline'));return}const th=el('th',num?'num':'');th.setAttribute('aria-sort',k===sortKey?(sortDir<0?'descending':'ascending'):'none');const b=el('button','ghost',label);b.style.padding='2px 4px';if(k===sortKey){const arrow=el('span','arr',sortDir<0?'▼':'▲');arrow.setAttribute('aria-hidden','true');b.appendChild(arrow)}b.onclick=()=>{if(sortKey===k)sortDir=-sortDir;else{sortKey=k;sortDir=num||k==='last'||k==='share'?-1:1}renderList();const buttons=$('list').querySelectorAll('thead button');for(const button of buttons)if(button.textContent.startsWith(label)){button.focus();break}};th.appendChild(b);hr.appendChild(th)});
+ cols().forEach(([k,label,num])=>{if(k==='tl'){hr.appendChild(el('th',null,'Timeline'));return}const th=el('th',num?'num':'');th.setAttribute('aria-sort',k===sortKey?(sortDir<0?'descending':'ascending'):'none');const b=el('button','ghost',label);if(k===sortKey){const arrow=el('span','arr',sortDir<0?'▼':'▲');arrow.setAttribute('aria-hidden','true');b.appendChild(arrow)}b.onclick=()=>{if(sortKey===k)sortDir=-sortDir;else{sortKey=k;sortDir=num||k==='last'||k==='share'?-1:1}renderList();const buttons=$('list').querySelectorAll('thead button');for(const button of buttons)if(button.textContent.startsWith(label)){button.focus();break}};th.appendChild(b);hr.appendChild(th)});
  const th=el('thead');th.appendChild(hr);t.appendChild(th);const bd=el('tbody');
  const val=(r,k)=>k==='share'?(r.open_s?r.active_s/r.open_s:0):r[k];
  const list=[...rows()].sort((a,b)=>{const x=val(a,sortKey),y=val(b,sortKey);return(typeof x==='string'?x.localeCompare(y):(x||0)-(y||0))*sortDir});
  if(!slice){listPager.set(list,keepPage('list',params(false).toString()+'|'+sortKey+'|'+sortDir));return}
- if(!list.length){const tr=el('tr');const td=el('td','muted','No activity in this period. Try a different period or client.');td.colSpan=cols().length;tr.appendChild(td);bd.appendChild(tr)}
+ if(!list.length){const tr=el('tr');const td=el('td','empty-state','No activity in this period. Try a different period or client.');td.colSpan=cols().length;tr.appendChild(td);bd.appendChild(tr)}
  slice.forEach(r=>{const tr=el('tr');let choose;
   if(S.client){tr.title='Show '+r.user+"'s sessions";choose=()=>{S.user=S.user===r.user?'':r.user;syncUrl();loadSessions().catch(e=>{const status=$('live-status');status.setAttribute('role','alert');status.textContent=e.message+' Choose the person again to retry.'});renderList();for(const b of $('list').querySelectorAll('tbody button'))if(b.getAttribute('aria-label')==='Filter sessions for '+r.user){b.focus();break}};if(S.user===r.user)tr.style.background='var(--chip)'}
   else{tr.title='Show the people at '+r.client_name;choose=()=>{S.client=r.client_id;S.user='';sortKey='open_s';sortDir=-1;load();scrollTo({top:0,behavior:'smooth'})}}
@@ -298,7 +301,7 @@ function renderList(slice){const pick=R.clients.find(c=>c.client_id===S.client);
    else td=el('td','num',k.endsWith('_s')?dur(r[k]):Number(r[k]).toLocaleString());
    tr.appendChild(td)});bd.appendChild(tr)});
 
- t.appendChild(bd);$('list-note').textContent=S.client?'Choose a person to filter their sessions below. Choose them again to clear.':'Choose a client to see its people and sessions.'}
+ t.appendChild(bd);$('list-note').textContent=!list.length?'':S.client?'Choose a person to filter their sessions below. Choose them again to clear.':'Choose a client to see its people and sessions.'}
 
 const sessionsPager=makePager({mount:$('sessions-pager'),noun:'sessions',size:25,draw:slice=>renderSessions(slice)});
 function renderSessions(slice){if(!slice){sessionsPager.set(SESS,keepPage('sessions',params(true).toString()));return}const card=$('sessions-card');card.classList.remove('hidden');

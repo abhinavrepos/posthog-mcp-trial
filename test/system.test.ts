@@ -94,7 +94,7 @@ test('the browser escapes container names, image names, health output and ClickH
         assert.ok(!b.get(id).innerHTML.includes('<img'))
         assert.ok(b.get(id).innerHTML.includes('&lt;img'))
     }
-    assert.match(b.get('tiles').innerHTML, /tile problem/)
+    assert.match(b.get('tiles').innerHTML, /tile failure/)
     assert.match(b.get('tiles').innerHTML, /1 unhealthy/)
     assert.match(b.get('tiles').innerHTML, /1 of 1/)
 })
