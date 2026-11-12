@@ -18,8 +18,9 @@
 # PostHog Lens goes into LENS_DIR [the folder next to PostHog's: <parent>/posthog-lens], and the settings
 # and data of an earlier PostHog Lens come over from OLD_DIR [/data04/ph_ops/posthog-mcp-trial].
 #
-# A long upgrade should survive a dropped session:
-#   sudo YES=1 nohup bash upgrade.sh <kit tag> > upgrade.log 2>&1 < /dev/null &
+# Once you say go, it runs in the background (a dropped SSH session does not stop it) and this terminal
+# follows it; Ctrl-C stops only the following. From any session: sudo posthog-lens progress -f (where it is),
+# sudo posthog-lens history (earlier runs). The status page and Lens's System page show it too.
 # If it stops, fix what it says and run the same command again: it continues where it stopped. Everything
 # it prints also goes to /var/log/posthog-lens/. Needs: root, Docker, and (for ECR) the AWS CLI with an
 # instance role that can read the registry (AmazonEC2ContainerRegistryReadOnly).
@@ -138,12 +139,77 @@ if [ "${YES:-}" != 1 ]; then
     [[ "$a" =~ ^[Yy] ]] || die "Stopped; nothing was changed."
 fi
 
+# ------------------------------------------------------------------ a run anyone can follow
+# The run itself goes on in the background (setsid), so a dropped SSH session does not stop it; this
+# terminal only follows it (Ctrl-C stops the following, not the run). FOREGROUND=1: no background run.
+# What it is doing is in $RUNS (current.json while it runs, history.jsonl after), which
+# "sudo posthog-lens progress [-f]", "sudo posthog-lens history", the status page and Lens's System page read.
+RUNS=/var/lib/posthog-lens/runs
+run_write() { # file key value ...: current.json is replaced, history.jsonl gets a line
+    python3 - "$@" <<'PY'
+import json, os, sys
+path, *kv = sys.argv[1:]
+d = dict(zip(kv[::2], kv[1::2]))
+for k in ("seconds", "code"):
+    if k in d: d[k] = int(d[k])
+line = json.dumps(d) + "\n"
+if path.endswith(".jsonl"):
+    with open(path, "a") as f: f.write(line)
+    os.chmod(path, 0o644)
+else:
+    with open(path + ".tmp", "w") as f: f.write(line)
+    os.chmod(path + ".tmp", 0o644); os.replace(path + ".tmp", path)
+PY
+}
+# The step or phase it is in, and the latest "... 12 min: 340 of 1020 migrations" line (never other output).
+run_step() { sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -aE '==> |== phase [0-9]+ of' | tail -1 | sed -E 's/^.*(==> |== )//' | cut -c1-160 || true; }
+run_detail() { sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | tail -3 | grep -aE '^[0-9: ]*\.\.\. ' | tail -1 | sed -E 's/^[0-9: ]*\.\.\. //' | cut -c1-160 || true; }
+run_follow() { # log id pid: shows the log until the run ends, then exits with the run's code
+    local log="$1" id="$2" pid="$3" tp code
+    trap 'echo; echo "Stopped following; it carries on in the background. Follow again: sudo posthog-lens progress -f"; exit 0' INT
+    for _ in $(seq 60); do [ -f "$log" ] && break; kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+    tail -n +1 -F "$log" 2>/dev/null & tp=$!
+    while kill -0 "$pid" 2>/dev/null; do sleep 2; done
+    sleep 2; kill "$tp" 2>/dev/null || true; wait "$tp" 2>/dev/null || true
+    code="$(grep -F "\"id\": \"$id\"" "$RUNS/history.jsonl" 2>/dev/null | tail -1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.read() or "{}").get("code", 1))' 2>/dev/null || echo 1)"
+    exit "$code"
+}
+run_detach() { # kind: start this script again in the background and follow it here
+    [ "${LENS_DETACHED:-}" != 1 ] && [ "${FOREGROUND:-}" != 1 ] && command -v setsid >/dev/null || return 0
+    local stamp; stamp="$(date -u +%Y%m%d-%H%M%S)"
+    export LENS_DETACHED=1 YES=1 LENS_RUN_ID="$1-$stamp-$$" LENS_RUN_LOG="/var/log/posthog-lens/$1-$stamp.log"
+    mkdir -p /var/log/posthog-lens
+    setsid bash "$0" </dev/null >/dev/null 2>&1 &
+    say "Running in the background, so a dropped connection does not stop it. Following it here (Ctrl-C stops"
+    echo "    only the following). From any session: sudo posthog-lens progress -f"
+    run_follow "$LENS_RUN_LOG" "$LENS_RUN_ID" $!
+}
+run_start() { # kind
+    RUN_KIND="$1"; RUN_ID="${LENS_RUN_ID:-$1-$(date -u +%Y%m%d-%H%M%S)-$$}"; RUN_T0=$(date +%s); RUN_STARTED="$(date -u +%FT%TZ)"; RUN_RESULT=failed
+    mkdir -p "$RUNS"; chmod 755 "$(dirname "$RUNS")" "$RUNS"
+    ( trap - EXIT; while kill -0 $$ 2>/dev/null; do
+        run_write "$RUNS/current.json" id "$RUN_ID" kind "$RUN_KIND" kit "${KIT_TAG:-}" started "$RUN_STARTED" updated "$(date -u +%FT%TZ)" log "$LOG" step "$(run_step)" detail "$(run_detail)" >/dev/null 2>&1 || true
+        sleep 10
+    done ) &
+    RUN_BEAT=$!
+}
+run_end() { # exit code
+    kill "$RUN_BEAT" 2>/dev/null || true
+    [ "$1" = 0 ] || [ "$RUN_RESULT" != ready ] || RUN_RESULT=failed
+    run_write "$RUNS/history.jsonl" id "$RUN_ID" kind "$RUN_KIND" kit "${KIT_TAG:-}" started "$RUN_STARTED" ended "$(date -u +%FT%TZ)" seconds "$(( $(date +%s) - RUN_T0 ))" result "$RUN_RESULT" code "$1" log "$LOG" step "$(run_step)" || true
+    rm -f "$RUNS/current.json"
+}
+
 # ------------------------------------------------------------------ go
+export KIT_TAG POSTHOG_DIR LENS_DIR REGISTRY REGION
+run_detach upgrade
 mkdir -p /var/log/posthog-lens "$(dirname "$PIN")"
 echo "$KIT_TAG" >"$PIN"
-LOG="/var/log/posthog-lens/upgrade-$(date -u +%Y%m%d-%H%M%S).log"
+LOG="${LENS_RUN_LOG:-/var/log/posthog-lens/upgrade-$(date -u +%Y%m%d-%H%M%S).log}"
 exec > >(tee -a "$LOG") 2>&1
 say "Log: $LOG"
+run_start upgrade
+trap 'rc=$?; run_end $rc; rm -rf "$KITDIR"' EXIT
 if [ $FIRST = 1 ]; then
     # setup writes the settings, installs the command, brings an earlier PostHog Lens's data over, then updates.
     say "Setting up posthog-lens and $([ $UPGRADE = 1 ] && echo "upgrading PostHog" || echo "updating PostHog Lens")"
@@ -162,8 +228,10 @@ echo
 echo
 # Not done until it works: wait for everything to be up, then one verdict.
 if "$SBIN" check "${CHECK_MINUTES:-10}"; then
+    RUN_RESULT=ready
     echo "${B}${G}Done.${N}"
 else
+    RUN_RESULT=not_ready
     echo "${B}${R}Installed, but not working yet${N} (see above). Look again in a few minutes: sudo posthog-lens check"
     if [ $UPGRADE = 1 ]; then echo "    If it stays broken: sudo posthog-lens rollback   (PostHog from before the upgrade)"; fi
     CHECK_FAILED=1
