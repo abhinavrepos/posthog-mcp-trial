@@ -8,7 +8,7 @@
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 
-import { anonymiseOn, clientOfCodename, countBlock, hideClientsDeep, namesClient, outsideEmail, REFUSAL, type BlockKind } from '../core/anonymise.ts'
+import { anonFor, anonSettings, clientOfCodename, countBlock, hideClientsDeep, isClientCode, namesClient, outsideEmail, refusalText, type BlockKind } from '../core/anonymise.ts'
 
 type Rpc = Record<string, any>
 const isObj = (v: unknown): v is Rpc => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -20,8 +20,10 @@ export function revealArgs(tool: string, args: unknown): unknown {
     if (tool === 'resolve_client' && isObj(args)) {
         // Name or email lookup would tell the AI which names are clients, or link a company's email domain
         // to its codename: only a codename is taken.
-        const id = clientOfCodename(String(args.query ?? '').trim())
+        const q = String(args.query ?? '').trim()
+        const id = clientOfCodename(q)
         if (id) return { ...args, query: id }
+        if (!anonSettings().codes && isClientCode(q)) return { ...args, query: q }
         throw new Refused()
     }
     const walk = (v: unknown, key: string): unknown => {
@@ -29,8 +31,10 @@ export function revealArgs(tool: string, args: unknown): unknown {
             if (CLIENT_KEY.test(key)) {
                 if (!v.trim()) return v
                 const id = clientOfCodename(v)
-                if (!id) throw new Refused()
-                return id
+                if (id) return id
+                // Codes shown to the AI (an admin's choice): a real code is taken as it is.
+                if (!anonSettings().codes && isClientCode(v.trim())) return v.trim()
+                throw new Refused()
             }
             // A client's user's email names the company by its domain.
             if (namesClient(v) || outsideEmail(v)) throw new Refused()
@@ -70,12 +74,12 @@ export function registryOf(server: unknown): Registry | undefined {
  * With a registry, an unknown tool or prompt gets one fixed answer (an error that repeats the name back
  * would show its codename), and arguments a tool does not take are dropped before any matching. */
 export function guardRequest(msg: unknown, kind: BlockKind = 'lens_refused', registry?: Registry): { msg?: Rpc; answer?: Rpc } {
-    if (!anonymiseOn() || !isObj(msg) || typeof msg.method !== 'string') return { msg: msg as Rpc }
+    if (!anonFor(kind.startsWith('posthog') ? 'posthog' : 'lens') || !isObj(msg) || typeof msg.method !== 'string') return { msg: msg as Rpc }
     const refuse = (): { answer: Rpc } => {
         countBlock(kind)
         return { answer: msg.method === 'tools/call'
-            ? { jsonrpc: '2.0', id: msg.id ?? null, result: { content: [{ type: 'text', text: REFUSAL }], isError: true } }
-            : { jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: REFUSAL } } }
+            ? { jsonrpc: '2.0', id: msg.id ?? null, result: { content: [{ type: 'text', text: refusalText() }], isError: true } }
+            : { jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32602, message: refusalText() } } }
     }
     try {
         if (msg.method === 'tools/call' || msg.method === 'prompts/get') {
@@ -105,7 +109,7 @@ export function guardRequest(msg: unknown, kind: BlockKind = 'lens_refused', reg
 
 /** A message on its way out, with every client name and code replaced by its codename. */
 export function guardResponse<T>(msg: T, kind: BlockKind = 'lens_cleaned'): T {
-    if (!anonymiseOn()) return msg
+    if (!anonFor(kind.startsWith('posthog') ? 'posthog' : 'lens')) return msg
     const { value, n } = hideClientsDeep(withoutMedia(msg) as T)
     if (n) countBlock(kind)
     return value

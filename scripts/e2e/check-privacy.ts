@@ -43,13 +43,13 @@ async function session(path: string, token: string) {
 }
 
 const start = (await api('/replays/admin/privacy/api/state')).body
-const original = { on: start.on, posthog: start.posthog }
+const original = start.settings
 const key = (await api('/replays/connect/api/tokens', 'POST', { label: 'privacy-check' })).body
 const token: string = key.token
 try {
     // ------------------------------------------------------------ turned on in the middle of a chat
     // A chat open before the switch: names while off, codenames from the next message on.
-    await api('/replays/admin/privacy/api/settings', 'POST', { on: false })
+    await api('/replays/admin/privacy/api/settings', 'POST', { on: false, lens: true, posthog: 'block', triage: true, codes: true, emails: true, message: '' })
     const early = await session('/mcp', token)
     const rq = (await api('/replays/dashboards/api/rescue', 'GET')).body?.clients?.[0]
     const beforeOn = await mcp('/mcp', token, 'tools/call', { name: 'rescue_queue', arguments: {} }, early.sid)
@@ -160,6 +160,18 @@ try {
         await api('/replays/admin/privacy/api/settings', 'POST', { posthog: 'block' })
     } else note(`PostHog MCP proxy not available (HTTP ${ph.status}): skipped`)
 
+    // ------------------------------------------------------------ an admin's own choices
+    const custom = 'Please use the client codename from Lens.'
+    await api('/replays/admin/privacy/api/settings', 'POST', { message: custom })
+    ok('custom message to the AI is used', (await mcp('/mcp', token, 'tools/call', { name: 'client_story', arguments: { client: target.client } }, init.sid)).raw.includes(custom))
+    await api('/replays/admin/privacy/api/settings', 'POST', { message: '', codes: false })
+    const codesShown = await mcp('/mcp', token, 'tools/call', { name: 'client_story', arguments: { client: target.client } }, init.sid)
+    ok('codes visible (admin choice): a real code is taken and shown, names still hidden', !REFUSED.test(codesShown.raw) && codesShown.raw.includes(target.client) && (!target.name || !codesShown.raw.toLowerCase().includes(target.name.toLowerCase())), codesShown.raw.slice(0, 160))
+    await api('/replays/admin/privacy/api/settings', 'POST', { codes: true, lens: false })
+    const lensOff = await mcp('/mcp', token, 'tools/call', { name: 'client_story', arguments: { client: target.client } }, init.sid)
+    ok('Lens tools not covered (admin choice): answered as before', !REFUSED.test(lensOff.raw) && lensOff.status === 200, lensOff.raw.slice(0, 160))
+    await api('/replays/admin/privacy/api/settings', 'POST', { lens: true })
+    ok('covered again after the choice is undone', REFUSED.test((await mcp('/mcp', token, 'tools/call', { name: 'client_story', arguments: { client: target.client } }, init.sid)).raw))
     const counts = (await api('/replays/admin/privacy/api/state')).body.counts
     ok('blocked and cleaned counts recorded', (counts.lens_refused ?? 0) > 0 && (counts.lens_cleaned ?? 0) > 0, JSON.stringify(counts))
     writeFileSync(`${S}/privacy-payloads.txt`, all.join('\n\n----\n\n'))
@@ -171,7 +183,7 @@ try {
 } finally {
     await api('/replays/admin/privacy/api/settings', 'POST', original)
     await api('/replays/connect/api/tokens/' + key.id, 'DELETE')
-    ok('setting put back as it was', JSON.stringify(((b) => ({ on: b.on, posthog: b.posthog }))((await api('/replays/admin/privacy/api/state')).body)) === JSON.stringify(original))
+    ok('settings put back as they were', JSON.stringify((await api('/replays/admin/privacy/api/state')).body.settings) === JSON.stringify(original))
     await browser.close()
 }
 console.log(report.join('\n'))

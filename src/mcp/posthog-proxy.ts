@@ -5,7 +5,7 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { StringDecoder } from 'node:string_decoder'
 
-import { anonymiseOn, hideClients, namesClient, posthogMode, REFUSAL, revealCodenames } from '../core/anonymise.ts'
+import { anonFor, hideClients, namesClient, posthogMode, refusalText, revealCodenames } from '../core/anonymise.ts'
 import { countBlock } from '../core/anonymise.ts'
 import { refreshRoster } from '../core/anonroster.ts'
 import { guardRequest, guardResponse } from './anonymise.ts'
@@ -74,7 +74,7 @@ export function replayRefusal(value: unknown, name = 'lens'): Rpc | undefined {
 // into client codes, client names and codes in the command refused, and results cleaned (best effort).
 const LOOKUP = new Set(['help', 'tools', 'search', 'info', 'schema'])
 const DOCS_ONLY = new Set(['docs-search'])
-export function anonRefusal(value: unknown, name = 'lens', mode = posthogMode()): { refusal?: Rpc; value?: unknown } {
+export function anonRefusal(value: unknown, name = 'lens', mode: 'block' | 'filter' | 'off' = posthogMode()): { refusal?: Rpc; value?: unknown } {
     if (!object(value)) return { value }
     if (value.method === 'tools/call' && value.params?.name === 'exec') {
         const command = String(value.params.arguments?.command ?? '')
@@ -88,10 +88,10 @@ export function anonRefusal(value: unknown, name = 'lens', mode = posthogMode())
                 if (v === 'call' && tool && DOCS_ONLY.has(tool)) continue
                 return refuse(`PostHog data commands are switched off while client anonymisation is on in Lens: their results can contain client names. Use the ${name} server's tools instead; they answer with client codenames. PostHog's docs search still works (call docs-search).`)
             }
-            if (namesClient(command)) return refuse(REFUSAL)
+            if (namesClient(command)) return refuse(refusalText())
             return { value }
         }
-        if (namesClient(command)) return refuse(REFUSAL)
+        if (namesClient(command)) return refuse(refusalText())
         return { value: { ...value, params: { ...value.params, arguments: { ...value.params.arguments, command: revealCodenames(command) } } } }
     }
     const g = guardRequest(value, 'posthog_refused')
@@ -149,11 +149,11 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
     res.once('close', onClose)
     // Client anonymisation (Admin → Client privacy for AI): requests checked, every answer cleaned.
     // Checked again for every message: a stream opened before an admin turned it on is cleaned from then on.
-    const anon = anonymiseOn()
-    const clean = (v: unknown) => (anonymiseOn() ? guardResponse(v, 'posthog_cleaned') : v)
+    const anon = anonFor('posthog')
+    const clean = (v: unknown) => (anonFor('posthog') ? guardResponse(v, 'posthog_cleaned') : v)
     const out = (v: unknown) => clean(rewriteResponse(v, options.name, options.info))
     const sseLine = (line: string) => {
-        if (!anonymiseOn()) return rewriteSseLine(line, options.name, options.info)
+        if (!anonFor('posthog')) return rewriteSseLine(line, options.name, options.info)
         if (!line.startsWith('data:')) return hideClients(line).text
         const m = /^(data: *)(.*?)(\r?)$/.exec(line)!
         try { return `${m[1]}${JSON.stringify(out(JSON.parse(m[2])))}${m[3]}` } catch { return hideClients(line).text }
@@ -226,7 +226,7 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
                 output = JSON.stringify(refusals.length ? [...(Array.isArray(value) ? value : [value]), ...refusals] : value)
             } else if (refusals.length) {
                 return send(res, 200, refusals)
-            } else if (anonymiseOn()) output = hideClients(raw).text
+            } else if (anonFor('posthog')) output = hideClients(raw).text
             res.writeHead(upstream.status)
             res.end(output)
         }

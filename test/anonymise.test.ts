@@ -265,6 +265,27 @@ describe('Claude triage', () => {
     })
 })
 
+describe('an admin\'s own choices', () => {
+    test('each path, codes, emails and the message can be set; bad values are refused', () => {
+        const all = A.setAnonymise({ on: true, lens: true, posthog: 'block', triage: true, codes: true, emails: true, message: '' })
+        assert.deepEqual(A.anonSettings(), all)
+        assert.ok(A.anonFor('lens') && A.anonFor('posthog') && A.anonFor('triage'))
+        A.setAnonymise({ lens: false, posthog: 'off', triage: false })
+        assert.ok(!A.anonFor('lens') && !A.anonFor('posthog') && !A.anonFor('triage'))
+        assert.deepEqual(guardResponse({ t: 'Zorblax Treasury' }), { t: 'Zorblax Treasury' }, 'Lens tools not covered')
+        A.setAnonymise({ lens: true, codes: false })
+        assert.equal(A.hideClients('QZX901 is Zorblax Treasury').text, `QZX901 is ${cn('QZX901')}`, 'codes shown, names hidden')
+        assert.equal(guardRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'client_story', arguments: { client: 'QZX901' } } }).msg!.params.arguments.client, 'QZX901')
+        A.setAnonymise({ codes: true, emails: false })
+        assert.equal(A.hideClients('pat@example-corp.com').text, 'pat@example-corp.com', 'emails shown')
+        assert.equal(A.hideClients('pat@zorblax-tr.com').text, `pat@${cn('QZX901')}-tr.com`, 'a client name inside a domain is still hidden')
+        A.setAnonymise({ emails: true, message: 'Use the codename.' })
+        assert.equal(guardRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'client_story', arguments: { client: 'QZX901' } } }).answer!.result.content[0].text, 'Use the codename.')
+        for (const bad of [{ posthog: 'maybe' }, { lens: 'yes' }, { message: 'x'.repeat(501) }]) assert.throws(() => A.setAnonymise(bad), A.AnonInputError)
+        A.setAnonymise({ message: '', posthog: 'block', triage: true, on: false })
+    })
+})
+
 describe('web links', () => {
     test('a codename slug in ?client= opens the real client for signed-in people', async () => {
         const { codenameRedirect } = await import('../src/service/privacy.ts')
