@@ -27,13 +27,14 @@ export async function draftRescueSurvey(client: string, by: string, injected: Pa
             { type: 'open', text: 'What would make it easier?' },
         ] : [{ type: 'rating', scale: 5, text: `How easy was ${task || dialog} for you this month?` }, { type: 'open', text: 'What would make it easier?' }],
     }
-    // PostHog refuses a name used before, archived surveys included: asking the same client twice adds the date, then a number.
-    const day = new Date().toISOString().slice(0, 10), base = spec.name
+    // PostHog refuses a name used before, archived surveys included: asking the same client again adds the date,
+    // then the time (so it never runs out of names, however often a client is asked in a day), then a number.
+    const now = new Date(), day = now.toISOString().slice(0, 10), time = now.toISOString().slice(11, 19), base = spec.name
     let result: Awaited<ReturnType<typeof d.saveSurvey>> | undefined
     for (let n = 0; !result; n++) {
-        if (n) spec.name = `${base} · ${day}${n > 1 ? ` (${n})` : ''}`
+        if (n) spec.name = `${base} · ${day}${n > 1 ? ` ${time}` : ''}${n > 2 ? ` (${n - 1})` : ''}`
         try { result = await d.saveSurvey(spec, { clientIds: [client] }) }
-        catch (e) { if (n >= 5 || !/already a survey with this name/i.test(String((e as Error)?.message))) throw e }
+        catch (e) { if (n >= 20 || !/already a survey with this name/i.test(String((e as Error)?.message))) throw e }
     }
     if (!result.survey) throw new RescueInputError('Could not create draft: ' + result.compiled.problems.map(p => p.text).join('; '))
     rememberClientSurvey(result.survey.id, spec.name, [client], 'draft')

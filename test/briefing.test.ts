@@ -94,7 +94,12 @@ test('Ask them twice for the same problem gets a new draft name, since PostHog k
     await draftRescueSurvey('acme','pm@example.com',deps)
     await draftRescueSurvey('acme','pm@example.com',deps)
     const day = new Date().toISOString().slice(0,10)
-    assert.deepEqual(names,['[Rescue] Acme – Hedge Designation',`[Rescue] Acme – Hedge Designation · ${day}`,'[Rescue] Acme – Hedge Designation',`[Rescue] Acme – Hedge Designation · ${day}`,`[Rescue] Acme – Hedge Designation · ${day} (2)`])
+    const b = '[Rescue] Acme – Hedge Designation'
+    assert.deepEqual(names.slice(0, 4),[b,`${b} · ${day}`,b,`${b} · ${day}`])
+    assert.match(names[4], new RegExp(`^\\[Rescue\\] Acme – Hedge Designation · ${day} \\d\\d:\\d\\d:\\d\\d$`), 'the third time adds the time')
+    // many times in one day (the e2e runs, a busy PM): never runs out of names
+    for (let i = 0; i < 8; i++) await draftRescueSurvey('acme','pm@example.com',deps)
+    assert.equal(new Set(names.filter((n, i) => names.indexOf(n) === i)).size, taken.size)
     await assert.rejects(draftRescueSurvey('acme','pm@example.com',{...deps,saveSurvey:async()=>{throw new Error('PostHog down')}}),/PostHog down/)
 })
 
