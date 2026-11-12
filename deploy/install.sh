@@ -205,6 +205,7 @@ is_email() { [[ "$1" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] || { 
 is_url() { [[ "$1" =~ ^https?://[^[:space:]/]+(/[^[:space:]]*)?$ ]] || { warn "must start with http:// or https://"; return 1; }; }
 is_urls() { local u; for u in ${1//,/ }; do is_url "$u" || return 1; done; }
 is_onoff() { [[ "$1" =~ ^(on|off)$ ]] || { warn "on or off"; return 1; }; }
+is_minutes() { [[ "$1" =~ ^[1-9][0-9]{0,4}$ ]] || { warn "a number of minutes"; return 1; }; }
 is_yesno() { [[ "$1" =~ ^(yes|no)$ ]] || { warn "yes or no"; return 1; }; }
 is_autoyesno() { [[ "$1" =~ ^(auto|yes|no)$ ]] || { warn "auto, yes or no"; return 1; }; }
 is_address() { [[ "$1" =~ ^(https?://)?[A-Za-z0-9.-]+$ ]] || { warn "a domain (posthog.example.com), an IP address, or http://name"; return 1; }; }
@@ -327,6 +328,10 @@ collect_answers() {
     setting SERVICE_PUBLIC_URL "http://$host:8080" is_url
     setting CLIP_ALLOWED_HOSTS "$([ -n "$APP_URLS" ] && hosts_of "$APP_URLS" || echo localhost)"
     setting STATUS_PUBLIC no is_yesno
+    # Alerts from the status page to a Teams/Slack channel (a webhook URL; empty: no alerts), and after how
+    # many minutes without a new event that counts as a problem (empty: never, for quiet systems).
+    setting STATUS_ALERT_WEBHOOK "" is_url
+    setting STATUS_MAX_EVENT_AGE_MINUTES "" is_minutes
     # No internet here: outside calls are refused at once (deploy/offline/no-internet.sh). auto: when this
     # machine cannot reach the internet. NO_INTERNET_ALLOW: public addresses that must stay reachable.
     setting NO_INTERNET auto is_autoyesno
@@ -775,10 +780,12 @@ step_status() {
     port="$(read_env_file "$SECRETS" SERVICE_PORT)"; port="${port:-8080}"
     project="$(basename "$POSTHOG_DIR")"
     touch "$f"; chmod 600 "$f"
-    python3 - "$f" "$port" "$project" "${STATUS_PASSWORD:-}" "$([ "$STATUS_PUBLIC" = yes ] && echo 0.0.0.0 || echo 127.0.0.1)" <<'PY'
+    python3 - "$f" "$port" "$project" "${STATUS_PASSWORD:-}" "$([ "$STATUS_PUBLIC" = yes ] && echo 0.0.0.0 || echo 127.0.0.1)" "${STATUS_ALERT_WEBHOOK:-}" "${STATUS_MAX_EVENT_AGE_MINUTES:-}" "$([ "$STATUS_PUBLIC" = yes ] && echo "http://$(sed -E 's#^https?://##; s#[:/].*##' <<<"${SERVICE_PUBLIC_URL:-}"):8090" || true)" <<'PY'
 import sys
-path, port, project, password, bind = sys.argv[1:]
-want = {
+path, port, project, password, bind, webhook, max_age, public = sys.argv[1:]
+# Only what was answered: an alert URL or event age set by hand in status.env stays when left empty here.
+extra = {k: v for k, v in {"STATUS_ALERT_WEBHOOK": webhook, "STATUS_MAX_EVENT_AGE_MINUTES": max_age, "STATUS_PUBLIC_URL": public}.items() if v}
+want = {**extra,
     "STATUS_PROJECTS": project,
     "STATUS_PASSWORD": password,
     "STATUS_BIND": bind,

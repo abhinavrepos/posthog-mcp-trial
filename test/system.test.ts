@@ -110,9 +110,9 @@ test('stale status warns even when the last check was healthy', () => {
 // Exercise the dependency-free collector with Docker/ClickHouse substitutes, without opening sockets.
 function collector() {
     const source = readFileSync(new URL('../deploy/status/server.mjs', import.meta.url), 'utf8')
-        .replace(/^import .+ from 'node:[^']+'\n/gm, '').split('http\n    .createServer')[0]
+        .replace(/^import .+ from 'node:[^']+'\n/gm, '').replace(/^export /gm, '').split('\nconst MAIN =')[0]
     const ctx = createContext({ process: { env: {}, uptime: () => 12 }, console, setTimeout, clearTimeout,
-        AbortSignal, os: { cpus: () => [1, 2], uptime: () => 10, loadavg: () => [1, 2, 3] },
+        AbortSignal, os: { cpus: () => [1, 2], uptime: () => 10, loadavg: () => [1, 2, 3], hostname: () => 'test' },
         readFileSync: (path: string) => path === '/proc/stat' ? 'cpu  20 0 10 70 0 0 0 0\n' : 'MemTotal: 100 kB\nMemAvailable: 50 kB\nSwapTotal: 40 kB\nSwapFree: 10 kB',
         statfsSync: () => ({ blocks: 100, bsize: 1024, bavail: 20 }),
     })

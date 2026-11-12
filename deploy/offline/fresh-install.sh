@@ -146,11 +146,19 @@ POSTHOG_LENS_CONF="$CONF" "$SBIN" update "$KIT_TAG"
 
 rm -f "$PIN"
 echo
-echo "${B}${G}Done.${N} PostHog and PostHog Lens are installed."
 "$SBIN" status || true
+echo
+if "$SBIN" check "${CHECK_MINUTES:-10}"; then
+    echo "${B}${G}Done.${N} PostHog and PostHog Lens are installed and working."
+else
+    echo "${B}${R}Installed, but not working yet${N} (see above). Look again in a few minutes: sudo posthog-lens check"
+    CHECK_FAILED=1
+fi
 cat <<EOF
 
     The PostHog login, its password and the addresses: sudo cat $STATE_DIR/summary.txt
-    From now on:   sudo posthog-lens status | doctor | restart
+    From now on:   sudo posthog-lens status | check | doctor | restart
+    Alerts:        STATUS_ALERT_WEBHOOK=<Teams or Slack webhook> in the status page's status.env, then: sudo posthog-lens alert-test
     New images:    build-images.sh on the build machine, then here: sudo bash upgrade.sh
 EOF
+exit "${CHECK_FAILED:-0}"
