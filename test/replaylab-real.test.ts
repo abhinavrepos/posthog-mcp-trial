@@ -16,7 +16,7 @@ for (const t of Object.values(truth.sessions)) test(`real replay: ${t.persona} $
     const raw = readFileSync(new URL(`${t.persona}-${t.session_id}.jsonl`, dir), 'utf8')
     // The idle recording contains no events after typing. Use observed session
     // duration, not an invented heartbeat or the persona's expected idle minimum.
-    const s = signalsFromReplay(raw, t.duration_ms), e = t.expected
+    const s = signalsFromReplay(raw, t.duration_ms, { names: ['notional', 'rate', 'trade date', 'tradedate', 'counterparty', 'save', 'preview'] }), e = t.expected
     assert.ok(e.rage_click_bursts ? s.rage_clicks.length >= e.rage_click_bursts : s.rage_clicks.length === 0, 'rage')
     if (e.dead_target_clicks) assert.ok(s.dead_clicks.length >= 1, 'dead clicks')
     if (t.persona === 'smooth' || t.persona === 'error-looping') assert.equal(s.dead_clicks.length, 0, 'responsive clicks')

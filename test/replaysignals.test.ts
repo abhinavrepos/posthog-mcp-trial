@@ -10,7 +10,7 @@ const inc = (t: number, source: number, data: object = {}) => event(t, 3, { sour
 const click = (t: number, id = 2) => inc(t, 2, { type: 2, id })
 const full = () => event(0, 2, { node: element(1, 'form', {}, [element(2, 'button', { 'data-action': 'save', type: 'submit' }, [element(4, 'span')]), element(3, 'input', { 'data-field': 'notional' })]) })
 const jsonl = (events: unknown[]) => events.map(e => JSON.stringify(e)).join('\n')
-const run = (...events: unknown[]) => signalsFromReplay(jsonl(events))
+const run = (...events: unknown[]) => signalsFromReplay(jsonl(events), undefined, { names: ['notional'] })
 const meta = (t: number) => event(t, 4, { href: 'https://example.com/trades?secret=hidden' })
 const error = (t: number, id = 8) => inc(t, 0, { adds: [{ parentId: 1, node: element(id, 'div', { role: 'alert' }) }] })
 
@@ -151,4 +151,25 @@ test('idle tails require observed duration; quiet gaps between inputs count with
 test('initial quiet time is excluded only with explicit page-load evidence', () => {
     assert.equal(run(full(), click(20000), meta(21000)).idle_ms, 20000)
     assert.equal(run(full(), event(10, 1, {}), click(20000), meta(21000)).idle_ms, 0)
+})
+
+test('names require explicit membership with normalized token comparison', () => {
+    const recording = jsonl([event(0, 2, { node: element(1, 'form', {}, [
+        element(2, 'button', { id: 'ZanthorCapital' }),
+        element(3, 'input', { 'data-field': 'counterparty' }),
+    ]) }), click(100), inc(200, 5, { id: 3 }), meta(2000)])
+    const generic = signalsFromReplay(recording)
+    assert.equal(generic.dead_clicks[0].target, 'button')
+    assert.equal(generic.fields[0].field, 'field')
+    const named = signalsFromReplay(recording, undefined, { names: new Set(['ＺＡＮＴＨＯＲ\u200bＣＡＰＩＴＡＬ', 'Counter Party']) })
+    // The output carries the reviewed list's spelling, never the page's own text.
+    assert.equal(named.dead_clicks[0].target, 'button#ZANTHORCAPITAL')
+    assert.equal(named.fields[0].field, 'field:Counter-Party')
+})
+
+test('safeName normalizes format characters and rejects Unicode digit runs and decimals', () => {
+    assert.equal(safeName('ｓａ\u200bｖｅ'), 'save')
+    for (const value of ['trade-１２３４５', 'trade-١٢٣٤٥', 'rate-４．６６９２', 'rate-١,٢', 'trade-1٢३']) {
+        assert.equal(safeName(value), undefined, value)
+    }
 })

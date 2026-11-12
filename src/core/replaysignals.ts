@@ -19,14 +19,22 @@ export interface SessionSignals {
 
 /** Keep short structural identifiers; free-form multiword labels are conservatively dropped. */
 export function safeName(s: unknown): string | undefined {
-    if (typeof s !== 'string' || !s.trim() || s.length > 40 || /\s/.test(s.trim()) || /\d{3}|\p{Sc}|USD|EUR|GBP|CAD|CHF|JPY|@|\d[.,]\d/iu.test(s)) return undefined
-    return s.trim()
+    if (typeof s !== 'string') return undefined
+    const normalized = s.normalize('NFKC').replace(/\p{Cf}/gu, '')
+    if (!normalized.trim() || normalized.length > 40 || /\s/.test(normalized.trim()) || /\p{Nd}{3}|\p{Sc}|USD|EUR|GBP|CAD|CHF|JPY|@|\p{Nd}[.,]\p{Nd}/iu.test(normalized)) return undefined
+    return normalized.trim()
 }
+const nameToken = (s: string) => s.normalize('NFKC').replace(/\p{Cf}/gu, '').toLowerCase().replace(/[^a-z0-9]/g, '')
+const structuralNames = new Set('save submit ok cancel close apply preview search run delete add edit next back refresh export banner alert error toast menu grid row dialog tab modal'.split(' '))
+const htmlTags = new Set('a button input select textarea label div span form table tr td th ul li ol section article header footer nav main aside p h1 h2 h3 h4 h5 h6 img svg dialog details summary option fieldset legend iframe canvas video audio body html head'.split(' '))
 const keys = ['data-field', 'data-action', 'name', 'id', 'aria-label', 'role', 'type', 'data-testid', 'data-dialog'] as const
 interface NodeInfo { tag: string; attrs: Record<string, string>; parent?: number; error: boolean; hidden: boolean; errorClass: boolean }
 
 /** One pass over JSONL; only sanitized structure survives each line. */
-export function signalsFromReplay(jsonl: string, recordingDurationMs?: number): SessionSignals {
+export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, opts?: { names?: Iterable<string> }): SessionSignals {
+    // token -> the name as written in the reviewed list; output uses that, never the page's own spelling.
+    const knownNames = new Map<string, string>([...structuralNames].map((n) => [n, n]))
+    for (const value of opts?.names || []) { const token = nameToken(value); const clean = safeName(String(value).replace(/\s+/g, '-')); if (token && clean && token.length <= 40 && !knownNames.has(token)) knownNames.set(token, clean) }
     const out: SessionSignals = { version: 1, duration_ms: 0, active_ms: 0, idle_ms: 0, clicks: 0, rage_clicks: [], dead_clicks: [], errors_shown: [], error_loops: [], fields: [], hesitations: [], cursor: { px_per_min: 0, direction_changes_per_min: 0, circling_bursts: 0 }, scroll: { px: 0, reversals: 0, hunting_bursts: 0 }, network_errors: 0, slow_calls: 0, console_errors: 0 }
     // Window-local node ids must never resolve against another window's DOM.
     const textWindows = new Map<string, Map<number, number>>()
@@ -52,9 +60,13 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number): 
         const original = nodes.get(id)
         let n = original
         for (let depth = 0; n && depth <= 4; depth++, n = n.parent === undefined ? undefined : nodes.get(n.parent)) {
-            for (const k of keys.slice(0, 6)) if (n.attrs[k]) return field ? `field:${n.attrs[k]}` : `${original?.tag || 'element'}#${n.attrs[k]}`
+            for (const k of keys.slice(0, 6)) { const known = n.attrs[k] ? knownNames.get(nameToken(n.attrs[k])) : undefined; if (known) return field ? `field:${known}` : `${original?.tag || 'element'}#${known}` }
         }
-        return field ? 'field' : original?.tag || 'element'
+        if (field) return 'field'
+        if (original?.tag === 'button' || original?.attrs.role === 'button') return 'button'
+        if (['input', 'select', 'textarea'].includes(original?.tag || '') || ['textbox', 'combobox', 'checkbox', 'radio', 'spinbutton', 'slider', 'searchbox'].includes(original?.attrs.role || '')) return 'field'
+        if (original?.tag === 'a' || original?.attrs.role === 'link') return 'link'
+        return 'element'
     }
     const fieldFor = (id: number) => {
         const field = name(id, true)
@@ -90,7 +102,8 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number): 
             // Retain text-node parent IDs only, never their content.
             if (n.type === 3 && item.parent !== undefined) textParents.set(n.id, item.parent)
             if (n.type === 2) {
-                const info = { tag: safeName(n.tagName)?.toLowerCase() || 'element', attrs: attrs(n.attributes), parent: item.parent, error: isError(n.attributes?.role, errorClass(n.attributes)), hidden: hidden(n.attributes), errorClass: errorClass(n.attributes) }
+                const tag = typeof n.tagName === 'string' ? n.tagName.toLowerCase() : ''
+                const info = { tag: htmlTags.has(tag) ? tag : 'element', attrs: attrs(n.attributes), parent: item.parent, error: isError(n.attributes?.role, errorClass(n.attributes)), hidden: hidden(n.attributes), errorClass: errorClass(n.attributes) }
                 nodes.set(n.id, info)
                 visibility.set(info, { hidden: n.attributes?.hidden != null, aria: n.attributes?.['aria-hidden'] === 'true', style: hidden({ style: n.attributes?.style }) })
                 if (info.error && !info.hidden) appeared(n.id, t)
