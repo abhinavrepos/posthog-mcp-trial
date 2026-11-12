@@ -115,6 +115,7 @@ run_follow() { # log id pid: shows the log until the run ends, then exits with t
     while kill -0 "$pid" 2>/dev/null; do sleep 2; done
     sleep 2; { kill "$tp"; wait "$tp"; } 2>/dev/null || true
     code="$(grep -F "\"id\": \"$id\"" "$RUNS/history.jsonl" 2>/dev/null | tail -1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.read() or "{}").get("code", 1))' 2>/dev/null || echo 1)"
+    case "$code" in '' | *[!0-9]*) code=1 ;; esac
     exit "$code"
 }
 run_detach() { # kind: start this script again in the background and follow it here
@@ -123,6 +124,9 @@ run_detach() { # kind: start this script again in the background and follow it h
     export LENS_DETACHED=1 YES=1 LENS_RUN_ID="$1-$stamp-$$" LENS_RUN_LOG="/var/log/posthog-lens/$1-$stamp.log"
     mkdir -p /var/log/posthog-lens
     # A background job of a script starts with SIGINT ignored; give the run the default back.
+    # Only one upgrade or install at a time: say so here, not in the background copy nobody sees.
+    mkdir -p "$RUNS"
+    if ! flock -n "$RUNS/.lock" true; then echo "Another upgrade or install is running. Follow it: sudo posthog-lens progress -f"; exit 1; fi
     setsid env --default-signal=INT bash "$0" </dev/null >/dev/null 2>&1 &
     say "Running in the background, so a dropped connection does not stop it. Following it here (Ctrl-C stops"
     echo "    only the following). From any session: sudo posthog-lens progress -f"
