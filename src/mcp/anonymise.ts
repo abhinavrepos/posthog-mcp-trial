@@ -90,7 +90,11 @@ export function guardRequest(msg: unknown, kind: BlockKind = 'lens_refused', reg
             } else if (namesClient(name)) return refuse()
             return { msg: { ...msg, params: { ...p, arguments: revealArgs(name, args) } } }
         }
-        // Anything else that carries text from the AI (resource addresses, completions, sampling, logging).
+        // Lens offers no resources or completions: while this is on, one fixed answer for any of them, whatever
+        // they name (answering some and refusing others would tell which names are clients).
+        if (/^(resources\/(read|subscribe|unsubscribe)|completion\/complete)$/.test(msg.method))
+            return { answer: { jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32601, message: 'Not available while client anonymisation is on.' } } }
+        // Anything else that carries text from the AI (sampling, logging).
         if (msg.params !== undefined && namesClient(JSON.stringify(msg.params))) return refuse()
         return { msg }
     } catch (e) {

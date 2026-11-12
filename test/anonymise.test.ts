@@ -49,6 +49,20 @@ describe('codenames', () => {
         A.syncClients([{ id: 'QZX901', name: 'Zorblax Treasury' }])
         assert.equal(cn('QZX901'), before, 'stays the same')
     })
+    test('the list: 10,000 short codenames, unique, two words of 3 to 5 letters; new clients get one from it', async () => {
+        const { CODENAMES, CODENAME_ADJECTIVES, CODENAME_ANIMALS } = await import('../src/core/codenames.ts')
+        assert.equal(CODENAMES.length, 10_000)
+        assert.equal(new Set(CODENAMES.map((c) => c.toLowerCase())).size, 10_000)
+        assert.ok(CODENAMES.every((c) => /^[A-Z][a-z]{2,4} [A-Z][a-z]{2,4}$/.test(c) && c.length <= 11))
+        const words = new Set([...CODENAME_ADJECTIVES, ...CODENAME_ANIMALS].map((w) => w.toLowerCase()))
+        assert.equal(words.size, 200, 'no word in both lists')
+        for (const w of ['gold', 'royal', 'bank', 'trust', 'capital', 'north', 'global', 'first', 'union', 'beta', 'delta']) assert.ok(!words.has(w), w)
+        const list = new Set(CODENAMES)
+        for (const c of A.listCodenames()) assert.ok(list.has(c.codename), c.codename)
+        A.syncClients(Array.from({ length: 60 }, (_, i) => ({ id: `BULK${i}`, name: `Bulkco Number ${i}` })))
+        const bulk = A.listCodenames().filter((c) => c.client.startsWith('BULK'))
+        assert.equal(bulk.length, 60); assert.ok(bulk.every((c) => list.has(c.codename)))
+    })
     test('admins rename, add other names, or draw a new codename; clashes and bad names are refused', () => {
         const r = A.setCodename('KWAMBE', { codename: 'Quiet Otter', aliases: 'KFH, Kwambe FT' }, 'admin@x')
         assert.equal(r.codename, 'Quiet Otter'); assert.deepEqual(r.aliases, ['KFH', 'Kwambe FT'])
@@ -140,7 +154,7 @@ describe('the guard: requests', () => {
         const prompt = guardRequest({ jsonrpc: '2.0', id: 8, method: 'prompts/get', params: { name: 'where_clients_struggle', arguments: { client: 'Voltrino' } } })
         assert.equal(prompt.answer!.error.message, A.REFUSAL)
         const res = guardRequest({ jsonrpc: '2.0', id: 9, method: 'resources/read', params: { uri: 'lens://client/QZX901' } })
-        assert.equal(res.answer!.error.message, A.REFUSAL)
+        assert.equal(res.answer!.error.message, 'Not available while client anonymisation is on.', 'one fixed answer, whatever the address names')
         assert.throws(() => revealArgs('client_story', { client: 'QZX901' }))
         // With the server's registry: unknown tools get one fixed answer (never the name back), extra arguments go.
         const reg = { tools: () => new Map<string, string[] | null>([['screen_usage', ['screen', 'days']]]), prompts: () => new Map<string, string[] | null>() }

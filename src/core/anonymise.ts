@@ -5,9 +5,12 @@
 //   - the PostHog MCP proxy (src/mcp/posthog-proxy.ts): data commands refused, or filtered (admin's choice)
 //   - Claude's ticket triage (src/core/triage.ts)
 // People see real names only in the Lens web app, where /replays/codenames lists who is who.
-// Codenames are random words (never derived from the name), stable, unique, and editable by admins.
+// Codenames are short random words from a list of 10,000 (src/core/codenames.ts), never derived from the
+// name, stable, unique, and editable by admins. Every client Lens sees gets one, also while the setting is
+// off, so people can learn them before it is turned on.
 import { randomInt } from 'node:crypto'
 
+import { CODENAMES } from './codenames.ts'
 import { all, getSetting, one, run, setSetting, tx } from './db.ts'
 
 export type PosthogMode = 'block' | 'filter'
@@ -24,15 +27,6 @@ export function setAnonymise(p: { on?: boolean; posthog?: string }): void {
 export class AnonInputError extends Error {}
 
 // ------------------------------------------------------------------ codenames
-const ADJ = ['Amber', 'Azure', 'Bold', 'Brisk', 'Calm', 'Clear', 'Cobalt', 'Coral', 'Crimson', 'Crisp', 'Dawn', 'Deep', 'Dusky', 'Eager', 'Early', 'Even',
-    'Fair', 'Fern', 'Fleet', 'Gentle', 'Gilded', 'Golden', 'Granite', 'Hazel', 'High', 'Honey', 'Indigo', 'Ivory', 'Jade', 'Keen', 'Kind', 'Lilac',
-    'Lively', 'Lucky', 'Lunar', 'Maple', 'Mellow', 'Misty', 'Noble', 'Ochre', 'Olive', 'Opal', 'Pale', 'Pearl', 'Plum', 'Proud', 'Quiet', 'Rapid',
-    'Rosy', 'Ruby', 'Rustic', 'Sable', 'Saffron', 'Scarlet', 'Silent', 'Silver', 'Slate', 'Snowy', 'Solar', 'Steady', 'Swift', 'Tawny', 'Velvet', 'Vivid']
-const NOUN = ['Badger', 'Bison', 'Condor', 'Crane', 'Dolphin', 'Eagle', 'Egret', 'Falcon', 'Ferret', 'Finch', 'Fox', 'Gazelle', 'Gecko', 'Heron', 'Ibis', 'Jackal',
-    'Jaguar', 'Kestrel', 'Kingfisher', 'Koala', 'Lark', 'Lemur', 'Leopard', 'Lynx', 'Magpie', 'Marten', 'Meerkat', 'Moose', 'Narwhal', 'Newt', 'Ocelot', 'Orca',
-    'Oriole', 'Osprey', 'Otter', 'Owl', 'Panda', 'Panther', 'Pelican', 'Penguin', 'Petrel', 'Puffin', 'Puma', 'Quail', 'Raven', 'Robin', 'Salmon', 'Seal',
-    'Sparrow', 'Stork', 'Swallow', 'Swan', 'Tapir', 'Tern', 'Tiger', 'Toucan', 'Trout', 'Turtle', 'Viper', 'Walrus', 'Weasel', 'Wolf', 'Wren', 'Yak']
-
 export interface ClientCodename { client: string; name: string; codename: string; aliases: string[]; auto_aliases: string[]; set_by: string; set_at: string }
 interface Row { client: string; name: string; codename: string; aliases: string; set_by: string; set_at: string }
 const words = (s: string) => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
@@ -49,15 +43,14 @@ function clashes(codename: string, rows: { client: string; name: string; aliases
         if ([r.name, r.client, ...r.aliases].some((x) => words(x).some((w) => mine.has(w)))) return 'it shares a word with another client\'s name or code'
     }
 }
+/** A random codename from the 10,000 (src/core/codenames.ts) that no client has and that shares no word with
+ * any client. Past 10,000 clients, a number is added ("Teal Wren 2"). */
 function randomCodename(taken: Set<string>, rows: { client: string; name: string; aliases: string[] }[], self: string): string {
-    for (let i = 0; i < 500; i++) {
-        const c = `${ADJ[randomInt(ADJ.length)]} ${NOUN[randomInt(NOUN.length)]}`
-        if (!taken.has(c.toLowerCase()) && !clashes(c, rows, self)) return c
-    }
-    for (let n = 2; ; n++) { // 4,096 pairs used up: add a number
-        const c = `${ADJ[randomInt(ADJ.length)]} ${NOUN[randomInt(NOUN.length)]} ${n}`
-        if (!taken.has(c.toLowerCase()) && !clashes(c, rows, self)) return c
-    }
+    const free = (c: string) => !taken.has(c.toLowerCase()) && !clashes(c, rows, self)
+    for (let i = 0; i < 200; i++) { const c = CODENAMES[randomInt(CODENAMES.length)]; if (free(c)) return c }
+    const start = randomInt(CODENAMES.length) // mostly taken: walk the whole list once from a random place
+    for (let i = 0; i < CODENAMES.length; i++) { const c = CODENAMES[(start + i) % CODENAMES.length]; if (free(c)) return c }
+    for (let n = 2; ; n++) { const c = `${CODENAMES[randomInt(CODENAMES.length)]} ${n}`; if (free(c)) return c }
 }
 
 // The legal or industry words a client is often written without: "Northwind Treasury" is also "Northwind".
@@ -80,7 +73,20 @@ export const listCodenames = (): ClientCodename[] => all<Row>('SELECT * FROM cli
 export function syncClients(clients: { id: string; name?: string }[], by = 'lens'): number {
     let added = 0
     tx(() => {
-        const rows = all<Row>('SELECT * FROM client_codenames')
+        let rows = all<Row>('SELECT * FROM client_codenames')
+        // Once: codenames Lens gave from its first, longer word list move to the short list of 10,000 (the
+        // setting was never on before it, so nobody knows them yet). Codenames an admin chose stay.
+        if (!getSetting<boolean>('codenames_v2', false)) {
+            const list = new Set(CODENAMES)
+            const roster = rows.map((r) => ({ client: r.client, name: r.name, aliases: parseAliases(r.aliases) }))
+            const taken = new Set(rows.filter((r) => r.set_by !== 'lens' || list.has(r.codename)).map((r) => r.codename.toLowerCase()))
+            for (const r of rows) if (r.set_by === 'lens' && !list.has(r.codename)) {
+                const c = randomCodename(taken, roster, r.client); taken.add(c.toLowerCase())
+                run('UPDATE client_codenames SET codename=? WHERE client=?', c, r.client); added++
+            }
+            setSetting('codenames_v2', true)
+            rows = all<Row>('SELECT * FROM client_codenames')
+        }
         const byId = new Map(rows.map((r) => [r.client, r]))
         const roster = rows.map((r) => ({ client: r.client, name: r.name, aliases: parseAliases(r.aliases) }))
         const taken = new Set(rows.map((r) => r.codename.toLowerCase()))
@@ -162,14 +168,40 @@ const LOOKALIKE: Record<string, string> = { 'а': 'a', 'в': 'b', 'е': 'e', 'к
     'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'У': 'Y', 'Х': 'X', 'І': 'I', 'Ј': 'J', 'Ѕ': 'S',
     'α': 'a', 'ο': 'o', 'ρ': 'p', 'ν': 'v', 'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H', 'Ι': 'I', 'Κ': 'K', 'Μ': 'M', 'Ν': 'N', 'Ο': 'O', 'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y', 'Χ': 'X' }
 const LOOKALIKE_RE = new RegExp(`[${Object.keys(LOOKALIKE).join('')}]`, 'g')
-export const plain = (s: string) => s.normalize('NFKC').replace(/[\u200B-\u200F\u2060-\u2064\uFEFF\u00AD\u180E]/g, '').replace(LOOKALIKE_RE, (c) => LOOKALIKE[c] || c)
+const ENTITY: Record<string, string> = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: ' ', rsquo: "'", lsquo: "'" }
+const char = (code: number) => (code > 0 && code < 0x110000 ? String.fromCodePoint(code) : '')
+/** Text as a person reads it, for matching: escapes (\u0041, &#65;, &amp;) decoded, accents dropped (é → e),
+ * full-width and look-alike letters made plain, invisible characters removed. */
+export const plain = (s: string) => s
+    .replace(/\\u\{?([0-9a-fA-F]{4,6})\}?|\\x([0-9a-fA-F]{2})/g, (_, u, x) => char(parseInt(u || x, 16)))
+    .replace(/&#(\d{1,7});|&#[xX]([0-9a-fA-F]{1,6});|&([a-zA-Z]+);/g, (hit, d, h, name) => (d ? char(+d) : h ? char(parseInt(h, 16)) : ENTITY[name.toLowerCase()] ?? hit))
+    .normalize('NFKD').replace(/\p{M}/gu, '')
+    .replace(/[\u200B-\u200F\u2060-\u2064\uFEFF\u00AD\u180E]/g, '').replace(LOOKALIKE_RE, (c) => LOOKALIKE[c] || c)
+    .normalize('NFKC')
 const EMAIL = /[\p{L}\p{N}._%+-]+@([\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+)/giu
 let version = 0
 let cache: { version: number; m: Matcher } | undefined
 function bump() { version++ }
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const SEP = '(?:[\\s_.+\\-]|%20|%2[dD]|%5[fF])+'
-const norm = (s: string) => s.toLowerCase().replace(/%20|%2d|%5f/gi, ' ').split(/[\s_.+\-]+/).filter(Boolean).join(' ')
+// Between the words of a name: nothing, separators (also URL-encoded), and the name's own punctuation, written
+// as is or URL-encoded ("O'Brien & Sons" also matches O%27Brien%20%26%20Sons, OBrien and Sons, OBrien-Sons).
+const SEPS = ['[\\s_.+\\-]', '%20', '%2[dD]', '%5[fF]']
+const pct = (c: string) => { const h = c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'); return `%${h[0]}[${h[1]}${h[1].toLowerCase()}]` }
+function gap(sep: string): string {
+    const alts = new Set(SEPS)
+    for (const c of sep) if (!/[\s_.+\-]/.test(c) && c.charCodeAt(0) < 128) { alts.add(esc(c)); alts.add(pct(c)) } else if (!/[\s_.+\-]/.test(c)) alts.add(esc(c))
+    if (sep.includes('&')) alts.add('and')
+    return `(?:${[...alts].join('|')})*`
+}
+/** A name as a pattern: its words, any gap between them, and an optional plural or possessive (Acme's, Acmes). */
+function namePattern(name: string): string | undefined {
+    const parts = plain(name).trim().split(/([^\p{L}\p{N}]+)/u).filter((x) => x !== '')
+    const words = parts.filter((x) => /[\p{L}\p{N}]/u.test(x))
+    if (!words.length || words.join('').length < 3) return undefined
+    return parts.map((x) => (/[\p{L}\p{N}]/u.test(x) ? esc(x) : gap(x))).join('') + "(?:(?:'|%27)?s|es)?"
+}
+/** The key a name or a matched text is looked up by: letters and digits only. */
+const keyOf = (s: string) => plain(s.replace(/%([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))).toLowerCase().replace(/&/g, 'and').replace(/[^\p{L}\p{N}]+/gu, '')
 const COMMON = new Set(['alpha', 'beta', 'gamma', 'delta', 'omega', 'test', 'demo', 'main', 'core', 'base', 'open', 'data', 'bank', 'fund', 'cash', 'risk', 'trade', 'deal', 'swap', 'loan', 'bond', 'live', 'prod', 'user', 'admin', 'team', 'home', 'next', 'new', 'old', 'one', 'two', 'all', 'any', 'and', 'the', 'for', 'not', 'yes', 'no', 'ok', 'id', 'api', 'app', 'web', 'acc', 'ref', 'tmp', 'dev'])
 const shortCode = (c: string) => /^[A-Za-z]+$/.test(c) && COMMON.has(c.toLowerCase())
 
@@ -181,9 +213,9 @@ function matcher(): Matcher {
     for (const r of rows) {
         codenames.set(r.codename.toLowerCase(), r); codenames.set(slug(r.codename), r)
         for (const n of [r.name, ...parseAliases(r.aliases), ...autoAliases(r.name)]) {
-            const w = n.split(/[\s_.+\-]+/).filter(Boolean)
-            if (!w.length || n.trim().length < 3) continue
-            byKey.set('n:' + norm(n), r); names.push(w.map(esc).join(SEP))
+            const pattern = namePattern(n)
+            if (!pattern) continue
+            byKey.set('n:' + keyOf(n), r); byKey.set('n:' + keyOf(n.replace(/&/g, ' ')), r); names.push(pattern)
         }
         if (shortCode(r.client)) { byKey.set('x:' + r.client, r); exact.push(esc(r.client)) }
         else { byKey.set('c:' + r.client.toLowerCase(), r); anyCase.push(esc(r.client)) }
@@ -221,7 +253,7 @@ export function hideClients(text: string): { text: string; n: number } {
                 return inUrl ? encodeURIComponent(slug(r.codename)) : r.codename
             })
         }
-        sub(m.names, (x) => 'n:' + norm(x))
+        sub(m.names, (x) => { const k = keyOf(x); for (const c of [k, k.replace(/es$/, ''), k.replace(/s$/, '')]) if (m.byKey.has('n:' + c)) return 'n:' + c; return 'n:' + k })
         sub(m.codesAnyCase, (x) => 'c:' + x.toLowerCase())
         sub(m.codesExact, (x) => 'x:' + x)
         return out

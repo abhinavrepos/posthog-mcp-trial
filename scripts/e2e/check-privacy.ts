@@ -47,6 +47,12 @@ const original = { on: start.on, posthog: start.posthog }
 const key = (await api('/replays/connect/api/tokens', 'POST', { label: 'privacy-check' })).body
 const token: string = key.token
 try {
+    // ------------------------------------------------------------ turned on in the middle of a chat
+    // A chat open before the switch: names while off, codenames from the next message on.
+    await api('/replays/admin/privacy/api/settings', 'POST', { on: false })
+    const early = await session('/mcp', token)
+    const rq = (await api('/replays/dashboards/api/rescue', 'GET')).body?.clients?.[0]
+    const beforeOn = await mcp('/mcp', token, 'tools/call', { name: 'rescue_queue', arguments: {} }, early.sid)
     // ------------------------------------------------------------ what must never come out
     const state = (await api('/replays/admin/privacy/api/settings', 'POST', { on: true, posthog: 'block' })).body
     ok('setting turns on', state.on === true && state.posthog === 'block', JSON.stringify(state))
@@ -65,6 +71,8 @@ try {
     const all: string[] = []
     const check = (label: string, raw: string) => { all.push(raw); const l = leaks(raw); ok(`no client in: ${label}`, !l.length, l.slice(0, 3).join(' | ')) }
 
+    const afterOn = await mcp('/mcp', token, 'tools/call', { name: 'rescue_queue', arguments: {} }, early.sid)
+    if (rq) ok('turned on mid-chat: the same chat sees the client before, and only its codename after', beforeOn.raw.includes(rq.client) && !leaks(afterOn.raw).length && afterOn.raw.includes(clients.find((c) => c.client === rq.client)?.codename || '§'), `${rq.client}: before ${beforeOn.raw.includes(rq.client)}, after leaks ${leaks(afterOn.raw).length}`)
     // A client with history, for codename questions.
     const rescue = (await api('/replays/dashboards/api/rescue', 'GET')).body
     const busy = rescue?.clients?.[0]?.client as string | undefined
