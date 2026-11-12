@@ -44,6 +44,8 @@ test('real lab recordings: read, stored, and each persona comes out as it behave
         names: async () => ['Notional', 'Rate', 'Trade Date', 'Counterparty', 'Save', 'Preview'],
     })
     assert.equal(r.read, cands.length, JSON.stringify(r))
+    assert.equal(X.lastReplayRun()?.read, cands.length)
+    assert.equal(X.lastReplayRun()?.candidates, cands.length)
     const by = (persona: string) => X.clientExperience(sessions.find((s) => s.persona === persona)!.client_id)
     const smooth = by('smooth'), errors = by('error-looping'), rage = by('rage-dead'), scroll = by('scroll-hunting'), idle = by('idle')
     assert.equal(smooth.verdict, 'smooth', smooth.summary)
@@ -53,11 +55,58 @@ test('real lab recordings: read, stored, and each persona comes out as it behave
     assert.ok(idle.findings.some((f) => f.measure === 'idle'), JSON.stringify(idle.measures))
     for (const x of [errors, rage]) {
         assert.ok(x.next_steps.length >= 1)
+        assert.doesNotMatch(x.summary, /a field|a button|the error message|an element/)
+        for (const f of x.findings) assert.ok(f.where.every(w => !/^(a field|a button|the error message|an element)$/.test(w)))
         assert.ok(x.findings[0].replays[0].url.includes('/replay/'), 'a replay link for the person to watch')
+        assert.match(x.findings[0].replays[0].day, /^\d{4}-\d{2}-\d{2}$/)
+        assert.ok(x.peer_clients >= 3)
+        assert.equal(x.findings[0].sessions, x.sessions)
+        assert.ok(x.findings[0].sessions_with_it > 0)
+        assert.match(x.findings[0].replays[0].started_at!, /^\d{4}-\d{2}-\d{2}T/)
+        assert.equal(x.next_steps.length, 1)
+        assert.match(x.next_steps[0], /Review .* replay\.$/)
     }
     // Nothing planted in the replays comes out of any client's report.
     const all = JSON.stringify(sessions.map((s) => X.clientExperience(s.client_id))) + JSON.stringify(X.frictionHotspots())
     for (const c of canaryStrings) for (const v of [c, c.replace(/,/g, ''), c.toLowerCase()]) assert.ok(!all.includes(v), v)
+})
+
+test('populated replay insights carry evidence, distinct UTC links and supporting disclosures', async () => {
+    const client = sessions.find(s => s.persona === 'error-looping')!.client_id
+    const { handleDashboards } = await import('../src/service/dashboards.ts')
+    let body = ''
+    const story = { client, client_name: 'Example', coverage: { complete: true, unprocessed: [] }, weeks: [], events: [], surveys: [], summary: '', unknown: '' }
+    const req = Object.assign((async function* () {})(), { method: 'GET', headers: {} })
+    await handleDashboards(req as never, { writeHead() {}, end(s: string) { body = s } } as never, new URL('http://test/replays/dashboards?view=story&client=' + client), { role: 'admin', dashboards: 'view', email: 'pm@example.com', name: 'PM', posthog_admin: true, in_replay_project: true, session: 's' } as never, { clientStory: async () => story, handoverPack: async () => '' } as never)
+    const section = body.match(/<section class="card xp">([\s\S]*?)<\/section>/)![1]
+    assert.match(section, /\d+ analysed replays/)
+    assert.match(section, /Peer median.*Median errors per replay/s)
+    assert.match(section, /UTC, opens in a new tab/)
+    assert.match(section, /class="xp-evidence"/)
+    assert.equal((section.match(/<details>/g) || []).length, 2 + (section.match(/<summary>Other supporting replays/g) || []).length)
+    assert.equal((section.match(/<table /g) || []).length, 1)
+    assert.match(section, /7 other measures \(none elevated\)/)
+    assert.match(section, /badge xp-warn/)
+    assert.match(section, /supporting replays available/)
+    assert.match(section, /Differences in client size and workflow are not accounted for/)
+    assert.doesNotMatch(section, /<details open|<details[^>]*open/)
+    assert.match(section, /<colgroup>/)
+    assert.match(section, /Watch supporting replay:.*errors · .*retry loops/)
+    assert.match(section, /Method and limitations/)
+    assert.ok(section.indexOf('Watch supporting replay') > section.indexOf('<table '))
+    assert.doesNotMatch(section, /class="xp-replay"[^>]*>Replay 1<\/a>/)
+    assert.match(section, /Elevated errors and retries in this sample/)
+    assert.ok(section.includes('Median errors per replay</th><td class="num">4</td><td class="num">0'))
+    assert.match(section, /Method and limitations/)
+    assert.doesNotMatch(section, /Replay \d+|Next step:|Struggling/)
+    for (const evidence of section.matchAll(/<div class="xp-evidence">([\s\S]*?)<\/div>/g)) {
+        const urls = [...evidence[1].matchAll(/href="([^"?]+)/g)].map(m => m[1])
+        assert.equal(urls.length, new Set(urls).size, 'supporting recordings are deduplicated')
+    }
+    tasksDb.prepare('UPDATE replay_signals SET started_at=NULL WHERE client=?').run(client)
+    body = ''
+    await handleDashboards(req as never, { writeHead() {}, end(s: string) { body = s } } as never, new URL('http://test/replays/dashboards?view=story&client=' + client), { role: 'admin', dashboards: 'view', email: 'pm@example.com', name: 'PM', posthog_admin: true, in_replay_project: true, session: 's' } as never, { clientStory: async () => story, handoverPack: async () => '' } as never)
+    assert.match(body, /[A-Z][a-z]+ \d+ \(time unavailable\)/)
 })
 
 test('screen vocabulary: only app-reported names, never generated ids, numbers or messages; PostHog down keeps the configured buttons', async () => {
@@ -73,9 +122,12 @@ test('too few replays: no findings, a clear note; a failed read is skipped once 
     assert.equal(x.verdict, 'not enough replays'); assert.equal(x.findings.length, 0); assert.match(x.summary, /Only 0 replays/)
     const r1 = await X.processReplays(5, { candidates: async () => [{ session_id: 'broken', client: 'Z', user: 'u', start: today }], jsonl: async () => { throw new Error('bad blob') } })
     assert.deepEqual(r1, { read: 0, skipped: 1 })
+    assert.equal(X.replayCoverage().last, tasksDb.prepare('SELECT max(at) AS last FROM replay_analysis_runs').get()!.last)
+    tasksDb.prepare('UPDATE replay_analysis_runs SET at=?').run('2000-01-01T00:00:00Z')
     let asked = 0
     await X.processReplays(5, { candidates: async () => { asked++; return [] } })
     assert.equal(asked, 1)
+    assert.ok(Date.parse(X.replayCoverage().last!) > Date.now() - 30_000, 'even an empty job records its run')
     const r2 = await X.processReplays(5, { candidates: async () => [{ session_id: 'pending', client: 'Z', user: 'u', start: today }], jsonl: async () => { throw new Error('Recording pending has no stored snapshots yet') } })
     assert.equal(r2.skipped, 1)
     assert.equal(tasksDb.prepare("SELECT count(*) AS n FROM replay_skips WHERE session_id='pending'").get()!.n, 0, 'still being written: tried again later')
@@ -94,4 +146,17 @@ test('Copilot: client_experience answers in plain words with findings, next step
     const hot = JSON.parse(((await client.callTool({ name: 'friction_hotspots', arguments: {} })) as any).content[0].text)
     assert.ok(hot.hotspots.length >= 1 && hot.replays_read >= 18, JSON.stringify(hot).slice(0, 300))
     await client.close(); await server.close()
+})
+
+
+test('every analysis round records completion, empty rounds and candidate errors; only 200 runs retained', async () => {
+    tasksDb.exec('DELETE FROM replay_runs')
+    assert.equal(X.lastReplayRun(), undefined)
+    await X.processReplays(3, { candidates: async () => [] })
+    assert.deepEqual({ ...X.lastReplayRun(), at: undefined }, { at: undefined, read: 0, skipped: 0, candidates: 0, error: null })
+    await assert.rejects(X.processReplays(3, { candidates: async () => { throw new Error('candidate lookup failed') } }), /candidate lookup failed/)
+    assert.equal(X.lastReplayRun()?.error, 'candidate lookup failed')
+    for (let i = 0; i < 201; i++) await X.processReplays(3, { candidates: async () => [] })
+    assert.equal((tasksDb.prepare('SELECT count(*) AS n FROM replay_runs').get() as { n: number }).n, 200)
+    assert.equal(X.lastReplayRun()?.error, null)
 })

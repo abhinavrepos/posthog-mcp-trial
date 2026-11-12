@@ -154,7 +154,7 @@ test('new client top tasks need two distinct UTC weeks; briefing is bounded, old
     assert.equal(b.sections.new_clients?.length,5);assert.equal(b.sections.new_clients[0].client,'Northwind')
     assert.doesNotMatch(JSON.stringify({n,b,q}),/private-person|hidden.example/)
     const story=await request(handleDashboards,'/replays/dashboards?view=story&client=Northwind&weeks=1','GET',undefined,viewer('none','view'))
-    assert.match(story.html,/Compared with other clients/);assert.doesNotMatch(story.html,/private-person|hidden.example/);scriptsParse(story.html)
+    assert.match(story.html,/Comparison/);assert.doesNotMatch(story.html,/private-person|hidden.example/);scriptsParse(story.html)
     const page=await request(handleDashboards,'/replays/dashboards?view=briefing','GET',undefined,viewer('none','view'))
     assert.match(page.html,/Clients added in the last 90 days/);scriptsParse(page.html)
     // Backdating reveals this client was already older than 90 days; invalidate derived answers.

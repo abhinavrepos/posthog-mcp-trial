@@ -526,3 +526,6 @@ export async function asViewer<T>(v: Viewer, path: string): Promise<T | undefine
     const res = await fetch(`${config.posthog.host}${path}`, { headers: { cookie: `sessionid=${v.session}`, accept: 'application/json' }, signal: AbortSignal.timeout(10_000) })
     return res.ok ? ((await res.json()) as T) : undefined
 }
+
+/** Explicit Lens administrators only; PostHog inheritance is not a Lens assignment. */
+export const lensAdministratorEmails = (): string[] => all<{ email: string }>("SELECT email FROM people WHERE role = 'admin' ORDER BY email LIMIT 3").map(p => p.email)

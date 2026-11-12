@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
+import type { StoryEvent } from '../src/core/story.ts'
 import type { Viewer } from '../src/service/access.ts'
 import type { FlowTime, FlowTimeParams, TaskMap, TaskMapParams, IngestStatus } from '../src/core/taskstypes.ts'
 
@@ -383,14 +384,29 @@ test('client story and handover APIs follow dashboard view roles; accessible cha
             if(!path.startsWith('/api/')&&allowed) {
                 assert.match(r.body,/<h1>&lt;img src=x onerror=1&gt;<\/h1>/)
                 assert.match(r.body,/Weekly work counts \(chart alternative\)/);assert.match(r.body,/<svg[^>]+role="img"/)
-                assert.match(r.body,/<th class="num" scope="col">People<\/th>/);assert.match(r.body,/&lt;private&gt; note/)
-                assert.match(r.body,/Copy handover pack/);assert.match(r.body,/<pre id="handover-pack"/);assert.match(r.body,/&lt;escaped&gt; pack/)
+                assert.match(r.body,/<th class="num" scope="col">People attempting tracked tasks<\/th>/);assert.match(r.body,/&lt;private&gt; note/)
+                assert.match(r.body,/Copy summary/);assert.match(r.body,/<pre id="handover-pack"/);assert.match(r.body,/&lt;escaped&gt; pack/)
                 assert.doesNotMatch(r.body,/<img|<private>|<escaped>/);scriptsParse(r.body)
             }
         }
     }
     for(const path of ['?view=story','/api/story?client=acme&weeks=53','/api/story?client=acme&weeks=1.5','/api/handover-pack']) assert.equal((await request(path)).status,400)
     assert.match((await request('?view=task_map')).body,/view=story/)
+})
+test('running story week shows compact reporting; zero charts and empty activity stay compact', async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const story = { client: 'acme', client_name: clientName, coverage: { complete: true, unprocessed: [] }, weeks: [{ week_start: today, attempts: 0, done: 0, users: 0, errors: 0, unrecovered: 0, exports: 0, productive_done: 0 }], events: [], surveys: [], summary: '', unknown: 'Unknown' }
+    const r = await request('?view=story&client=acme', viewer(), 'GET', undefined, { ...deps, clientStory: async () => story, handoverPack: async () => '' })
+    assert.doesNotMatch(r.body, /<span class="l">Attempt change|class="story-chart" viewBox/)
+    assert.match(r.body, /Weekly counts/)
+    assert.equal((r.body.match(/No tracked task starts recorded /g) || []).length, 1)
+    assert.match(r.body, /Edit follow-up/)
+    assert.match(r.body, /No tracked task starts recorded/)
+    assert.match(r.body, /<details><summary>Preview/)
+    assert.doesNotMatch(r.body, /0 completed \(0%\)|0 completed out of 0/)
+    assert.match(r.body, /<section class="story-empty compact">/)
+    assert.ok(r.body.indexOf('Status <span') < r.body.indexOf('<h2 class="sr-only" id="xp-h">Replay insights</h2>'))
+    assert.doesNotMatch(r.body, /<summary>Data coverage/)
 })
 test('briefing grid renders every warning column, explanatory labels, story links and standard pagination',async()=>{
     const grid=[{client:'acme',client_name:'ACME',score:50,open:ROOT+'?view=story&client=acme',cells:['missing','activity_drop','users_lost','key_person_gap','failing','giving_up','slower','peer_gap','work_moving_out','recurring_close_error','trend'].map(column=>({column,mark:column==='missing'?'●':'–',label:column==='missing'?'Yes: Hedge Designation stopped':column+': not flagged'}))}]
@@ -400,4 +416,49 @@ test('briefing grid renders every warning column, explanatory labels, story link
     for(const name of ['Stopped tasks','Less use','Users stopped','Key person gone','Failing','Giving up','Slower','Behind others','Exports up','Close errors','Trend']) assert.ok(r.body.includes('<th scope="col">'+name+'</th>'))
     assert.match(r.body,/aria-label="Yes: Hedge Designation stopped"/)
     assert.match(r.body,/data-page-list="portfolio-pager"/);assert.match(r.body,/view=story/);scriptsParse(r.body)
+})
+
+test('story charts use responsive geometry, merged work series and a dashed partial week; activity groups safely', async () => {
+    const monday = new Date()
+    monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() + 6) % 7)
+    const weeks = Array.from({ length: 26 }, (_, i) => ({ week_start: new Date(monday.getTime() - (25 - i) * 7 * 86400000).toISOString().slice(0,10), attempts: i < 21 ? 100 : 69, done: i < 21 ? 100 : 69, users: 2, errors: 0, exports: 0, unrecovered: 0, productive_done: 0 }))
+    const events: StoryEvent[] = Array.from({ length: 7 }, () => ({ date: '2026-11-11T14:02:00Z', kind: 'action' as const, actor: 'alice@example.com', text: 'Status: Open → Contacted', source: '<raw> source' }))
+    events.splice(1, 0, { date: '2026-11-11T14:02:00Z', kind: 'note', actor: 'alice@example.com', text: 'Note updated: Contacted treasury lead', source: 'chat' })
+    const story = { client: 'acme', client_name: 'Acme', coverage: { complete: true, unprocessed: [] }, weeks, events, surveys: [], summary: '', unknown: '' }
+    const r = await request('?view=story&client=acme', viewer(), 'GET', undefined, { ...deps, clientStory: async () => story, handoverPack: async () => '' })
+    assert.match(r.body, /viewBox="0 0 520 185" preserveAspectRatio="xMidYMid meet" role="img"/)
+    assert.match(r.body, /new ResizeObserver/)
+    const comparedChart = r.body.match(/class="story-chart-wrap" data-history="compared">([\s\S]*?)<\/svg>/)![1]
+    const fullChart = r.body.match(/class="story-chart-wrap" data-history="full" hidden>([\s\S]*?)<\/svg>/)![1]
+    assert.equal((comparedChart.match(/<circle /g) || []).length, 8)
+    assert.equal((fullChart.match(/<circle /g) || []).length, 26)
+    assert.match(r.body, /id="story-history" data-story-range="full" aria-pressed="false">Full history/)
+    assert.equal((r.body.match(/data-weekly-values>/g) || []).length, 0)
+    assert.match(r.body, /Note updated: Contacted treasury lead/)
+    assert.match(comparedChart, /Previous 4 weeks/)
+    assert.match(comparedChart, /Recent 4 weeks/)
+    assert.doesNotMatch(comparedChart, /Current week \(incomplete\)/)
+    assert.doesNotMatch(r.body, /preserveAspectRatio="none"/)
+    assert.match(r.body, /Recorded completions: 276. Recorded starts: 276/)
+    assert.doesNotMatch(r.body, /data-story-series="story-series-1"/)
+    assert.match(r.body, /stroke-dasharray="5 4"/)
+    assert.match(r.body, /Tracked task starts down 31%/)
+    assert.match(r.body, /Current partial week excluded/)
+    assert.doesNotMatch(r.body, /data-story-toggle="story-series-0"/)
+    assert.match(r.body, /Nov 11, 14:02/)
+    assert.match(r.body, /title="alice@example.com">Alice<\/span> set follow-up to Contacted · 7 changes · Nov 11, 14:02/)
+    assert.match(r.body, /&lt;raw&gt; source/)
+    assert.equal((r.body.match(/<summary>Data sources and methodology/g) || []).length, 1)
+    scriptsParse(r.body)
+})
+
+
+test('eight zero weeks never claim steady attempts or completion', async () => {
+    const weeks = Array.from({ length: 26 }, (_, i) => ({ week_start: new Date(Date.parse('2026-05-18') + i * 7 * 86400000).toISOString().slice(0,10), attempts: 0, done: 0, users: 0, errors: 0, exports: 0, unrecovered: 0, productive_done: 0 }))
+    const story = { client: 'acme', client_name: 'Acme', window: { from: '2026-05-18', to: '2026-11-11' }, coverage: { complete: true, unprocessed: [] }, weeks, events: [], surveys: [], summary: '', unknown: '' }
+    const r = await request('?view=story&client=acme', viewer(), 'GET', undefined, { ...deps, clientStory: async () => story, handoverPack: async () => '' })
+    assert.match(r.body, /No tracked task starts in the last 178 days/)
+    assert.match(r.body, /No tracked task starts recorded May 18 – Nov 11\./)
+    assert.doesNotMatch(r.body, /Tracked task attempts steady|all attempts completed|Completion:|not available yet/i)
+    assert.equal((r.body.match(/id="weekly-counts"/g) || []).length, 1)
 })
