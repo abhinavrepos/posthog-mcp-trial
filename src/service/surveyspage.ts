@@ -143,7 +143,7 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 .ldlg .row{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
 .ldlg .warnbox{border-left:4px solid var(--warn);background:var(--warn-bg);padding:8px 12px;border-radius:6px;font-size:13.5px}
 .ldlg label.f{font-weight:600;font-size:14px}
-.ldlg input[type=text]{text-transform:uppercase}
+.ldlg input[type=text]{text-transform:uppercase}.ldlg input[type=text]::placeholder{text-transform:none}#l-title:focus,#l-title:focus-visible{outline:none}
 main.wide{min-width:0}
 .layout{display:grid;align-items:start;grid-template-columns:minmax(0,290px) minmax(0,1fr);gap:36px}
 .layout>section{min-width:0}

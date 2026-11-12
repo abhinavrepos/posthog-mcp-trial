@@ -349,6 +349,9 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .people-toolbar{position:relative}
 .people-toolbar>div{flex:1}
 .add-person{margin:0}
+.add-person>.toolbar{display:grid;grid-template-columns:minmax(220px,2fr) repeat(3,minmax(130px,1fr));gap:14px 16px;align-items:end}.add-person>.toolbar>div{min-width:0!important}
+.add-person>.toolbar>div:nth-child(3){order:10}.add-person>.toolbar>div:nth-child(4){order:11}.add-person>.toolbar>div:nth-child(7){order:12;justify-self:start}.add-person .check{display:flex;align-items:center;gap:8px;margin:0;min-height:36px;font-size:13px;color:var(--ink)}
+@media(max-width:700px){.add-person>.toolbar{grid-template-columns:minmax(0,1fr)}}
 .add-person[open]{flex-basis:100%;order:2}
 .add-person>summary{min-height:36px;padding:7px 12px;border:1px solid var(--line-strong);border-radius:6px;box-sizing:border-box}
 .settings,.access-help{margin:0;border-bottom:1px solid var(--line);padding:16px 0}
