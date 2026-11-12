@@ -67,7 +67,7 @@ function connectHtml(v: Viewer): string {
 table{width:100%;table-layout:fixed}
 td,th{overflow-wrap:anywhere}
 .srv h3{margin:0 0 6px;font-size:15px}
-.policy{border:1px solid var(--warn);background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:12px 16px;margin:0 0 16px}
+.policy{border:1px solid var(--err);background:var(--err-bg);color:var(--err);border-radius:8px;padding:12px 16px;margin:0 0 16px}
 .policy p{margin:0}
 .policy ul{margin:4px 0;padding-left:20px}
 .info{background:var(--hover);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:12px 16px;margin:0 0 16px}
