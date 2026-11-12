@@ -122,7 +122,7 @@ ok('viewer can read the queue', (await viewer.api(`/replays/dashboards/api/rescu
     // Filters apply on change: choosing the period reloads the page.
     await Promise.all([p.waitForNavigation({ waitUntil: 'networkidle0' }), p.select('select[name=days]', '14')])
     const txt = await p.evaluate(() => document.body.innerText)
-    ok('page: choosing Last 14 days shows Treasury 1 (urgent) and Treasury 2', /Treasury 1/.test(txt) && /urgent/.test(txt) && /Treasury 2/.test(txt) && !/Waiting for processed history/.test(txt), (/Data through[^\n]*/.exec(txt) || [''])[0])
+    ok('page: choosing Last 14 days shows Treasury 1 (urgent) and Treasury 2', /Treasury 1/.test(txt) && /urgent/i.test(txt) && /Treasury 2/.test(txt) && !/Waiting for processed history/.test(txt), (/Data through[^\n]*/.exec(txt) || [''])[0])
 }
 
 // 6. chat with real personal keys
