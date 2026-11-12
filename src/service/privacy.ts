@@ -58,7 +58,7 @@ const STYLE = `.cn-wrap{max-width:860px}.top{display:flex;justify-content:space-
 table.cn{width:100%;table-layout:fixed;border-collapse:collapse}table.cn th,table.cn td{text-align:left;padding:7px 6px;border-bottom:1px solid var(--line);vertical-align:middle;overflow-wrap:anywhere}
 table.cn th{font-size:12px;color:var(--muted);font-weight:500}table.cn input{width:100%;min-width:0;margin:0}.code{color:var(--muted);font-size:12px;display:block}
 .ic{padding:6px 9px;min-width:0}.acts{display:flex;gap:4px;justify-content:flex-end}.find{display:flex;justify-content:space-between;align-items:end;gap:12px;margin:8px 0}.find input{max-width:320px}
-@media(max-width:700px){table.cn thead{display:none}table.cn tr{display:grid;grid-template-columns:1fr 1fr;gap:6px;border-bottom:1px solid var(--line);padding:8px 0}table.cn td{border:0;padding:0}table.cn td.cl,table.cn td.al{grid-column:1/-1}.acts{justify-content:flex-start}}`
+@media(max-width:700px){table.cn,table.cn tbody{display:block;width:100%}table.cn colgroup,table.cn thead{display:none}table.cn tr{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 8px;border-bottom:1px solid var(--line);padding:10px 0}table.cn td{display:block;border:0;padding:0;min-width:0}table.cn td.cl,table.cn td.al{grid-column:1/-1}table.cn td.cn{grid-column:1}table.cn td.ac{grid-column:2;align-self:center}.find{flex-wrap:wrap}.find input{max-width:none}}`
 
 function adminPage(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Client privacy for AI · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}${STYLE}</style></head>
