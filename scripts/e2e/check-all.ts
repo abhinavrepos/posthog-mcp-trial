@@ -132,7 +132,8 @@ let token = ''
     ok('MCP /mcp: key accepted (initialize)', init.status === 200 && !!init.data?.result, 'HTTP ' + init.status)
     const tools = await mcp('/mcp', token, 'tools/list', {}, init.sid)
     const names: string[] = tools.data?.result?.tools?.map((t: any) => t.name) || []
-    ok('MCP /mcp: admin gets dashboard and survey tools', ['find_task', 'task_map', 'flow_time', 'pin_dashboard', 'list_surveys', 'survey_results', 'launch_survey'].every((n) => names.includes(n)), names.length + ' tools')
+    ok('MCP /mcp: admin gets dashboard and survey tools', ['find_task', 'task_map', 'flow_time', 'pin_dashboard', 'list_surveys', 'survey_results', 'stop_survey'].every((n) => names.includes(n)), names.length + ' tools')
+    ok('MCP /mcp: no survey launch from chat, even for an admin', !names.includes('launch_survey'), names.filter((n) => /survey/.test(n)).join(', '))
     const tm = await mcp('/mcp', token, 'tools/call', { name: 'task_map', arguments: {} }, init.sid)
     const tmText = JSON.stringify(tm.data?.result?.content || tm.data?.error || '').slice(0, 300)
     ok('MCP task_map answers', tm.status === 200 && !!tm.data?.result && !tm.data.result.isError, tmText)

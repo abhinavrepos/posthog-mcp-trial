@@ -52,7 +52,8 @@ test('chat tools follow the survey role', () => {
     assert.deepEqual(surveyToolNames('none'), [])
     assert.deepEqual(surveyToolNames('view').sort(), ['list_surveys', 'survey_results'])
     assert.deepEqual(surveyToolNames('edit').sort(), ['design_survey', 'list_surveys', 'save_survey', 'survey_results'])
-    assert.deepEqual(all.sort(), ['design_survey', 'launch_survey', 'list_surveys', 'save_survey', 'stop_survey', 'survey_results'])
+    assert.deepEqual(all.sort(), ['design_survey', 'list_surveys', 'save_survey', 'stop_survey', 'survey_results'])
+    for (const r of ['none', 'view', 'edit', 'launch'] as const) assert.ok(!surveyToolNames(r).includes('launch_survey'), 'chat can never launch a survey')
 })
 
 test("PostHog's MCP refuses survey commands: surveys are Lens only", () => {

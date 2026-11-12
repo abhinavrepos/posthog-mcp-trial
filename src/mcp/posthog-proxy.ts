@@ -15,7 +15,7 @@ const DEFAULT_INFO: LensInfo = { app: 'the app', tools: ['get_replay_link'] }
 export function routingBlock(name: string, info: LensInfo = DEFAULT_INFO): string {
     const app = info.app
     return `Replays are private: use ${name}'s get_replay_link and give the person the link; never call session-recording-*, query-session-recordings-list or vision-* tools.
-Use the Lens server (${name}) instead for a named ${app} client or user, trade/link id, ${app} dialog/screen/button, errors ${app} showed users, which clients or users an error hit, one session, Jira ticket, release outcome, "where do clients struggle" or "who is at risk", which clients stopped doing a task, how long a flow takes or which path people take${info.tools.includes('design_survey') ? `, and in-app surveys for ${app} users (making, launching, stopping, answers)` : ''}. Call its tools directly with JSON arguments, never through exec.
+Use the Lens server (${name}) instead for a named ${app} client or user, trade/link id, ${app} dialog/screen/button, errors ${app} showed users, which clients or users an error hit, one session, Jira ticket, release outcome, "where do clients struggle" or "who is at risk", which clients stopped doing a task, how long a flow takes or which path people take${info.tools.includes('design_survey') ? `, and in-app surveys for ${app} users (making, stopping, answers; launching only on the Lens Surveys page)` : ''}. Call its tools directly with JSON arguments, never through exec.
 Use PostHog exec for generic product analytics and PostHog objects: trends, funnels, retention, insights, dashboards, feature flags, experiments, ${info.tools.includes('design_survey') ? '' : 'surveys, '}cohorts, annotations, actions/event definitions, error-tracking issue management, data warehouse/batch exports, docs/SDK help and raw SQL.`
 }
 
@@ -59,7 +59,7 @@ export function replayRefusal(value: unknown, name = 'lens'): Rpc | undefined {
         return { jsonrpc: '2.0', id: value.id ?? null, error: { code: -32602, message: `Replays are private. Use the ${name} server's get_replay_link and give the person the link. PostHog replay and vision commands are refused.` } }
     // In-app surveys are made, launched and read only in Lens, under its survey roles.
     if (/\bsurvey[\w-]*/i.test(command) && /\bcall\b/i.test(command))
-        return { jsonrpc: '2.0', id: value.id ?? null, error: { code: -32602, message: `In-app surveys are managed only in Lens: use the ${name} server's survey tools (list_surveys, survey_results, design_survey, save_survey, launch_survey, stop_survey), which follow each person's survey role. PostHog survey commands are refused.` } }
+        return { jsonrpc: '2.0', id: value.id ?? null, error: { code: -32602, message: `In-app surveys are managed only in Lens: use the ${name} server's survey tools (list_surveys, survey_results, design_survey, save_survey, stop_survey), which follow each person's survey role; launching is only on the Lens Surveys page. PostHog survey commands are refused.` } }
 }
 
 export function bearerAuthorized(req: IncomingMessage, token: string): boolean {

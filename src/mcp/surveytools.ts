@@ -1,5 +1,5 @@
 // MCP tools for in-app surveys: a PM describes a survey in chat, Lens checks it, estimates how many
-// would see it, saves it as a draft, and launches it only after the person says so. Every survey and
+// would see it and saves it as a draft. Launching is never possible from chat: only on the Surveys page. Every survey and
 // its answers are also on the Surveys page (/replays/surveys).
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -14,7 +14,6 @@ import {
     queueAlert,
     estimateReach,
     listSurveys,
-    launchSurvey,
     saveSurvey,
     stopSurvey,
     surveyOverview,
@@ -23,10 +22,8 @@ import {
     type SurveySpec,
 } from '../core/surveys.ts'
 import { audit, type ChatCaller, type SurveyRole } from '../service/access.ts'
-import { checkTicket, recordLaunch } from '../core/launches.ts'
-import { launchCheck } from '../service/surveyspage.ts'
 
-export const SURVEY_TOOLS = ['design_survey', 'save_survey', 'launch_survey', 'stop_survey', 'list_surveys', 'survey_results']
+export const SURVEY_TOOLS = ['design_survey', 'save_survey', 'stop_survey', 'list_surveys', 'survey_results']
 // Which tools each survey role gets in chat (the same roles as the Surveys page, set on the admin page).
 const TOOLS_FOR: Record<SurveyRole, string[]> = {
     none: [],
@@ -162,7 +159,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         'save_survey',
         {
             title: 'Save a survey as a draft, or change one',
-            description: `Saves an in-app ${app} survey as a draft (users see nothing until launch_survey), or changes one Lens made (give survey_id and every field: start from the "spec" survey_results returns; a running survey changes for users at once, so say so first). The same fields as design_survey.`,
+            description: `Saves an in-app ${app} survey as a draft (users see nothing until someone launches it on the Lens Surveys page; chat cannot launch), or changes one Lens made (give survey_id and every field: start from the "spec" survey_results returns; a running survey changes for users at once, so say so first). The same fields as design_survey.`,
             inputSchema: { ...specShape, survey_id: z.string().optional().describe('Change this survey instead of making a new one') },
         },
         async (args) => {
@@ -175,40 +172,9 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             const v = viewOf(out.survey)
             const conflicts = conflictsFor(out.compiled.chain, out.survey, await listSurveys())
             return json(
-                `${queueAlert(out.compiled.chain, conflicts).alert}\n\n${survey_id ? 'Changed' : 'Saved as a draft'}: "${v.name}" (${v.status}). ${v.status === 'draft' ? 'Users see nothing yet. Ask the person before launch_survey.' : ''} Page: ${pageUrl(v.id)}`,
+                `${queueAlert(out.compiled.chain, conflicts).alert}\n\n${survey_id ? 'Changed' : 'Saved as a draft'}: "${v.name}" (${v.status}). ${v.status === 'draft' ? 'Users see nothing yet. Chat cannot launch surveys: someone with the launch role launches it on the Surveys page.' : ''} Page: ${pageUrl(v.id)}`,
                 { survey: v, warnings: out.compiled.problems, queue: queueAlert(out.compiled.chain, conflicts), already_in: conflicts.map((x) => x.text) }
             )
-        }
-    )
-
-    reg(
-        'launch_survey',
-        {
-            title: 'Show a survey to users',
-            description: `Starts showing a survey to ${app} users (or starts a stopped one again). Two steps, never one: first call it with only survey_id, which returns the four rules of how it works; show them to the person word for word, with any ⚠ notice, and ask for the Jira ticket this launch is for and for them to type that they acknowledge it launches a survey to Reval users. Only after they did, call again with jira_ticket, acknowledged: true and confirm: true. Never fill in a ticket or the acknowledgement yourself.`,
-            inputSchema: {
-                survey_id: z.string(),
-                jira_ticket: z.string().optional().describe('The Jira ticket the person gave for this launch, e.g. REVAL-1234'),
-                acknowledged: z.boolean().optional().describe('true only when the person typed that they acknowledge this launches a survey to Reval users'),
-                confirm: z.boolean().optional().describe('true only when the person said to launch it'),
-            },
-            annotations: { destructiveHint: false, openWorldHint: true },
-        },
-        async ({ survey_id, jira_ticket, acknowledged, confirm }) => {
-            const check = await launchCheck(survey_id)
-            const rules = check.rules.map((r, i) => `${i + 1}. ${r}`).join('\n')
-            if (confirm !== true || acknowledged !== true || !jira_ticket) {
-                return text(`Not launched yet. Show the person this, word for word:\n\n${check.queue && check.queue.level !== 'clear' ? check.queue.alert + '\n\n' : ''}Before "${check.survey.name}" goes live, the four rules of how it works:\n${rules}\n\nTo launch, they give the Jira ticket for this launch and confirm: "${check.acknowledgement}"\nThen call launch_survey again with jira_ticket, acknowledged: true and confirm: true.`)
-            }
-            const ticket = await checkTicket(jira_ticket)
-            if (!ticket.ok) return text(`Not launched: ${ticket.error} Ask the person for the right ticket.`)
-            const launched = await launchSurvey(survey_id)
-            const v = viewOf(launched)
-            recordLaunch({ survey_id: v.id, survey_name: v.name, ticket: ticket.key, ticket_summary: ticket.summary ?? null, launched_by: who, via: 'chat', rules: check.rules, clients: v.clients })
-            audit(who, 'survey.launched', { survey: v.id, name: v.name, ticket: ticket.key })
-            const chain = launched.conditions?.lensChain
-            const conflicts = chain ? conflictsFor(chain, launched, await listSurveys()) : []
-            return json(`${chain ? queueAlert(chain, conflicts).alert + '\n\n' : ''}Running: "${v.name}", launched under ${ticket.key}${ticket.summary ? ` (${ticket.summary})` : ''}. It shows as soon as a user does the steps. Answers: survey_results, or ${pageUrl(v.id)}`, { steps: v.steps, clients: v.clients, sample_percent: v.sample_percent, ticket: ticket.key, ...(chain ? { queue: queueAlert(chain, conflicts) } : {}), already_in: conflicts.map((x) => x.text) })
         }
     )
 

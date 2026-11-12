@@ -344,7 +344,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
         'client_feedback',
         {
             title: 'What clients said',
-            description: `Shows what ${A} clients complained about after a release, grouped by screen, from support tickets and survey answers with ratings before and after. Use PostHog's exec instead for surveys as PostHog objects: creating, launching, editing or listing them.`,
+            description: `Shows what ${A} clients complained about after a release, grouped by screen, from support tickets and survey answers with ratings before and after. Use PostHog's exec instead for generic trends or funnels. Surveys themselves are handled only by the Lens survey tools (never PostHog), and launched only on the Lens Surveys page.`,
             inputSchema: { scope: scopeArg, screen: z.string().optional().describe('A screen path like /invoices, to narrow it down') },
             annotations: { readOnlyHint: true },
         },
