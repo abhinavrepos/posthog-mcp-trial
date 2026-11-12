@@ -14,7 +14,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { anonymiseOn } from '../core/anonymise.ts'
 import { config } from '../core/config.ts'
 import { all } from '../core/db.ts'
-import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSurveyRole, resetSurveyRole, setSurveySettings, chatPolicy, setChatPolicy, SURVEY_ROLES, SURVEY_ROLE_TEXT, defaultSurveyRole, sharedTokenSurveyRole, surveyRoleOf, listMcpTokens, revokeMcpToken, chatUrl, setChatUrl, type SurveyRole, setSystemAccess, surveyPeople, systemViewers, type Role, type Viewer } from './access.ts'
+import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSurveyRole, resetSurveyRole, setSurveySettings, chatPolicy, setChatPolicy, SURVEY_ROLES, SURVEY_ROLE_TEXT, defaultSurveyRole, sharedTokenSurveyRole, surveyRoleOf, listMcpTokens, revokeMcpToken, chatUrl, setChatUrl, type SurveyRole, setSystemAccess, setInsightAccess, insightPeople, surveyPeople, systemViewers, type Role, type Viewer } from './access.ts'
 import { dashboardPeople, dashboardRoleOf, setDashboardRole, resetDashboardRole, setDashboardSettings, defaultDashboardRole, sharedTokenDashboardRole, DASHBOARD_ROLES, DASHBOARD_ROLE_TEXT, type DashboardRole } from './access.ts'
 import { adminTabs } from './privacy.ts'
 import { APP_NAME, deleteClip, headerHtml, PAGER_JS, listClips, PAGE_CSS, setSaved, storage } from './replays.ts'
@@ -95,9 +95,10 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         const space = storage()
         const held = new Map(space.per_person.map((x) => [x.email, x]))
         const sys = systemViewers()
+        const ins = insightPeople()
         const srv = surveyPeople()
         const dash = dashboardPeople()
-        const emails = new Set([...members.map((m) => m.email), ...Object.keys(access.people), ...sys.keys(), ...srv.keys(), ...dash.keys()])
+        const emails = new Set([...members.map((m) => m.email), ...Object.keys(access.people), ...sys.keys(), ...ins.keys(), ...srv.keys(), ...dash.keys()])
         const people = [...emails].sort().map((email) => {
             const ms = members.filter((m) => m.email === email)
             const inProject = ms.find((m) => m.org_id === org)
@@ -107,6 +108,8 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
                 // Admins always see the System page; for anyone else it is the tick on this page.
                 system: can(role, 'admin') || sys.has(email),
                 system_granted: sys.has(email),
+                // Replay insights: admins always; anyone else only when ticked here.
+                insights: can(role, 'admin') || ins.has(email),
                 survey_role: surveyRoleOf(email, role),
                 survey_role_set_here: srv.get(email)?.role ?? null,
                 dashboard_role: dashboardRoleOf(email, role),
@@ -152,8 +155,19 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         if (body.dashboard_role && !DASHBOARD_ROLES.includes(body.dashboard_role as DashboardRole)) return (json(res, 400, { error: 'Give a dashboard role.' }), true)
         setPerson(email, role, v.email, String(body.note || '').slice(0, 200) || undefined)
         if (typeof body.system === 'boolean') setSystemAccess(email, body.system, v.email)
+        if (typeof body.insights === 'boolean') setInsightAccess(email, body.insights, v.email)
         if (typeof body.dashboard_role === 'string' && body.dashboard_role) setDashboardRole(email, body.dashboard_role as DashboardRole, v.email)
         if (typeof body.survey_role === 'string' && body.survey_role) setSurveyRole(email, body.survey_role as SurveyRole, v.email)
+        return (json(res, 200, { ok: true }), true)
+    }
+
+    // System page and replay insights: switches of their own, so ticking one never touches a role.
+    if (p === '/replays/admin/api/extra-access' && req.method === 'POST') {
+        const body = await readJson(req)
+        const email = String(body.email || '').trim().toLowerCase()
+        if (!EMAIL.test(email) || (typeof body.system !== 'boolean' && typeof body.insights !== 'boolean')) return (json(res, 400, { error: 'Give an email and what to turn on or off.' }), true)
+        if (typeof body.system === 'boolean') setSystemAccess(email, body.system, v.email)
+        if (typeof body.insights === 'boolean') setInsightAccess(email, body.insights, v.email)
         return (json(res, 200, { ok: true }), true)
     }
 
@@ -329,6 +343,7 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .identity-name{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .people-table th:nth-child(6){white-space:nowrap}
 .people-table label.check{min-height:36px;margin:0;align-items:center}
+.extra-access{display:flex;flex-direction:column;gap:0}.extra-access label.check{min-height:30px;white-space:nowrap}
 #people td select{text-overflow:clip}
 .people-toolbar,.chat-head,.token-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
 .people-toolbar{position:relative}
@@ -390,9 +405,9 @@ ${adminTabs()}
 
 <div class="tabpanel" role="tabpanel" id="tab-people" data-panel="people">
 <div class="card"><h2>People</h2><p class="small muted">Changes to access save automatically.</p><div class="people-toolbar"><div><label for="people-filter">Find a person</label><input id="people-filter" type="search" placeholder="Name or email"></div><details class="add-person"><summary>Add a person</summary><div class="toolbar"><div><label for="new-email">PostHog email</label><input id="new-email" type="email" placeholder="name@company.com"></div>
-<div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-system"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0"><label for="new-surveys">Surveys</label><select id="new-surveys"></select></div><div style="flex:0"><label for="new-dashboards">Dashboards</label><select id="new-dashboards"></select></div><div style="flex:0"><button type="button" id="add">Add person</button></div></div></details></div>
+<div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-system"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-insights"><input id="new-insights" type="checkbox"> Replay insights</label></div><div style="flex:0"><label for="new-surveys">Surveys</label><select id="new-surveys"></select></div><div style="flex:0"><label for="new-dashboards">Dashboards</label><select id="new-dashboards"></select></div><div style="flex:0"><button type="button" id="add">Add person</button></div></div></details></div>
 <p id="people-msg" class="small" aria-live="polite"></p>
-<div class="table-wrap" role="region" aria-label="People access table" tabindex="0"><table class="people-table" role="table"><colgroup><col style="width:29%"><col style="width:16%"><col style="width:12%"><col style="width:15%"><col style="width:15%"><col style="width:7%"><col style="width:6%"></colgroup><thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Person</th><th scope="col" role="columnheader">Clip role</th><th scope="col" role="columnheader">System page</th><th scope="col" role="columnheader">Surveys</th><th scope="col" role="columnheader">Dashboards</th><th scope="col" role="columnheader">Last seen</th><th scope="col" role="columnheader">Actions</th></tr></thead><tbody id="people" role="rowgroup"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table></div><div id="people-pager"></div></div>
+<div class="table-wrap" role="region" aria-label="People access table" tabindex="0"><table class="people-table" role="table"><colgroup><col style="width:29%"><col style="width:16%"><col style="width:12%"><col style="width:15%"><col style="width:15%"><col style="width:7%"><col style="width:6%"></colgroup><thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Person</th><th scope="col" role="columnheader">Clip role</th><th scope="col" role="columnheader">Extra access</th><th scope="col" role="columnheader">Surveys</th><th scope="col" role="columnheader">Dashboards</th><th scope="col" role="columnheader">Last seen</th><th scope="col" role="columnheader">Actions</th></tr></thead><tbody id="people" role="rowgroup"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table></div><div id="people-pager"></div></div>
 
 <details class="settings"><summary>Access defaults</summary><p class="small muted">Changes save automatically.</p>
 <div class="toolbar"><div><label for="default-role">Role for other PostHog users</label><select id="default-role"></select></div>
@@ -462,7 +477,7 @@ const clock=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 const short=e=>(e||'').replace(/@.*/,'');
 const cell=(tr,t,cls)=>{const td=document.createElement('td');if(t instanceof Node)td.appendChild(t);else td.textContent=t??'';if(cls)td.className=cls;tr.appendChild(td);return td};
 const msg=(id,t,ok)=>{$(id).textContent=t;$(id).className='small '+(ok?'ok':'err');$(id).setAttribute('role',ok?'status':'alert')};
-const ACTIONS={'privacy.anonymise_set':'Changed client privacy','outcome.recorded':'Recorded client outcome','rescue.updated':'Updated client follow-up','signin':'Signed in','signout':'Signed out','signin.failed':'Failed sign in','recording.inspected':'Looked up a recording','clip.requested':'Asked for a clip','clip.created':'Clip made','clip.viewed':'Watched a clip','clip.downloaded':'Downloaded a clip','clip.link_shared':'Created a share link','clip.deleted':'Deleted a clip','clip.saved':'Saved a clip','clip.unsaved':'Unsaved a clip','clip.comment_added':'Commented on a clip','clip.comment_edited':'Edited a clip comment','clip.comment_deleted':'Deleted a clip comment','clips.pruned':'Old clips deleted','access.role_set':'Changed a role','access.role_removed':'Removed a role','access.settings':'Changed settings','access.system_set':'Changed System page access','access.surveys_set':'Changed Surveys page access','access.survey_role_set':'Changed a survey role','access.survey_role_reset':'Reset a survey role','access.survey_settings':'Changed survey settings','access.dashboard_role_set':'Changed a dashboard role','access.dashboard_role_reset':'Reset a dashboard role','access.dashboard_settings':'Changed dashboard settings','access.chat_url':'Changed the Copilot address','dashboard.pinned':'Pinned a dashboard','dashboard.changed':'Changed a dashboard','dashboard.deleted':'Deleted a dashboard','dashboard.shared':'Shared a dashboard','chat.token_created':'Made a chat token','chat.token_revoked':'Revoked a chat token','survey.created':'Made a survey','survey.changed':'Changed a survey','survey.launched':'Launched a survey','survey.stopped':'Stopped a survey','survey.archived':'Archived a survey'};
+const ACTIONS={'privacy.anonymise_set':'Changed client privacy','outcome.recorded':'Recorded client outcome','rescue.updated':'Updated client follow-up','signin':'Signed in','signout':'Signed out','signin.failed':'Failed sign in','recording.inspected':'Looked up a recording','clip.requested':'Asked for a clip','clip.created':'Clip made','clip.viewed':'Watched a clip','clip.downloaded':'Downloaded a clip','clip.link_shared':'Created a share link','clip.deleted':'Deleted a clip','clip.saved':'Saved a clip','clip.unsaved':'Unsaved a clip','clip.comment_added':'Commented on a clip','clip.comment_edited':'Edited a clip comment','clip.comment_deleted':'Deleted a clip comment','clips.pruned':'Old clips deleted','access.role_set':'Changed a role','access.role_removed':'Removed a role','access.settings':'Changed settings','access.system_set':'Changed System page access','access.insights_set':'Changed replay insights access','access.surveys_set':'Changed Surveys page access','access.survey_role_set':'Changed a survey role','access.survey_role_reset':'Reset a survey role','access.survey_settings':'Changed survey settings','access.dashboard_role_set':'Changed a dashboard role','access.dashboard_role_reset':'Reset a dashboard role','access.dashboard_settings':'Changed dashboard settings','access.chat_url':'Changed the Copilot address','dashboard.pinned':'Pinned a dashboard','dashboard.changed':'Changed a dashboard','dashboard.deleted':'Deleted a dashboard','dashboard.shared':'Shared a dashboard','chat.token_created':'Made a chat token','chat.token_revoked':'Revoked a chat token','survey.created':'Made a survey','survey.changed':'Changed a survey','survey.launched':'Launched a survey','survey.stopped':'Stopped a survey','survey.archived':'Archived a survey'};
 let S=null;
 function identity(email){const box=document.createElement('div'),person=S?.people.find(p=>p.email===email),name=document.createElement('div');name.className='identity-name';name.textContent=person?.name||email;box.append(name);if(person?.name){const sub=document.createElement('div');sub.className='small muted';sub.textContent=email;box.append(sub)}if(email===S?.me){const badge=document.createElement('span');badge.className='badge';badge.textContent='You';name.append(badge)}return box}
 const roleLabel=(id,fallback)=>({admin:'Admin',watch:'Watch clips',download:'Watch, download and share',none:'No access',view:'View',edit:'Manage',launch:'Launch',share:'Publish',default:'Default'}[id]||fallback);
@@ -483,10 +498,12 @@ const peoplePg=makePager({mount:$('people-pager'),noun:'people',size:25,draw:sli
   const ph=document.createElement('div');ph.textContent=p.posthog.replace(/ \\((owner|admin|member)\\)/g,' $1');if(p.sees_all_replays_in_posthog){const badge=document.createElement('span');badge.className='badge';badge.title='Can watch every replay inside PostHog itself';badge.textContent='All PostHog replays';ph.append(badge)}ph.className='small muted person-meta';who.append(ph);
   const sel=roleSelect(p.role,p.locked);sel.setAttribute('aria-label','Clip role for '+p.email);if(p.locked){const w=document.createElement('div');const locked=document.createElement('span');locked.textContent=roleLabel(p.role,p.role);locked.setAttribute('aria-label','Clip role for '+p.email);w.appendChild(locked);const n=document.createElement('div');n.className='small muted';n.textContent='Inherited from PostHog';w.appendChild(n);cell(tr,w)}else{if(!p.set_here){const w=document.createElement('div');w.appendChild(sel);const n=document.createElement('div');n.className='small muted';n.textContent='Default';w.appendChild(n);cell(tr,w)}else cell(tr,sel)}
   sel.onchange=async()=>{try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email:p.email,role:sel.value})});msg('people-msg','Saved: '+p.email+' now has "'+sel.selectedOptions[0].textContent+'".',true);await load()}catch(e){msg('people-msg',e.message);await load()}};
-  const sw=document.createElement('label');sw.className='check small';const cb=document.createElement('input');cb.type='checkbox';cb.setAttribute('aria-label','System page access for '+p.email);cb.checked=!!p.system;sw.append(cb,document.createTextNode(p.role==='admin'?' Always (admin)':' Can see it'));
-  if(p.role==='admin'){cb.disabled=true;cb.hidden=true;sw.lastChild.textContent='Included';sw.title='Admins always see the System page'}
-  cb.onchange=async()=>{try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email:p.email,role:p.role,system:cb.checked})});msg('people-msg',(cb.checked?'Saved: '+p.email+' can now see the System page.':'Saved: '+p.email+' can no longer see the System page.'),true);await load()}catch(e){msg('people-msg',e.message);await load()}};
-  cell(tr,sw);
+  const extra=document.createElement('div');extra.className='extra-access';
+  [['system','System page','see the System page'],['insights','Replay insights','see replay insights']].forEach(([key,label,what])=>{const sw=document.createElement('label');sw.className='check small';const cb=document.createElement('input');cb.type='checkbox';cb.setAttribute('aria-label',label+' for '+p.email);cb.checked=!!p[key];sw.append(cb,document.createTextNode(' '+label));
+   if(p.role==='admin'){cb.disabled=true;sw.title='Admins always have this'}
+   cb.onchange=async()=>{try{await api('/replays/admin/api/extra-access',{method:'POST',body:JSON.stringify({email:p.email,[key]:cb.checked})});msg('people-msg',(cb.checked?'Saved: '+p.email+' can now '+what+'.':'Saved: '+p.email+' can no longer '+what+'.'),true);await load()}catch(e){msg('people-msg',e.message);await load()}};
+   extra.append(sw)});
+  cell(tr,extra);
   const ss=document.createElement('select');ss.setAttribute('aria-label','Survey role for '+p.email);[{id:'default',text:'Default'}].concat(S.survey_roles).forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.id==='default'?'Default ('+roleLabel(S.survey_default_role,'No access')+')':roleLabel(r.id,r.text);ss.appendChild(o)});
   ss.value=p.role==='admin'?'launch':(p.survey_role_set_here||'default');if(p.role==='admin'){ss.disabled=true;ss.title='Admins can always launch and stop surveys'}
   ss.onchange=async()=>{try{await api('/replays/admin/api/survey-role',{method:'POST',body:JSON.stringify({email:p.email,role:ss.value})});msg('people-msg','Saved: '+p.email+' survey role is now "'+ss.selectedOptions[0].textContent+'".',true);await load()}catch(e){msg('people-msg',e.message);await load()}};
@@ -498,7 +515,7 @@ const peoplePg=makePager({mount:$('people-pager'),noun:'people',size:25,draw:sli
   if(p.clips.clips){const c=document.createElement('div');c.className='small muted';c.textContent=n(p.clips.clips,'clip')+', '+p.clips.saved+' saved · '+mb(p.clips.bytes);who.appendChild(c)}
   {const td=cell(tr,p.last_seen?new Date(p.last_seen).toLocaleDateString([], {month:'short',day:'numeric'}):'never','small');if(td&&p.last_seen)td.title=when(p.last_seen)}
   if(p.set_here&&!p.locked){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Reset';b.setAttribute('aria-label','Reset clip role for '+p.email);b.title='Remove the role set here, so the default applies';b.onclick=async()=>{if(!confirm('Reset the clip role for '+p.email+' to the default?'))return;try{await api('/replays/admin/api/person?email='+encodeURIComponent(p.email),{method:'DELETE'});msg('people-msg','Removed the role for '+p.email+'.',true);await load()}catch(e){msg('people-msg',e.message)}};cell(tr,b)}else cell(tr,'');
-  tr.setAttribute('role','row');[...tr.children].forEach((td,i)=>{td.setAttribute('role','cell');td.dataset.label=['Person','Clip role','System page','Surveys','Dashboards','Last activity','Actions'][i]});tb.appendChild(tr)});
+  tr.setAttribute('role','row');[...tr.children].forEach((td,i)=>{td.setAttribute('role','cell');td.dataset.label=['Person','Clip role','Extra access','Surveys','Dashboards','Last activity','Actions'][i]});tb.appendChild(tr)});
 
 if(!slice.length)$('people').innerHTML='<tr><td colspan="7">No people found. Change your search or add a person above.</td></tr>';guardControls()}});
 function renderPeople(keep=false){const q=$('people-filter').value.trim().toLowerCase();if(S)peoplePg.set(S.people.filter(p=>(p.email+' '+p.name+' '+p.note).toLowerCase().includes(q)),keep)}
@@ -542,7 +559,7 @@ let searchVersion=0;
 async function searchAudit(more=false){const version=++searchVersion;msg('audit-msg','Loading…',true);try{const q=$('filter').value.trim();const audit=(await api('/replays/admin/api/audit?q='+encodeURIComponent(q)+'&offset='+(more?S.audit.length:0))).audit;if(version!==searchVersion)return;S.audit=more?S.audit.concat(audit):audit;renderAudit(more);msg('audit-msg',audit.length?'Activity loaded.':'No activity found. Try another search.',true)}catch(e){if(version===searchVersion)msg('audit-msg',e.message+' Try the search again.')}}
 $('audit-more').onclick=()=>searchAudit(true);
 let searchTimer;$('filter').oninput=()=>{++searchVersion;clearTimeout(searchTimer);searchTimer=setTimeout(()=>searchAudit(),250)};
-$('add').onclick=async()=>{const email=$('new-email').value.trim();if(!$('new-email').reportValidity()||!email){msg('people-msg','Enter a valid email address.');return;}try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email,role:$('new-role').value,system:$('new-system').checked,dashboard_role:$('new-dashboards').value==='default'?'':$('new-dashboards').value,survey_role:$('new-surveys').value==='default'?'':$('new-surveys').value})});$('new-email').value='';$('new-system').checked=false;$('new-surveys').value='default';$('new-dashboards').value='default';msg('people-msg','Added '+email+'.',true);await load()}catch(e){msg('people-msg',e.message)}};
+$('add').onclick=async()=>{const email=$('new-email').value.trim();if(!$('new-email').reportValidity()||!email){msg('people-msg','Enter a valid email address.');return;}try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email,role:$('new-role').value,system:$('new-system').checked,insights:$('new-insights').checked,dashboard_role:$('new-dashboards').value==='default'?'':$('new-dashboards').value,survey_role:$('new-surveys').value==='default'?'':$('new-surveys').value})});$('new-email').value='';$('new-system').checked=false;$('new-insights').checked=false;$('new-surveys').value='default';$('new-dashboards').value='default';msg('people-msg','Added '+email+'.',true);await load()}catch(e){msg('people-msg',e.message)}};
 $('show-revoked').onchange=()=>drawTokens(true);
 $('chat-url').value=${JSON.stringify(chatUrl()).replace(/</g, '\\u003c')};
 {const p=${JSON.stringify(chatPolicy()).replace(/</g, '\\u003c')};$('chat-apps').value=p.apps.join('\\n');$('chat-note').value=p.note}

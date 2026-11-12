@@ -136,7 +136,7 @@ export async function cachedToolCall(name: string, args: unknown, run: () => Pro
     return structuredClone(await flight)
 }
 
-export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'dashboardRole' | 'admin'>>): void {
+export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'dashboardRole' | 'admin' | 'insights'>>): void {
     const register = server.registerTool.bind(server)
     server.registerTool = ((name: string, cfg: { description?: string }, cb: unknown) => {
         const call = cb as (a: unknown, e: unknown) => unknown
@@ -470,7 +470,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
         })
     )
     registerSurveyTools(server, caller)
-    if (appEvents()) registerDashboardTools(server, caller && { who: caller.who, email: caller.email, dashboardRole: caller.dashboardRole ?? 'view', surveyRole: caller.surveyRole, admin: !!caller.admin })
+    if (appEvents()) registerDashboardTools(server, caller && { who: caller.who, email: caller.email, dashboardRole: caller.dashboardRole ?? 'view', surveyRole: caller.surveyRole, admin: !!caller.admin, insights: !!caller.admin || caller.insights === true })
 }
 
 // The app's own events (APP_EVENTS_FILE): what they are, one session as a story, where people fail.

@@ -52,10 +52,11 @@ test('registered tools follow none, view and share roles', async () => {
             if (role === 'none') {
                 assert.equal(c.client.getServerCapabilities()?.tools, undefined)
                 await assert.rejects(c.client.listTools(), /Method not found/)
-            } else assert.deepEqual((await c.client.listTools()).tools.map(t => t.name).sort(), dashboardToolNames(role).sort())
+            } else assert.deepEqual((await c.client.listTools()).tools.map(t => t.name).sort(), dashboardToolNames(role, 'launch', false).sort(), 'no replay insights without their own grant')
         } finally { await c.close() }
     }
     assert.equal(dashboardToolNames('view').length, 12)
+    assert.equal(dashboardToolNames('view', 'launch', false).length, 10)
     assert.equal(dashboardToolNames('share').length, DASHBOARD_TOOLS.length)
 })
 

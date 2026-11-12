@@ -7,6 +7,7 @@
 //   clip_holders  who has which clip: made it, and whether they saved it
 //   clip_comments comments pinned to a second of a clip, shown over the video and burned into downloads
 //   system_viewers who may see the System page besides admins
+//   replay_insight_people who may see replay insights besides admins
 //   survey_people  each person's survey role (view, edit, launch), besides admins (always launch)
 //   mcp_tokens     personal chat (MCP) tokens: who they belong to, stored as a hash, revocable
 //   survey_launches every survey launch: who, the Jira ticket, the rules they acknowledged
@@ -268,6 +269,14 @@ const MIGRATIONS: string[] = [
         set_by TEXT NOT NULL, set_at TEXT NOT NULL
     );
     CREATE TABLE anon_blocks (day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, kind));`,
+    // People an admin let see replay insights (how clients' people work, read from session replays: the
+    // Client story section and the client_experience / friction_hotspots chat tools). Admins always can;
+    // nobody else unless ticked here. Kept apart from every role, so no role change grants it.
+    `CREATE TABLE replay_insight_people (
+        email TEXT PRIMARY KEY,
+        updated_by TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

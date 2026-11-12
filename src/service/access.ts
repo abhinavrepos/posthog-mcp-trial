@@ -82,6 +82,29 @@ export function hasSystemGrant(email: string): boolean {
 
 export const canSeeSystem = (v: Pick<Viewer, 'role' | 'system'>) => can(v.role, 'admin') || v.system === true
 
+// ------------------------------------------------------------------ replay insights
+// How clients' people actually work, read from session replays (src/core/experience.ts): the Client story
+// section and the chat tools client_experience and friction_hotspots. Admins always; anyone else only when
+// an admin ticked "Replay insights" for them. Never through the shared chat token, never by a role change.
+export const REPLAY_INSIGHT_TOOLS = ['client_experience', 'friction_hotspots']
+export function insightPeople(): Map<string, { updated_by: string; updated_at: string }> {
+    return new Map(all<{ email: string; updated_by: string; updated_at: string }>('SELECT * FROM replay_insight_people').map((r) => [r.email, r]))
+}
+export function hasInsightGrant(email: string): boolean {
+    return !!one('SELECT 1 FROM replay_insight_people WHERE email = ?', email.toLowerCase())
+}
+export const canSeeReplayInsights = (v: Pick<Viewer, 'role' | 'insights'>) => can(v.role, 'admin') || v.insights === true
+/** Lets a person see replay insights, or stops it, and records who did it. */
+export function setInsightAccess(email: string, on: boolean, by: string): void {
+    const e = email.toLowerCase()
+    tx(() => {
+        const before = hasInsightGrant(e)
+        if (on) run('INSERT INTO replay_insight_people (email, updated_by, updated_at) VALUES (?, ?, ?) ON CONFLICT (email) DO UPDATE SET updated_by = excluded.updated_by, updated_at = excluded.updated_at', e, by, new Date().toISOString())
+        else run('DELETE FROM replay_insight_people WHERE email = ?', e)
+        if (before !== on) audit(by, 'access.insights_set', { person: e, insights: on })
+    })
+}
+
 // ------------------------------------------------------------------ surveys
 // Survey roles are separate from the clip role. Each includes the ones before it:
 //   none    no Surveys page and no survey tools in chat
@@ -284,12 +307,12 @@ export function revokeMcpToken(id: string, by: string, onlyFor?: string): boolea
 }
 
 /** Who a chat request is from: the shared token, or a person's own token. Undefined: refuse. */
-export interface ChatCaller { who: string; email?: string; shared: boolean; surveyRole: SurveyRole; dashboardRole: DashboardRole; admin: boolean }
+export interface ChatCaller { who: string; email?: string; shared: boolean; surveyRole: SurveyRole; dashboardRole: DashboardRole; admin: boolean; insights: boolean }
 export function chatCaller(bearer: string | undefined, sharedToken: string): ChatCaller | undefined {
     if (!bearer) return undefined
     if (sharedToken) {
         const a = Buffer.from(bearer), b = Buffer.from(sharedToken)
-        if (a.length === b.length && timingSafeEqual(a, b)) return { who: 'mcp (shared token)', shared: true, surveyRole: sharedTokenSurveyRole(), dashboardRole: sharedTokenDashboardRole(), admin: false }
+        if (a.length === b.length && timingSafeEqual(a, b)) return { who: 'mcp (shared token)', shared: true, surveyRole: sharedTokenSurveyRole(), dashboardRole: sharedTokenDashboardRole(), admin: false, insights: false }
     }
     if (!/^lens_[A-Za-z0-9_-]{20,64}$/.test(bearer)) return undefined
     const row = one<Record<string, unknown>>('SELECT * FROM mcp_tokens WHERE hash = ? AND revoked_at IS NULL', tokenHash(bearer))
@@ -299,7 +322,7 @@ export function chatCaller(bearer: string | undefined, sharedToken: string): Cha
     const lensRole: Role = t.posthog_admin ? 'admin' : roleOf(t.email, false)
     const now = new Date().toISOString()
     if (!t.last_used_at || Date.parse(now) - Date.parse(t.last_used_at) > 60_000) run('UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?', now, t.id)
-    return { who: t.email, email: t.email, shared: false, surveyRole: surveyRoleOf(t.email, lensRole), dashboardRole: dashboardRoleOf(t.email, lensRole), admin: can(lensRole, 'admin') }
+    return { who: t.email, email: t.email, shared: false, surveyRole: surveyRoleOf(t.email, lensRole), dashboardRole: dashboardRoleOf(t.email, lensRole), admin: can(lensRole, 'admin'), insights: can(lensRole, 'admin') || hasInsightGrant(t.email) }
 }
 
 /** Lets a person see the System page, or stops it, and records who did it. */
@@ -372,6 +395,7 @@ export interface Viewer {
     system?: boolean // an admin let this person see the System page (admins see it anyway)
     surveys?: SurveyRole // this person's survey role (admins: launch)
     dashboards?: DashboardRole // this person's dashboard role (admins: share)
+    insights?: boolean // an admin let this person see replay insights (admins see them anyway)
     session: string // PostHog session id, used to call PostHog on the admin's behalf
 }
 
@@ -446,7 +470,7 @@ export async function currentViewer(req: IncomingMessage): Promise<Viewer | unde
     if (!session || !/^[A-Za-z0-9:._-]{8,200}$/.test(session)) return undefined
     const id = await identity(session)
     if (!id) return undefined
-    return { ...id, role: roleOf(id.email, id.posthog_admin), system: hasSystemGrant(id.email), surveys: surveyRoleOf(id.email, roleOf(id.email, id.posthog_admin)), dashboards: dashboardRoleOf(id.email, roleOf(id.email, id.posthog_admin)), session }
+    return { ...id, role: roleOf(id.email, id.posthog_admin), system: hasSystemGrant(id.email), insights: hasInsightGrant(id.email), surveys: surveyRoleOf(id.email, roleOf(id.email, id.posthog_admin)), dashboards: dashboardRoleOf(id.email, roleOf(id.email, id.posthog_admin)), session }
 }
 
 // ------------------------------------------------------------------ sign in and out through PostHog

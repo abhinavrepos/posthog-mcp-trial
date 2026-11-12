@@ -9,12 +9,12 @@ import type { SurveyRole, DashboardRole } from '../service/access.ts'
 
 export const INSTRUCTIONS_LIMIT = 2048
 
-export function serverInstructions(withPosthog = posthogMcpActive(), surveyRole: SurveyRole = 'launch', dashboardRole: DashboardRole = 'share'): string {
+export function serverInstructions(withPosthog = posthogMcpActive(), surveyRole: SurveyRole = 'launch', dashboardRole: DashboardRole = 'share', insights = true): string {
     const p = config.properties
     const client = p.clientFromDistinctId ? `part ${p.clientFromDistinctId} of the distinct id` : `the event property ${p.client}`
     const app = appEvents()?.app || 'the app'
     const surveys = surveyToolNames(surveyRole)
-    const dashboards = dashboardToolNames(dashboardRole, surveyRole)
+    const dashboards = dashboardToolNames(dashboardRole, surveyRole, insights)
     // Client anonymisation (Admin → Client privacy for AI): codenames only.
     const privacy = anonFor('lens') ? `Clients are known here only by codename (two words, e.g. Teal Wren). Never write a real client name or code, even if the person does: ask for the codename (Lens → Codenames).\n` : ''
     return `${privacy}Replays are private: never call PostHog's session-recording-*, query-session-recordings-list or vision-* tools. Use get_replay_link; give the person the link, never view replay content.
@@ -32,7 +32,7 @@ Lens tools:
 - releases: list_releases, release_outcomes; one ticket: ticket_evidence; complaints after shipping: client_feedback
 - agreed verdict: record_verdict; ticket link: correct_ticket_link; sync: refresh_releases${appEvents() ? `
 - reval_brief first for PM questions; ${app}: describe_app_events vocabulary; top_pains; dialog_friction failures; message_doctor messages; session_story; attempt_timings waits; find_trade ids; client_signals risk; discover_workflows, workflow_completion` : ''}${dashboards.length ? `
-- "how is <client> doing": client_experience first, then client_story, handover_pack; screen friction: friction_hotspots; weekly: monday_brief, signal_scorecard; rescue_queue${dashboards.includes('draft_rescue_survey') ? ', draft_rescue_survey' : ''}${dashboards.includes('set_rescue_status') ? ', set_rescue_status' : ''}; tasks: task_map, flow_time, find_task; pins: ${dashboards.filter((t) => /pin|share|list/.test(t)).join(', ') || 'none'}` : appEvents() ? `
+- "how is <client> doing": ${dashboards.includes('client_experience') ? 'client_experience first, then ' : ''}client_story, handover_pack; ${dashboards.includes('friction_hotspots') ? 'screen friction: friction_hotspots; ' : ''}weekly: monday_brief, signal_scorecard; rescue_queue${dashboards.includes('draft_rescue_survey') ? ', draft_rescue_survey' : ''}${dashboards.includes('set_rescue_status') ? ', set_rescue_status' : ''}; tasks: task_map, flow_time, find_task; pins: ${dashboards.filter((t) => /pin|share|list/.test(t)).join(', ') || 'none'}` : appEvents() ? `
 - dashboards (task map, flow time): this person has no access; a Lens admin grants it` : ''}${surveys.length ? `
 - in-app surveys for ${app} users (only here, never PostHog): ${surveys.join(', ')}. Launching: only on the Lens Surveys page, never from chat${surveyRole === 'launch' ? '' : '. More needs a higher survey role (Lens admin)'}` : surveyToolNames().length ? `
 - in-app surveys: this person has no survey access in Lens; a Lens admin grants it (never use PostHog for surveys)` : ''}`

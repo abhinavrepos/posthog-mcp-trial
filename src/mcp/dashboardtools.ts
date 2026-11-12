@@ -18,13 +18,14 @@ import { createDashboard, shareDashboard, listDashboards, getDashboard, canManag
 import { resolveClient } from '../core/resolve.ts'
 import { parseTimeWindow } from '../core/timewindow.ts'
 import type { FlowTimeParams, TaskMapParams, Window } from '../core/taskstypes.ts'
-import type { ChatCaller, DashboardRole } from '../service/access.ts'
+import { REPLAY_INSIGHT_TOOLS, type ChatCaller, type DashboardRole } from '../service/access.ts'
 
 export const DASHBOARD_TOOLS = ['client_experience', 'friction_hotspots', 'signal_scorecard', 'client_story', 'handover_pack', 'monday_brief', 'draft_rescue_survey', 'rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'share_dashboard']
-export const dashboardToolNames = (role: DashboardRole = 'share', surveyRole: SurveyRole = 'launch'): string[] =>
-    !appEvents() || role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => (t !== 'draft_rescue_survey' || surveysActive() && canSurvey(surveyRole, 'edit')) && (role === 'share' || !['pin_dashboard', 'share_dashboard', 'set_rescue_status'].includes(t)))
+/** Replay insights (client_experience, friction_hotspots) need their own grant from a Lens admin, on top of dashboard access. */
+export const dashboardToolNames = (role: DashboardRole = 'share', surveyRole: SurveyRole = 'launch', insights = true): string[] =>
+    !appEvents() || role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => (t !== 'draft_rescue_survey' || surveysActive() && canSurvey(surveyRole, 'edit')) && (role === 'share' || !['pin_dashboard', 'share_dashboard', 'set_rescue_status'].includes(t)) && (insights || !REPLAY_INSIGHT_TOOLS.includes(t)))
 const realDeps = { scorecard, clientStory, handoverPack, mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
-type Caller = Pick<ChatCaller, 'who' | 'email' | 'dashboardRole' | 'admin'> & { surveyRole?: SurveyRole }
+type Caller = Pick<ChatCaller, 'who' | 'email' | 'dashboardRole' | 'admin'> & { surveyRole?: SurveyRole; insights?: boolean }
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
 const json = (value: unknown) => text(JSON.stringify(value, null, 2))
 const page = (id?: string) => `${config.service.publicUrl.replace(/\/$/, '')}/replays/dashboards${id ? '/' + id : ''}`
@@ -60,9 +61,9 @@ const filters = {
     only_flagged: z.boolean().default(true).describe('Only tasks needing attention in the task map.'),
 }
 
-export function registerDashboardTools(server: McpServer, caller: Caller = { who: 'mcp', dashboardRole: 'share', surveyRole: 'launch', admin: false }, deps: Partial<typeof realDeps> = {}): void {
+export function registerDashboardTools(server: McpServer, caller: Caller = { who: 'mcp', dashboardRole: 'share', surveyRole: 'launch', admin: false, insights: true }, deps: Partial<typeof realDeps> = {}): void {
     const d = { ...realDeps, ...deps }
-    const allowed = new Set(dashboardToolNames(caller.admin ? 'share' : caller.dashboardRole, caller.admin ? 'launch' : caller.surveyRole || 'none'))
+    const allowed = new Set(dashboardToolNames(caller.admin ? 'share' : caller.dashboardRole, caller.admin ? 'launch' : caller.surveyRole || 'none', caller.admin || caller.insights === true))
     const reg = ((name: string, ...rest: unknown[]) => allowed.has(name) ? (server.registerTool as (...a: unknown[]) => unknown)(name, ...rest) : undefined) as typeof server.registerTool
     const safe = <T>(fn: (input: T) => Promise<ReturnType<typeof text>>) => async (input: T) => {
         try { return await fn(input) } catch (e) { return text((e as Error).message) }

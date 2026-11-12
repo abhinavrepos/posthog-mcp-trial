@@ -84,7 +84,7 @@ test('too few replays: no findings, a clear note; a failed read is skipped once 
 test('Copilot: client_experience answers in plain words with findings, next steps and links; friction_hotspots ranks places', async () => {
     const { registerDashboardTools } = await import('../src/mcp/dashboardtools.ts')
     const server = new McpServer({ name: 't', version: '1' })
-    registerDashboardTools(server, { who: 'pm', email: 'pm@x', dashboardRole: 'view', surveyRole: 'none', admin: false }, { rescueClients: (t: string) => sessions.filter((s) => s.client_id === t || s.client_name.toLowerCase() === t.toLowerCase()).slice(0, 1).map((s) => ({ id: s.client_id, name: s.client_name })) } as never)
+    registerDashboardTools(server, { who: 'pm', email: 'pm@x', dashboardRole: 'view', surveyRole: 'none', admin: false, insights: true }, { rescueClients: (t: string) => sessions.filter((s) => s.client_id === t || s.client_name.toLowerCase() === t.toLowerCase()).slice(0, 1).map((s) => ({ id: s.client_id, name: s.client_name })) } as never)
     const client = new Client({ name: 't', version: '0' }); const [a, b] = InMemoryTransport.createLinkedPair()
     await Promise.all([server.connect(a), client.connect(b)])
     const name = sessions.find((s) => s.persona === 'error-looping')!.client_name
