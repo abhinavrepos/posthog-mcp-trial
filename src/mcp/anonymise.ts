@@ -8,7 +8,7 @@
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 
-import { anonFor, anonSettings, clientOfCodename, countBlock, hideClientsDeep, isClientCode, namesClient, outsideEmail, refusalText, type BlockKind } from '../core/anonymise.ts'
+import { anonFor, anonSettings, roundValue, clientOfCodename, countBlock, hideClientsDeep, isClientCode, namesClient, outsideEmail, refusalText, type BlockKind } from '../core/anonymise.ts'
 
 type Rpc = Record<string, any>
 const isObj = (v: unknown): v is Rpc => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -110,7 +110,7 @@ export function guardRequest(msg: unknown, kind: BlockKind = 'lens_refused', reg
 /** A message on its way out, with every client name and code replaced by its codename. */
 export function guardResponse<T>(msg: T, kind: BlockKind = 'lens_cleaned'): T {
     if (!anonFor(kind.startsWith('posthog') ? 'posthog' : 'lens')) return msg
-    const { value, n } = hideClientsDeep(withoutMedia(msg) as T)
+    const { value, n } = hideClientsDeep(anonSettings().round ? roundValue(withoutMedia(msg)) as T : withoutMedia(msg) as T)
     if (n) countBlock(kind)
     return value
 }

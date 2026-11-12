@@ -116,11 +116,11 @@ if (target) {
 }
 ok('viewer can read the queue', (await viewer.api(`/replays/dashboards/api/rescue?${W}`)).status === 200)
 
-// 5b. the Period choice in the page itself (select Last 14 days, Apply) finds the planted problems
+// 5b. the Period choice in the page itself (select Last 14 days; it applies at once) finds the planted problems
 {
     const p = admin.page; await p.goto(LENS + '/replays/dashboards?view=rescue', { waitUntil: 'networkidle0' })
-    await p.select('select[name=days]', '14')
-    await Promise.all([p.waitForNavigation({ waitUntil: 'networkidle0' }), p.evaluate(() => (document.querySelector('select[name=days]') as HTMLSelectElement).form!.requestSubmit())])
+    // Filters apply on change: choosing the period reloads the page.
+    await Promise.all([p.waitForNavigation({ waitUntil: 'networkidle0' }), p.select('select[name=days]', '14')])
     const txt = await p.evaluate(() => document.body.innerText)
     ok('page: choosing Last 14 days shows Treasury 1 (urgent) and Treasury 2', /Treasury 1/.test(txt) && /urgent/.test(txt) && /Treasury 2/.test(txt) && !/Waiting for processed history/.test(txt), (/Data through[^\n]*/.exec(txt) || [''])[0])
 }

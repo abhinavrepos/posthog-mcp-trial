@@ -106,10 +106,10 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
 export function surveysHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Surveys · ${APP_NAME}</title><style>${PAGE_CSS()}
 :root{--act:#545c68;--good:#067647;--good-bg:#e7f5ec;--warn:#9a5b00;--warn-bg:#fff4dd;--down:#b42318;--grid:#e1e0d9}
-main.wide{max-width:1240px;min-width:0}
+main.wide{min-width:0}
 .layout{display:grid;grid-template-columns:minmax(0,330px) minmax(0,1fr);gap:14px;align-items:start}
 @media(max-width:860px){.layout{grid-template-columns:minmax(0,1fr)}}
-.list .item{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:0 0 8px;cursor:pointer;color:var(--ink);font:inherit}
+.list .item{display:block;width:100%;text-align:left;white-space:normal;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:0 0 8px;cursor:pointer;color:var(--ink);font:inherit}
 .list .item:hover{border-color:var(--act)}.list .item[aria-current="true"]{border-color:var(--act);box-shadow:0 0 0 1px var(--act)}
 .list .item b{display:block;overflow-wrap:anywhere}.list .item small{display:block;color:var(--muted);font-size:12.5px;margin-top:3px}
 .chip{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:999px;margin-right:6px;vertical-align:1px;background:var(--chip);color:var(--muted)}
@@ -144,7 +144,7 @@ table{width:100%;table-layout:fixed}td,th{overflow-wrap:anywhere}td.n,th.n{text-
 .ldlg label.f{font-weight:600;font-size:14px}.ldlg input[type=text]{text-transform:uppercase}
 
 /* Survey-local hierarchy: results first, quiet surfaces, disclosure for supporting detail. */
-main.wide{--accent:#303844;--chip:#f0f1f3;background:var(--card);margin-top:24px;padding:24px; border-radius:12px}
+main.wide{min-width:0}
 .layout{grid-template-columns:minmax(0,290px) minmax(0,1fr);gap:36px}
 .layout>section{min-width:0}.toolbar select{width:auto;max-width:100%;font-size:13px}
 .list .item{border:0;border-radius:0;border-bottom:1px solid var(--line);margin:0;padding:14px 10px;background:transparent;line-height:1.6}

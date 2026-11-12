@@ -192,16 +192,20 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
             html(res, 200, v, rescueNav('story', client) + storyHtml(story, await deps.handoverPack(client)))
             return true
         }
+        if (url.searchParams.get('view') === 'pinned' && !pin) {
+            html(res, 200, v, `${rescueNav('pinned')}<h1>Pinned</h1>${pinsHtml(listDashboards(v.email, admin), v, admin)}`)
+            return true
+        }
         if (selected === 'briefing' && !pin) {
             const brief = await deps.mondayBrief({ by: v.email })
-            html(res, 200, v, `${rescueNav('briefing')}<h1>Monday briefing</h1>${briefingHtml(brief, share)}${pinsHtml(listDashboards(v.email, admin), v, admin)}`)
+            html(res, 200, v, `${rescueNav('briefing')}<h1>Monday briefing</h1>${briefingHtml(brief, share)}`)
             return true
         }
         if (selected === 'rescue' && !pin) {
             let body: string
             try { body = rescueHtml(await deps.rescueQueue(rescueParams(url.searchParams)), url, v, share, deps.surveysActive()) }
             catch (e) { if (e instanceof InputError) throw e; body = '<div class="card" role="alert">Dashboard history is unavailable. Try again shortly.</div>' }
-            html(res, 200, v, `${rescueNav('rescue')}<h1>${url.searchParams.get('history') === '1' ? 'Rescue history' : 'Rescue queue'}</h1>${body}${pinsHtml(listDashboards(v.email, admin), v, admin)}`)
+            html(res, 200, v, `${rescueNav('rescue')}<h1>${url.searchParams.get('history') === '1' ? 'Rescue history' : 'Rescue queue'}</h1>${body}`)
             return true
         }
         if (selected !== 'task_map' && selected !== 'flow_time') bad('View must be task_map or flow_time.')
@@ -251,13 +255,13 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
         const manage = pin && share && canManage(pin, v.email, admin)
         const context = { kind, params: filterParams, id: pin?.id, relative: url.searchParams.has('days') ? length(filterParams.window) : url.searchParams.has('from') || url.searchParams.has('to') ? null : pin && 'last_days' in pin.params.window ? (pin.params.window as unknown as { last_days: number }).last_days : null, shares: pin?.shared_with || [] }
         const body = `<div id="dashboard-context" data-context="${esc(JSON.stringify(context))}"></div>
-<nav class="tabs" aria-label="Dashboard views"><a href="${ROOT}?view=briefing" ${selected === 'briefing' ? 'aria-current="page"' : ''}>Briefing</a><a href="${ROOT}?view=rescue">Rescue queue</a><a href="${ROOT}?view=task_map" ${kind === 'task_map' ? 'aria-current="page"' : ''}>Client task map</a><a href="${ROOT}?view=flow_time" ${kind === 'flow_time' ? 'aria-current="page"' : ''}>Flow time</a><a href="${ROOT}?view=scorecard" ${selected === 'scorecard' ? 'aria-current="page"' : ''}>Scorecard</a><a href="#pinned">Pinned</a></nav>
+<nav class="tabs" aria-label="Dashboard views"><a href="${ROOT}?view=briefing" ${selected === 'briefing' ? 'aria-current="page"' : ''}>Briefing</a><a href="${ROOT}?view=rescue">Rescue queue</a><a href="${ROOT}?view=task_map" ${kind === 'task_map' ? 'aria-current="page"' : ''}>Client task map</a><a href="${ROOT}?view=flow_time" ${kind === 'flow_time' ? 'aria-current="page"' : ''}>Flow time</a><a href="${ROOT}?view=scorecard" ${selected === 'scorecard' ? 'aria-current="page"' : ''}>Scorecard</a><a href="${ROOT}?view=pinned" ${selected === 'pinned' ? 'aria-current="page"' : ''}>Pinned</a></nav>
 <div class="tools"><h1>${esc(pin?.title || KIND_TEXT[kind])}</h1><div class="actions">${controls}${manage ? '<details class="dashboard-settings"><summary>Settings</summary><div class="actions"><button class="ghost" type="button" id="save-filters">Save filters</button><button class="ghost" type="button" data-open="rename-dialog">Rename</button><button class="ghost" type="button" id="open-share">Share</button><button class="ghost" type="button" data-open="delete-dialog">Delete</button></div></details>' : ''}</div></div>
 ${pin ? `<details class="ownership"><summary>Owner: ${esc(pin.owner)} · Shared with ${num(pin.shared_with.length)}</summary><p>${pin.shared_with.map(esc).join(', ') || 'No one else has access.'}</p></details>` : ''}
 ${statusLine}${filters(kind, filterParams, url, tasks, clients, pin ? 'last_days' in pin.params.window : undefined)}${coreError}
-${map ? mapHtml(map, url) : flow ? flowHtml(flow) : !params ? '<div class="card"><h2>Choose a task</h2><p>Choose a task above, then apply to see completion times and replays.</p></div>' : ''}
+${map ? mapHtml(map, url) : flow ? flowHtml(flow) : !params ? '<div class="card"><h2>Choose a task</h2><p>Choose a task above to see completion times and replays.</p></div>' : ''}
 ${countingHelp(map?.note || flow?.note)}
-${pinsHtml(listDashboards(v.email, admin), v, admin)}${share ? dialogs(pin, !!manage, length(filterParams.window)) : ''}`
+${pin ? '' : ''}${share ? dialogs(pin, !!manage, length(filterParams.window)) : ''}`
         html(res, 200, v, body)
     } catch (e) {
         const known = e instanceof HttpError || e instanceof InputError || e instanceof RescueInputError
@@ -288,17 +292,17 @@ function rescueParams(q: URLSearchParams): RescueParams {
     }
     return p
 }
-const rescueNav = (selected: string, client?: string) => `<nav class="tabs" aria-label="Dashboard views"><a href="${ROOT}?view=briefing" ${selected === 'briefing' ? 'aria-current="page"' : ''}>Briefing</a><a href="${ROOT}?view=rescue" ${selected === 'rescue' ? 'aria-current="page"' : ''}>Rescue queue</a><a href="${ROOT}?view=task_map">Client task map</a><a href="${ROOT}?view=flow_time">Flow time</a>${client ? `<a href="${esc(storyLink(client))}" aria-current="page">Client story</a>` : ''}<a href="${ROOT}?view=scorecard" ${selected === 'scorecard' ? 'aria-current="page"' : ''}>Scorecard</a><a href="#pinned">Pinned</a></nav>`
+const rescueNav = (selected: string, client?: string) => `<nav class="tabs" aria-label="Dashboard views"><a href="${ROOT}?view=briefing" ${selected === 'briefing' ? 'aria-current="page"' : ''}>Briefing</a><a href="${ROOT}?view=rescue" ${selected === 'rescue' ? 'aria-current="page"' : ''}>Rescue queue</a><a href="${ROOT}?view=task_map">Client task map</a><a href="${ROOT}?view=flow_time">Flow time</a>${client ? `<a href="${esc(storyLink(client))}" aria-current="page">Client story</a>` : ''}<a href="${ROOT}?view=scorecard" ${selected === 'scorecard' ? 'aria-current="page"' : ''}>Scorecard</a><a href="${ROOT}?view=pinned" ${selected === 'pinned' ? 'aria-current="page"' : ''}>Pinned</a></nav>`
 function rescueHtml(r: RescueQueue, url: URL, v: Viewer, share: boolean, surveysOn: boolean): string {
     const q = url.searchParams, level = q.get('level') || 'all', status = q.get('status') || 'any'
     if (!['all', 'urgent', 'watch'].includes(level)) bad('Invalid level.')
     if (!['any', 'unassigned', 'mine', ...RESCUE_STATUSES].includes(status)) bad('Invalid status.')
     const clients = (q.get('history') === '1' ? [...r.clients, ...(r.recovered || [])] : r.clients).filter(c => (!q.get('client') || c.client === q.get('client')) && (level === 'all' || c.level === level) && (status === 'any' || status === 'unassigned' && !c.action?.owner || status === 'mine' && c.action?.owner === v.email.toLowerCase() || (c.action?.status || 'open') === status))
     const options = (values: readonly string[], selected: string) => values.map(x => `<option value="${esc(x)}" ${x === selected ? 'selected' : ''}>${esc(x.replaceAll('_', ' '))}</option>`).join('')
-    return `<p>${r.coverage.complete ? `${r.clients.length} client${r.clients.length === 1 ? ' needs' : 's need'} someone` : 'Waiting for processed history'}</p>
+    const urgent = r.clients.filter(c => c.level === 'urgent').length
+    return `<p class="sub-line">${r.coverage.complete ? `<b>${r.clients.length} client${r.clients.length === 1 ? ' needs' : 's need'} someone</b>${urgent ? ` · <span class="rescue-level urgent">${urgent} urgent</span>` : ''}` : 'Waiting for processed history'} <span class="muted">· ${esc(r.window.from)} to ${esc(r.window.to)} vs ${esc(r.baseline.from)} to ${esc(r.baseline.to)} · data through ${esc(r.data_through || 'not yet available')}</span></p>
 ${!r.coverage.complete ? `<div class="card" role="status">${esc(r.coverage.text)}<details><summary>Unprocessed days</summary>${r.coverage.unprocessed.map(esc).join(', ')}</details></div>` : ''}
-<p class="muted">Data through ${esc(r.data_through || 'not yet available')} · ${esc(r.window.from)} to ${esc(r.window.to)} · compared with ${esc(r.baseline.from)} to ${esc(r.baseline.to)}</p>
-<form class="card rescue-filters" method="get"><input type="hidden" name="view" value="rescue">
+<form class="filter-bar rescue-filters" method="get" data-auto><input type="hidden" name="view" value="rescue">
 ${['from', 'to', 'baseline_from', 'baseline_to', 'min_attempts'].filter(k => q.has(k)).map(k => `<input type="hidden" name="${k}" value="${esc(q.get(k))}">`).join('')}
 <label>Period <select name="days">${(() => {
     // Explicit dates (e.g. from a chat link) show as "custom"; choosing a period replaces them.
@@ -308,24 +312,24 @@ ${['from', 'to', 'baseline_from', 'baseline_to', 'min_attempts'].filter(k => q.h
 })()}</select></label>
 <label>Level <select name="level">${options(['all', 'urgent', 'watch'], level)}</select></label>
 <label>Status <select name="status">${options(['any', 'unassigned', 'mine', ...RESCUE_STATUSES], status)}</select></label>
-<label><input type="checkbox" name="include_snoozed" value="true" ${q.get('include_snoozed') === 'true' || q.get('include_snoozed') === '1' ? 'checked' : ''}> Show snoozed</label><button type="submit">Apply</button></form>
-${r.hidden_snoozed ? `<p class="muted">${r.hidden_snoozed} snoozed client${r.hidden_snoozed === 1 ? '' : 's'} hidden (expected declines). Tick Show snoozed to see them.</p>` : ''}
+<label class="check"><input type="checkbox" name="include_snoozed" value="true" ${q.get('include_snoozed') === 'true' || q.get('include_snoozed') === '1' ? 'checked' : ''}> Snoozed${r.hidden_snoozed ? ` (${r.hidden_snoozed})` : ''}</label></form>
 ${share ? `<datalist id="rescue-people">${knownPeople().map(e => `<option value="${esc(e)}"></option>`).join('')}</datalist>` : ''}
+<div class="rq card"><div class="rq-head" aria-hidden="true"><span>Client</span><span>Main reason</span><span>Owner</span><span>Status</span></div>
 <div data-page-list="rescue-pager" data-noun="clients">${clients.map(c => {
     const a = c.action, link = new URLSearchParams({ view: 'task_map', client: c.client, from: r.window.from, to: r.window.to, baseline_from: r.baseline.from, baseline_to: r.baseline.to })
     const flow = new URLSearchParams({ view: 'flow_time', client: c.client, task: c.critical_task?.task_id || '', from: r.window.from, to: r.window.to })
-    return `<article class="card rescue-client"><h2>${esc(c.client_name)} <span class="rescue-level ${c.level}">${c.level}</span></h2><p>Trend: ${esc(c.trend)}</p>
-<ul>${c.reasons.slice(0, 3).map(reason => `<li>${esc(reason.text)}</li>`).join('')}</ul><p>${esc(c.next_step)}</p>${c.recovery_text ? `<p>${esc(c.recovery_text)}</p>` : ''}
-<p><a href="${esc(storyLink(c.client))}">Client story</a> · <a href="${ROOT}?${esc(link)}">Open task map for this client</a>${c.critical_task ? ` · <a href="${ROOT}?${esc(flow)}">Flow time</a>` : ''}</p>
-${(can(v.role, 'admin') || canSurvey(v.surveys, 'edit')) && surveysOn ? `<button type="button" data-ask-client="${esc(c.client)}">Ask them</button>` : ''}
-${share ? `<details class="rescue-edit"${a ? '' : ''}><summary>Owner: ${esc(a?.owner || 'unassigned')} · Status: ${esc((a?.status || 'open').replaceAll('_', ' '))}${a?.due ? ` · Due ${esc(a.due)}` : ''} · <span class="linkish">Update</span></summary><form class="rescue-action" data-client="${esc(c.client)}">
+    const statusText = (a?.status || 'open').replaceAll('_', ' ')
+    return `<details class="rescue-client rq-row"><summary><span class="rq-client"><b>${esc(c.client_name)}</b> <span class="rescue-level ${c.level}">${c.level}</span><span class="muted small rq-trend">${esc(c.trend)}</span></span><span class="rq-reason">${esc(c.reasons[0]?.text || '')}${c.reasons.length > 1 ? ` <span class="muted">+${c.reasons.length - 1}</span>` : ''}</span><span class="rq-owner${a?.owner ? '' : ' muted'}">${esc(a?.owner || 'Unassigned')}</span><span class="rq-status"><span class="badge${statusText === 'open' ? '' : ' info'}">${esc(statusText)}</span>${a?.due ? `<span class="muted small"> due ${esc(a.due)}</span>` : ''}</span></summary>
+<div class="rq-body"><ul>${c.reasons.slice(0, 3).map(reason => `<li>${esc(reason.text)}</li>`).join('')}</ul><p><b>Next step:</b> ${esc(c.next_step)}</p>${c.recovery_text ? `<p class="muted">${esc(c.recovery_text)}</p>` : ''}
+<p class="rq-links"><a href="${esc(storyLink(c.client))}">Client story</a><a href="${ROOT}?${esc(link)}">Task map</a>${c.critical_task ? `<a href="${ROOT}?${esc(flow)}">Flow time</a>` : ''}${(can(v.role, 'admin') || canSurvey(v.surveys, 'edit')) && surveysOn ? `<button type="button" class="secondary" data-ask-client="${esc(c.client)}">Ask them</button>` : ''}</p>
+${share ? `<form class="rescue-action" data-client="${esc(c.client)}">
 <label>Owner <input type="email" name="owner" list="rescue-people" value="${esc(a?.owner)}" placeholder="Email"></label>
 <label>Status <select name="status">${options(RESCUE_STATUSES, a?.status || 'open')}</select></label>
 <label>Due <input type="date" name="due" value="${esc(a?.due)}"></label>
-<label>Note <textarea name="note" maxlength="500">${esc(a?.note)}</textarea></label>
+<label class="wide">Note <textarea name="note" maxlength="500" rows="2">${esc(a?.note)}</textarea></label>
 <label class="snooze-field" ${a?.status !== 'expected' ? 'hidden' : ''}>Snooze until <input type="date" name="snooze_until" value="${esc(a?.snooze_until)}"></label>
-<button type="submit">Save</button><span role="status" aria-live="polite"></span></form></details>${a?.note ? `<p class="muted">${esc(a.note)}</p>` : ''}` : `<p>Owner: ${esc(a?.owner || 'Unassigned')} · Status: ${esc(a?.status || 'open')}${a?.due ? ` · Due: ${esc(a.due)}` : ''}</p>${a?.note ? `<p>${esc(a.note)}</p>` : ''}`}</article>`
-}).join('') || `<p class="card">${!r.coverage.complete ? 'Flags appear once both periods are processed.' : r.clients.length ? 'No clients match these filters.' : 'No client needs someone in this period. A shorter period shows recent changes sooner.'}</p>`}</div><div id="rescue-pager"></div><p class="muted">${esc(r.note)}</p>`
+<div><button type="submit">Save</button> <span role="status" aria-live="polite"></span></div></form>` : `${a?.note ? `<p>${esc(a.note)}</p>` : ''}`}</div></details>`
+}).join('') || `<p class="rq-empty">${!r.coverage.complete ? 'Flags appear once both periods are processed.' : r.clients.length ? 'No clients match these filters.' : 'No client needs someone in this period. A shorter period shows recent changes sooner.'}</p>`}</div></div><div id="rescue-pager"></div><p class="muted small">${esc(r.note)}</p>`
 }
 
 const storyLink = (client: string) => ROOT + '?' + new URLSearchParams({ view: 'story', client })
@@ -349,11 +353,13 @@ function storyHtml(s: ClientStory, pack: string): string {
 function briefingHtml(b: MondayBrief, share: boolean): string {
     const card = (item: NonNullable<MondayBrief['sections']['quiet_review']>) => `<article class="card"><h3><a href="${esc(item.open)}">${esc(item.client_name)}</a> · <a href="${esc(storyLink(item.client))}">Client story</a></h3><p>${esc(item.text)}</p></article>`
     const titles = { new_or_worse: 'Changed since your last briefing', close_soon: 'Month-end close coming up', overdue: 'Overdue follow-ups', recovered: 'Recovered' }
-    const section = (k: keyof typeof titles) => `<section class="card"><h2>${titles[k]}</h2>${(b.sections[k] || []).map(card).join('') || '<p class="muted">Nothing here this week.</p>'}</section>`
+    // Empty sections become one quiet line at the end instead of a card each.
+    const empty: string[] = []
+    const section = (k: keyof typeof titles) => (b.sections[k] || []).length ? `<section class="card"><h2>${titles[k]}</h2>${(b.sections[k] || []).map(card).join('')}</section>` : (empty.push(titles[k]), '')
     // New clients are a short list, one line each; the client story has the detail.
     const fresh = b.sections.new_clients || []
     const newClients = `<section class="card"><h2>New clients</h2>${fresh.length ? `<ul class="compact">${fresh.map(i => `<li><a href="${esc(i.open)}">${esc(i.client_name)}</a>: ${esc(i.text.replace(/^[^(]*\(/, '(').replace(/^\(([^)]*)\):\s*/, '$1 · '))}</li>`).join('')}</ul>` : '<p class="muted">No new clients in the last 90 days.</p>'}</section>`
-    return `<p class="lead">${esc(b.headline)}</p><p class="muted">Week ${esc(b.period.from)} to ${esc(b.period.to)}</p>${gridHtml(b)}${section('new_or_worse')}${section('close_soon')}${section('overdue')}${section('recovered')}<section class="card"><h2>Quiet account to check</h2>${b.sections.quiet_review ? card(b.sections.quiet_review) + (share ? `<button type="button" data-review-client="${esc(b.sections.quiet_review.client)}">Mark reviewed</button>` : '') : '<p class="muted">No steady low-use client to review.</p>'}</section>${newClients}`
+    return `<p class="lead">${esc(b.headline)}</p><p class="muted">Week ${esc(b.period.from)} to ${esc(b.period.to)}</p>${gridHtml(b)}${section('new_or_worse')}${section('close_soon')}${section('overdue')}${section('recovered')}<section class="card"><h2>Quiet account to check</h2>${b.sections.quiet_review ? card(b.sections.quiet_review) + (share ? `<button type="button" data-review-client="${esc(b.sections.quiet_review.client)}">Mark reviewed</button>` : '') : '<p class="muted">No steady low-use client to review.</p>'}</section>${newClients}${empty.length ? `<p class="muted small">Nothing this week: ${empty.map(esc).join(' · ')}.</p>` : ''}`
 }
 
 function filters(kind: DashboardKind, p: TaskMapParams | FlowTimeParams, url: URL, tasks: Awaited<ReturnType<Deps['findTasks']>>, clients: TaskMap['clients'], savedRelative?: boolean) {
@@ -369,7 +375,7 @@ function filters(kind: DashboardKind, p: TaskMapParams | FlowTimeParams, url: UR
 <div class="date-fields" id="period-dates"${selectedPeriod === 'custom' ? '' : ' hidden'}><label>From<input type="date" name="from" aria-label="From date" value="${esc(p.window.from)}" required></label><label>To<input type="date" name="to" aria-label="To date" value="${esc(p.window.to)}" required></label></div>
 <label>Client<select name="client" aria-label="Client" id="client-picker"><option value="">All clients</option>${p.client && !clients.some(c => c.client === p.client) ? option(p.client, p.client, p.client) : ''}${clients.filter(c => c.client).map(c => option(c.client, c.client_name || c.client, p.client || '')).join('')}</select></label>
 ${kind === 'flow_time' ? taskControls : `<label>Show<select name="attention" aria-label="Show tasks"><option value="1"${showAll(q) ? '' : ' selected'}>Only what needs attention</option><option value="0"${showAll(q) ? ' selected' : ''}>All tasks</option></select></label>`}
-<button class="primary" type="submit">Apply</button></div>
+</div>
 <details class="more-filters"><summary>More filters${kind === 'task_map' && p.task ? ' · Task selected' : ''}${kind === 'task_map' && compare === 'year' ? ' · Last year' : compare === 'custom' ? ' · Custom comparison' : ''}</summary><div class="filter-extra">
 <label>Find a client<input type="search" id="client-search" aria-label="Find a client" placeholder="Search clients" autocomplete="off"></label>
 ${kind === 'task_map' ? `${taskControls}<label>Compared with<select name="compare" aria-label="Compared with" id="compare">${option('previous', 'Previous period', compare)}${option('year', 'Same period last year', compare)}${option('custom', 'Custom comparison', compare)}</select></label><div class="date-fields" id="comparison-dates"${compare === 'custom' ? '' : ' hidden'}><label>Comparison from<input type="date" name="baseline_from" aria-label="Comparison start date" value="${esc(baseline?.from)}"></label><label>Comparison to<input type="date" name="baseline_to" aria-label="Comparison end date" value="${esc(baseline?.to)}"></label></div><label>Minimum attempts<input name="min_attempts" aria-label="Minimum attempts" type="number" min="1" max="100000" value="${esc('min_attempts' in p ? p.min_attempts ?? 5 : 5)}"></label>` : `<label>Group by<select name="granularity" aria-label="Group by day or week">${option('day', 'Day', 'granularity' in p ? p.granularity || (length(p.window) > 31 ? 'week' : 'day') : 'day')}${option('week', 'Week', 'granularity' in p ? p.granularity || (length(p.window) > 31 ? 'week' : 'day') : 'day')}</select></label>`}
@@ -458,11 +464,11 @@ const CSS = `
 .lead{font-size:1.1rem;font-weight:600}ul.compact{padding-left:20px;margin:0}ul.compact li{margin:6px 0}th[scope=row] .rescue-level{font-weight:400;margin-left:4px}
 
 :root{--good:var(--ok);--warn:#9a5b00;--down:var(--err)}
-@media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#151922;--card:#1d2330;--ink:#e8ebf2;--muted:#acb5c6;--line:#374151;--accent:#8fb5ff;--accent-ink:#151922;--chip:#29303d;--good:#7ed5a0;--warn:#edbd70;--down:#ffa4a0}}
-main.wide{max-width:1280px;min-width:0}main *{box-sizing:border-box}main [hidden]{display:none!important}
-main .card{border:0;border-radius:0;background:transparent;padding:0;margin:28px 0}main h1{margin:0}main h2{font-size:20px;margin:0 0 16px}main h3{font-size:15px;margin:24px 0 12px}main p{line-height:1.5}
+@media(prefers-color-scheme:dark){:root{--good:#7ed5a0;--warn:#edbd70;--down:#ffa4a0}}
+main.wide{min-width:0}main *{box-sizing:border-box}main [hidden]{display:none!important}
+main .card{margin:0 0 20px}main h1{margin:0}main h2{font-size:20px;margin:0 0 16px}main h3{font-size:15px;margin:24px 0 12px}main p{line-height:1.5}
 .tools,.actions,.tabs{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.tools{justify-content:space-between;align-items:start;margin:24px 0 12px}.tabs{margin-bottom:24px;border-bottom:1px solid var(--line)}.tabs a{padding:10px 0;margin-right:16px;text-decoration:none;color:var(--muted)}.tabs [aria-current]{border-bottom:2px solid var(--ink);color:var(--ink);font-weight:600}
-label{display:block;font-size:13px;min-width:0}label input:not([type=checkbox]):not([type=radio]),label select{display:block;width:100%;margin-top:6px}main input,main select,main button{font:inherit;max-width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);min-height:40px}main input[type=checkbox],main input[type=radio]{width:auto;min-height:0;flex:none}main button{width:auto;cursor:pointer}main button.ghost{border-color:transparent;background:transparent;color:var(--ink);font-weight:500}main button.primary{background:var(--ink);border-color:var(--ink);color:var(--card)}
+label{display:block;font-size:13px;min-width:0}label input:not([type=checkbox]):not([type=radio]),label select{display:block;width:100%;margin-top:6px}main input,main select,main button{font:inherit;max-width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);min-height:40px}main input[type=checkbox],main input[type=radio]{width:auto;min-height:0;flex:none}main button{width:auto;cursor:pointer}main button.ghost{border-color:transparent;background:transparent;color:var(--ink);font-weight:500}main button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .filter-main,.filter-extra,.date-fields{display:flex;align-items:end;gap:16px;flex-wrap:wrap}.filter-main>label{flex:1 1 180px}.filter-main>button{flex:0 0 auto}.date-fields{flex:1 1 300px}.date-fields label{flex:1 1 130px}.filter-extra>label,.filter-extra>.task-choice{flex:1 1 190px}.task-choice{min-width:0;flex:1 1 230px}.task-choice label+label{margin-top:12px}#search-status:empty{display:none}#search-status{display:block;font-size:12px;margin-top:4px}.more-filters{margin-top:16px}.filter-extra{padding-top:16px}.counting-help,.ownership{margin:16px 0 24px}summary{cursor:pointer;width:fit-content;max-width:100%;padding:6px 0;font-size:13px}.dashboard-settings .actions{margin-top:8px}.dashboard-settings summary{min-height:40px;padding:10px}.ownership summary{color:var(--muted)}
 .layout{display:grid;grid-template-columns:minmax(0,230px) minmax(0,1fr);gap:32px;align-items:start}.layout .card{min-width:0;margin-top:16px}.client{padding:14px 0;border-bottom:1px solid var(--line)}.client small{line-height:1.6}.flag{white-space:nowrap;display:inline-block;font-size:12px;margin:3px 6px 3px 0}.flag.attention{color:var(--warn)}.flag.new{color:var(--good)}
 .table-wrap{max-width:100%;overflow:auto}@media(max-width:600px){.table-wrap>table{min-width:560px}}table{width:100%;font-size:13px;border-collapse:collapse}td,th{vertical-align:top;overflow-wrap:anywhere;padding:12px 10px;border-bottom:1px solid var(--line)}th{font-weight:500;color:var(--muted);text-align:left}td{min-width:75px}td:first-child{min-width:125px}
@@ -472,7 +478,19 @@ label{display:block;font-size:13px;min-width:0}label input:not([type=checkbox]):
 @media(max-width:760px){.layout{grid-template-columns:minmax(0,1fr);gap:12px}.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}.filter-main>label{flex-basis:140px}.filter-main>button{width:100%}.filter-main>.task-choice{flex-basis:100%}.tools h1{font-size:26px}main.wide{padding:20px 12px}.actions{gap:6px}.tabs{gap:14px}.tabs a{margin-right:0}.tiles .tile:last-child{grid-column:1/-1}dialog{padding:20px}.layout aside.card{margin-bottom:0}}
 
 .task-choice{display:flex;gap:12px 16px;align-items:end;flex-wrap:wrap;flex:2 1 380px}.task-choice>label{flex:1 1 180px}.task-choice label+label{margin-top:0}#search-status{flex-basis:100%;order:3}#search-status:empty{display:none}
-@media(max-width:760px){.filter-main>.task-choice{flex-basis:100%}}`
+@media(max-width:760px){.filter-main>.task-choice{flex-basis:100%}}
+.sub-line{margin:6px 0 16px}.rescue-level{font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.filter-bar{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin:0 0 16px}.filter-bar>label{flex:0 1 190px;margin:0}.filter-bar label.check{display:flex;align-items:center;gap:6px;flex:0 0 auto;padding-bottom:9px;color:var(--ink)}.filter-bar label.check input{min-height:0;margin:0}
+.filters.card{padding:16px 20px}.filters .more-filters{margin-top:10px}
+.rq{padding:0;overflow:hidden}.rq-head,.rq-row>summary{display:grid;grid-template-columns:22% minmax(0,1fr) 17% 14%;gap:16px;align-items:center;padding:12px 20px}
+.rq-head{font-size:12px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line)}.rq-row{border-bottom:1px solid var(--line)}.rq-row:last-child{border-bottom:0}
+.rq-row>summary{width:100%;list-style:none;cursor:pointer;color:var(--ink);font-size:13.5px;margin:0}.rq-row>summary::-webkit-details-marker{display:none}.rq-row>summary:hover{background:var(--chip)}.rq-row[open]>summary{background:var(--accent-soft);margin:0}
+.rq-client{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.rq-trend{display:block;width:100%}.rq-reason{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}.rq-owner{overflow-wrap:anywhere}
+.rq-body{padding:6px 20px 18px}.rq-body ul{margin:8px 0;padding-left:20px}.rq-links{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.rescue-action{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;align-items:end;border-top:1px solid var(--line);padding-top:14px;margin-top:8px}.rescue-action .wide{grid-column:1/-1}.rescue-action label{margin:0}
+.rq-empty{padding:16px 20px;margin:0;color:var(--muted)}
+main .tabs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}main .tabs a{flex:none}
+@media(max-width:760px){.rq-head{display:none}.rq-row>summary{grid-template-columns:1fr;gap:4px}.rescue-action{grid-template-columns:1fr}.filter-bar>label{flex:1 1 140px}}`
 
 // Browser code stays in String.raw so escaping HTML never alters JavaScript quoting.
 const CLIENT = String.raw`
@@ -498,7 +516,10 @@ document.querySelectorAll('.rescue-action').forEach(form=>{const update=()=>{for
 document.querySelectorAll('[data-ask-client]').forEach(b=>b.onclick=run(async()=>{const d=await api('rescue/'+encodeURIComponent(b.dataset.askClient)+'/ask'+location.search,'POST',{});$('message').textContent=d.message+' ';const a=document.createElement('a');a.href=d.open;a.textContent='Open the draft';$('message').append(a)}))
 document.querySelectorAll('[data-review-client]').forEach(b=>b.onclick=run(async()=>{await api('rescue/'+encodeURIComponent(b.dataset.reviewClient),'POST',{note:'Quiet review completed: checked whether their work is going well.'});b.textContent='Reviewed'}))
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close())
+// Filters apply as soon as they change (no Apply button). Custom dates wait until both are valid.
+document.querySelectorAll('form[data-auto]').forEach(f=>f.addEventListener('change',()=>f.requestSubmit()))
 const form=$('filters')
+if(form)form.addEventListener('change',e=>{const t=e.target;if(t.type==='search'||(t.id==='period'||t.id==='compare')&&t.value==='custom')return;if(t.type==='date'&&![...form.querySelectorAll('input[type=date]:not(:disabled)')].every(x=>x.value&&x.checkValidity()))return;if(form.checkValidity())form.requestSubmit()})
 if(form){
  const update=()=>{const custom=$('period').value==='custom';$('period-dates').hidden=!custom;for(const k of ['from','to'])form.elements[k].disabled=!custom;if($('compare')){const customComparison=$('compare').value==='custom';$('comparison-dates').hidden=!customComparison;for(const k of ['baseline_from','baseline_to'])form.elements[k].disabled=!customComparison}}
  $('period').onchange=update;if($('compare'))$('compare').onchange=update;update()

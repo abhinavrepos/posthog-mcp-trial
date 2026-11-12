@@ -1,6 +1,6 @@
 // Which clients exist, for the anonymisation matcher: every client the task history, Lens's own tables and
 // PostHog's last 90 days of events know. Each gets a codename the first time it is seen.
-import { syncClients } from './anonymise.ts'
+import { syncClients, whenUnknownClient } from './anonymise.ts'
 import { all } from './db.ts'
 import { hogql } from './posthog.ts'
 import { P } from './props.ts'
@@ -39,3 +39,6 @@ export async function refreshRoster(maxAgeMs = 60_000, deps: { knownClients: () 
     return running
 }
 export const forgetRoster = () => { last = 0; lastPosthog = 0 }
+// A client Lens has no codename for showed up in an answer: look for new clients now (at most once a minute).
+let lastUnknown = 0
+whenUnknownClient(() => { if (Date.now() - lastUnknown > 60_000) { lastUnknown = Date.now(); void refreshRoster(0).catch(() => {}) } })

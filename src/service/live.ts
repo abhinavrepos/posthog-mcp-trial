@@ -75,12 +75,12 @@ export function liveHtml(v: Viewer): string {
     const boot = JSON.stringify({ gap: s.gap_s, gaps: [...new Set([...GAP_CHOICES, s.gap_s])].sort((a, b) => a - b), liveMinutes: s.live_minutes, replayBase: `${config.posthog.publicHost}/project/${config.posthog.projectId}/replay/` }).replace(/</g, '\\u003c')
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Live · ${APP_NAME}</title><style>${PAGE_CSS()}
 :root{--act:#535b65;--idle:#d1d5da;--grid:#e7e8e9;--axis:#b9bec4;--live:#067647}
-main.wide{max-width:1180px}.wide .card{border:0;border-top:1px solid var(--line);border-radius:0;background:transparent;padding:24px 0}.wide>.card:first-of-type{border-top:0;padding-top:0}
-.now{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}#now-sub{flex:1;min-width:220px}.hero{font-size:52px;font-weight:650;line-height:1}
+
+.now{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}#now-sub{flex:1;min-width:220px}.hero{font-size:36px;font-weight:650;line-height:1}
 .pulse{width:12px;height:12px;border-radius:50%;background:var(--live);flex:none}.pulse.off{background:var(--axis);animation:none}
 .filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin:4px 0 16px}.filters>div{min-width:150px}.filters>div.grow{flex:1}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
-.tile{padding:12px 0;min-width:0}.tile span{display:block;font-size:13px;color:var(--muted)}.tile b{font-size:24px;font-weight:600}
+.tile{padding:12px 16px;min-width:0}.tile span{display:block;font-size:13px;color:var(--muted)}.tile b{font-size:24px;font-weight:600}
 .tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
 .seg{display:flex;gap:2px;height:8px;width:100%;margin-top:8px}.seg i{display:block;height:8px;border-radius:999px}.seg .a{background:var(--act)}.seg .i{background:var(--idle)}
 td .seg{width:90px;margin:0;display:inline-flex;vertical-align:middle}
@@ -106,7 +106,7 @@ details.how summary{cursor:pointer;font-weight:600}details.how li{margin:4px 0}
 #tl-chart{outline:none;border-radius:6px}#tl-chart:focus-visible{box-shadow:0 0 0 2px var(--accent)}#tl-chart svg{cursor:crosshair}
 .tlbtn{padding:3px 9px;font-size:13px}#tl-pick{min-height:34px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .live-settings{align-self:flex-end;padding:10px 0;min-width:150px}.live-settings[open]{flex-basis:100%}.live-settings>div{max-width:260px;margin-top:12px}.filters>div{min-width:0;flex:1 1 150px}.heat-scroll{overflow-x:auto;max-width:100%}.heat{min-width:640px}.tiles{gap:12px 24px}.tl-facts{gap:6px 20px}
-@media(max-width:600px){.hero{font-size:40px}.now{gap:10px}#now-sub{min-width:0;flex-basis:180px}.live-settings{flex-basis:100%;padding:0}.tl-nav{gap:4px}.tl-nav input[type=date]{max-width:145px}.tl-facts{gap:4px 14px}}
+@media(max-width:600px){.hero{font-size:30px}.now{gap:10px}#now-sub{min-width:0;flex-basis:180px}.live-settings{flex-basis:100%;padding:0}.tl-nav{gap:4px}.tl-nav input[type=date]{max-width:145px}.tl-facts{gap:4px 14px}}
 </style></head>
 <body>${headerHtml(v, 'Live')}<main class="wide"><h1>Live activity</h1><p id="live-status" class="small" aria-live="polite"></p>
 
