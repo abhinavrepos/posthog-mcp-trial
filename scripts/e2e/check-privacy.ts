@@ -16,6 +16,7 @@ mkdirSync(S, { recursive: true })
 const report: string[] = []
 const ok = (l: string, c: boolean, x = '') => { report.push((c ? 'PASS ' : 'FAIL ') + l + (x ? ' — ' + x : '')); return c }
 const note = (l: string) => report.push('NOTE ' + l)
+const COMMON = new Set(['alpha', 'beta', 'gamma', 'delta', 'omega', 'test', 'demo', 'main', 'core', 'base', 'open', 'data', 'bank', 'fund', 'cash', 'risk', 'trade', 'deal', 'swap', 'loan', 'bond', 'live', 'prod', 'user', 'admin', 'team', 'home', 'next', 'new', 'old', 'one', 'two', 'all', 'any', 'and', 'the', 'for', 'not', 'yes', 'no', 'ok', 'id', 'api', 'app', 'web', 'acc', 'ref', 'tmp', 'dev'])
 
 const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] })
 const page = await (await browser.createBrowserContext()).newPage()
@@ -55,7 +56,8 @@ try {
     const needles = clients.flatMap((c) => {
         const out: { what: string; re: RegExp }[] = []
         for (const n of [c.name, ...c.aliases, ...c.auto_aliases].filter((x) => x && x.trim().length >= 3)) out.push({ what: `${c.codename}: name "${n}"`, re: new RegExp(`(?<![\\p{L}\\p{N}])${n.trim().split(/[\s_.+\-]+/).map(esc).join('(?:[\\s_.+\\-]|%20)+')}(?![\\p{L}\\p{N}])`, 'iu') })
-        const short = c.client.length < 5 && /^[A-Za-z]+$/.test(c.client)
+        // As Lens matches them (src/core/anonymise.ts COMMON): a code that is also a common word counts only as written.
+        const short = /^[A-Za-z]+$/.test(c.client) && COMMON.has(c.client.toLowerCase())
         out.push({ what: `${c.codename}: code "${c.client}"`, re: new RegExp(`(?<![\\p{L}\\p{N}_\\-])${esc(c.client)}(?![\\p{L}\\p{N}_\\-])`, short ? 'u' : 'iu') })
         return out
     })
