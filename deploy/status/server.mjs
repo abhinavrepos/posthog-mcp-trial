@@ -21,6 +21,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { readFileSync, statfsSync } from 'node:fs'
 import http from 'node:http'
 import os from 'node:os'
+import { pathToFileURL } from 'node:url'
 
 const env = (k, d = '') => (process.env[k] ?? '').trim() || d
 const PORT = Number(env('STATUS_LISTEN_PORT', '8090'))
@@ -34,6 +35,15 @@ const DISK = env('STATUS_DISK_PATH', '/host-disk')
 const HOST = env('STATUS_HOST_URL', 'http://host.docker.internal')
 // Optional: a problem when no event has arrived for this many minutes (quiet systems: leave empty).
 const MAX_EVENT_AGE_MIN = Number(env('STATUS_MAX_EVENT_AGE_MINUTES', '0'))
+// Optional alerts: a message to a chat channel when a check stays down (or at a warning) for a while,
+// and again when it is fixed. Teams (a Workflows "when a webhook request is received" URL), Slack, or any
+// URL that takes {"text": "..."}.
+const ALERT_URL = env('STATUS_ALERT_WEBHOOK')
+const ALERT_AFTER_MIN = Math.max(0, Number(env('STATUS_ALERT_AFTER_MINUTES', '5')))
+const ALERT_ON = env('STATUS_ALERT_LEVEL', 'warn') === 'down' ? ['down'] : ['warn', 'down']
+const ALERT_FORMAT = env('STATUS_ALERT_FORMAT', /hooks\.slack\.com/.test(ALERT_URL) ? 'slack' : /logic\.azure\.com|powerautomate|powerplatform|webhook\.office\.com/.test(ALERT_URL) ? 'teams' : 'text')
+const ALERT_LINK = env('STATUS_PUBLIC_URL')
+const ALERT_NAME = env('STATUS_ALERT_NAME', `${TITLE} (${os.hostname()})`)
 
 // group | name | url | "any" when any HTTP answer counts as up (a login page answering 401, say)
 const DEFAULT_HTTP = [
@@ -415,6 +425,72 @@ function checkMachine() {
     return rows
 }
 
+// ------------------------------------------------------------------ alerts
+// A check alerts once it has been at an alerting level for ALERT_AFTER_MIN (so a container that is
+// starting, or a short blip, says nothing), again if it gets worse (warning -> down), and once more
+// when it is back. One message per round, whatever the number of checks in it. A message that cannot be
+// sent is tried again the next round, so nothing is lost while the network is out.
+const alerted = new Map() // check key -> { level, name, at }
+const badSince = new Map() // check key -> { at }: since when it has been at an alerting level without a break
+const alertState = { sent: 0, last_sent_at: null, last_error: null }
+const RANK = { ok: 0, info: 0, warn: 1, down: 2 }
+export function alertMessage(firing, fixed, name = ALERT_NAME, link = ALERT_LINK) {
+    const line = (r) => `${r.level === 'down' ? '🔴' : r.level === 'warn' ? '🟠' : '🟢'} ${r.group}: ${r.name}${r.detail ? ` (${r.detail})` : ''}`
+    const head = firing.length ? `${name}: ${firing.length} problem${firing.length > 1 ? 's' : ''}${fixed.length ? `, ${fixed.length} fixed` : ''}` : `${name}: ${fixed.length} fixed`
+    const lines = [...firing.map(line), ...fixed.map((r) => line({ ...r, level: 'ok', detail: r.detail || 'back to normal' }))]
+    return { head, lines, text: [head, ...lines, ...(link ? [`Status page: ${link}`] : [])].join('\n') }
+}
+export function alertBody(msg, format = ALERT_FORMAT) {
+    if (format === 'slack') return { text: msg.text }
+    if (format === 'teams') return { type: 'message', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: {
+        $schema: 'http://adaptivecards.io/schemas/adaptive-card.json', type: 'AdaptiveCard', version: '1.4',
+        body: [{ type: 'TextBlock', text: msg.head, weight: 'Bolder', wrap: true }, ...msg.lines.map((l) => ({ type: 'TextBlock', text: l, wrap: true, spacing: 'Small' }))],
+        ...(ALERT_LINK ? { actions: [{ type: 'Action.OpenUrl', title: 'Open the status page', url: ALERT_LINK }] } : {}),
+    } }] }
+    return { text: msg.text }
+}
+async function postAlert(msg) {
+    const r = await fetch(ALERT_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(alertBody(msg)), signal: AbortSignal.timeout(10_000) })
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+}
+// Which checks start, worsen or stop alerting this round (pure, so it can be tested).
+// badMap: since when each check has been at an alerting level, unbroken (warning <-> down does not reset it).
+export function alertChanges(rows, badMap, alertedMap, now = Date.now(), afterMs = ALERT_AFTER_MIN * 60_000, on = ALERT_ON) {
+    const firing = [], fixed = [], seen = new Set()
+    // When a collector failed, its rows are missing for an unknown reason: that is not a recovery.
+    const blind = rows.some((r) => r.group === 'Status page' || (r.group === 'Containers' && r.name === 'Docker') || /no containers of this compose project/.test(r.detail || ''))
+    for (const r of rows) {
+        const key = `${r.group}/${r.name}`; seen.add(key)
+        const was = alertedMap.get(key)
+        const bad = on.includes(r.level) && now - (badMap.get(key)?.at ?? now) >= afterMs
+        if (bad && (!was || RANK[r.level] > RANK[was.level])) firing.push({ key, row: r })
+        else if (was && !on.includes(r.level)) fixed.push({ key, row: r })
+    }
+    if (!blind) for (const [key, was] of alertedMap) if (!seen.has(key)) fixed.push({ key, row: { group: was.group, name: was.name, level: 'ok', detail: 'no longer checked' } })
+    return { firing, fixed }
+}
+async function alerts(rows) {
+    if (!ALERT_URL) return
+    const keys = new Set()
+    for (const r of rows) {
+        const key = `${r.group}/${r.name}`; keys.add(key)
+        if (!ALERT_ON.includes(r.level)) badSince.delete(key)
+        else if (!badSince.has(key)) badSince.set(key, { at: Date.now() })
+    }
+    for (const key of badSince.keys()) if (!keys.has(key)) badSince.delete(key)
+    const { firing, fixed } = alertChanges(rows, badSince, alerted)
+    if (!firing.length && !fixed.length) return
+    try {
+        await postAlert(alertMessage(firing.map((f) => f.row), fixed.map((f) => f.row)))
+        for (const f of firing) alerted.set(f.key, { level: f.row.level, group: f.row.group, name: f.row.name, at: Date.now() })
+        for (const f of fixed) alerted.delete(f.key)
+        alertState.sent++; alertState.last_sent_at = new Date().toISOString(); alertState.last_error = null
+    } catch (e) {
+        alertState.last_error = `${new Date().toISOString()} ${e.message}`
+        console.error('alert not sent:', e.message)
+    }
+}
+
 // ------------------------------------------------------------------ the loop
 let latest = { at: null, rows: [], took_ms: 0 }
 async function runChecks() {
@@ -424,6 +500,7 @@ async function runChecks() {
     for (const r of rows) r.since = track(`${r.group}/${r.name}`, r.level, r)
     for (const [id, samples] of containerHistory) if (Date.now() - samples.at(-1)[0] > 3600_000) { containerHistory.delete(id); lastCpu.delete(id); restartsSeen.delete(id) }
     latest = { at: Date.now(), rows, took_ms: Date.now() - t }
+    await alerts(rows)
 }
 async function loop() {
     try {
@@ -535,26 +612,34 @@ function authorized(req) {
     return a.length === b.length && timingSafeEqual(a, b)
 }
 
-http
-    .createServer((req, res) => {
-        const path = new URL(req.url || '/', 'http://x').pathname
-        const send = (code, type, body, extra = {}) => {
-            res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', ...extra })
-            res.end(body)
-        }
-        if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'text/plain', 'GET only')
-        if (path === '/healthz') {
-            const s = summary()
-            return send(s.down ? 503 : 200, 'text/plain', s.down ? `${s.down} problem(s)\n` : 'ok\n')
-        }
-        if (path === '/self') return send(200, 'text/plain', 'ok\n')
-        if (!authorized(req)) return send(401, 'text/plain', 'password needed\n', { 'www-authenticate': `Basic realm="${TITLE}", charset="UTF-8"` })
-        if (path === '/') return send(200, 'text/html; charset=utf-8', page(), { 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'" })
-        if (path === '/fragment') return send(200, 'text/html; charset=utf-8', fragment())
-        if (path === '/api/status') return send(200, 'application/json', JSON.stringify({ ...summary(), checked_at: latest.at && new Date(latest.at).toISOString(), checks: latest.rows, changes, about: { posthog_image: latest.rows.find(r => r.compose_service === 'web')?.image ?? null, clickhouse_version: ch.version ?? null, docker_version: dockerVersion, uptime_s: Math.round(process.uptime()), interval_s: EVERY / 1000, took_ms: latest.took_ms }, metrics: { machine, history, ...extras.data, extras_at: extras.at, clickhouse: ch, docker_disk: dockerDisk } }, null, 2))
-        send(404, 'text/plain', 'not found\n')
-    })
-    .listen(PORT, '0.0.0.0', () => {
-        console.log(`${TITLE} on port ${PORT}: ${HTTP_CHECKS.length} endpoints, projects ${PROJECTS.join(', ')}, every ${EVERY / 1000} s${PASSWORD ? ', password on' : ', NO password'}`)
-        void loop()
-    })
+const MAIN = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+if (MAIN && process.argv[2] === 'test-alert') {
+    // node server.mjs test-alert: sends one test message with this container's settings, then exits.
+    if (!ALERT_URL) { console.error('STATUS_ALERT_WEBHOOK is not set (status.env).'); process.exit(1) }
+    postAlert(alertMessage([{ group: 'Test', name: 'Alerts work', level: 'warn', detail: 'a test message, nothing is wrong' }], []))
+        .then(() => { console.log(`Test alert sent (${ALERT_FORMAT}).`); process.exit(0) }, (e) => { console.error(`Test alert not sent: ${e.message}`); process.exit(1) })
+} else if (MAIN) {
+    http
+        .createServer((req, res) => {
+            const path = new URL(req.url || '/', 'http://x').pathname
+            const send = (code, type, body, extra = {}) => {
+                res.writeHead(code, { 'content-type': type, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', ...extra })
+                res.end(body)
+            }
+            if (req.method !== 'GET' && req.method !== 'HEAD') return send(405, 'text/plain', 'GET only')
+            if (path === '/healthz') {
+                const s = summary()
+                return send(s.down ? 503 : 200, 'text/plain', s.down ? `${s.down} problem(s)\n` : 'ok\n')
+            }
+            if (path === '/self') return send(200, 'text/plain', 'ok\n')
+            if (!authorized(req)) return send(401, 'text/plain', 'password needed\n', { 'www-authenticate': `Basic realm="${TITLE}", charset="UTF-8"` })
+            if (path === '/') return send(200, 'text/html; charset=utf-8', page(), { 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'" })
+            if (path === '/fragment') return send(200, 'text/html; charset=utf-8', fragment())
+            if (path === '/api/status') return send(200, 'application/json', JSON.stringify({ ...summary(), checked_at: latest.at && new Date(latest.at).toISOString(), checks: latest.rows, changes, about: { posthog_image: latest.rows.find(r => r.compose_service === 'web')?.image ?? null, clickhouse_version: ch.version ?? null, docker_version: dockerVersion, uptime_s: Math.round(process.uptime()), interval_s: EVERY / 1000, took_ms: latest.took_ms, alerts: ALERT_URL ? { format: ALERT_FORMAT, after_minutes: ALERT_AFTER_MIN, on: ALERT_ON, alerting: [...alerted.values()].map((a) => `${a.group}: ${a.name}`), ...alertState } : 'off' }, metrics: { machine, history, ...extras.data, extras_at: extras.at, clickhouse: ch, docker_disk: dockerDisk } }, null, 2))
+            send(404, 'text/plain', 'not found\n')
+        })
+        .listen(PORT, '0.0.0.0', () => {
+            console.log(`${TITLE} on port ${PORT}: ${HTTP_CHECKS.length} endpoints, projects ${PROJECTS.join(', ')}, every ${EVERY / 1000} s${PASSWORD ? ', password on' : ', NO password'}`)
+            void loop()
+        })
+}

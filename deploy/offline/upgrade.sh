@@ -158,11 +158,20 @@ fi
 
 rm -f "$PIN"
 echo
-echo "${B}${G}Done.${N}"
 "$SBIN" status || true
+echo
+# Not done until it works: wait for everything to be up, then one verdict.
+if "$SBIN" check "${CHECK_MINUTES:-10}"; then
+    echo "${B}${G}Done.${N}"
+else
+    echo "${B}${R}Installed, but not working yet${N} (see above). Look again in a few minutes: sudo posthog-lens check"
+    if [ $UPGRADE = 1 ]; then echo "    If it stays broken: sudo posthog-lens rollback   (PostHog from before the upgrade)"; fi
+    CHECK_FAILED=1
+fi
 cat <<EOF
 
-    Check it:      sudo posthog-lens doctor
+    Full check:    sudo posthog-lens doctor
 $([ $UPGRADE = 1 ] && echo "    Go back:       sudo posthog-lens rollback   (PostHog from before the upgrade)
     Once happy:    sudo posthog-lens cleanup    (deletes the upgrade's backup)")
 EOF
+exit "${CHECK_FAILED:-0}"

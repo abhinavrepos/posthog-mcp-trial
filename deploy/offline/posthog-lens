@@ -10,6 +10,9 @@
 #                                        upgrade PostHog and PostHog Lens with it (no questions asked)
 #   sudo posthog-lens status             what is installed, and whether PostHog and Lens answer
 #   sudo posthog-lens doctor             PostHog Lens's full check of its settings and services
+#   sudo posthog-lens check [minutes]    waits (10 by default) until PostHog, Lens and every status-page check
+#                                        are fine, then says so in one line; otherwise says what is not
+#   sudo posthog-lens alert-test         applies the status page's settings (status.env) and sends a test alert
 #   sudo posthog-lens restart            restart PostHog Lens
 #   sudo posthog-lens cleanup            after an upgrade: delete its backup (asks about each item)
 #   sudo posthog-lens rollback           after an upgrade: go back to the PostHog from before it
@@ -134,6 +137,48 @@ status() {
     echo
     [ -x "$LENS_DIR/deploy/install.sh" ] && bash "$LENS_DIR/deploy/install.sh" status | sed -n '1,20p' || true
 }
+# Waits until PostHog and Lens answer and the status page has no problem left, then one verdict line.
+check() {
+    local mins="${1:-10}" port spass sport ph lens st end
+    [[ "$mins" =~ ^[0-9]+$ ]] || die "usage: sudo posthog-lens check [minutes]"
+    port="$(conf_of "$LENS_DIR/.secrets.env" SERVICE_PORT)"; port="${port:-8080}"
+    spass="$(conf_of "$LENS_DIR/deploy/status/status.env" STATUS_PASSWORD)"; sport="${STATUS_PORT:-8090}"
+    end=$((SECONDS + mins * 60))
+    say "checking PostHog, PostHog Lens and the status page (waiting up to $mins min while they start)"
+    while :; do
+        ph="$(curl -s -o /dev/null -m 5 -w '%{http_code}' http://localhost/_health || true)"
+        lens="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:$port/healthz" || true)"
+        st="$(curl -s -m 5 "http://127.0.0.1:$sport/healthz" || true)"
+        [ "$ph" = 200 ] && [ "$lens" = 200 ] && [ "$st" = ok ] && break
+        if [ $SECONDS -ge $end ]; then
+            echo "NOT READY after $mins min:"
+            [ "$ph" = 200 ] || echo "    PostHog does not answer (http://localhost/_health: ${ph:-no answer})"
+            [ "$lens" = 200 ] || echo "    PostHog Lens does not answer (port $port: ${lens:-no answer}); see: journalctl -u ticket-triage -n 50"
+            if [ "$st" != ok ]; then
+                curl -s -m 5 ${spass:+-u "x:$spass"} "http://127.0.0.1:$sport/api/status" 2>/dev/null | python3 -c '
+import json, sys
+try: d = json.load(sys.stdin)
+except Exception: print("    the status page does not answer (port '"$sport"'): sudo docker ps | grep lens-status"); sys.exit()
+for r in d["checks"]:
+    if r["level"] in ("down", "warn"): print("    %-5s %s: %s (%s)" % (r["level"], r["group"], r["name"], r.get("detail", "")))' || true
+            fi
+            return 1
+        fi
+        sleep 10
+    done
+    local warns; warns="$(curl -s -m 5 ${spass:+-u "x:$spass"} "http://127.0.0.1:$sport/api/status" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("warn", 0))' 2>/dev/null || echo 0)"
+    echo "READY: PostHog, PostHog Lens and every status-page check are fine$([ "${warns:-0}" != 0 ] && echo " ($warns warning(s) on the status page: http://127.0.0.1:$sport)")."
+}
+
+alert_test() {
+    local d="$LENS_DIR/deploy/status" id
+    grep -qE '^STATUS_ALERT_WEBHOOK=.+' "$d/status.env" 2>/dev/null || die "no alert address yet: add STATUS_ALERT_WEBHOOK=<a Teams or Slack webhook URL> to $d/status.env, then run this again."
+    say "starting the status page again with $d/status.env"
+    STATUS_DISK_FOLDER="$d/.disk" POSTHOG_NETWORK="$(basename "$POSTHOG_DIR")_default" bash "$d/up.sh" >/dev/null
+    id="$(docker ps -q -f label=com.docker.compose.project=lens-status -f label=com.docker.compose.service=status | head -1)"
+    [ -n "$id" ] || die "the status page is not running: sudo docker ps -a | grep lens-status"
+    docker exec "$id" node server.mjs test-alert
+}
 conf_of() { grep -E "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
 
 setup() {
@@ -189,6 +234,8 @@ case "$cmd" in
     setup) setup "$@" ;;
     update) load; update "$@" ;;
     status) load; status ;;
+    check) load; check "$@" ;;
+    alert-test) load; alert_test ;;
     doctor) load; exec bash "$LENS_DIR/deploy/lens/lens.sh" doctor ;;
     restart) systemctl restart ticket-triage && say "PostHog Lens restarted" ;;
     cleanup) load; POSTHOG_DIR="$POSTHOG_DIR" exec bash "$LENS_DIR/deploy/migrate/posthog-upgrade.sh" cleanup ;;
