@@ -55,7 +55,7 @@ test('registered tools follow none, view and share roles', async () => {
             } else assert.deepEqual((await c.client.listTools()).tools.map(t => t.name).sort(), dashboardToolNames(role).sort())
         } finally { await c.close() }
     }
-    assert.equal(dashboardToolNames('view').length, 10)
+    assert.equal(dashboardToolNames('view').length, 12)
     assert.equal(dashboardToolNames('share').length, DASHBOARD_TOOLS.length)
 })
 

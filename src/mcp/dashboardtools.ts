@@ -5,6 +5,7 @@ import { clientStory, handoverPack } from '../core/story.ts'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { appEvents } from '../core/appevents.ts'
+import { clientExperience, frictionHotspots, replayCoverage } from '../core/experience.ts'
 import { config } from '../core/config.ts'
 import { mondayBrief } from '../core/briefing.ts'
 import { draftRescueSurvey } from '../core/rescuesurveys.ts'
@@ -19,7 +20,7 @@ import { parseTimeWindow } from '../core/timewindow.ts'
 import type { FlowTimeParams, TaskMapParams, Window } from '../core/taskstypes.ts'
 import type { ChatCaller, DashboardRole } from '../service/access.ts'
 
-export const DASHBOARD_TOOLS = ['signal_scorecard', 'client_story', 'handover_pack', 'monday_brief', 'draft_rescue_survey', 'rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'share_dashboard']
+export const DASHBOARD_TOOLS = ['client_experience', 'friction_hotspots', 'signal_scorecard', 'client_story', 'handover_pack', 'monday_brief', 'draft_rescue_survey', 'rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'share_dashboard']
 export const dashboardToolNames = (role: DashboardRole = 'share', surveyRole: SurveyRole = 'launch'): string[] =>
     !appEvents() || role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => (t !== 'draft_rescue_survey' || surveysActive() && canSurvey(surveyRole, 'edit')) && (role === 'share' || !['pin_dashboard', 'share_dashboard', 'set_rescue_status'].includes(t)))
 const realDeps = { scorecard, clientStory, handoverPack, mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
@@ -101,6 +102,28 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         description: 'How did client flags compare with recorded outcomes? Weekly historical sanity check with hits, misses and lead days; never a probability.',
         inputSchema: { weeks: z.number().int().min(1).max(52).optional() }, annotations: { readOnlyHint: true },
     }, safe(async input => json(await d.scorecard(input))))
+    reg('client_experience', {
+        title: 'How is this client doing?',
+        description: 'How a client is doing: their usage and how their people actually work, from replays. Use it first for "how is <client> doing / are they using it / do they struggle": usage (sessions, people, completed work against the period before) and, from session replays, (hesitation, cursor circling, scrolling to find things, clicks that do nothing, rage clicks, error loops, idle time, failed calls), compared with other clients, with plain findings, where it happens, next steps and replay links for the person. Replays are read as structure only: no values or text.',
+        inputSchema: { client: z.string().describe('Client name or id'), days: z.number().int().min(7).max(90).default(28) }, annotations: { readOnlyHint: true },
+    }, safe(async ({ client, days }) => {
+        const matches = d.rescueClients(client)
+        if (matches.length !== 1) return json(await rescuePrivacy({ message: 'Choose a client id.', candidates: matches }))
+        const x = clientExperience(matches[0].id, { days })
+        const name = matches[0].name || matches[0].id
+        const lines = [`${name}: ${x.verdict.toUpperCase()}. ${x.summary}`, `Usage: ${x.usage.text}`,
+            ...x.findings.map((f) => `- ${f.severity === 'high' ? 'High' : 'Medium'}: ${f.text}${f.where.length ? ` Where: ${f.where.join(', ')}.` : ''}${f.replays[0] ? ` Watch: ${f.replays[0].url}` : ''}`),
+            ...(x.next_steps.length ? ['Next steps:', ...x.next_steps.map((n) => `- ${n}`)] : []), x.note, `Open in Lens: ${page()}?${new URLSearchParams({ view: 'story', client: matches[0].id })}`]
+        return text(lines.join('\n') + '\n\n```json\n' + JSON.stringify(await rescuePrivacy({ ...x, client_name: name }), null, 2) + '\n```')
+    }))
+    reg('friction_hotspots', {
+        title: 'Where do clients struggle on screen?',
+        description: 'Where on screen clients struggle most, across all clients. From session replays: the buttons and fields where friction gathers (rage clicks, clicks that do nothing, error loops, heavy re-editing), by how many clients hit them. Use it for "what should we fix first".',
+        inputSchema: { days: z.number().int().min(7).max(90).default(28) }, annotations: { readOnlyHint: true },
+    }, safe(async ({ days }) => {
+        const h = frictionHotspots({ days }), c = replayCoverage()
+        return json({ hotspots: h, replays_read: c.sessions, clients: c.clients, note: h.length ? 'Ranked by how many clients hit each place, then by how often.' : 'No friction found yet in the replays read so far.' })
+    }))
     reg('client_story', {
         description: 'One client story: weekly work counts, changes, signals, actions, surveys and unknowns from local Lens history only.',
         inputSchema: { client: z.string(), weeks: z.number().int().min(1).max(52).optional() }, annotations: { readOnlyHint: true },

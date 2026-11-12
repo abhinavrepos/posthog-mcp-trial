@@ -1,0 +1,236 @@
+{
+  "version": 1,
+  "generated_at": "2026-11-12T14:44:31.986Z",
+  "expected_note": "Scripted counts and minima; incidental clicks, recording sampling and detector thresholds can affect extracted totals.",
+  "sessions": {
+    "01a1d033-5098-7682-ba4a-ada2e95dd30c": {
+      "session_id": "01a1d033-5098-7682-ba4a-ada2e95dd30c",
+      "client_id": "LAB1",
+      "client_name": "Lab Smooth Co",
+      "persona": "smooth",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "duration_ms": 70004
+    },
+    "01a1d033-50af-70da-bf6d-fe012c5f76cc": {
+      "session_id": "01a1d033-50af-70da-bf6d-fe012c5f76cc",
+      "client_id": "LAB3",
+      "client_name": "Lab Scroll Co",
+      "persona": "scroll-hunting",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 9,
+        "hunting_bursts_min": 1,
+        "idle_ms_min": 0
+      },
+      "duration_ms": 70002
+    },
+    "01a1d033-50b2-7918-ae0a-fc64f02abafc": {
+      "session_id": "01a1d033-50b2-7918-ae0a-fc64f02abafc",
+      "client_id": "LAB2",
+      "client_name": "Lab Hesitant Co",
+      "persona": "hesitant-circling",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 1,
+        "circling_bursts_min": 1,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "duration_ms": 70003
+    },
+    "01a1d034-67ab-79f0-b3c1-a5bc5082e3c7": {
+      "session_id": "01a1d034-67ab-79f0-b3c1-a5bc5082e3c7",
+      "client_id": "LAB4",
+      "client_name": "Lab Rage Co",
+      "persona": "rage-dead",
+      "expected": {
+        "rage_click_bursts": 1,
+        "rage_clicks": 4,
+        "dead_target_clicks": 1,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "duration_ms": 70005
+    },
+    "01a1d034-6809-7f9f-b797-20853f82f9e3": {
+      "session_id": "01a1d034-6809-7f9f-b797-20853f82f9e3",
+      "client_id": "LAB5",
+      "client_name": "Lab Error Co",
+      "persona": "error-looping",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 4,
+        "error_retries": 3,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "duration_ms": 70003
+    },
+    "01a1d034-688a-7876-a49d-6b53252a1514": {
+      "session_id": "01a1d034-688a-7876-a49d-6b53252a1514",
+      "client_id": "LAB6",
+      "client_name": "Lab Idle Co",
+      "persona": "idle",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 50000
+      },
+      "duration_ms": 70004
+    },
+    "01a1d035-7e6f-7c67-86d3-fdb4b577d304": {
+      "session_id": "01a1d035-7e6f-7c67-86d3-fdb4b577d304",
+      "client_id": "LAB1",
+      "client_name": "Lab Smooth Co",
+      "persona": "smooth",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "duration_ms": 70003
+    },
+    "01a1d035-7eeb-72fc-bc1f-69bb69829d2e": {
+      "session_id": "01a1d035-7eeb-72fc-bc1f-69bb69829d2e",
+      "client_id": "LAB2",
+      "client_name": "Lab Hesitant Co",
+      "persona": "hesitant-circling",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 1,
+        "circling_bursts_min": 1,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "duration_ms": 70003
+    },
+    "01a1d035-7fc0-7a70-aa90-ff39f1bb69f9": {
+      "session_id": "01a1d035-7fc0-7a70-aa90-ff39f1bb69f9",
+      "client_id": "LAB3",
+      "client_name": "Lab Scroll Co",
+      "persona": "scroll-hunting",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 9,
+        "hunting_bursts_min": 1,
+        "idle_ms_min": 0
+      },
+      "duration_ms": 70002
+    },
+    "01a1d036-9544-7f5b-89d6-43d75107cbf4": {
+      "session_id": "01a1d036-9544-7f5b-89d6-43d75107cbf4",
+      "client_id": "LAB4",
+      "client_name": "Lab Rage Co",
+      "persona": "rage-dead",
+      "expected": {
+        "rage_click_bursts": 1,
+        "rage_clicks": 4,
+        "dead_target_clicks": 1,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "duration_ms": 70003
+    },
+    "01a1d036-95da-72e4-9805-b211a3b7ef17": {
+      "session_id": "01a1d036-95da-72e4-9805-b211a3b7ef17",
+      "client_id": "LAB5",
+      "client_name": "Lab Error Co",
+      "persona": "error-looping",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 4,
+        "error_retries": 3,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "duration_ms": 70002
+    },
+    "01a1d036-966c-7eef-99d2-72dc41981b94": {
+      "session_id": "01a1d036-966c-7eef-99d2-72dc41981b94",
+      "client_id": "LAB6",
+      "client_name": "Lab Idle Co",
+      "persona": "idle",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 50000
+      },
+      "duration_ms": 70003
+    }
+  },
+  "failures": []
+}
