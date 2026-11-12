@@ -80,7 +80,7 @@ export function liveHtml(v: Viewer): string {
 .pulse{width:12px;height:12px;border-radius:50%;background:var(--live);flex:none}.pulse.off{background:var(--axis);animation:none}
 .filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin:4px 0 16px}.filters>div{min-width:150px}.filters>div.grow{flex:1}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
-.tile{padding:12px 16px;min-width:0}.tile span{display:block;font-size:13px;color:var(--muted)}.tile b{font-size:24px;font-weight:600}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 20px;min-width:0}.tile span{display:block;font-size:12px;font-weight:500;color:var(--muted)}.tile b{display:block;font-size:26px;line-height:32px;font-weight:650;letter-spacing:-.02em;margin-top:6px}
 .tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
 .seg{display:flex;gap:2px;height:8px;width:100%;margin-top:8px}.seg i{display:block;height:8px;border-radius:999px}.seg .a{background:var(--act)}.seg .i{background:var(--idle)}
 td .seg{width:90px;margin:0;display:inline-flex;vertical-align:middle}
@@ -105,7 +105,7 @@ details.how summary{cursor:pointer;font-weight:600}details.how li{margin:4px 0}
 .tl-facts{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tl-facts span{padding:5px 0;font-size:13px;color:var(--muted)}.tl-facts b{color:var(--ink);font-variant-numeric:tabular-nums}
 #tl-chart{outline:none;border-radius:6px}#tl-chart:focus-visible{box-shadow:0 0 0 2px var(--accent)}#tl-chart svg{cursor:crosshair}
 .tlbtn{padding:3px 9px;font-size:13px}#tl-pick{min-height:34px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.live-settings{align-self:flex-end;padding:10px 0;min-width:150px}.live-settings[open]{flex-basis:100%}.live-settings>div{max-width:260px;margin-top:12px}.filters>div{min-width:0;flex:1 1 150px}.heat-scroll{overflow-x:auto;max-width:100%}.heat{min-width:640px}.tiles{gap:12px 24px}.tl-facts{gap:6px 20px}
+.live-settings{align-self:flex-end;padding:10px 0;min-width:150px}.live-settings[open]{flex-basis:100%}.live-settings>div{max-width:260px;margin-top:12px}.filters>div{min-width:0;flex:1 1 150px}.heat-scroll{overflow-x:auto;max-width:100%}.heat{min-width:640px}.tiles{gap:16px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}.tl-facts{gap:6px 20px}
 @media(max-width:600px){.hero{font-size:30px}.now{gap:10px}#now-sub{min-width:0;flex-basis:180px}.live-settings{flex-basis:100%;padding:0}.tl-nav{gap:4px}.tl-nav input[type=date]{max-width:145px}.tl-facts{gap:4px 14px}}
 </style></head>
 <body>${headerHtml(v, 'Live')}<main class="wide"><h1>Live activity</h1><p id="live-status" class="small" aria-live="polite"></p>
