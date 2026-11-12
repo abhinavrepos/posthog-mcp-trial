@@ -97,3 +97,14 @@ are `[time_ms, cpu_pct, mem_bytes]`. Docker disk and extras timestamps are Unix 
 database. Lens activity uses up to 100,000 audit rows in the last day and explicitly marks counts
 as lower bounds if this limit is reached. Audit identities/details and per-person storage are never
 included in the response. A database failure leaves the other status data available.
+
+## Alerts
+
+Set `STATUS_ALERT_WEBHOOK` in `status.env` to a Teams Workflows webhook ("When a Teams webhook request is
+received"), a Slack incoming webhook, or any URL taking `{"text": "..."}`, then run
+`sudo posthog-lens alert-test`. A check that stays at a warning or down for `STATUS_ALERT_AFTER_MINUTES` (5)
+sends one message, again if it gets worse, and once more when it is fixed. Low memory or disk, restart loops,
+endpoints not answering and (with `STATUS_MAX_EVENT_AGE_MINUTES`) events no longer arriving all alert. The
+machine must be able to reach the webhook's address. The System page in Lens shows whether alerts are on and
+when the last one went out.
+

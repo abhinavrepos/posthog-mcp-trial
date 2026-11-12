@@ -43,7 +43,8 @@ const ALERT_AFTER_MIN = Math.max(0, Number(env('STATUS_ALERT_AFTER_MINUTES', '5'
 const ALERT_ON = env('STATUS_ALERT_LEVEL', 'warn') === 'down' ? ['down'] : ['warn', 'down']
 const ALERT_FORMAT = env('STATUS_ALERT_FORMAT', /hooks\.slack\.com/.test(ALERT_URL) ? 'slack' : /logic\.azure\.com|powerautomate|powerplatform|webhook\.office\.com/.test(ALERT_URL) ? 'teams' : 'text')
 const ALERT_LINK = env('STATUS_PUBLIC_URL')
-const ALERT_NAME = env('STATUS_ALERT_NAME', `${TITLE} (${os.hostname()})`)
+// The machine's own name (up.sh passes it in; inside the container os.hostname() is the container id).
+const ALERT_NAME = env('STATUS_ALERT_NAME', `${TITLE} (${env('STATUS_HOST_NAME', os.hostname())})`)
 
 // group | name | url | "any" when any HTTP answer counts as up (a login page answering 401, say)
 const DEFAULT_HTTP = [
