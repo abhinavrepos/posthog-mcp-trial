@@ -113,7 +113,7 @@ run_follow() { # log id pid: shows the log until the run ends, then exits with t
     for _ in $(seq 60); do [ -f "$log" ] && break; kill -0 "$pid" 2>/dev/null || break; sleep 1; done
     tail -n +1 -F "$log" 2>/dev/null & tp=$!
     while kill -0 "$pid" 2>/dev/null; do sleep 2; done
-    sleep 2; kill "$tp" 2>/dev/null || true; wait "$tp" 2>/dev/null || true
+    sleep 2; { kill "$tp"; wait "$tp"; } 2>/dev/null || true
     code="$(grep -F "\"id\": \"$id\"" "$RUNS/history.jsonl" 2>/dev/null | tail -1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.read() or "{}").get("code", 1))' 2>/dev/null || echo 1)"
     exit "$code"
 }
@@ -141,7 +141,7 @@ run_start() { # kind
     RUN_BEAT=$!
 }
 run_end() { # exit code
-    pkill -P "$RUN_BEAT" 2>/dev/null || true; kill "$RUN_BEAT" 2>/dev/null || true; wait "$RUN_BEAT" 2>/dev/null || true
+    { pkill -P "$RUN_BEAT"; kill "$RUN_BEAT"; wait "$RUN_BEAT"; } 2>/dev/null || true
     [ "$1" = 0 ] || [ "$RUN_RESULT" != ready ] || RUN_RESULT=failed
     run_write "$RUNS/history.jsonl" id "$RUN_ID" kind "$RUN_KIND" kit "${KIT_TAG:-}" started "$RUN_STARTED" ended "$(date -u +%FT%TZ)" seconds "$(( $(date +%s) - RUN_T0 ))" result "$RUN_RESULT" code "$1" log "$LOG" step "$(run_step)" || true
     rm -f "$RUNS/current.json"
