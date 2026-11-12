@@ -59,7 +59,9 @@ export async function handleConnect(req: IncomingMessage, res: ServerResponse, u
 const esc = (t: string) => t.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 function connectHtml(v: Viewer): string {
     const policy = chatPolicy()
-    const role = SURVEY_ROLE_TEXT[can(v.role, 'admin') ? 'launch' : v.surveys || 'none']
+    const surveyRole = can(v.role, 'admin') ? 'launch' : v.surveys || 'none'
+    // Launching is only on the Surveys page, never from chat (src/mcp/surveytools.ts).
+    const role = surveyRole === 'launch' ? 'Also make, change and stop surveys (launching is only on the Surveys page)' : SURVEY_ROLE_TEXT[surveyRole]
     const ph = posthogOn()
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connect chat · ${APP_NAME}</title><style>${PAGE_CSS()}
 table{width:100%;table-layout:fixed}td,th{overflow-wrap:anywhere}ol.steps{padding-left:20px}ol.steps li{margin:10px 0}
