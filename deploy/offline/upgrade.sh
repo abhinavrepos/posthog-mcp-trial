@@ -195,7 +195,7 @@ run_start() { # kind
     ( trap - EXIT; while kill -0 $$ 2>/dev/null; do
         run_write "$RUNS/current.json" id "$RUN_ID" kind "$RUN_KIND" kit "${KIT_TAG:-}" started "$RUN_STARTED" updated "$(date -u +%FT%TZ)" log "$LOG" step "$(run_step)" detail "$(run_detail)" >/dev/null 2>&1 || true
         sleep 10
-    done ) &
+    done ) 2>/dev/null &   # quiet: stopping it would otherwise print "Terminated" into the log
     RUN_BEAT=$!
 }
 run_end() { # exit code
