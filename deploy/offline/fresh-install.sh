@@ -104,7 +104,7 @@ else:
 PY
 }
 # The step or phase it is in, and the latest "... 12 min: 340 of 1020 migrations" line (never other output).
-run_step() { sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -aE '==> |== phase [0-9]+ of' | tail -1 | sed -E 's/^.*(==> |== )//' | cut -c1-160 || true; }
+run_step() { sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -aE '==> |== phase [0-9]+ of' | grep -av '==> Log: ' | tail -1 | sed -E 's/^.*(==> |== )//' | cut -c1-160 || true; }
 run_detail() { sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | tail -3 | grep -aE '^[0-9: ]*\.\.\. ' | tail -1 | sed -E 's/^[0-9: ]*\.\.\. //' | cut -c1-160 || true; }
 run_follow() { # log id pid: shows the log until the run ends, then exits with the run's code
     local log="$1" id="$2" pid="$3" tp code
