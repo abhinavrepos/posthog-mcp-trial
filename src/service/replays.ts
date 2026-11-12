@@ -608,7 +608,7 @@ nav a:hover{color:var(--ink);background:var(--chip)}nav a[aria-current=page]{col
 @media(min-width:900px){body:has(header.shell){padding-left:var(--side)}
 header.shell{position:fixed;inset:0 auto 0 0;width:var(--side);height:auto;flex-direction:column;align-items:stretch;gap:0;padding:20px 12px 12px;border-bottom:0;border-right:1px solid var(--line);background:var(--side-bg);z-index:20}
 header.shell .brand{gap:8px;padding:0 8px 24px}header.shell nav{flex-direction:column;flex:1;overflow-y:auto}header.shell .hdr{margin-top:auto;border-top:1px solid var(--line);padding-top:10px}
-header.shell .acct-menu{left:0;bottom:calc(100% + 6px)}.shell-only{display:block}}
+header.shell .acct-menu{left:0;bottom:calc(100% + 6px)}body:has(header.shell) .skip:focus{position:fixed;top:12px;left:calc(var(--side) + 16px);z-index:50;border:1px solid var(--line);border-radius:var(--r-sm);box-shadow:var(--pop)}.shell-only{display:block}}
 @media(max-width:899px){header.shell{position:sticky;top:0;z-index:20;gap:12px;padding:0 16px}header.shell nav{flex:1;overflow-x:auto;scrollbar-width:none}header.shell nav::-webkit-scrollbar{display:none}
 header.shell nav a{padding:6px 8px;gap:6px}header.shell .ico{width:16px;height:16px}.acct .who-short{display:none}header.shell .acct-menu{right:0;top:calc(100% + 8px)}}
 .muted{color:var(--muted)}.small{font-size:12.5px}main{max-width:var(--page);margin:0 auto;padding:32px 32px 64px}
