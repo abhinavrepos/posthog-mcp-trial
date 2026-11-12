@@ -48,7 +48,7 @@ export function codenameRedirect(req: IncomingMessage, res: ServerResponse, url:
 const STYLE = `.lede{color:var(--muted);max-width:760px}.state{display:flex;gap:16px;flex-wrap:wrap;align-items:end;margin:12px 0}.state label{display:block;font-weight:600;margin-bottom:4px}
 .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-weight:600;font-size:13px}.pill.on{background:#e6f4ea;color:#14532d}.pill.off{background:var(--chip);color:var(--muted)}
 table.cn{width:100%;table-layout:fixed;border-collapse:collapse}table.cn th,table.cn td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
-table.cn input{width:100%;min-width:0}.row-actions{display:flex;gap:6px;flex-wrap:wrap}.counts{display:flex;gap:24px;flex-wrap:wrap}.counts div b{display:block;font-size:22px}
+table.cn input{width:100%;min-width:0}.row-actions{display:flex;gap:6px;flex-wrap:wrap}.row-actions button,table.cn td button{white-space:nowrap}.counts{display:flex;gap:24px;flex-wrap:wrap}.counts div b{display:block;font-size:22px}
 @media(max-width:760px){table.cn thead{display:none}table.cn tr{display:block;border-bottom:1px solid var(--line);padding:8px 0}table.cn td{display:block;border:0;padding:4px 0}table.cn td[data-l]::before{content:attr(data-l);display:block;font-size:12px;color:var(--muted)}}`
 
 function adminPage(v: Viewer): string {
@@ -69,7 +69,7 @@ function adminPage(v: Viewer): string {
 <section class="card"><h2>Blocked and hidden, last 30 days</h2><div class="counts" id="counts"></div><p class="small muted">Counts only: the text itself is never kept.</p></section>
 <section class="card"><h2>Codenames</h2><p class="small muted">Each client gets a random two-word codename the first time Lens sees it. It never hints at the name, and it stays until you change it. Other names: how people also write this client (short names, old names, abbreviations), so those are hidden too. Legal endings are covered already: "Northwind Treasury" also hides "Northwind".</p>
 <p><label for="find">Find a client</label><input id="find" type="search" placeholder="Name, code or codename"></p>
-<table class="cn"><caption class="sr-only">Clients and their codenames</caption><colgroup><col style="width:16%"><col style="width:24%"><col style="width:20%"><col style="width:24%"><col style="width:16%"></colgroup>
+<table class="cn"><caption class="sr-only">Clients and their codenames</caption><colgroup><col style="width:13%"><col style="width:21%"><col style="width:19%"><col style="width:22%"><col style="width:25%"></colgroup>
 <thead><tr><th scope="col">Client code</th><th scope="col">Name</th><th scope="col">Codename</th><th scope="col">Other names</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody id="rows"><tr><td colspan="5">Loading…</td></tr></tbody></table>
 <p id="rows-msg" class="small" aria-live="polite"></p></section>
 </main>
