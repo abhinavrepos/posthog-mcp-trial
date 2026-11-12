@@ -166,7 +166,8 @@ run_step() { sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | grep -aE '==> |== ph
 run_detail() { sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null | tail -3 | grep -aE '^[0-9: ]*\.\.\. ' | tail -1 | sed -E 's/^[0-9: ]*\.\.\. //' | cut -c1-160 || true; }
 run_follow() { # log id pid: shows the log until the run ends, then exits with the run's code
     local log="$1" id="$2" pid="$3" tp code
-    trap 'echo; echo "Stopped following; it carries on in the background. Follow again: sudo posthog-lens progress -f"; exit 0' INT
+    tp=''
+    trap '[ -n "$tp" ] && kill "$tp" 2>/dev/null; echo; echo "Stopped following; it carries on in the background. Follow again: sudo posthog-lens progress -f"; exit 0' INT
     for _ in $(seq 60); do [ -f "$log" ] && break; kill -0 "$pid" 2>/dev/null || break; sleep 1; done
     tail -n +1 -F "$log" 2>/dev/null & tp=$!
     while kill -0 "$pid" 2>/dev/null; do sleep 2; done
@@ -179,7 +180,8 @@ run_detach() { # kind: start this script again in the background and follow it h
     local stamp; stamp="$(date -u +%Y%m%d-%H%M%S)"
     export LENS_DETACHED=1 YES=1 LENS_RUN_ID="$1-$stamp-$$" LENS_RUN_LOG="/var/log/posthog-lens/$1-$stamp.log"
     mkdir -p /var/log/posthog-lens
-    setsid bash "$0" </dev/null >/dev/null 2>&1 &
+    # A background job of a script starts with SIGINT ignored; give the run the default back.
+    setsid env --default-signal=INT bash "$0" </dev/null >/dev/null 2>&1 &
     say "Running in the background, so a dropped connection does not stop it. Following it here (Ctrl-C stops"
     echo "    only the following). From any session: sudo posthog-lens progress -f"
     run_follow "$LENS_RUN_LOG" "$LENS_RUN_ID" $!
@@ -187,6 +189,9 @@ run_detach() { # kind: start this script again in the background and follow it h
 run_start() { # kind
     RUN_KIND="$1"; RUN_ID="${LENS_RUN_ID:-$1-$(date -u +%Y%m%d-%H%M%S)-$$}"; RUN_T0=$(date +%s); RUN_STARTED="$(date -u +%FT%TZ)"; RUN_RESULT=failed
     mkdir -p "$RUNS"; chmod 755 "$(dirname "$RUNS")" "$RUNS"
+    # One upgrade or install at a time: the lock is held until this run ends.
+    exec 9>"$RUNS/.lock"
+    flock -n 9 || { echo "Another upgrade or install is running: sudo posthog-lens progress"; exit 1; }
     ( trap - EXIT; while kill -0 $$ 2>/dev/null; do
         run_write "$RUNS/current.json" id "$RUN_ID" kind "$RUN_KIND" kit "${KIT_TAG:-}" started "$RUN_STARTED" updated "$(date -u +%FT%TZ)" log "$LOG" step "$(run_step)" detail "$(run_detail)" >/dev/null 2>&1 || true
         sleep 10
@@ -194,7 +199,7 @@ run_start() { # kind
     RUN_BEAT=$!
 }
 run_end() { # exit code
-    kill "$RUN_BEAT" 2>/dev/null || true
+    pkill -P "$RUN_BEAT" 2>/dev/null || true; kill "$RUN_BEAT" 2>/dev/null || true; wait "$RUN_BEAT" 2>/dev/null || true
     [ "$1" = 0 ] || [ "$RUN_RESULT" != ready ] || RUN_RESULT=failed
     run_write "$RUNS/history.jsonl" id "$RUN_ID" kind "$RUN_KIND" kit "${KIT_TAG:-}" started "$RUN_STARTED" ended "$(date -u +%FT%TZ)" seconds "$(( $(date +%s) - RUN_T0 ))" result "$RUN_RESULT" code "$1" log "$LOG" step "$(run_step)" || true
     rm -f "$RUNS/current.json"

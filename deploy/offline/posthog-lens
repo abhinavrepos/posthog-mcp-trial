@@ -143,6 +143,7 @@ status() {
 check() {
     local mins="${1:-10}" port spass sport ph lens st end
     [[ "$mins" =~ ^[0-9]+$ ]] || die "usage: sudo posthog-lens check [minutes]"
+    mins=$((10#$mins))
     port="$(conf_of "$LENS_DIR/.secrets.env" SERVICE_PORT)"; port="${port:-8080}"
     spass="$(conf_of "$LENS_DIR/deploy/status/status.env" STATUS_PASSWORD)"; sport="${STATUS_PORT:-8090}"
     end=$((SECONDS + mins * 60))
@@ -185,30 +186,43 @@ alert_test() {
 RUNS=/var/lib/posthog-lens/runs
 progress() {
     local follow=0; [ "${1:-}" = -f ] && follow=1
-    if [ ! -s "$RUNS/current.json" ]; then
-        echo "Nothing is running."
-        [ -s "$RUNS/history.jsonl" ] && { echo "Last run:"; history 1; }
-        return 0
-    fi
-    python3 - "$RUNS/current.json" <<'PY'
+    # One snapshot of the run (it may end at any moment): id, log, and a summary to print.
+    local snap; snap="$(python3 /dev/fd/3 "$RUNS/current.json" 3<<'PY'
 import json, sys, datetime as dt
-r = json.load(open(sys.argv[1]))
+try:
+    r = json.load(open(sys.argv[1]))
+except (FileNotFoundError, ValueError):
+    sys.exit(0)
 now = dt.datetime.now(dt.timezone.utc)
 start = dt.datetime.fromisoformat(r["started"].replace("Z", "+00:00"))
 upd = dt.datetime.fromisoformat(r["updated"].replace("Z", "+00:00"))
 mins = int((now - start).total_seconds() // 60)
 stale = (now - upd).total_seconds() > 90
-print(f"{r['kind']} of kit {r.get('kit') or '?'}: running for {mins} min" + ("  (no sign of life for over 90 s: it may have stopped; run the same command again to continue)" if stale else ""))
-print(f"  now:  {r.get('step') or 'starting'}")
-if r.get("detail"): print(f"        {r['detail']}")
-print(f"  log:  {r['log']}")
+print(r["id"]); print(r["log"])
+print("%s of kit %s: running for %d min%s" % (r["kind"], r.get("kit") or "?", mins, "  (no sign of life for over 90 s: it may have stopped; run the same command again to continue)" if stale else ""))
+print("  now:  %s" % (r.get("step") or "starting"))
+if r.get("detail"): print("        %s" % r["detail"])
+print("  log:  %s" % r["log"])
 PY
-    local log; log="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["log"])' "$RUNS/current.json")"
+)"
+    if [ -z "$snap" ]; then
+        echo "Nothing is running."
+        [ -s "$RUNS/history.jsonl" ] && { echo "Last run:"; history 1; }
+        return 0
+    fi
+    local id log; id="$(sed -n 1p <<<"$snap")"; log="$(sed -n 2p <<<"$snap")"
+    sed -n '3,$p' <<<"$snap"
     if [ $follow = 0 ]; then echo; tail -n 12 "$log" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'; return 0; fi
-    echo; tail -n 20 -F "$log" 2>/dev/null & local tp=$!
-    trap 'kill $tp 2>/dev/null; echo; echo "Stopped following; the run carries on."; exit 0' INT
-    while [ -s "$RUNS/current.json" ]; do sleep 2; done
-    sleep 1; kill $tp 2>/dev/null || true; echo; history 1
+    echo; local tp=''
+    trap '[ -n "$tp" ] && kill "$tp" 2>/dev/null; echo; echo "Stopped following; the run carries on."; exit 0' INT
+    tail -n 20 -F "$log" 2>/dev/null & tp=$!
+    # Until this run (by id) is no longer the current one.
+    while grep -qF "\"id\": \"$id\"" "$RUNS/current.json" 2>/dev/null; do sleep 2; done
+    sleep 1; kill "$tp" 2>/dev/null || true; wait "$tp" 2>/dev/null || true; echo
+    local line; line="$(grep -F "\"id\": \"$id\"" "$RUNS/history.jsonl" 2>/dev/null | tail -1)"
+    history 1
+    [ -n "$line" ] || { echo "The run stopped without recording a result (see $log)."; return 1; }
+    return "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1]).get("code", 1))' "$line")"
 }
 history() {
     local n="${1:-10}"
