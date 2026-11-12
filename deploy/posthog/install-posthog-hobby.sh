@@ -45,7 +45,8 @@ COMPOSE_STANDALONE_VERSION="v2.33.1"
 MIN_RAM_GB=7          # AWS reports an "8 GB" instance as about 7.6 GB.
 SWAP_BELOW_RAM_GB=15  # Instances with less RAM than this get a 4 GB swap file.
 MIN_FREE_DISK_GB=30
-HEALTH_TIMEOUT_MIN=75 # A first boot runs ~700 migrations; 4 vCPUs took 35 minutes in testing.
+HEALTH_STALL_MIN=20   # Give up only when no new migration was applied for this long...
+HEALTH_TIMEOUT_MIN=180 # ...or after this long in all. A first boot runs ~1,000 migrations; 4 vCPUs took 35 to 80 minutes in testing.
 
 # Inside this project, a machine without internet takes everything from ECR and the kit image instead
 # (../offline/ecr.sh, on when ../offline/ecr.env exists). Copied on its own, this script downloads as usual.
@@ -675,10 +676,10 @@ EOF
 
 wait_for_health() {
     cd "$INSTALL_DIR"
-    local start now elapsed applied status web_state
-    start=$(date +%s)
-    info "The first boot creates the databases and runs ~700 migrations."
-    info "Expect 15 to 45 minutes. Progress is shown every 30 seconds."
+    local start now elapsed applied status web_state last_applied=-1 last_change
+    start=$(date +%s); last_change=$start
+    info "The first boot creates the databases and runs about 1,000 migrations."
+    info "Expect 30 to 90 minutes. Progress is shown every 30 seconds; it keeps waiting while migrations move."
     while true; do
         status=$(curl -s -o /dev/null -w '%{http_code}' -m 10 http://localhost/_health || true)
         if [ "$status" = 200 ]; then
@@ -690,9 +691,11 @@ wait_for_health() {
         web_state=$(docker inspect -f '{{.State.Status}}' "$(docker compose ps -q web 2>/dev/null)" 2>/dev/null || echo unknown)
         applied=$(docker compose logs --no-log-prefix web 2>/dev/null | grep -c 'Applying .* OK' || true)
         printf '\r    … %3d min elapsed | web: %-8s | migrations applied: %-5s' "$elapsed" "$web_state" "$applied"
-        if [ "$elapsed" -ge "$HEALTH_TIMEOUT_MIN" ]; then
+        if [ "$applied" != "$last_applied" ]; then last_applied=$applied; last_change=$now; fi
+        if [ $(( (now - last_change) / 60 )) -ge "$HEALTH_STALL_MIN" ] || [ "$elapsed" -ge "$HEALTH_TIMEOUT_MIN" ]; then
             echo
-            warn "PostHog did not answer /_health within ${HEALTH_TIMEOUT_MIN} minutes."
+            if [ "$elapsed" -ge "$HEALTH_TIMEOUT_MIN" ]; then warn "PostHog did not answer /_health within ${HEALTH_TIMEOUT_MIN} minutes."
+            else warn "PostHog did not answer /_health, and no migration was applied in the last ${HEALTH_STALL_MIN} minutes."; fi
             info "Last lines from the web container:"
             docker compose logs --tail 30 web 2>&1 | sed 's/^/      /'
             return 1

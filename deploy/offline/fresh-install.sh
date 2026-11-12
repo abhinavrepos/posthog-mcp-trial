@@ -14,7 +14,7 @@
 #
 # Once the answers are in, it runs in the background (a dropped SSH session does not stop it) and this
 # terminal follows it; Ctrl-C stops only the following. From any session: sudo posthog-lens progress -f.
-# It takes 30-60 minutes. If it stops, fix what it says and run the same command again: it continues where
+# It takes 1-2 hours (most of it is PostHog's first database setup). If it stops, fix what it says and run the same command again: it continues where
 # it stopped. Everything it prints also goes to /var/log/posthog-lens/. Needs: root, Docker, and (for ECR)
 # the AWS CLI with an instance role that can read the registry (AmazonEC2ContainerRegistryReadOnly).
 set -euo pipefail
@@ -217,7 +217,7 @@ tmp="$(mktemp)"
 docker run --rm --entrypoint cat "$KIT" /kit/repo/deploy/offline/posthog-lens >"$tmp" || die "This kit has no posthog-lens command (too old?)."
 install -o root -g root -m 755 "$tmp" "$SBIN"; rm -f "$tmp"
 ok "installed $SBIN"
-say "Installing PostHog and PostHog Lens (30-60 minutes)"
+say "Installing PostHog and PostHog Lens (1-2 hours the first time)"
 POSTHOG_LENS_CONF="$CONF" "$SBIN" update "$KIT_TAG"
 
 rm -f "$PIN"
