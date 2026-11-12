@@ -118,3 +118,25 @@ test('Copilot address: admins set it, the Chat page hands it out, bad values ref
     assert.equal(access.chatUrl(), config.service.publicUrl, 'empty goes back to the default')
     assert.ok(access.readAudit({ action: 'access.chat_url' }).length >= 2)
 })
+
+test('approved chat apps: defaults to ION GitHub Copilot, central admins edit the list, the Chat page warns with it', async () => {
+    assert.deepEqual(access.chatPolicy().apps, access.DEFAULT_CHAT_APPS)
+    assert.match(access.chatPolicy().note, /not approved/)
+    const page = async () => {
+        const { handleConnect } = await import('../src/service/connect.ts')
+        let html = ''
+        const res = { writeHead() {}, end(b: string) { html = b } } as never
+        await handleConnect({ method: 'GET', headers: {} } as never, res, new URL('http://x/replays/connect'), { email: 'pm@x.com', role: 'watch', surveys: 'view' } as never)
+        return html
+    }
+    assert.match(await page(), /Approved apps only[\s\S]*GitHub Copilot with your ION Microsoft enterprise account/)
+    const p = access.setChatPolicy({ apps: ' GitHub Copilot (ION tenant)\n\nMicrosoft 365 Copilot <ION>\n', note: 'Nothing else, please.' }, 'admin@x.com')
+    assert.deepEqual(p.apps, ['GitHub Copilot (ION tenant)', 'Microsoft 365 Copilot <ION>'])
+    const html = await page()
+    assert.match(html, /Microsoft 365 Copilot &lt;ION&gt;/, 'escaped'); assert.match(html, /Nothing else, please\./); assert.doesNotMatch(html, /<ION>/)
+    assert.throws(() => access.setChatPolicy({ apps: Array.from({ length: 11 }, (_, i) => 'App ' + i) }, 'admin@x.com'), /at most 10/)
+    assert.throws(() => access.setChatPolicy({ note: 'x'.repeat(401) }, 'admin@x.com'), /under 400/)
+    access.setChatPolicy({ apps: '', note: '' }, 'admin@x.com')
+    assert.deepEqual(access.chatPolicy(), { apps: access.DEFAULT_CHAT_APPS, note: access.DEFAULT_CHAT_NOTE }, 'empty goes back to the default')
+    assert.ok(access.readAudit({ action: 'access.chat_policy' }).length >= 2)
+})

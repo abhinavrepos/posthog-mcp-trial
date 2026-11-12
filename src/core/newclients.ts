@@ -34,7 +34,9 @@ export function newClientValues(to: string): Promise<NewClient[]> {
         return rescuePrivacy(first.map(c => {
             const tasks = (grouped.get(c.client)||[]).map(t=>({...t, established:t.done_weeks>=2}))
             const days = Math.floor((Date.parse(to)-Date.parse(c.first_seen))/86400000), client_name=names.get(c.client)||c.client
-            const text = `${client_name} (first seen ${days} days ago): ${tasks.map(t=>t.done ? `${t.task_name} done in ${t.done_weeks} weeks${t.established ? '' : '; not yet established'}` : `${t.task_name} tried ${t.attempts} times, never completed`).join('; ')}.`
+            // Short on purpose: established tasks are counted, only the ones still struggling are named.
+            const ok = tasks.filter(t=>t.established).length, open = tasks.filter(t=>!t.established)
+            const text = `${client_name} (first seen ${days} days ago): ${!tasks.length ? 'no tasks completed yet' : ok === tasks.length ? `all ${ok} main tasks established` : `${ok} of ${tasks.length} main tasks established; ${open.map(t=>t.done ? `${t.task_name} done in only ${t.done_weeks} week` : `${t.task_name} tried ${t.attempts} times, never completed`).join('; ')}`}.`
             return {...c,client_name,days,tasks,text}
         }))
     })

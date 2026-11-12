@@ -77,7 +77,8 @@ const viewerEdit = await viewer.page.evaluate(() => [...document.querySelectorAl
 ok('viewer sees no Save (cannot assign)', viewerEdit === 0, `${viewerEdit} save buttons`)
 
 // 3. owner/status through the real form (admin), then API, audit
-const target = clients[0]
+// Write test owners, notes and statuses to a synthetic client, never to the demo clients (S001–S005) people look at.
+const target = clients.find((c: any) => !/^S00\d$/.test(c.client)) ?? clients[0]
 if (target) {
     const p = admin.page; await p.goto(LENS + `/replays/dashboards?view=rescue&${W}`, { waitUntil: 'networkidle0' }); await wait(1000)
     const filled = await p.evaluate((client) => {

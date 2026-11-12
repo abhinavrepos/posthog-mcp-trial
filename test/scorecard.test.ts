@@ -72,7 +72,7 @@ test('weekly scorecard counts hits, misses, false alarms and first-observed lead
     assert.equal(missing.median_lead_days,7)
     assert.deepEqual(missing.first_flags.find(f=>f.client==='Leaving'),{client:'Leaving',first_flag:'2026-02-08',lead_days:7})
     assert.equal(s.rows[0].kind,'overall');assert.equal(s.rows[0].hits,1)
-    assert.match(s.explanation,/4 clients with outcomes; this is a small sample: treat as a sanity check, not accuracy/)
+    assert.match(s.explanation,/4 clients with a recorded outcome: a small sample, so treat this as a sanity check, not accuracy/)
     recordOutcome(viewer(),{client:'Leaving'},true)
     assert.equal((await scorecard({weeks:8})).outcome_clients,3)
     tasksDb.prepare("DELETE FROM task_ingest WHERE day='2026-03-15'").run();forgetAnswers()

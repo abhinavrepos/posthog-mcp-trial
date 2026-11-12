@@ -1,4 +1,10 @@
 import { clientOutcomes, recordOutcome, OUTCOMES } from '../core/outcomes.ts'
+import { tasksDb } from '../core/tasks.ts'
+/** Clients seen in history, for picking one by name when recording an outcome. */
+const knownClients = (): { client: string; name: string }[] => {
+    try { return tasksDb.prepare("SELECT c.client,coalesce(n.name,c.client) AS name FROM (SELECT DISTINCT client FROM client_daily WHERE client!='') c LEFT JOIN client_names n USING(client) ORDER BY name LIMIT 2000").all() as { client: string; name: string }[] }
+    catch { return [] }
+}
 import { briefingDeliveryStatus } from '../core/briefingdelivery.ts'
 // Admin page for replay clip access: who can watch, who can download, the default for everyone
 // else, share links, clips and the activity log. Only admins reach it: PostHog owners and admins
@@ -7,7 +13,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config } from '../core/config.ts'
 import { all } from '../core/db.ts'
-import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSurveyRole, resetSurveyRole, setSurveySettings, SURVEY_ROLES, SURVEY_ROLE_TEXT, defaultSurveyRole, sharedTokenSurveyRole, surveyRoleOf, listMcpTokens, revokeMcpToken, chatUrl, setChatUrl, type SurveyRole, setSystemAccess, surveyPeople, systemViewers, type Role, type Viewer } from './access.ts'
+import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSurveyRole, resetSurveyRole, setSurveySettings, chatPolicy, setChatPolicy, SURVEY_ROLES, SURVEY_ROLE_TEXT, defaultSurveyRole, sharedTokenSurveyRole, surveyRoleOf, listMcpTokens, revokeMcpToken, chatUrl, setChatUrl, type SurveyRole, setSystemAccess, surveyPeople, systemViewers, type Role, type Viewer } from './access.ts'
 import { dashboardPeople, dashboardRoleOf, setDashboardRole, resetDashboardRole, setDashboardSettings, defaultDashboardRole, sharedTokenDashboardRole, DASHBOARD_ROLES, DASHBOARD_ROLE_TEXT, type DashboardRole } from './access.ts'
 import { APP_NAME, deleteClip, headerHtml, PAGER_JS, listClips, PAGE_CSS, setSaved, storage } from './replays.ts'
 
@@ -58,7 +64,8 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
     if (!can(v.role, 'admin')) {
         if (p === '/replays/admin' || p === '/replays/admin/') {
             res.writeHead(403, { 'content-type': 'text/html; charset=utf-8' })
-            res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Admin</title><style>${PAGE_CSS()}</style></head><body>${headerHtml(v, 'Admin')}<main><div class="card"><h2>Admins only</h2><p>Ask a PostHog owner or admin for access.</p></div></main></body></html>`)
+            res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Admin</title><style>${PAGE_CSS()}
+.people-table{table-layout:auto}#people td{overflow-wrap:break-word}#people td b{word-break:normal}#people td select{width:auto;max-width:none}.revoked-toggle{display:flex;gap:6px;align-items:center;margin:8px 0}</style></head><body>${headerHtml(v, 'Admin')}<main><div class="card"><h2>Admins only</h2><p>Ask a PostHog owner or admin for access.</p></div></main></body></html>`)
         } else json(res, 403, { error: 'Admins only.' })
         return true
     }
@@ -191,6 +198,13 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
             change.default_role = r
         }
         if (body.allow_share_links !== undefined) change.allow_share_links = !!body.allow_share_links
+        if (body.chat_apps !== undefined || body.chat_note !== undefined) {
+            try {
+                return (json(res, 200, { ok: true, ...setChatPolicy({ apps: body.chat_apps, note: body.chat_note }, v.email) }), true)
+            } catch (e) {
+                return (json(res, 400, { error: (e as Error).message }), true)
+            }
+        }
         if (body.chat_url !== undefined) {
             try {
                 return (json(res, 200, { ok: true, chat_url: setChatUrl(body.chat_url, v.email) }), true)
@@ -272,7 +286,7 @@ main h1{margin:8px 0 0}main button:not(.ghost){background:var(--ink);border-colo
 </style></head>
 <body>${headerHtml(v, 'Admin')}<main style="max-width:1280px"><h1>Admin</h1>
 
-<section class="card"><h2>Client outcomes</h2><p class="muted">Record the date the client decided, if known; otherwise the date it became known. Client id must match history. Saving an existing id edits its outcome.</p><form id="outcome-form" class="toolbar"><div><label for="outcome-client">Client id</label><input id="outcome-client" name="client" required maxlength="256"></div><div><label for="outcome-kind">Outcome</label><select id="outcome-kind" name="outcome">${OUTCOMES.map(o=>`<option>${o}</option>`).join('')}</select></div><div><label for="outcome-date">Decision date</label><input id="outcome-date" name="decided_on" type="date" required></div><div><label for="outcome-note">Note</label><input id="outcome-note" name="note" maxlength="500"></div><button type="submit">Save outcome</button></form><p id="outcome-msg" role="status" aria-live="polite"></p><div class="table-wrap"><table><caption>Recorded client outcomes</caption><thead><tr><th>Client</th><th>Outcome</th><th>Decision date</th><th>Note</th><th>Actions</th></tr></thead><tbody id="outcome-rows"></tbody></table></div></section>
+<section class="card"><h2>Client outcomes</h2><p class="muted">Record the date the client decided, if known; otherwise the date it became known. Pick the client from the list. Saving a client again edits its outcome. The Scorecard on Dashboards uses these to check which warnings came before a client left.</p><form id="outcome-form" class="toolbar"><div><label for="outcome-client">Client</label><input id="outcome-client" name="client" required maxlength="256" list="outcome-clients" placeholder="Type a client name or id"><datalist id="outcome-clients">${knownClients().map(c=>`<option value="${e(c.client)}">${e(c.name)}</option>`).join('')}</datalist></div><div><label for="outcome-kind">Outcome</label><select id="outcome-kind" name="outcome">${OUTCOMES.map(o=>`<option>${o}</option>`).join('')}</select></div><div><label for="outcome-date">Decision date</label><input id="outcome-date" name="decided_on" type="date" required></div><div><label for="outcome-note">Note</label><input id="outcome-note" name="note" maxlength="500"></div><button type="submit">Save outcome</button></form><p id="outcome-msg" role="status" aria-live="polite"></p><div class="table-wrap"><table><caption>Recorded client outcomes</caption><thead><tr><th>Client</th><th>Outcome</th><th>Decision date</th><th>Note</th><th>Actions</th></tr></thead><tbody id="outcome-rows"></tbody></table></div></section>
 <div class="card"><h2>People</h2><p class="small muted">Changes to access save automatically.</p><label for="people-filter">Find a person</label><input id="people-filter" type="search" placeholder="Name or email">
 <details class="add-person"><summary>Add a person</summary><div class="toolbar"><div><label for="new-email">PostHog email</label><input id="new-email" type="email" placeholder="name@company.com"></div>
 <div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-system"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0"><label for="new-surveys">Surveys</label><select id="new-surveys"></select></div><div style="flex:0"><label for="new-dashboards">Dashboards</label><select id="new-dashboards"></select></div><div style="flex:0"><button type="button" id="add">Add person</button></div></div></details>
@@ -305,7 +319,12 @@ main h1{margin:8px 0 0}main button:not(.ghost){background:var(--ink);border-colo
 <p class="small muted">Briefing delivery: ${config.briefing.webhook ? `on (${e(config.briefing.kind)}, ${e(config.briefing.day)} at ${e(config.briefing.hour)}:00 UTC)` : 'off'} · Last sent: ${e(briefingDeliveryStatus().last_sent || 'never')}</p>
 <div class="toolbar" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label for="chat-url">Lens address for Copilot</label><input id="chat-url" placeholder="https://lens.example.com"></div><div><button type="button" id="chat-url-save">Save address</button></div></div>
 <p class="small muted">The Chat page gives people this address. Leave empty for the default.</p><p id="chat-url-msg" class="small" aria-live="polite"></p>
-</details><p class="small muted">Revoking a key stops its chat access immediately.</p>
+<h3 style="font-size:15px;margin:18px 0 6px">Approved chat apps</h3>
+<p class="small muted">The Chat page warns everyone to connect their key only to these apps. One per line.</p>
+<label for="chat-apps">Approved apps</label><textarea id="chat-apps" rows="3" style="width:100%;box-sizing:border-box"></textarea>
+<label for="chat-note">Warning shown under the list</label><textarea id="chat-note" rows="2" style="width:100%;box-sizing:border-box"></textarea>
+<div><button type="button" id="chat-policy-save">Save approved apps</button></div><p id="chat-policy-msg" class="small" aria-live="polite"></p>
+</details><p class="small muted">Revoking a key stops its chat access immediately.</p><label class="revoked-toggle small"><input type="checkbox" id="show-revoked"> <span id="show-revoked-text">Show revoked keys</span></label>
 <div class="table-wrap"><table><thead><tr><th scope="col">Person</th><th scope="col">Name</th><th scope="col">Made</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="tokens"><tr><td colspan="5">Loading tokens…</td></tr></tbody></table></div><div id="tokens-pager"></div></div>
 
 <div class="card"><h2>Clips</h2><p class="small muted" id="space"></p>
@@ -330,8 +349,9 @@ const ACTIONS={'signin':'Signed in','signout':'Signed out','signin.failed':'Fail
 let S=null;
 
 function guardControls(){document.querySelectorAll('main button,main select,main input[type=checkbox]').forEach(el=>{for(const event of ['onclick','onchange']){const handler=el[event];if(!handler||handler.guarded)continue;const wrapped=async function(e){if(el.disabled)return;const label=el.getAttribute('aria-label'),id=el.id,focused=document.activeElement===el;el.disabled=true;try{await handler.call(el,e)}catch(err){msg('people-msg',err.message+' Reload the page to try again.')}finally{if(el.isConnected)el.disabled=false;if(focused){const next=el.isConnected?el:id?$(id):label?[...document.querySelectorAll('[aria-label]')].find(x=>x.getAttribute('aria-label')===label):null;next?.focus()}}};wrapped.guarded=true;el[event]=wrapped}})}
+function drawTokens(reset){const gone=S.chat_tokens.filter(t=>t.revoked_at).length;$('show-revoked-text').textContent='Show revoked keys ('+gone+')';tokensPg.set($('show-revoked').checked?S.chat_tokens:S.chat_tokens.filter(t=>!t.revoked_at),reset)}
 const tokensPg=makePager({mount:$('tokens-pager'),noun:'tokens',size:25,draw:slice=>{
- const tt=$('tokens');tt.innerHTML='';if(!slice.length)tt.innerHTML='<tr><td colspan="5" class="muted">No personal tokens yet. People can make one on the Chat page.</td></tr>';
+ const tt=$('tokens');tt.innerHTML='';if(!slice.length)tt.innerHTML='<tr><td colspan="5" class="muted">No active keys. People make one on the Chat page.</td></tr>';
  slice.forEach(t=>{const tr=document.createElement('tr');cell(tr,t.email);cell(tr,t.label);cell(tr,when(t.created_at),'small');cell(tr,t.revoked_at?'Revoked '+when(t.revoked_at)+' by '+t.revoked_by:when(t.last_used_at),'small');
   if(!t.revoked_at){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Revoke';b.setAttribute('aria-label','Revoke '+t.label+' token for '+t.email+' made '+when(t.created_at));b.onclick=async()=>{if(!confirm('Revoke the chat token '+t.label+' of '+t.email+'? Chat with it stops at once.'))return;try{await api('/replays/admin/api/chat-tokens/'+t.id,{method:'DELETE'});await load()}catch(e){msg('people-msg',e.message+' Try the action again.')}};cell(tr,b)}else cell(tr,'');tt.appendChild(tr)});
 
@@ -372,7 +392,7 @@ async function load(){const focused=document.activeElement;const focusLabel=focu
  const opts=(sel,list,value)=>{sel.innerHTML='';list.forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.text;if(r.id===value)o.selected=true;sel.appendChild(o)})};
  opts($('survey-default'),S.survey_roles.filter(r=>r.id!=='launch'),S.survey_default_role);opts($('survey-shared'),S.survey_roles,S.survey_shared_token_role);opts($('new-surveys'),[{id:'default',text:'Default'}].concat(S.survey_roles),'default');
  opts($('dashboard-default'),S.dashboard_roles.filter(r=>r.id!=='share'),S.dashboard_default_role);opts($('dashboard-shared'),S.dashboard_roles.filter(r=>r.id!=='share'),S.dashboard_shared_token_role);opts($('new-dashboards'),[{id:'default',text:'Default'}].concat(S.dashboard_roles),'default');
- tokensPg.set(S.chat_tokens,true);renderPeople(true);
+ drawTokens(true);renderPeople(true);
  const st=S.storage;$('space').textContent=n(st.clips,'clip')+' using '+mb(st.bytes)+' on the server. Saved: '+st.saved+' ('+mb(st.saved_bytes)+'). Unsaved clips expire two weeks after their last request.';
  renderClips();
  renderAudit(true);guardControls();if(focusLabel){const next=[...document.querySelectorAll('[aria-label]')].find(el=>el.getAttribute('aria-label')===focusLabel);next?.focus()}}
@@ -400,7 +420,10 @@ async function searchAudit(more=false){const version=++searchVersion;msg('audit-
 $('audit-more').onclick=()=>searchAudit(true);
 let searchTimer;$('filter').oninput=()=>{++searchVersion;clearTimeout(searchTimer);searchTimer=setTimeout(()=>searchAudit(),250)};
 $('add').onclick=async()=>{const email=$('new-email').value.trim();if(!$('new-email').reportValidity()||!email){msg('people-msg','Enter a valid email address.');return;}try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email,role:$('new-role').value,system:$('new-system').checked,dashboard_role:$('new-dashboards').value==='default'?'':$('new-dashboards').value,survey_role:$('new-surveys').value==='default'?'':$('new-surveys').value})});$('new-email').value='';$('new-system').checked=false;$('new-surveys').value='default';$('new-dashboards').value='default';msg('people-msg','Added '+email+'.',true);await load()}catch(e){msg('people-msg',e.message)}};
+$('show-revoked').onchange=()=>drawTokens(true);
 $('chat-url').value=${JSON.stringify(chatUrl()).replace(/</g, '\\u003c')};
+{const p=${JSON.stringify(chatPolicy()).replace(/</g, '\\u003c')};$('chat-apps').value=p.apps.join('\\n');$('chat-note').value=p.note}
+$('chat-policy-save').onclick=async()=>{try{const r=await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({chat_apps:$('chat-apps').value,chat_note:$('chat-note').value})});$('chat-apps').value=r.apps.join('\\n');$('chat-note').value=r.note;msg('chat-policy-msg','Saved. The Chat page shows this now.',true)}catch(e){msg('chat-policy-msg',e.message)}};
 $('chat-url-save').onclick=async()=>{try{const r=await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({chat_url:$('chat-url').value})});$('chat-url').value=r.chat_url;msg('chat-url-msg','Saved.',true)}catch(e){msg('chat-url-msg',e.message)}};
 $('default-role').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({default_role:$('default-role').value})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
 $('share').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({allow_share_links:$('share').value==='1'})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
@@ -409,7 +432,7 @@ $('survey-shared').onchange=async()=>{try{await api('/replays/admin/api/settings
 $('dashboard-default').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({dashboard_default_role:$('dashboard-default').value})});msg('settings-msg','Saved.',true);await load()}catch(e){msg('settings-msg',e.message)}};
 $('dashboard-shared').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({dashboard_shared_token_role:$('dashboard-shared').value})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
 guardControls();
-async function loadOutcomes(){const rows=await api('/replays/admin/api/outcomes');const body=$('outcome-rows');body.replaceChildren();for(const o of rows){const tr=document.createElement('tr');for(const key of ['client','outcome','decided_on','note']){const td=document.createElement('td');td.textContent=o[key];tr.append(td)}const td=document.createElement('td');for(const action of ['Edit','Remove']){const b=document.createElement('button');b.type='button';b.textContent=action;b.setAttribute('aria-label',action+' outcome for '+o.client);b.onclick=async()=>{try{if(action==='Edit'){for(const key of ['client','outcome','decided_on','note'])$('outcome-form').elements.namedItem(key).value=o[key];$('outcome-client').focus()}else{await api('/replays/admin/api/outcomes',{method:'DELETE',body:JSON.stringify({client:o.client})});await loadOutcomes()}}catch(e){$('outcome-msg').textContent=e.message}};td.append(b)}tr.append(td);body.append(tr)}}
+async function loadOutcomes(){const rows=await api('/replays/admin/api/outcomes');const body=$('outcome-rows');body.replaceChildren();if(!rows.length){const tr=document.createElement('tr');const td=document.createElement('td');td.colSpan=5;td.className='muted';td.textContent='No outcomes recorded yet. Add clients that left, shrank, renewed or stayed.';tr.append(td);body.append(tr)}for(const o of rows){const tr=document.createElement('tr');for(const key of ['client','outcome','decided_on','note']){const td=document.createElement('td');td.textContent=o[key];tr.append(td)}const td=document.createElement('td');for(const action of ['Edit','Remove']){const b=document.createElement('button');b.type='button';b.textContent=action;b.setAttribute('aria-label',action+' outcome for '+o.client);b.onclick=async()=>{try{if(action==='Edit'){for(const key of ['client','outcome','decided_on','note'])$('outcome-form').elements.namedItem(key).value=o[key];$('outcome-client').focus()}else{await api('/replays/admin/api/outcomes',{method:'DELETE',body:JSON.stringify({client:o.client})});await loadOutcomes()}}catch(e){$('outcome-msg').textContent=e.message}};td.append(b)}tr.append(td);body.append(tr)}}
 $('outcome-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;try{await api('/replays/admin/api/outcomes',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(form)))});$('outcome-msg').textContent='Outcome saved.';form.reset();await loadOutcomes()}catch(err){$('outcome-msg').textContent=err.message}}
 loadOutcomes().catch(e=>{$('outcome-msg').textContent=e.message})
 load().catch(e=>{msg('people-msg',e.message+' Reload the page to try again.');$('people').innerHTML='<tr><td colspan="9" class="err"></td></tr>';$('people').querySelector('td').textContent=e.message});
