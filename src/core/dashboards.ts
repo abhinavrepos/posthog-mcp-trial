@@ -122,7 +122,7 @@ export function shareDashboard(id: string, by: string, admin: boolean, emails: u
 /** The people Lens knows (for the share picker): anyone with a role of any kind, and anyone signed in. */
 export function knownPeople(): string[] {
     return all<{ email: string }>(
-        `SELECT email FROM people UNION SELECT email FROM survey_people UNION SELECT email FROM system_viewers
+        `SELECT email FROM people UNION SELECT email FROM survey_people UNION SELECT email FROM system_viewers UNION SELECT email FROM replay_insight_people
          UNION SELECT email FROM dashboard_people UNION SELECT DISTINCT who AS email FROM audit WHERE action = 'signin' ORDER BY email LIMIT 2000`
     ).map((r) => r.email).filter((e) => EMAIL.test(e))
 }

@@ -161,7 +161,7 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse) {
     const caller = callerOf(req)
     if (!caller) return send(res, 401, { error: 'MCP needs Authorization: Bearer <MCP_TOKEN or your personal token from the Connect chat page>' })
     // Stateless: a fresh server and transport per request, with the tools this caller may use.
-    const server = new McpServer(lensServerInfo, { instructions: serverInstructions(undefined, caller.surveyRole, caller.dashboardRole) })
+    const server = new McpServer(lensServerInfo, { instructions: serverInstructions(undefined, caller.surveyRole, caller.dashboardRole, caller.admin || caller.insights) })
     registerTools(server, ai, caller)
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     res.on('close', () => {

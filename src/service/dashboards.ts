@@ -11,7 +11,7 @@ import { rescueQueue, setRescueAction, RescueInputError, RESCUE_STATUSES, type R
 import { taskMap, flowTime, findTasks, ingestStatus, dataThrough } from '../core/tasks.ts'
 import type { FlowTime, FlowTimeParams, TaskMap, TaskMapParams, Window, Flag, Coverage } from '../core/taskstypes.ts'
 import { createDashboard, getDashboard, listDashboards, updateDashboard, deleteDashboard, shareDashboard, canOpen, canManage, knownPeople, KIND_TEXT, type Dashboard, type DashboardKind } from '../core/dashboards.ts'
-import { can, canSurvey, canDashboard, canUseDashboards, type Viewer } from './access.ts'
+import { can, canSurvey, canDashboard, canUseDashboards, canSeeReplayInsights, type Viewer } from './access.ts'
 import { PAGE_CSS, headerHtml, APP_NAME, PAGER_JS } from './replays.ts'
 
 const ROOT = '/replays/dashboards'
@@ -193,7 +193,7 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
         if (selected === 'story' && !pin) {
             const client = text(url.searchParams.get('client'), 'client', 256)
             const story = await deps.clientStory({ client, weeks: integer(url.searchParams.get('weeks') ?? '26', 1, 52, 'Weeks') })
-            html(res, 200, v, rescueNav('story', client) + storyHtml(story, await deps.handoverPack(client)).replace('<!--experience-->', experienceHtml(clientExperience(client))))
+            html(res, 200, v, rescueNav('story', client) + storyHtml(story, await deps.handoverPack(client)).replace('<!--experience-->', canSeeReplayInsights(v) ? experienceHtml(clientExperience(client)) : INSIGHTS_LOCKED))
             return true
         }
         if (url.searchParams.get('view') === 'pinned' && !pin) {
@@ -352,6 +352,8 @@ const storyLink = (client: string) => ROOT + '?' + new URLSearchParams({ view: '
 function gridHtml(b: MondayBrief): string {
     return `<section><p class="muted small">Last 28 days. ● marks a warning sign (hover or focus for the reason). Trend compares with the 28 days before. A row without marks is not proof that all is well.</p><div class="table-wrap"><table><caption class="sr-only">Clients and their warning signs</caption><thead><tr><th scope="col">Client</th>${GRID_COLUMNS.map(([,label]) => `<th scope="col">${label}</th>`).join('')}</tr></thead><tbody data-page-list="portfolio-pager" data-noun="clients">${(b.grid || []).map(r => `<tr><th scope="row"><a href="${esc(r.open)}">${esc(r.client_name)}</a>${r.level === 'urgent' ? ' <span class="rescue-level urgent">urgent</span>' : ''}</th>${r.cells.map(c => `<td><span role="img" aria-label="${esc(c.label)}" title="${esc(c.label)}">${esc(c.mark)}</span></td>`).join('')}</tr>`).join('') || `<tr><td colspan="${GRID_COLUMNS.length + 1}">No clients flagged in processed history.</td></tr>`}</tbody></table><div id="portfolio-pager"></div></div></section>`
 }
+// Replay insights need their own grant (Admin → People). Without it nothing from replays is read or shown.
+const INSIGHTS_LOCKED = `<p class="xp-locked muted small">Replay insights (how this client's people work, from session replays) are not turned on for you. A Lens admin can turn them on.</p>`
 /** How this client's people experience Reval, from replays (src/core/experience.ts): verdict, findings, next steps. */
 function experienceHtml(x: ClientExperience): string {
     const tone = x.verdict === 'struggling' ? 'err' : x.verdict === 'some friction' ? 'warn' : x.verdict === 'smooth' ? 'ok' : ''
