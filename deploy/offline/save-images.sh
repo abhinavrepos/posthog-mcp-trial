@@ -5,6 +5,9 @@
 #   deploy/offline/save-images.sh                 # the kit build-images.sh made last (deploy/offline/last-kit.txt)
 #   deploy/offline/save-images.sh <kit tag>       # another kit, e.g. 685049943753-92fb46e1
 #   OUT=/some/folder deploy/offline/save-images.sh
+#   SINCE=<kit tag on the machine> deploy/offline/save-images.sh
+#                         only the images that kit did not have: a much smaller file for an update (often
+#                         just PostHog Lens and the kit). The machine must have that kit's images loaded.
 #
 # It writes, in OUT [deploy/offline/out]:
 #   posthog-lens-images-<kit>.tar          every image (PostHog's, PostHog Lens, the kit itself), about 15 GB
@@ -60,12 +63,22 @@ docker run --rm --entrypoint tar "$KIT" -C /kit/repo/deploy/offline -cf - ecr.en
 mapfile -t REFS < <( { awk '!/^#/ && NF == 2 {print $2}' "$WORK/images.lock"
     grep -E '^ECR_[A-Z_]+=' "$WORK/ecr.env" | cut -d= -f2-; } | grep -v '^$' | sort -u)
 ok "${#REFS[@]} images"
+if [ -n "${SINCE:-}" ]; then
+    SINCE="${SINCE##*:}"
+    [[ "$SINCE" =~ ^[0-9a-f]{12}-[0-9a-f]{8}$ ]] || die "SINCE: \"$SINCE\" is not a kit tag."
+    docker pull -q "$REGISTRY/posthog/kit:$SINCE" >/dev/null || die "Cannot pull the kit $SINCE."
+    mkdir "$WORK/since"
+    docker run --rm --entrypoint tar "$REGISTRY/posthog/kit:$SINCE" -C /kit/repo/deploy/offline -cf - ecr.env images.lock | tar -xf - -C "$WORK/since"
+    have="$( { awk '!/^#/ && NF == 2 {print $2}' "$WORK/since/images.lock"; grep -E '^ECR_[A-Z_]+=' "$WORK/since/ecr.env" | cut -d= -f2-; } | sort -u)"
+    mapfile -t REFS < <(printf '%s\n' "${REFS[@]}" | grep -vxF -f <(echo "$have") || true)
+    ok "${#REFS[@]} of them are new since kit $SINCE (the machine has the others)"
+fi
 
 say "Pulling and naming them for the machine (lens-offline/...)"
 NAMES=("lens-offline/posthog/kit:$TAG")
 docker tag "$KIT" "lens-offline/posthog/kit:$TAG"
 i=0
-for r in "${REFS[@]}"; do
+for r in ${REFS[@]+"${REFS[@]}"}; do
     i=$((i + 1))
     docker image inspect "$r" >/dev/null 2>&1 || docker pull -q "$r" >/dev/null || die "Cannot pull $r."
     n="$(local_ref "$r")"
@@ -75,7 +88,7 @@ for r in "${REFS[@]}"; do
 done
 
 mkdir -p "$OUT"
-FILE="$OUT/posthog-lens-images-$TAG.tar"
+FILE="$OUT/posthog-lens-images-$TAG${SINCE:+-since-$SINCE}.tar"
 say "Writing $FILE (several minutes)"
 docker save -o "$FILE.part" "${NAMES[@]}"
 mv "$FILE.part" "$FILE"
@@ -90,7 +103,7 @@ cat <<EOF
       $OUT/fresh-install.sh   (no PostHog there yet)   or   $OUT/upgrade.sh   (PostHog runs there)
 
     On the machine:
-      sha256sum -c posthog-lens-images-$TAG.tar.sha256
-      sudo docker load -i posthog-lens-images-$TAG.tar
+      sha256sum -c $(basename "$FILE").sha256
+      sudo docker load -i $(basename "$FILE")
       sudo bash fresh-install.sh $TAG       (or: sudo bash upgrade.sh $TAG)
 EOF

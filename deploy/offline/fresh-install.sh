@@ -17,6 +17,9 @@
 # It takes 1-2 hours (most of it is PostHog's first database setup). If it stops, fix what it says and run the same command again: it continues where
 # it stopped. Everything it prints also goes to /var/log/posthog-lens/. Needs: root, Docker, and (for ECR)
 # the AWS CLI with an instance role that can read the registry (AmazonEC2ContainerRegistryReadOnly).
+#
+# Ubuntu without AWS (IMAGE_SOURCE=local, the default on Ubuntu): load the images first, from the file
+# deploy/offline/save-images.sh made: sudo docker load -i posthog-lens-images-<kit>.tar. Nothing is pulled.
 set -euo pipefail
 
 REGISTRY="${REGISTRY:-555011114032.dkr.ecr.ca-central-1.amazonaws.com}"   # filled in by build-images.sh

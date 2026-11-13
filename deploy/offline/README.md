@@ -1,7 +1,54 @@
-# PostHog + PostHog Lens from your ECR: three scripts
+# PostHog + PostHog Lens on a machine without internet
 
-Everything a machine needs comes from your ECR as images. The machine itself downloads nothing from the
-internet and needs no copy of this project: one script file is enough.
+Two ways to get the images there. Everything else is the same.
+
+| The machine | Images | What you carry to it |
+|---|---|---|
+| **Ubuntu 24.04, self-hosted** (no AWS) | loaded onto it beforehand from one file | `posthog-lens-images-<kit>.tar` + one script |
+| **Amazon Linux 2023 on EC2** | pulled from your ECR | one script |
+
+The machine downloads nothing from the internet and needs no copy of this project.
+
+## Ubuntu 24.04 (self-hosted, no AWS): the short version
+
+**Before (once):** Ubuntu 24.04 x86_64, with Docker installed from your own package mirror or `.deb` files
+(`sudo apt install docker.io`; Docker Compose comes with the kit if it is missing). git, openssl, python3,
+tar and curl, which Ubuntu has already. 4 CPUs and 16 GB of memory (8 GB works), ports 80, 443 and 8080
+free, root. **Disk: about 120 GB free** before you start: the images file is about 11 GB (delete it once
+loaded), the loaded images about 37 GB (measured with Docker 29 on Ubuntu 24.04), and PostHog's data needs
+room to grow (60 GB or more).
+
+**On the build machine (internet):**
+```bash
+deploy/offline/build-images.sh        # the images and the kit (into your registry, e.g. a local one)
+deploy/offline/save-images.sh         # out/posthog-lens-images-<kit>.tar (+ .sha256): every image in one file
+```
+
+**On the machine:**
+```bash
+sha256sum -c posthog-lens-images-<kit>.tar.sha256
+sudo docker load -i posthog-lens-images-<kit>.tar
+sudo bash fresh-install.sh            # no PostHog there yet: asks the address and the first login's email
+sudo bash upgrade.sh                  # PostHog runs there: shows what will change, asks, keeps all data
+```
+
+On Ubuntu the scripts take the images loaded on the machine (`IMAGE_SOURCE=local`, kept in
+`/etc/posthog-lens/posthog-lens.env`) and never pull. Before anything changes, they check the machine
+(CPU, memory, disk, ports, Docker) and that every image of the kit is loaded, and list what is missing.
+The images are named `lens-offline/<repository>:<tag>`; `docker images 'lens-offline/*/*'` lists them.
+Later updates: load the new file, then `sudo bash upgrade.sh` (or `sudo posthog-lens update <kit tag>`).
+When PostHog's version stays the same, the file can hold only what changed (often a few hundred MB):
+`SINCE=<kit tag on the machine> deploy/offline/save-images.sh`.
+Old images can go afterwards: `sudo docker image prune -a` removes the ones nothing uses.
+
+**HTTPS:** a domain name gets its certificate from Let's Encrypt, which needs the internet. On a machine
+without it, use the IP address or `http://<name>` (plain HTTP inside your network).
+
+The rest of this page is the Amazon Linux / ECR route, and the commands both share (`posthog-lens`).
+
+# Amazon Linux 2023 on EC2: from your ECR
+
+Everything a machine needs comes from your ECR as images. One script file is enough.
 
 | # | Script | Where you run it | What it does |
 |---|---|---|---|
