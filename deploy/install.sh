@@ -459,7 +459,8 @@ port_user() {
 step_check() {
     CURRENT=check; step "Checking this machine"
     . /etc/os-release
-    [ "$ID" = amzn ] && [[ "$VERSION_ID" == 2023* ]] || die "Amazon Linux 2023 only (this is $PRETTY_NAME). For Ubuntu or Debian use the ticket-triage branch."
+    { [ "$ID" = amzn ] && [[ "$VERSION_ID" == 2023* ]]; } || { [ "$ID" = ubuntu ] && [[ "$VERSION_ID" == 24.04* ]]; } \
+        || die "Amazon Linux 2023 (EC2, images from ECR) or Ubuntu 24.04 (self-hosted, images loaded onto it) only; this is $PRETTY_NAME."
     ok "OS: $PRETTY_NAME"
     [ "$(uname -m)" = x86_64 ] || die "x86_64 only: Chrome for rendering clips has no Linux arm64 build (this is $(uname -m)). Pick an Intel or AMD instance type (m7i, m6i, m6a, t3...), not Graviton."
     local ram disk; ram=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1024 / 1024 ))
@@ -512,8 +513,26 @@ step_packages() {
     # Chrome, its libraries and fonts are in the PostHog Lens image, not on this machine. The AWS CLI logs
     # Docker in to ECR. On a machine without internet dnf reaches Amazon Linux's repositories through the
     # VPC's S3 gateway endpoint.
-    dnf install -y -q ca-certificates git openssl python3 tar xz iproute util-linux shadow-utils procps-ng iptables-nft hostname gettext awscli-2 >/dev/null
-    ok "base tools installed"
+    . /etc/os-release
+    if [ "$ID" = ubuntu ]; then
+        # Self-hosted Ubuntu, usually without internet: only what is missing, from the machine's own apt
+        # sources (a mirror), and a list to install by hand when that fails. Ubuntu Server has them all.
+        local c pkg need=()
+        for c in git:git openssl:openssl python3:python3 tar:tar xz:xz-utils ip:iproute2 flock:util-linux \
+            useradd:passwd pgrep:procps iptables:iptables hostname:hostname envsubst:gettext-base curl:curl ss:iproute2; do
+            command -v "${c%%:*}" >/dev/null 2>&1 || need+=("${c#*:}")
+        done
+        if [ ${#need[@]} -gt 0 ]; then
+            mapfile -t need < <(printf '%s\n' "${need[@]}" | sort -u)
+            say "installing ${need[*]}"
+            timeout 300 apt-get install -y -qq "${need[@]}" >/dev/null 2>&1 \
+                || die "Could not install ${need[*]} (no internet or package mirror?). Install them first, e.g. from .deb files: sudo apt install ${need[*]}"
+        fi
+        ok "base tools present"
+    else
+        dnf install -y -q ca-certificates git openssl python3 tar xz iproute util-linux shadow-utils procps-ng iptables-nft hostname gettext awscli-2 >/dev/null
+        ok "base tools installed"
+    fi
     finish packages
 }
 

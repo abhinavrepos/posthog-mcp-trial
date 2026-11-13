@@ -238,7 +238,7 @@ install_packages() {
         if [ ${#need[@]} -eq 0 ]; then ok "Base tools present (git, openssl, python3, tar, curl)"; return; fi
         info "Installing ${need[*]}"
         if [ "$PKG" = apt ]; then
-            { apt-get install -y -qq "${need[@]}" || { apt-get update -qq && apt-get install -y -qq "${need[@]}"; }; } >/dev/null 2>&1
+            { timeout 300 apt-get install -y -qq "${need[@]}" || { timeout 300 apt-get update -qq && timeout 300 apt-get install -y -qq "${need[@]}"; }; } >/dev/null 2>&1
         else
             dnf install -y -q "${need[@]}" >/dev/null 2>&1
         fi || die "Could not install ${need[*]}, and this machine cannot download them. Install them first (Ubuntu: sudo apt install ${need[*]}, from your own package mirror or .deb files), then run this again."
