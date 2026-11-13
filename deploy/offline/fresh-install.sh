@@ -39,11 +39,25 @@ export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 local_registry() { case "$REGISTRY" in localhost:* | 127.0.0.1:*) return 0 ;; *) return 1 ;; esac; }
 conf() { grep -E "^$1=" "$CONF" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
 
+# Where the images are. local: loaded onto this machine beforehand (Ubuntu without AWS: sudo docker load -i
+# posthog-lens-images-<kit>.tar, made by deploy/offline/save-images.sh); nothing is pulled. registry: pulled
+# from REGISTRY (ECR on Amazon Linux). IMAGE_SOURCE=local|registry in front chooses; otherwise the setting kept
+# in $CONF; a machine set up before this setting existed keeps registry; a new one: local on Ubuntu/Debian.
+if [ -z "${IMAGE_SOURCE:-}" ]; then
+    IMAGE_SOURCE="$(conf IMAGE_SOURCE)"
+    if [ -z "$IMAGE_SOURCE" ] && [ -f "$CONF" ]; then IMAGE_SOURCE=registry; fi
+    if [ -z "$IMAGE_SOURCE" ]; then
+        case "$(. /etc/os-release 2>/dev/null; echo "${ID:-}")" in ubuntu | debian) IMAGE_SOURCE=local ;; *) IMAGE_SOURCE=registry ;; esac
+    fi
+fi
+case "$IMAGE_SOURCE" in local | registry) ;; *) die "IMAGE_SOURCE is local or registry, not \"$IMAGE_SOURCE\"." ;; esac
+local_images() { [ "$IMAGE_SOURCE" = local ]; }
+
 # ------------------------------------------------------------------ is this a fresh install?
 say "Checking this machine"
-command -v docker >/dev/null || die "Docker is missing. Amazon Linux: sudo dnf install -y docker && sudo systemctl enable --now docker. Ubuntu: https://docs.docker.com/engine/install/ubuntu/"
+command -v docker >/dev/null || die "Docker is missing. Amazon Linux: sudo dnf install -y docker && sudo systemctl enable --now docker. Ubuntu: sudo apt install docker.io (from your package mirror, or the .deb files), then sudo systemctl enable --now docker"
 docker info >/dev/null 2>&1 || die "Docker is not running: sudo systemctl enable --now docker"
-local_registry || command -v aws >/dev/null || die "The AWS CLI is missing (Amazon Linux: sudo dnf install -y awscli)."
+local_images || local_registry || command -v aws >/dev/null || die "The AWS CLI is missing (Amazon Linux: sudo dnf install -y awscli)."
 RESUME=0
 if [ -f "$CONF" ]; then
     # This script, or posthog-lens setup, ran here before.
@@ -64,6 +78,37 @@ else
     ok "no PostHog here yet: a fresh install into $POSTHOG_DIR, PostHog Lens into $LENS_DIR"
 fi
 
+# ------------------------------------------------------------------ is this machine big enough?
+# Checked now, not an hour into the install. SKIP_CHECKS=1: warn only.
+preflight() {
+    local bad=0 cpus ram_gb free_gb d="$POSTHOG_DIR" port
+    no() { if [ "${SKIP_CHECKS:-}" = 1 ]; then echo "    ! $* (SKIP_CHECKS=1: going on)"; else echo "    ${R}✘${N} $*"; bad=1; fi; }
+    ok "$(. /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-unknown Linux}") ($(uname -m)), Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null)"
+    [ "$(uname -m)" = x86_64 ] || no "the images are for x86_64 machines; this one is $(uname -m)"
+    cpus="$(nproc)"; ram_gb=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1024 / 1024 ))
+    while [ ! -d "$d" ]; do d="$(dirname "$d")"; done
+    free_gb=$(( $(df -Pk "$d" | awk 'NR==2 {print $4}') / 1024 / 1024 ))
+    if [ "$cpus" -ge 4 ]; then ok "$cpus CPUs"; else echo "    ! only $cpus CPUs: 4 or more are recommended (the first start can take much longer)"; fi
+    if [ "$ram_gb" -ge 15 ]; then ok "$ram_gb GB of memory"
+    elif [ "$ram_gb" -ge 7 ]; then echo "    ! $ram_gb GB of memory: it works, 16 GB is recommended"
+    else no "$ram_gb GB of memory: PostHog needs at least 8 GB (16 recommended)"; fi
+    if [ "$free_gb" -ge 60 ]; then ok "$free_gb GB free at $d"
+    elif [ "$free_gb" -ge 30 ]; then echo "    ! $free_gb GB free at $d: it installs, but 60 GB or more leaves room for data"
+    else no "$free_gb GB free at $d: PostHog needs at least 30 GB (60 recommended)"; fi
+    if [ $RESUME = 0 ] && command -v ss >/dev/null; then
+        for port in 80 443 8080; do
+            ! ss -Hltn "sport = :$port" 2>/dev/null | grep -q . || no "port $port is already in use on this machine ($(ss -Hltnp "sport = :$port" 2>/dev/null | grep -oE 'users:\(\("[^"]+' | head -1 | cut -d'"' -f2)); PostHog needs 80 and 443, PostHog Lens 8080"
+        done
+    fi
+    if local_images; then
+        local kits; kits="$(docker images --format '{{.Tag}}' lens-offline/posthog/kit 2>/dev/null | grep -cE '^[0-9a-f]{12}-[0-9a-f]{8}$' || true)"
+        if [ "$kits" -gt 0 ]; then ok "images: on this machine ($(docker images -q 'lens-offline/*/*' 2>/dev/null | sort -u | wc -l) loaded, $kits kit(s))"
+        else no "no images on this machine yet: load the images file first (sudo docker load -i posthog-lens-images-<kit>.tar)"; fi
+    fi
+    [ $bad = 0 ] || die "This machine is not ready (above). Fix it and run this again; nothing was changed."
+}
+preflight
+
 # ------------------------------------------------------------------ the two answers
 ask() { # name question default check
     local v="${!1:-}"
@@ -80,6 +125,13 @@ is_email() { [[ "$1" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; }
 is_addresses() { [[ "$1" =~ ^[A-Za-z0-9.:/,_-]+$ ]]; }
 ask POSTHOG_ADDRESS "Address(es) people use to open PostHog (IP, or a domain for HTTPS; comma-separated)" "$(hostname -I 2>/dev/null | awk '{print $1}')" is_addresses
 ask ADMIN_EMAIL "Email for the first PostHog login" "" is_email
+# A bare domain means HTTPS with a certificate from Let's Encrypt, which needs the internet.
+if local_images && [ "${LETSENCRYPT:-}" != 1 ]; then
+    for a in ${POSTHOG_ADDRESS//,/ }; do
+        [[ "$a" =~ ^[0-9.]+$ || "$a" == http://* ]] && continue
+        die "\"$a\" would get an HTTPS certificate from Let's Encrypt, which needs the internet. On this machine use the IP address or http://$a (plain HTTP inside your network), e.g. POSTHOG_ADDRESS=http://$a. LETSENCRYPT=1 in front if this machine can reach Let's Encrypt."
+    done
+fi
 
 # ------------------------------------------------------------------ a run anyone can follow
 # The run itself goes on in the background (setsid), so a dropped SSH session does not stop it; this
@@ -152,7 +204,7 @@ run_end() { # exit code
 }
 
 # ------------------------------------------------------------------ settings, then the kit
-export KIT_TAG POSTHOG_DIR LENS_DIR REGISTRY REGION POSTHOG_ADDRESS ADMIN_EMAIL
+export KIT_TAG POSTHOG_DIR LENS_DIR REGISTRY REGION POSTHOG_ADDRESS ADMIN_EMAIL IMAGE_SOURCE
 run_detach fresh-install
 mkdir -p /var/log/posthog-lens "$(dirname "$CONF")"
 LOG="${LENS_RUN_LOG:-/var/log/posthog-lens/fresh-install-$(date -u +%Y%m%d-%H%M%S).log}"
@@ -168,20 +220,23 @@ if [ $RESUME = 0 ]; then
         echo "POSTHOG_DIR=$POSTHOG_DIR"
         echo "REGISTRY=$REGISTRY"
         echo "REGION=$REGION"
+        echo "IMAGE_SOURCE=$IMAGE_SOURCE"
         echo "POSTHOG_ADDRESS=$POSTHOG_ADDRESS"
         echo "ADMIN_EMAIL=$ADMIN_EMAIL"
         echo "MIGRATE_REPLAYS=no"
         if [ -n "${SETTINGS:-}" ]; then
             [ -f "$SETTINGS" ] || die "SETTINGS: $SETTINGS does not exist."
-            grep -vE '^\s*(#|$)|^(LENS_DIR|POSTHOG_DIR|REGISTRY|REGION|POSTHOG_ADDRESS|ADMIN_EMAIL)=' "$SETTINGS" || true
+            grep -vE '^\s*(#|$)|^(LENS_DIR|POSTHOG_DIR|REGISTRY|REGION|IMAGE_SOURCE|POSTHOG_ADDRESS|ADMIN_EMAIL)=' "$SETTINGS" || true
         fi
     } >"$CONF.new"
     chown root:root "$CONF.new"; chmod 644 "$CONF.new"; mv "$CONF.new" "$CONF"
     ok "settings in $CONF"
 fi
 
-say "Logging in to $REGISTRY"
-if ! local_registry; then
+if local_images; then
+    say "Images: on this machine (IMAGE_SOURCE=local), nothing is downloaded"
+elif ! local_registry; then
+    say "Logging in to $REGISTRY"
     pw="$(aws ecr get-login-password --region "$REGION" 2>&1)" || die "Cannot log in to $REGISTRY: $pw
     The instance's IAM role needs AmazonEC2ContainerRegistryReadOnly, and the VPC the ECR endpoints (ecr.api, ecr.dkr) and the S3 gateway endpoint."
     docker login --username AWS --password-stdin "$REGISTRY" <<<"$pw" >/dev/null 2>&1 || die "docker login to $REGISTRY failed."
@@ -193,6 +248,13 @@ PIN=/var/lib/posthog-lens-install/kit-in-progress
 if [ -z "$KIT_TAG" ] && [ -s "$PIN" ]; then
     KIT_TAG="$(cat "$PIN")"
     ok "the kit the run that stopped used: $KIT_TAG (give a tag to use another)"
+fi
+if [ -z "$KIT_TAG" ] && local_images; then
+    # The newest kit loaded onto this machine.
+    KIT_TAG="$(docker images --format '{{.CreatedAt}}	{{.Tag}}' lens-offline/posthog/kit 2>/dev/null \
+        | grep -E '[0-9a-f]{12}-[0-9a-f]{8}$' | sort | tail -1 | cut -f2 || true)"
+    [ -n "$KIT_TAG" ] || die "No kit on this machine (lens-offline/posthog/kit). Load the images file first: sudo docker load -i posthog-lens-images-<kit>.tar"
+    ok "the newest kit on this machine: $KIT_TAG"
 fi
 if [ -z "$KIT_TAG" ]; then
     local_registry && die "Give the kit tag: sudo bash $0 <kit tag> (build-images.sh printed it)."
@@ -206,8 +268,13 @@ if [ -z "$KIT_TAG" ]; then
 fi
 KIT_TAG="${KIT_TAG##*:}"
 [[ "$KIT_TAG" =~ ^[0-9a-f]{12}-[0-9a-f]{8}$ ]] || die "\"$KIT_TAG\" is not a kit tag. It looks like 685049943753-92fb46e1."
-KIT="$REGISTRY/posthog/kit:$KIT_TAG"
-docker pull -q "$KIT" >/dev/null || die "Cannot pull $KIT (is the tag right?)."
+if local_images; then
+    KIT="lens-offline/posthog/kit:$KIT_TAG"
+    docker image inspect "$KIT" >/dev/null 2>&1 || die "$KIT is not on this machine. Load the images file for it first: sudo docker load -i posthog-lens-images-$KIT_TAG.tar"
+else
+    KIT="$REGISTRY/posthog/kit:$KIT_TAG"
+    docker pull -q "$KIT" >/dev/null || die "Cannot pull $KIT (is the tag right?)."
+fi
 ok "kit $KIT_TAG"
 mkdir -p "$(dirname "$PIN")"; echo "$KIT_TAG" >"$PIN"
 

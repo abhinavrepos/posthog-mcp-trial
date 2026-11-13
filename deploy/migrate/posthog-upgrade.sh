@@ -111,7 +111,7 @@ if [ -n "$REPLAYS_FLAG" ] && [ "$ONLY" != status ]; then remember replays "$REPL
 # image every phase uses for copying and measuring files (HELPER_IMAGE, a copy of alpine).
 if [ "$IMAGES_FROM" = ecr ] && [ "$ONLY" != status ]; then
     images_login || { echo "Docker cannot log in to $IMAGE_REGISTRY (above)."; exit 1; }
-    docker image inspect "$HELPER_IMAGE" >/dev/null 2>&1 || docker pull -q "$HELPER_IMAGE" >/dev/null
+    ecr_fetch "$HELPER_IMAGE" || exit 1
     # PostHog's own tools (bin/migrate-storage-hobby, bin/upgrade-postgres) run plain "alpine", which
     # cannot be downloaded here: the registry's copy answers to that name too.
     docker image inspect alpine:latest >/dev/null 2>&1 || docker tag "$HELPER_IMAGE" alpine:latest
@@ -609,7 +609,11 @@ if phase configure; then
 fi
 
 # ---------------------------------------------------------------- 6 pull
-pull_all() { dc pull -q && docker pull -q "$NODE_BASE_IMAGE"; }
+pull_all() {
+    # Images loaded onto this machine beforehand: nothing to pull (ecr_check_images found them all).
+    if [ "${IMAGE_SOURCE:-}" = local ]; then ecr_fetch "$NODE_BASE_IMAGE"; return; fi
+    dc pull -q && docker pull -q "$NODE_BASE_IMAGE"
+}
 if phase pull; then
     # From ECR: every image must be in the registry before PostHog goes down for the pull.
     ecr_check_images "$POSTHOG_DIR" || exit 1
@@ -684,7 +688,7 @@ if phase stone; then
     else
         say "migrating the database with PostHog $STEPPING_STONE_COMMIT (the last version before the squash) first"
         images_login
-        docker pull -q "$STEPPING_STONE_IMAGE" >/dev/null
+        ecr_fetch "$STEPPING_STONE_IMAGE" || exit 1
         printf 'services:\n    web:\n        image: %s\n' "$STEPPING_STONE_IMAGE" > "$STATE/stone.yml"
         stone_files=(); IFS=: read -ra cf <<< "$(grep -E '^COMPOSE_FILE=' .env | cut -d= -f2-)"
         for f in "${cf[@]}"; do stone_files+=(-f "$f"); done

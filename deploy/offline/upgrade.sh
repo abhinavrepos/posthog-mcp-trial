@@ -44,16 +44,30 @@ local_registry() { case "$REGISTRY" in localhost:* | 127.0.0.1:*) return 0 ;; *)
 conf() { grep -E "^$1=" "$CONF" 2>/dev/null | tail -1 | cut -d= -f2- | sed -E 's/^"(.*)"$/\1/' || true; }
 env_of() { grep -E "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || true; }
 
+# Where the images are. local: loaded onto this machine beforehand (Ubuntu without AWS: sudo docker load -i
+# posthog-lens-images-<kit>.tar, made by deploy/offline/save-images.sh); nothing is pulled. registry: pulled
+# from REGISTRY (ECR on Amazon Linux). IMAGE_SOURCE=local|registry in front chooses; otherwise the setting kept
+# in $CONF; a machine set up before this setting existed keeps registry; a new one: local on Ubuntu/Debian.
+if [ -z "${IMAGE_SOURCE:-}" ]; then
+    IMAGE_SOURCE="$(conf IMAGE_SOURCE)"
+    if [ -z "$IMAGE_SOURCE" ] && [ -f "$CONF" ]; then IMAGE_SOURCE=registry; fi
+    if [ -z "$IMAGE_SOURCE" ]; then
+        case "$(. /etc/os-release 2>/dev/null; echo "${ID:-}")" in ubuntu | debian) IMAGE_SOURCE=local ;; *) IMAGE_SOURCE=registry ;; esac
+    fi
+fi
+case "$IMAGE_SOURCE" in local | registry) ;; *) die "IMAGE_SOURCE is local or registry, not \"$IMAGE_SOURCE\"." ;; esac
+local_images() { [ "$IMAGE_SOURCE" = local ]; }
+
 # ------------------------------------------------------------------ which PostHog
 say "Checking this machine"
 command -v docker >/dev/null || die "Docker is missing."
 docker info >/dev/null 2>&1 || die "Docker is not running: sudo systemctl enable --now docker"
-local_registry || command -v aws >/dev/null || die "The AWS CLI is missing (Amazon Linux: sudo dnf install -y awscli)."
+local_images || local_registry || command -v aws >/dev/null || die "The AWS CLI is missing (Amazon Linux: sudo dnf install -y awscli)."
 if [ -f "$CONF" ]; then
     FIRST=0
     POSTHOG_DIR="$(conf POSTHOG_DIR)"; LENS_DIR="$(conf LENS_DIR)"
     [ -f "$POSTHOG_DIR/.env" ] || die "$CONF is here, but there is no PostHog in $POSTHOG_DIR yet: a fresh install did not finish. Run fresh-install.sh again; it continues."
-    [ "$(conf REGISTRY)" = "$REGISTRY" ] || die "$CONF uses the registry $(conf REGISTRY), this script $REGISTRY. Run it with REGISTRY=$(conf REGISTRY) in front, or change $CONF."
+    local_images || [ "$(conf REGISTRY)" = "$REGISTRY" ] || die "$CONF uses the registry $(conf REGISTRY), this script $REGISTRY. Run it with REGISTRY=$(conf REGISTRY) in front, or change $CONF."
     ok "set up before: PostHog in $POSTHOG_DIR, PostHog Lens in $LENS_DIR ($CONF)"
 else
     FIRST=1
@@ -70,8 +84,10 @@ else
 fi
 
 # ------------------------------------------------------------------ the kit
-say "Logging in to $REGISTRY"
-if ! local_registry; then
+if local_images; then
+    say "Images: on this machine (IMAGE_SOURCE=local), nothing is downloaded"
+elif ! local_registry; then
+    say "Logging in to $REGISTRY"
     pw="$(aws ecr get-login-password --region "$REGION" 2>&1)" || die "Cannot log in to $REGISTRY: $pw
     The instance's IAM role needs AmazonEC2ContainerRegistryReadOnly, and the VPC the ECR endpoints (ecr.api, ecr.dkr) and the S3 gateway endpoint."
     docker login --username AWS --password-stdin "$REGISTRY" <<<"$pw" >/dev/null 2>&1 || die "docker login to $REGISTRY failed."
@@ -83,6 +99,13 @@ PIN=/var/lib/posthog-lens-install/kit-in-progress
 if [ -z "$KIT_TAG" ] && [ -s "$PIN" ]; then
     KIT_TAG="$(cat "$PIN")"
     ok "the kit the run that stopped used: $KIT_TAG (give a tag to use another)"
+fi
+if [ -z "$KIT_TAG" ] && local_images; then
+    # The newest kit loaded onto this machine.
+    KIT_TAG="$(docker images --format '{{.CreatedAt}}	{{.Tag}}' lens-offline/posthog/kit 2>/dev/null \
+        | grep -E '[0-9a-f]{12}-[0-9a-f]{8}$' | sort | tail -1 | cut -f2 || true)"
+    [ -n "$KIT_TAG" ] || die "No kit on this machine (lens-offline/posthog/kit). Load the images file first: sudo docker load -i posthog-lens-images-<kit>.tar"
+    ok "the newest kit on this machine: $KIT_TAG"
 fi
 if [ -z "$KIT_TAG" ]; then
     local_registry && die "Give the kit tag: sudo bash $0 <kit tag> (build-images.sh printed it)."
@@ -96,8 +119,13 @@ if [ -z "$KIT_TAG" ]; then
 fi
 KIT_TAG="${KIT_TAG##*:}"
 [[ "$KIT_TAG" =~ ^[0-9a-f]{12}-[0-9a-f]{8}$ ]] || die "\"$KIT_TAG\" is not a kit tag. It looks like 685049943753-92fb46e1."
-KIT="$REGISTRY/posthog/kit:$KIT_TAG"
-docker pull -q "$KIT" >/dev/null || die "Cannot pull $KIT (is the tag right?)."
+if local_images; then
+    KIT="lens-offline/posthog/kit:$KIT_TAG"
+    docker image inspect "$KIT" >/dev/null 2>&1 || die "$KIT is not on this machine. Load the images file for it first: sudo docker load -i posthog-lens-images-$KIT_TAG.tar"
+else
+    KIT="$REGISTRY/posthog/kit:$KIT_TAG"
+    docker pull -q "$KIT" >/dev/null || die "Cannot pull $KIT (is the tag right?)."
+fi
 # The kit's deploy/offline folder: its posthog-lens command, and the per-machine settings (sites/).
 KITDIR="$(mktemp -d)"; trap 'rm -rf "$KITDIR"' EXIT
 docker run --rm --entrypoint tar "$KIT" -C /kit/repo -cf - deploy/offline deploy/migrate/versions/versions.env | tar -xf - -C "$KITDIR" \
@@ -210,7 +238,7 @@ run_end() { # exit code
 }
 
 # ------------------------------------------------------------------ go
-export KIT_TAG POSTHOG_DIR LENS_DIR REGISTRY REGION
+export KIT_TAG POSTHOG_DIR LENS_DIR REGISTRY REGION IMAGE_SOURCE
 run_detach upgrade
 mkdir -p /var/log/posthog-lens "$(dirname "$PIN")"
 echo "$KIT_TAG" >"$PIN"
@@ -222,7 +250,7 @@ trap 'rc=$?; run_end $rc; rm -rf "$KITDIR"' EXIT
 if [ $FIRST = 1 ]; then
     # setup writes the settings, installs the command, brings an earlier PostHog Lens's data over, then updates.
     say "Setting up posthog-lens and $([ $UPGRADE = 1 ] && echo "upgrading PostHog" || echo "updating PostHog Lens")"
-    POSTHOG_DIR="$POSTHOG_DIR" LENS_DIR="$LENS_DIR" REGISTRY="$REGISTRY" REGION="$REGION" \
+    POSTHOG_DIR="$POSTHOG_DIR" LENS_DIR="$LENS_DIR" REGISTRY="$REGISTRY" REGION="$REGION" IMAGE_SOURCE="$IMAGE_SOURCE" \
         bash "$KITDIR/deploy/offline/posthog-lens" setup "$KIT_TAG"
 else
     # The kit's own command, so fixes in it apply to this run.

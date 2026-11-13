@@ -99,7 +99,7 @@ put POSTHOG_MCP_URL "http://$local_host:$MCP_PORT/mcp"
 
 # A machine without internet takes the image from ECR (deploy/offline/ecr.env).
 . ../offline/ecr.sh
-if [ "$IMAGES_FROM" = ecr ]; then export POSTHOG_MCP_IMAGE="$ECR_POSTHOG_MCP"; images_login; fi
+if [ "$IMAGES_FROM" = ecr ]; then export POSTHOG_MCP_IMAGE="$ECR_POSTHOG_MCP"; images_login; ecr_fetch "$ECR_POSTHOG_MCP" || exit 1; fi
 docker compose up -d --quiet-pull --remove-orphans 2>&1 | grep -v -E "^ *(Container|Network) " || true
 # Up to 3 minutes: at start the server fetches its skills catalog from github.com and waits up to 60 s
 # for it. Without internet it then starts without those skills (its tools all work) and keeps trying.

@@ -31,6 +31,8 @@
 # Settings, in /etc/posthog-lens/posthog-lens.env (also the installer's answers, deploy/install.env.example):
 #   LENS_DIR         the project folder                                        [/data04/posthog-lens]
 #   POSTHOG_DIR      the PostHog install
+#   IMAGE_SOURCE     local: the images were loaded onto this machine beforehand (Ubuntu without AWS:
+#                    sudo docker load -i posthog-lens-images-<kit>.tar); registry: pulled from REGISTRY [registry]
 #   REGISTRY, REGION where the images are       [555011114032.dkr.ecr.ca-central-1.amazonaws.com, ca-central-1]
 #   MIGRATE_REPLAYS  copy old session replays during a PostHog upgrade (yes/no)                    [no]
 #   SITE             this machine's folder in deploy/offline/sites, set by setup when one exists: its
@@ -53,15 +55,22 @@ load() {
     POSTHOG_DIR="$(conf POSTHOG_DIR)"
     REGISTRY="$(conf REGISTRY)"; REGISTRY="${REGISTRY:-555011114032.dkr.ecr.ca-central-1.amazonaws.com}"
     REGION="$(conf REGION)"; REGION="${REGION:-ca-central-1}"
+    # IMAGE_SOURCE=... in front changes it for good (kept in $CONF).
+    if [ -n "${IMAGE_SOURCE:-}" ] && [ "$IMAGE_SOURCE" != "$(conf IMAGE_SOURCE)" ]; then
+        case "$IMAGE_SOURCE" in local | registry) ;; *) die "IMAGE_SOURCE is local or registry, not \"$IMAGE_SOURCE\"." ;; esac
+        sed -i '/^IMAGE_SOURCE=/d' "$CONF"; echo "IMAGE_SOURCE=$IMAGE_SOURCE" >>"$CONF"
+    fi
+    IMAGE_SOURCE="$(conf IMAGE_SOURCE)"; IMAGE_SOURCE="${IMAGE_SOURCE:-registry}"
+    export IMAGE_SOURCE
     [ -n "$POSTHOG_DIR" ] || die "POSTHOG_DIR is not set in $CONF."
 }
 
 # A kit tag (685049943753-92fb46e1) or the full image name -> the full image name, from our registry only.
 kit_image() {
     local t="${1:-}"
-    t="${t#"$REGISTRY/posthog/kit:"}"
+    t="${t#"$REGISTRY/posthog/kit:"}"; t="${t#lens-offline/posthog/kit:}"
     [[ "$t" =~ ^[0-9a-f]{12}-[0-9a-f]{8}$ ]] || die "\"${1:-}\" is not a kit tag. It looks like 685049943753-92fb46e1: the end of the kit name build-images.sh printed."
-    echo "$REGISTRY/posthog/kit:$t"
+    if [ "$IMAGE_SOURCE" = local ]; then echo "lens-offline/posthog/kit:$t"; else echo "$REGISTRY/posthog/kit:$t"; fi
 }
 
 ecr_login() {
@@ -94,10 +103,15 @@ update() {
     site_check
     mkdir -p "$LENS_DIR"
     chown root:root "$LENS_DIR"; chmod 755 "$LENS_DIR"
-    say "logging in to $REGISTRY"
-    ecr_login
-    say "unpacking $image into $LENS_DIR"
-    docker pull -q "$image" >/dev/null || die "cannot pull $image (is the tag right?)."
+    if [ "$IMAGE_SOURCE" = local ]; then
+        docker image inspect "$image" >/dev/null 2>&1 || die "$image is not on this machine. Load the images file for it first: sudo docker load -i posthog-lens-images-${image##*:}.tar"
+        say "unpacking $image into $LENS_DIR"
+    else
+        say "logging in to $REGISTRY"
+        ecr_login
+        say "unpacking $image into $LENS_DIR"
+        docker pull -q "$image" >/dev/null || die "cannot pull $image (is the tag right?)."
+    fi
     docker run --rm -v "$LENS_DIR:/out" "$image"
     # This command comes with the kit too, so a fix to it reaches the machine with the update.
     install -o root -g root -m 755 "$LENS_DIR/deploy/offline/posthog-lens" "$SBIN"
@@ -260,6 +274,7 @@ LENS_DIR=${LENS_DIR:-/data04/posthog-lens}
 POSTHOG_DIR=$ph
 REGISTRY=${REGISTRY:-555011114032.dkr.ecr.ca-central-1.amazonaws.com}
 REGION=${REGION:-ca-central-1}
+IMAGE_SOURCE=${IMAGE_SOURCE:-registry}
 MIGRATE_REPLAYS=no
 EOF
         site="$(hostname -s)"
