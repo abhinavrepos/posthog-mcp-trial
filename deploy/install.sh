@@ -863,7 +863,7 @@ write_summary() {
     cat >"$f" <<EOF
 PostHog Lens is installed ($(date -u '+%Y-%m-%d %H:%M UTC')).
 
-EC2 security group (inbound): 22 from your address; 80$([ "$(addr_kind "${POSTHOG_ADDRESS%%,*}")" = http ] || echo " and 443") from where
+Firewall (on EC2: the security group), inbound: 22 from your address; 80$([ "$(addr_kind "${POSTHOG_ADDRESS%%,*}")" = http ] || echo " and 443") from where
 your users and app reach PostHog; $sport (this service) from where people open clip links$([ "$STATUS_PUBLIC" = yes ] && echo "; 8090 for the status page").
 
 PostHog

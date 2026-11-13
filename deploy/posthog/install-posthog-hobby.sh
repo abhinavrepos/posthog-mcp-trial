@@ -603,7 +603,7 @@ check_ip_address() {
     else
         warn "$DOMAIN is not an address of this machine. Check that it reaches this instance."
     fi
-    info "Reminder: the security group must allow inbound TCP 80 from the machines that will use PostHog."
+    info "Reminder: the firewall (on EC2: the security group) must allow inbound TCP 80 from the machines that will use PostHog."
 }
 
 check_dns() {
@@ -618,7 +618,7 @@ check_dns() {
         else
             warn "$DOMAIN does not resolve from this machine. Check your DNS."
         fi
-        info "Reminder: the security group must allow inbound TCP 80 from the machines that will use PostHog."
+        info "Reminder: the firewall (on EC2: the security group) must allow inbound TCP 80 from the machines that will use PostHog."
         return
     fi
     my_ip="$(public_ip)"
@@ -634,7 +634,7 @@ check_dns() {
         warn "$DOMAIN resolves to $dns_ips, but this instance's public IP is $my_ip."
         warn "Update the A record, or the HTTPS certificate cannot be issued."
     fi
-    info "Reminder: the security group must allow inbound TCP 80 and 443."
+    info "Reminder: the firewall (on EC2: the security group) must allow inbound TCP 80 and 443."
 }
 
 # ---------------------------------------------------------------------------
