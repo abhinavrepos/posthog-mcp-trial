@@ -326,4 +326,7 @@ cat <<EOF
       deploy/offline/out/upgrade.sh         PostHog runs there:        sudo bash upgrade.sh
 
     Both use this kit ($KIT_TAG) unless you give another tag as the first argument.
+
+    An Ubuntu machine without AWS takes the images as one file instead: deploy/offline/save-images.sh
+    writes it (out/posthog-lens-images-$KIT_TAG.tar); load it there with docker load before the script.
 EOF

@@ -231,6 +231,20 @@ ensure_swap() {
 # Packages and Docker
 # ---------------------------------------------------------------------------
 install_packages() {
+    # From a kit (no internet): only what is missing, and a clear stop when it cannot be installed.
+    if [ "$IMAGES_FROM" = ecr ]; then
+        local c need=()
+        for c in git openssl python3 tar curl; do command -v "$c" >/dev/null 2>&1 || need+=("$c"); done
+        if [ ${#need[@]} -eq 0 ]; then ok "Base tools present (git, openssl, python3, tar, curl)"; return; fi
+        info "Installing ${need[*]}"
+        if [ "$PKG" = apt ]; then
+            { apt-get install -y -qq "${need[@]}" || { apt-get update -qq && apt-get install -y -qq "${need[@]}"; }; } >/dev/null 2>&1
+        else
+            dnf install -y -q "${need[@]}" >/dev/null 2>&1
+        fi || die "Could not install ${need[*]}, and this machine cannot download them. Install them first (Ubuntu: sudo apt install ${need[*]}, from your own package mirror or .deb files), then run this again."
+        ok "Installed ${need[*]}"
+        return
+    fi
     if [ "$PKG" = apt ]; then
         apt-get update -qq
         apt-get install -y -qq ca-certificates curl git openssl brotli python3 gnupg >/dev/null
@@ -242,6 +256,12 @@ install_packages() {
 }
 
 install_docker() {
+    # Docker is there but not its Compose plugin (Ubuntu's docker.io): the kit brings Compose.
+    if command -v docker >/dev/null 2>&1 && ! docker compose version >/dev/null 2>&1 && [ -n "$(kit_file docker-compose)" ]; then
+        mkdir -p /usr/local/lib/docker/cli-plugins
+        install -m 755 "$(kit_file docker-compose)" /usr/local/lib/docker/cli-plugins/docker-compose
+        ok "Docker Compose installed from the kit ($(docker compose version --short))"
+    fi
     if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
         upgrade_amazon_linux_docker
         ok "Docker is already installed ($(docker --version | cut -d, -f1), $(docker compose version --short))"
@@ -249,6 +269,7 @@ install_docker() {
         return
     fi
 
+    [ "${IMAGE_SOURCE:-}" != local ] || die "Docker is not installed, and this machine cannot download it. Install Docker first (Ubuntu: sudo apt install docker.io, from your own package mirror or .deb files), then run this again."
     info "Installing Docker"
     if [ "$PKG" = apt ]; then
         install -m 0755 -d /etc/apt/keyrings
@@ -622,6 +643,12 @@ check_dns() {
 pull_images() {
     cd "$INSTALL_DIR"
     local attempt out
+    # Images loaded onto this machine beforehand (IMAGE_SOURCE=local): nothing to pull, all must be here.
+    if [ "${IMAGE_SOURCE:-}" = local ]; then
+        ecr_check_images "$INSTALL_DIR" || die "Some images are not on this machine (above). Nothing was started."
+        ok "All images are on this machine"
+        return
+    fi
     images_login || die "Docker cannot log in to the image registry (above)."
     for attempt in 1 2 3 4; do
         info "Pulling images, attempt $attempt/4 (about 20 GB the first time)"

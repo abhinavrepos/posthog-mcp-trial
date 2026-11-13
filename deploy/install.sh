@@ -352,7 +352,10 @@ show_plan() {
     step "Plan"
     say "PostHog         $POSTHOG_PUBLIC_URL  ($([ $scheme = https ] && echo "HTTPS, certificate from Let's Encrypt" || echo "plain HTTP: private network or VPN only"))"
     say "Internet        $([ "$OFFLINE" = yes ] && echo "none here: every outside call will be refused at once" || echo "reachable")"
-    say "Images          $([ "$IMAGES_FROM" = ecr ] && echo "from $IMAGE_REGISTRY (pushed ${IMAGES_PUSHED:-?} from commit ${IMAGES_COMMIT:0:12})" || echo "from Docker Hub and GitHub; PostHog Lens built here")"
+    local images_from="from Docker Hub and GitHub; PostHog Lens built here"
+    if [ "$IMAGES_FROM" = ecr ] && [ "$IMAGE_SOURCE" = local ]; then images_from="on this machine already (lens-offline/..., from commit ${IMAGES_COMMIT:0:12})"
+    elif [ "$IMAGES_FROM" = ecr ]; then images_from="from $IMAGE_REGISTRY (pushed ${IMAGES_PUSHED:-?} from commit ${IMAGES_COMMIT:0:12})"; fi
+    say "Images          $images_from"
     [ -z "$others" ] || say "                also at $others"
     case "$MODE" in
         existing) say "                keep the PostHog already in $POSTHOG_DIR" ;;
@@ -472,7 +475,10 @@ step_check() {
     # The service runs as a container that mounts its data folders, so the project folder can be anywhere,
     # even inside a private home folder.
     ok "project folder $APP_DIR"
-    if [ "$IMAGES_FROM" = ecr ]; then
+    if [ "$IMAGES_FROM" = ecr ] && [ "$IMAGE_SOURCE" = local ]; then
+        command -v docker >/dev/null 2>&1 || die "Docker is not installed, and this machine cannot download it. Install Docker first (Ubuntu: sudo apt install docker.io), then run this again."
+        ecr_check_local || die "Nothing was changed."
+    elif [ "$IMAGES_FROM" = ecr ]; then
         if command -v docker >/dev/null 2>&1; then
             images_login || die "Docker cannot log in to $IMAGE_REGISTRY (above). Nothing was changed."
             ok "Docker logs in to $IMAGE_REGISTRY (images pushed ${IMAGES_PUSHED:-?})"
@@ -868,7 +874,7 @@ PostHog Lens
   After a change  sudo systemctl restart ${UNIT%.service}      (and sudo $HERE/lens/lens.sh mcp-config after an MCP switch)
   Logs            $APP_DIR/logs/service.log
   Check           sudo $HERE/lens/lens.sh doctor
-  Image           posthog-lens:current ($([ "$IMAGES_FROM" = ecr ] && echo "from $IMAGE_REGISTRY" || echo "built from deploy/lens/Dockerfile")); a new one: run this installer again
+  Image           posthog-lens:current ($([ "$IMAGES_FROM" = ecr ] && { [ "$IMAGE_SOURCE" = local ] && echo "loaded onto this machine" || echo "from $IMAGE_REGISTRY"; } || echo "built from deploy/lens/Dockerfile")); a new one: run this installer again
 EOF
     if [ "$mcp_on" != off ]; then cat >>"$f" <<EOF
 
