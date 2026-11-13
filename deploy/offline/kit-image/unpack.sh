@@ -24,4 +24,4 @@ cp /kit/files/* "$out/deploy/offline/kit/"
     | while read -r f; do chown -h "$owner" "$out/$f"; done
 . "$out/deploy/offline/ecr.env"
 echo "Unpacked PostHog Lens (commit $(echo "$IMAGES_COMMIT" | cut -c1-12), images pushed $IMAGES_PUSHED) into the mounted folder."
-echo "Images come from $IMAGE_REGISTRY. Next, in that folder: sudo deploy/install.sh"
+echo "Images: from $IMAGE_REGISTRY, or (IMAGE_SOURCE=local) the lens-offline/... copies loaded on the machine. Next, in that folder: sudo deploy/install.sh"
