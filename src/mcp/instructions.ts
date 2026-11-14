@@ -29,8 +29,7 @@ Lens tools:
 - client name/id/email: resolve_client; recent problems: find_client_incidents
 - screen use by clients: screen_usage; who hit an error: error_blast_radius; struggle without errors: find_silent_issues
 - Jira triage: triage_ticket
-- releases: list_releases, release_outcomes; one ticket: ticket_evidence; complaints after shipping: client_feedback
-- agreed verdict: record_verdict; ticket link: correct_ticket_link; sync: refresh_releases${appEvents() ? `
+${config.features.jira ? '- releases: list_releases, release_outcomes; one ticket: ticket_evidence; complaints after shipping: client_feedback\n- agreed verdict: record_verdict; ticket link: correct_ticket_link; sync: refresh_releases' : ''}${appEvents() ? `
 - reval_brief first for PM questions; ${app}: describe_app_events vocabulary; top_pains; dialog_friction failures; message_doctor messages; session_story; attempt_timings waits; find_trade ids; client_signals risk; discover_workflows, workflow_completion` : ''}${dashboards.length ? `
 - "how is <client> doing": ${dashboards.includes('client_experience') ? 'client_experience first, then ' : ''}client_story, handover_pack; ${dashboards.includes('friction_hotspots') ? 'screen friction: friction_hotspots; ' : ''}weekly: monday_brief, signal_scorecard; rescue_queue${dashboards.includes('draft_rescue_survey') ? ', draft_rescue_survey' : ''}${dashboards.includes('set_rescue_status') ? ', set_rescue_status' : ''}; tasks: task_map, flow_time, find_task; pins: ${dashboards.filter((t) => /pin|share|list/.test(t)).join(', ') || 'none'}` : appEvents() ? `
 - dashboards (task map, flow time): this person has no access; a Lens admin grants it` : ''}${surveys.length ? `

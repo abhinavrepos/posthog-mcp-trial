@@ -9,6 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
 const dir = mkdtempSync(join(tmpdir(), 'triage-instr-'))
+process.env.FEATURE_JIRA = 'on'
 process.env.TRIAGE_DB = join(dir, 'test.db')
 process.env.APP_EVENTS_FILE = 'config/app-events.reval.json'
 const { db } = await import('../src/core/db.ts')

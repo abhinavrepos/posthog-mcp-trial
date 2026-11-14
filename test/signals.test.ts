@@ -13,7 +13,7 @@ const to = '2026-06-15'
 const shift = (d: string, n: number) => new Date(Date.parse(d) + n * 86400000).toISOString().slice(0, 10)
 function reset() {
     for (const table of ['ops_daily', 'errors_daily', 'user_daily', 'client_daily', 'task_ingest', 'task_users_daily', 'task_catalog']) db.exec(`DELETE FROM ${table}`)
-    const ins = db.prepare('INSERT INTO task_ingest VALUES (?,0,0,0,0,0,?)')
+    const ins = db.prepare('INSERT INTO task_ingest VALUES (?,0,0,0,0,0,?,1)')
     for (let i = 0; i < 180; i++) ins.run(shift(to, -i), to)
     forgetAnswers()
 }
@@ -86,7 +86,7 @@ test('synthetic year of 50 clients: cold under 1s and cached under 10ms', async 
     const u = db.prepare('INSERT INTO user_daily VALUES (?,?,?,1,2)')
     const o = db.prepare("INSERT INTO ops_daily VALUES (?,?,'Dlg','save','productive',10,5,0,0,0)")
     const e = db.prepare("INSERT INTO errors_daily VALUES (?,?,'Dlg','save','Invalid date',10,4)")
-    const ingest = db.prepare('INSERT OR REPLACE INTO task_ingest VALUES (?,0,0,0,0,0,?)')
+    const ingest = db.prepare('INSERT OR REPLACE INTO task_ingest VALUES (?,0,0,0,0,0,?,1)')
     db.exec('BEGIN')
     for (let i = 0; i < 365; i++) {
         const d = shift(to, -i); ingest.run(d, d)
@@ -104,7 +104,7 @@ test('v1 processed history and pruned captures cannot look like zero activity', 
     db.prepare('INSERT INTO task_state VALUES (?,?)').run('signals_missing:' + day, '1')
     forgetAnswers(); assert.equal((await signals()).length, 0)
     assert.ok((await clientSignals({ to })).coverage.unprocessed.includes(day))
-    storeAttempts(day, [], { summary: { ops: [], errors: [], users: [], clients: [] } })
+    storeAttempts(day, [], { finalized: true, summary: { ops: [], errors: [], users: [], clients: [] } })
     assert.equal((await signals())[0]?.kind, 'giving_up')
 })
 

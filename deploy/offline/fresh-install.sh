@@ -216,7 +216,8 @@ say "Log: $LOG"
 run_start fresh-install
 trap 'run_end $?' EXIT
 if [ $RESUME = 0 ]; then
-    umask 022
+    umask 077
+    rm -f "$CONF.new"
     {
         echo "# PostHog Lens settings, written by fresh-install.sh. Also the installer's answers (deploy/install.env.example)."
         echo "LENS_DIR=$LENS_DIR"
@@ -232,7 +233,7 @@ if [ $RESUME = 0 ]; then
             grep -vE '^\s*(#|$)|^(LENS_DIR|POSTHOG_DIR|REGISTRY|REGION|IMAGE_SOURCE|POSTHOG_ADDRESS|ADMIN_EMAIL)=' "$SETTINGS" || true
         fi
     } >"$CONF.new"
-    chown root:root "$CONF.new"; chmod 644 "$CONF.new"; mv "$CONF.new" "$CONF"
+    chown root:root "$CONF.new"; chmod 600 "$CONF.new"; mv "$CONF.new" "$CONF"
     ok "settings in $CONF"
 fi
 

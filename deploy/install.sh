@@ -449,6 +449,22 @@ wait_posthog() {
     posthog_healthy
 }
 # The command line of whatever listens on a TCP port (empty when the port is free).
+# Accept published ports only from services in this installation's Compose config.
+posthog_publishes_port() {
+    local port="$1" project services id label service bindings found=0
+    project=$(cd "$POSTHOG_DIR" && docker compose config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])') || return 1
+    services=$(cd "$POSTHOG_DIR" && docker compose config --services) || return 1
+    for id in $(docker ps -q --filter "publish=$port"); do
+        bindings=$(docker inspect -f '{{range $bindings := .NetworkSettings.Ports}}{{range $bindings}}{{println .HostPort}}{{end}}{{end}}' "$id") || return 1
+        grep -qx "$port" <<<"$bindings" || continue
+        label=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$id") || return 1
+        service=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}}' "$id") || return 1
+        [ "$label" = "$project" ] && grep -Fxq "$service" <<<"$services" || return 1
+        found=1
+    done
+    [ "$found" = 1 ]
+}
+
 port_user() {
     local pid; pid="$(ss -Hltnp "sport = :$1" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)"
     [ -n "$pid" ] || { ss -Hltn "sport = :$1" 2>/dev/null | grep -q . && echo "(unknown process)"; return 0; }
@@ -498,7 +514,8 @@ step_check() {
         u="$(port_user "$p")"
         [ -z "$u" ] && continue
         case "$p:$u" in
-            80:*docker-proxy*|443:*docker-proxy*|8090:*docker-proxy*) ;;  # PostHog's proxy, the status page
+            80:*docker-proxy*|443:*docker-proxy*|8090:*docker-proxy*)
+                posthog_publishes_port "$p" || die "Port $p is published by a container outside this PostHog Compose project" ;;
             "$sp":*src/service/server.ts*) ;;                           # the triage service from an earlier run
             *) die "Port $p is already in use by: $u" ;;
         esac
@@ -599,6 +616,7 @@ step_user() {
     # Only what the container writes; the rest of the project folder keeps its owner.
     mkdir -p "$APP_DIR"/{run,logs,clips,.cache,config}
     chown -R "$APP_USER:$APP_USER" "$APP_DIR"/{run,logs,clips,.cache}
+    chmod 700 "$APP_DIR"/{run,logs,clips,.cache}
     ok "$APP_DIR/{run,logs,clips,.cache} belong to $APP_USER"
     finish user
 }
@@ -753,6 +771,18 @@ step_settings() {
     finish settings
 }
 
+# Quote one systemd argument, including specifiers and environment expansion.
+systemd_arg() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//%/%%}"
+    value="${value//\$/\$\$}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\t'/\\t}"
+    printf '"%s"' "$value"
+}
+
 step_service() {
     CURRENT=service; step "Starting the triage service (systemd)"
     cat >/etc/systemd/system/$UNIT <<EOF
@@ -765,7 +795,7 @@ Wants=network-online.target
 Requires=docker.service
 
 [Service]
-ExecStart=/usr/bin/env bash $HERE/lens/lens.sh serve
+ExecStart=/usr/bin/env bash $(systemd_arg "$HERE/lens/lens.sh") serve
 ExecStop=/usr/bin/docker stop -t 20 posthog-lens
 Restart=on-failure
 RestartSec=5

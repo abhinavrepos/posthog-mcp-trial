@@ -2,6 +2,7 @@
 // errors never kept, argument order irrelevant but nested values distinct, size bounded.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+process.env.FEATURE_JIRA = 'on'
 process.env.LENS_TOOL_CACHE_SECONDS = '120'
 const { cachedToolCall, clearToolAnswers, CACHED_TOOLS } = await import('../src/mcp/tools.ts')
 

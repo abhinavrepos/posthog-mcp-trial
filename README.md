@@ -13,7 +13,7 @@ The site is at `http://<host>:8080`. `APP_NAME` and `APP_TAG` rename it.
 **Upgrade** an existing PostHog to the tested version: `sudo deploy/migrate/posthog-upgrade.sh`
 (see [deploy/migrate/README.md](deploy/migrate/README.md)).
 
-Jira is optional until you connect it: without `JIRA_BASE_URL`, `JIRA_EMAIL` and `JIRA_API_TOKEN`,
+Jira is off by default. Set `FEATURE_JIRA=on` to enable release tools, prompts, sync and webhooks; without `JIRA_BASE_URL`, `JIRA_EMAIL` and `JIRA_API_TOKEN`,
 the Jira webhook answers 503 and release outcomes keep the numbers they last had. Everything else
 (replay links, clips, the MCP tools, `triage_ticket`) works.
 
@@ -879,7 +879,7 @@ kept unchanged.
 `deploy/install.sh` takes all of this from a `--config` file. To change it later, edit `.secrets.env` and run
 `sudo systemctl restart ticket-triage` (or `scripts/stack.sh restart service`).
 
-- **Jira Cloud**: set `JIRA_BASE_URL=https://<site>.atlassian.net`, `JIRA_EMAIL` and
+- **Jira Cloud**: set `FEATURE_JIRA=on` (default off), `JIRA_BASE_URL=https://<site>.atlassian.net`, `JIRA_EMAIL` and
   `JIRA_API_TOKEN` (an API token for a bot user). Add a webhook for "Issue created" pointing at
   `https://<service>/webhooks/jira`, with a secret equal to `JIRA_WEBHOOK_SECRET`. Set
   `JIRA_RCI_ISSUE_TYPE` and `JIRA_RISK_ISSUE_TYPE` to your issue type names. Custom fields are
@@ -983,11 +983,11 @@ plugin fails or any container restarts.
   for the same issue does nothing.
 - Clip links are signed with `CLIP_LINK_SECRET` and expire after `CLIP_LINK_TTL_HOURS` (default
   7 days). `/mcp`, `/posthog-mcp` and `/status` need `MCP_TOKEN`.
-- Recordings are untrusted content. The renderer's Chrome can only resolve the hosts in
-  `CLIP_ALLOWED_HOSTS`, and every other hostname fails to resolve. This replaces PostHog's
-  production egress proxy. Two gaps remain: it does not stop a URL with a literal IP, and
-  stylesheets are fetched by the rasterizer's Node process. For production, run the renderer
-  behind an egress proxy (`HTTPS_PROXY`) or in its own network namespace.
+- Recordings are untrusted content. Everything the renderer fetches (Chrome's requests, and the
+  stylesheets the rasterizer's Node process fetches) goes through an allowlist proxy inside Lens
+  (`src/core/egress.ts`): only the hosts in `CLIP_ALLOWED_HOSTS`, on ports 80 and 443 unless an entry
+  names its port (`app.internal:8443`). Literal IPs, other ports on this machine (databases, PostHog's
+  internals) and every other name get 403; Chrome's DNS is also limited to the allowlist.
 - The PostHog API key is read-only and scoped to one project.
 - Everything here runs over plain HTTP on a public IP, which is fine for a demo of invented data.
   Put it behind HTTPS (a domain, so the hobby installer gets a certificate) before it touches

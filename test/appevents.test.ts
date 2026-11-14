@@ -11,6 +11,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
 const dir = mkdtempSync(join(tmpdir(), 'triage-appevents-'))
+process.env.FEATURE_JIRA = 'on'
 process.env.TRIAGE_DB = join(dir, 'test.db')
 process.env.APP_EVENTS_FILE = 'config/app-events.reval.json'
 process.env.CLIENT_FROM_DISTINCT_ID = '3'
@@ -19,7 +20,7 @@ process.env.POSTHOG_PROJECT_ID = '123456'
 const { db } = await import('../src/core/db.ts')
 const ae = await import('../src/core/appevents.ts')
 const { clientExpr, P } = await import('../src/core/props.ts')
-const { registerTools, APP_EVENT_TOOLS, CORE_TOOLS } = await import('../src/mcp/tools.ts')
+const { registerTools, APP_EVENT_TOOLS, CORE_TOOLS, RELEASE_TOOLS } = await import('../src/mcp/tools.ts')
 const { DASHBOARD_TOOLS, dashboardToolNames } = await import('../src/mcp/dashboardtools.ts')
 const { SURVEY_TOOLS } = await import('../src/mcp/surveytools.ts')
 const { serverInstructions, INSTRUCTIONS_LIMIT } = await import('../src/mcp/instructions.ts')
@@ -331,7 +332,7 @@ describe('the MCP server with app events', async () => {
     test('lists every app tool exactly once, with reval_brief first', async () => {
         const names = (await client.listTools()).tools.map((t) => t.name)
         // Dashboard tools (task map, flow time) and survey tools are listed on their own.
-        const appNames = names.filter((name) => !CORE_TOOLS.includes(name) && !DASHBOARD_TOOLS.includes(name) && !SURVEY_TOOLS.includes(name))
+        const appNames = names.filter((name) => !CORE_TOOLS.includes(name) && !RELEASE_TOOLS.includes(name) && !DASHBOARD_TOOLS.includes(name) && !SURVEY_TOOLS.includes(name))
         assert.deepEqual(names.filter((n) => DASHBOARD_TOOLS.includes(n)).sort(), dashboardToolNames().sort())
         assert.equal(APP_EVENT_TOOLS[0], 'reval_brief')
         assert.equal(appNames[0], 'reval_brief')
@@ -369,4 +370,40 @@ test('generalise: identifiers mixing letters and digits, same as before, in line
     const t = performance.now()
     for (const long of ['Error ' + 'a'.repeat(30_000) + ' in step', 'x'.repeat(30_000), 'a1'.repeat(15_000), 'a.'.repeat(15_000)]) generalise(long, reg, 100_000)
     assert.ok(performance.now() - t < 200, `took ${Math.round(performance.now() - t)} ms`)
+})
+
+
+test('money is masked before grouping or message output, while trade ids stay searchable', () => {
+    const reg = { redact: [] }
+    for (const amount of ['USD 123,456.78', '$123', '123 EUR', 'eur 123', '1,234', '1.234,56', '123456.78', '1 234 567,89', '12.5', '-12.5', '(12.5)', 'USD -123', '(USD 123)', '123€', '-$123', '($123)', '(123 USD)']) {
+        for (const fn of [ae.cleanMessage, ae.generalise]) {
+            const out = fn('Cash balance ' + amount + ' exceeds limit', reg)
+            assert.match(out, /<amount>/, amount)
+            assert.doesNotMatch(out, /[0-9]/, amount)
+        }
+    }
+    for (const code of ['USD', 'EUR', 'GBP', 'CAD', 'CHF', 'JPY', 'AUD', 'INR', 'CNY', 'HKD', 'SGD', 'SEK', 'NOK', 'DKK', 'ZAR', 'MXN', 'BRL']) {
+        assert.equal(ae.cleanMessage(code.toLowerCase() + '123', reg), '<amount>')
+        assert.equal(ae.generalise('123 ' + code, reg), '<amount>')
+    }
+    assert.equal(ae.cleanMessage('($123)', reg), '<amount>')
+    assert.equal(ae.cleanMessage('Trade Id 4348, IFRS 9, 2 records', reg), 'Trade Id 4348, IFRS 9, 2 records')
+    assert.equal(ae.cleanMessage('Email user@example.com', reg), 'Email …')
+    assert.equal(ae.cleanMessage('Cash balance USD 123,456.78 exceeds limit', reg), 'Cash balance <amount> exceeds limit')
+    for (const fn of [ae.cleanMessage, ae.generalise]) {
+        const start = Date.now()
+        fn('9'.repeat(100_000) + '.78', reg)
+        fn('a'.repeat(100_000) + '@' + 'b'.repeat(100_000), reg)
+        assert.ok(Date.now() - start < 1000)
+    }
+})
+
+const { cleanMessage: cleanMessageFn } = await import('../src/core/appevents.ts')
+test('amount masking: tabs, spaced thousands, symbols on either side, and emails inside longer tokens', () => {
+    const reg = { redact: [] as string[] }
+    for (const [input, out] of [
+        ['USD\t1234 short', '<amount> short'], ['USD 1 234 due', '<amount> due'], ['1.234,56 € paid', '<amount> paid'],
+        ['$1,000 fee', '<amount> fee'], ['Paid (1,250.00) back', 'Paid <amount> back'], ['Trade Id 4348 Updated', 'Trade Id 4348 Updated'],
+        ['owner alice@example.com@x done', 'owner …@x done'],
+    ] as const) assert.equal(cleanMessageFn(input, reg), out, input)
 })

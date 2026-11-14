@@ -15,7 +15,7 @@ after(() => { tasksDb.close(); db.close(); rmSync(dir,{recursive:true,force:true
 function reset() {
     for (const t of ['task_daily','task_users_daily','task_catalog','task_ingest','client_names','errors_daily','user_daily']) tasksDb.exec(`DELETE FROM ${t}`)
     db.exec('DELETE FROM briefing_snapshots; DELETE FROM rescue_actions')
-    for (let i=0;i<220;i++) tasksDb.prepare('INSERT INTO task_ingest VALUES (?,0,0,0,0,0,?)').run(shift('2026-06-30',-i),'2026-07-01')
+    for (let i=0;i<220;i++) tasksDb.prepare('INSERT INTO task_ingest VALUES (?,0,0,0,0,0,?,1)').run(shift('2026-06-30',-i),'2026-07-01')
     tasksDb.prepare("INSERT INTO task_catalog VALUES ('t_Hedge','Hedge','Hedge Designation','save','2026-01-01','2026-06-30')").run()
     forgetAnswers()
 }

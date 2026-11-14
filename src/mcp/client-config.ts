@@ -15,7 +15,7 @@ export interface McpClientConfig {
 }
 
 export function mcpClientConfig(
-    features = config.features,
+    features: Pick<typeof config.features, 'lensMcp' | 'posthogMcp'> = config.features,
     ph: { mcpUrl: string; mcpApiKey: string; mcpViaLens?: boolean } = config.posthog,
     lens: { container: boolean; port: number; token: string } = { container: process.env.LENS_CONTAINER === '1', port: config.service.port, token: config.service.mcpToken },
 ): { file: McpClientConfig; notes: string[] } {

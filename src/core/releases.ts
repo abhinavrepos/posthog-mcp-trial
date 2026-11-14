@@ -581,6 +581,7 @@ export const syncStatus = () => ({ running: !!syncing, ...getSetting<{ at?: stri
 
 /** Reads Jira and PostHog and recomputes everything. One run at a time. */
 export function syncReleases(): Promise<SyncResult> {
+    if (!config.features.jira) return Promise.reject(new Error('Jira is switched off (FEATURE_JIRA=off).'))
     if (!syncing) {
         syncing = doSync()
             .then((result) => {
@@ -958,7 +959,7 @@ export function outcomesMarkdown(scope: Scope): string {
     return lines.join('\n')
 }
 
-export function evidenceMarkdown(key: string): string | undefined {
+export function evidenceMarkdown(key: string, ai = false): string | undefined {
     const release = ticketRelease(key)
     if (!release) return undefined
     const snap = snapshotsFor([release])[0]
@@ -966,13 +967,13 @@ export function evidenceMarkdown(key: string): string | undefined {
     if (!snap || !raw) return undefined
     const t = classify(raw, snap, latestVerdicts().get(key))
     const sc = t.link?.screen ? snap.screens[t.link.screen] : undefined
-    const lines = [`## ${t.key}: ${t.summary}`, `${t.type} in release ${t.release} (${snap.date}). Measured ${snap.window.days} days before and after${snap.window.open ? ', still counting' : ''}. Jira: ${jiraUrl(t.key)}`]
+    const lines = [`## ${t.key}: ${ai ? '[summary withheld]' : t.summary}`, `${t.type} in release ${t.release} (${snap.date}). Measured ${snap.window.days} days before and after${snap.window.open ? ', still counting' : ''}. Jira: ${jiraUrl(t.key)}`]
     lines.push(`- **Groups:** ${t.groups.map((g) => OUTCOMES.find((x) => x.id === g)!.title).join(', ')}`)
     lines.push(`- **Linked to:** ${t.link ? `${nameOf(t.link.screen)}${t.link.event ? `, event ${t.link.event}` : ''}` : 'nothing'} (${t.link_source === 'person' ? `set by ${t.link_by}` : t.link_reason}).`)
     for (const f of t.facts) lines.push(`- ${f}`)
     if (t.weekly.length) lines.push(`- **Week by week:** ${t.weekly.map((w) => `${w.week}: ${w.n}`).join(', ')}`)
     if (sc && t.risk_owner) {
-        for (const x of sc.support) lines.push(`- **${x.type} ${x.key}** (${day(x.created)}) "${x.summary}": ${x.text}`)
+        for (const x of sc.support) lines.push(`- **${x.type} ${x.key}** (${day(x.created)}) "${ai ? '[summary withheld]' : x.summary}": ${ai ? '[description withheld]' : x.text}`)
         for (const c of sc.survey.comments_after.slice(0, 8)) lines.push(`- **Survey** (${c.rating ?? 'no rating'}/5, ${c.client}, ${day(c.at)}): "${c.comment}"`)
     }
     for (const e of snap.new_errors.filter((e) => e.path === t.link?.screen)) lines.push(`- **New error** ${e.type}: ${e.message}. ${e.occurrences} times, ${e.clients} clients, first seen ${day(e.first_seen)}.${e.url ? ` ${e.url}` : ''}`)
@@ -981,7 +982,7 @@ export function evidenceMarkdown(key: string): string | undefined {
     return lines.join('\n')
 }
 
-export function feedbackMarkdown(scope: Scope, screen?: string): string {
+export function feedbackMarkdown(scope: Scope, screen?: string, ai = false): string {
     const lines = [`## Client feedback: ${scope.label}${screen ? `, ${nameOf(screen)}` : ''}`, 'Support tickets and in-product survey answers in the days after each release, by screen.']
     for (const snap of snapshotsFor(scope.releases)) {
         const screens = Object.entries(snap.screens).filter(([p, v]) => (!screen || p === screen) && (v.support.length || v.survey.answers_after))
@@ -990,7 +991,7 @@ export function feedbackMarkdown(scope: Scope, screen?: string): string {
         for (const [p, v] of screens) {
             const sv = v.survey
             lines.push(`**${nameOf(p)}**: ${v.support.length} support tickets; survey rating ${sv.rating_before ?? '–'} → ${sv.rating_after ?? '–'} from ${sv.answers_after} answers (${sv.answers_before} before).`)
-            for (const x of v.support) lines.push(`- ${x.type} ${x.key} (${day(x.created)}) "${x.summary}": ${x.text}`)
+            for (const x of v.support) lines.push(`- ${x.type} ${x.key} (${day(x.created)}) "${ai ? '[summary withheld]' : x.summary}": ${ai ? '[description withheld]' : x.text}`)
             for (const c of sv.comments_after) lines.push(`- Survey ${c.rating ?? '–'}/5 (${c.client}, ${day(c.at)}): "${c.comment}"`)
         }
     }

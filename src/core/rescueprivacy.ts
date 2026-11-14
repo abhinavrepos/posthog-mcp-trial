@@ -1,5 +1,6 @@
 // Defense in depth for free text copied from task titles and team notes.
 import { cached, tasksDb } from './tasks.ts'
+import { ALL_CLIENTS } from './catalog.ts'
 import { config } from './config.ts'
 
 const MIN = 3 // shorter tokens are replaced only when they are the whole string
@@ -35,15 +36,17 @@ function replaceTokens(text: string, m: Matcher): string {
 }
 const containsToken = (text: string, m: Matcher) => replaceTokens(text, m) !== text
 
-export async function rescuePrivacy<T>(value: T): Promise<T> {
-    const tokens = await cached('rescue-identity-tokens', {}, async () => {
+export async function identityTokens(): Promise<string[]> {
+    return cached('rescue-identity-tokens', {}, async () => {
         const rows = tasksDb.prepare('SELECT user FROM known_users').all() as { user: string }[]
-        return [...new Set(rows.flatMap(({ user }) => {
+        return [...new Set([...ALL_CLIENTS.flatMap(c => c.users.flatMap(u => [u.name, u.email])), ...rows.flatMap(({ user }) => {
             const person = user.split(config.properties.distinctIdSeparator).at(-1) || ''
             return [user, person, person.includes('@') ? person.split('@')[0] : ''].filter(Boolean)
-        }))].sort((a,b) => b.length - a.length)
+        })])].sort((a,b) => b.length - a.length)
     })
-    return scrubWith(tokens, value)
+}
+export async function rescuePrivacy<T>(value: T): Promise<T> {
+    return scrubWith(await identityTokens(), value)
 }
 /** Replaces identity tokens (sorted longest first) anywhere in strings inside value. */
 export function scrubWith<T>(tokens: string[], value: T): T {

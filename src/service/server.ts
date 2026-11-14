@@ -32,7 +32,7 @@ import { serverInstructions } from '../mcp/instructions.ts'
 import { lensToolNames, registerTools } from '../mcp/tools.ts'
 import { appEvents } from '../core/appevents.ts'
 import { startTaskHistory } from '../core/tasks.ts'
-import { audit, chatCaller } from './access.ts'
+import { audit, chatCaller, loadAccess } from './access.ts'
 import { keptReleases, syncReleases, syncStatus } from '../core/releases.ts'
 import { captionedFile } from '../core/comments.ts'
 import { getClip, handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
@@ -110,7 +110,7 @@ async function runJob(job: Job) {
 }
 
 async function handleWebhook(req: IncomingMessage, res: ServerResponse) {
-    if (!jiraConfigured()) return send(res, 503, { error: 'Jira is not connected: set JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN' })
+    if (!jiraConfigured()) return send(res, 503, { error: 'Jira is not connected: set FEATURE_JIRA=on, JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN' })
     const raw = await readRaw(req)
     if (!verifyWebhookSignature(raw, req.headers['x-hub-signature'] as string | undefined)) {
         log('webhook rejected: bad signature')
@@ -136,6 +136,7 @@ async function handleWebhook(req: IncomingMessage, res: ServerResponse) {
 async function serveClip(req: IncomingMessage, res: ServerResponse, url: URL) {
     const name = decodeURIComponent(url.pathname.slice('/clips/'.length))
     if (name !== basename(name) || !/^[A-Za-z0-9-]+_\d+-\d+\.mp4$/.test(name)) return send(res, 404, 'not found')
+    if (!loadAccess().allow_share_links) return send(res, 403, 'Clip sharing is disabled.')
     if (!verifyClipLink(name, url.searchParams.get('exp'), url.searchParams.get('sig'))) return send(res, 403, 'This clip link is invalid or has expired.')
     const file = join(config.clip.outDir, name)
     if (!existsSync(file)) return send(res, 404, 'not found')
@@ -244,44 +245,51 @@ export function compressResponse(req: IncomingMessage, res: ServerResponse) {
     }) as typeof res.end
 }
 
-const server = createServer(async (req, res) => {
-    compressResponse(req, res)
-    const url = new URL(req.url || '/', 'http://localhost')
-    try {
-        if (url.pathname === '/healthz') return send(res, 200, 'ok')
-        // For the status page: up, and which switches are on. No secrets, no data.
-        if (url.pathname === '/health') return send(res, 200, { ok: true, features: featureState() })
-        if (url.pathname === '/favicon.ico') {
-            res.writeHead(204, { 'cache-control': 'max-age=86400' })
-            return res.end()
+const server = createServer((req, res) => {
+    void (async () => {
+        let url: URL | undefined
+        try {
+            compressResponse(req, res)
+            try { url = new URL(req.url || '/', 'http://localhost') }
+            catch { return send(res, 400, { error: 'invalid request target' }) }
+            if (url.pathname === '/healthz') return send(res, 200, 'ok')
+            // For the status page: up, and which switches are on. No secrets, no data.
+            if (url.pathname === '/health') return send(res, 200, { ok: true, features: featureState() })
+            if (url.pathname === '/favicon.ico') {
+                res.writeHead(204, { 'cache-control': 'max-age=86400' })
+                return res.end()
+            }
+            if (url.pathname === '/webhooks/jira' && req.method === 'POST') return await handleWebhook(req, res)
+            if (url.pathname.startsWith('/clips/') && req.method === 'GET') return await serveClip(req, res, url)
+            if (url.pathname === '/') {
+                res.writeHead(302, { location: '/replays' })
+                return res.end()
+            }
+            if (await handleReplays(req, res, url)) return
+            if (url.pathname === '/posthog-mcp') return await handlePosthogMcp(req, res, {
+                url: config.posthog.mcpUrl, apiKey: config.posthog.mcpApiKey,
+                token: config.service.mcpToken, name: config.mcp.name,
+                enabled: config.posthog.mcpViaLens && posthogMcpActive(),
+                authorize: (r) => !!callerOf(r),
+                info: { app: appEvents()?.app || 'the app', tools: lensToolNames() },
+            })
+            if (url.pathname === '/mcp') return await handleMcp(req, res)
+            if (url.pathname === '/status') {
+                if (!bearerOk(req)) return send(res, 401, { error: 'needs Authorization: Bearer <MCP_TOKEN>' })
+                return send(res, 200, { ai: !!ai, features: featureState(), jobs })
+            }
+            send(res, 404, 'not found')
+        } catch (e) {
+            log('request failed', { path: url?.pathname, error: (e as Error).message })
+            if (!res.headersSent) send(res, 500, { error: 'internal error' })
         }
-        if (url.pathname === '/webhooks/jira' && req.method === 'POST') return await handleWebhook(req, res)
-        if (url.pathname.startsWith('/clips/') && req.method === 'GET') return await serveClip(req, res, url)
-        if (url.pathname === '/') {
-            res.writeHead(302, { location: '/replays' })
-            return res.end()
-        }
-        if (await handleReplays(req, res, url)) return
-        if (url.pathname === '/posthog-mcp') return await handlePosthogMcp(req, res, {
-            url: config.posthog.mcpUrl, apiKey: config.posthog.mcpApiKey,
-            token: config.service.mcpToken, name: config.mcp.name,
-            enabled: config.posthog.mcpViaLens && posthogMcpActive(),
-            authorize: (r) => !!callerOf(r),
-            info: { app: appEvents()?.app || 'the app', tools: lensToolNames() },
-        })
-        if (url.pathname === '/mcp') return await handleMcp(req, res)
-        if (url.pathname === '/status') {
-            if (!bearerOk(req)) return send(res, 401, { error: 'needs Authorization: Bearer <MCP_TOKEN>' })
-            return send(res, 200, { ai: !!ai, features: featureState(), jobs })
-        }
-        send(res, 404, 'not found')
-    } catch (e) {
-        log('request failed', { path: url.pathname, error: (e as Error).message })
-        if (!res.headersSent) send(res, 500, { error: 'internal error' })
-    }
+    })().catch(() => {
+        if (!res.headersSent) { try { send(res, 500, { error: 'internal error' }) } catch { res.destroy() } }
+        else res.destroy()
+    })
 })
 
-if (!jiraConfigured()) log('Jira is not connected: webhooks answer 503 and release outcomes keep their last numbers until JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN are set')
+if (!jiraConfigured()) log('Jira is not connected: webhooks answer 503 and release outcomes keep their last numbers until FEATURE_JIRA=on, JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN are set')
 for (const [name, value] of Object.entries({ ...(jiraConfigured() ? { JIRA_WEBHOOK_SECRET: config.jira.webhookSecret } : {}), CLIP_LINK_SECRET: config.service.clipLinkSecret, ...(config.features.lensMcp ? { MCP_TOKEN: config.service.mcpToken } : {}) })) {
     if (!value) log(`warning: ${name} is not set; that feature refuses every request until it is`)
 }

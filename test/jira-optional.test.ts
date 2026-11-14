@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { after, describe, test } from 'node:test'
 
 const dir = mkdtempSync(join(tmpdir(), 'triage-jira-'))
+process.env.FEATURE_JIRA = 'on'
 process.env.TRIAGE_DB = join(dir, 'test.db')
 const { config, jiraConfigured } = await import('../src/core/config.ts')
 const { getIssue } = await import('../src/jira/client.ts')

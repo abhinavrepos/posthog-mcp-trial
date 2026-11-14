@@ -24,7 +24,7 @@ const viewer=(role:Viewer['role']='admin',dashboards:Viewer['dashboards']='view'
 function reset(from='2025-12-01',to='2026-03-29') {
     for(const t of ['task_daily','task_users_daily','task_catalog','task_ingest','user_daily','client_daily','ops_daily','errors_daily','client_names','task_state'])tasksDb.exec(`DELETE FROM ${t}`)
     db.exec('DELETE FROM client_outcomes; DELETE FROM audit; DELETE FROM briefing_snapshots; DELETE FROM rescue_actions')
-    const q=tasksDb.prepare('INSERT INTO task_ingest VALUES (?,0,0,0,0,0,?)')
+    const q=tasksDb.prepare('INSERT INTO task_ingest VALUES (?,0,0,0,0,0,?,1)')
     for(let d=from;d<=to;d=shift(d,1))q.run(d,to)
     tasksDb.prepare("INSERT INTO task_catalog VALUES ('t_Swap','Swap','IR Swap','save',?,?)").run(from,to)
     forgetAnswers()

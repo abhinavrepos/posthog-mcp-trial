@@ -418,12 +418,24 @@ if phase check; then
         fi
     fi
     pg_mb=$(docker run --rm -v "${PROJECT}_postgres-data:/a:ro" "$HELPER_IMAGE" du -sm /a | cut -f1)
-    used_mb=$(docker run --rm -v "${PROJECT}_postgres-data:/a:ro" -v "${PROJECT}_clickhouse-data:/b:ro" ${minio_vol:+-v "$minio_vol:/c:ro"} "$HELPER_IMAGE" du -sm /a /b ${minio_vol:+/c} | awk '{s+=$1} END {print s}')
-    free_mb=$(( $(df -Pk "$BACKUP_DIR" | awk 'NR==2 {print $4}') / 1024 ))
-    # backup of every volume, the Postgres 12 copy, the copied files and the new images
-    need_mb=$(( ${SKIP_VOLUME_BACKUP:-0} == 1 ? used_mb / 4 + pg_mb + 30000 : used_mb * 2 + pg_mb + 30000 ))
-    say "data volumes: ${used_mb} MB; free: ${free_mb} MB; needed (backup, new images, copied files): about ${need_mb} MB"
-    [ "$free_mb" -ge "$need_mb" ] || { echo "Not enough disk. Free space, or set SKIP_VOLUME_BACKUP=1 if you have a VM snapshot."; exit 1; }
+    used_mb=0
+    for v in $(docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT"); do
+        size_mb=$(docker run --rm -v "$v:/data:ro" "$HELPER_IMAGE" du -sm /data | cut -f1)
+        used_mb=$((used_mb + size_mb))
+    done
+    docker_root=$(docker info --format '{{.DockerRootDir}}')
+    backup_need=$((pg_mb + ( ${SKIP_VOLUME_BACKUP:-0} == 1 ? 0 : used_mb )))
+    docker_need=$((used_mb + pg_mb + 30000))
+    backup_free=$(( $(df -Pk "$BACKUP_DIR" | awk 'NR==2 {print $4}') / 1024 ))
+    docker_free=$(( $(df -Pk "$docker_root" | awk 'NR==2 {print $4}') / 1024 ))
+    # When both paths share storage, both allocations must fit together.
+    if [ "$(stat -c %d "$BACKUP_DIR")" = "$(stat -c %d "$docker_root")" ]; then
+        backup_need=$((backup_need + docker_need))
+    fi
+    say "all project volumes: ${used_mb} MB; backup storage: ${backup_free} MB free, ${backup_need} MB needed; Docker storage: ${docker_free} MB free, ${docker_need} MB needed"
+    [ "$backup_free" -ge "$backup_need" ] && [ "$docker_free" -ge "$docker_need" ] || {
+        echo "Not enough disk on backup or Docker storage. Free space, or use SKIP_VOLUME_BACKUP=1 with a VM snapshot."; exit 1;
+    }
     a=$(dc exec -T clickhouse clickhouse-client -q "SELECT count() FROM posthog.events WHERE _timestamp > now() - INTERVAL 10 MINUTE" < /dev/null)
     sleep 30
     b=$(dc exec -T clickhouse clickhouse-client -q "SELECT count() FROM posthog.events WHERE _timestamp > now() - INTERVAL 10 MINUTE" < /dev/null)
@@ -480,32 +492,68 @@ tar_volume() {
         && f=\$(find . ! -type s | wc -l) && t=\$(tar -tf '/b/$1.tar.partial' | wc -l) && echo \"\$f files and folders, \$t in the backup\" && [ \"\$f\" = \"\$t\" ]"
 }
 make_sums() { (cd "$BACKUP_DIR" && sha256sum pg_dumpall.sql.gz install-files.tgz volumes/*.tar > SHA256SUMS.partial); }
+# StartedAt changes even when a restarted container has subsequently been stopped again.
+backup_containers() {
+    local id
+    for id in $(docker ps -aq --filter "label=com.docker.compose.project=$PROJECT" | sort); do
+        docker inspect -f '{{.Id}} {{.State.StartedAt}}' "$id" || return 1
+    done
+}
 if phase backup; then
+    if [ -f "$BACKUP_DIR/stages/containers" ]; then
+        backup_containers > "$BACKUP_DIR/containers.current"
+        if ! cmp -s "$BACKUP_DIR/stages/containers" "$BACKUP_DIR/containers.current" ||
+            { [ -f "$BACKUP_DIR/stages/stopped" ] && [ -n "$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT")" ]; }; then
+            say "Old stack restarted or changed: discarding the partial backup generation"
+            rm -rf "$BACKUP_DIR/stages" "$BACKUP_DIR/volumes"
+            rm -f "$BACKUP_DIR/pg_dumpall.sql.gz" "$BACKUP_DIR/install-files.tgz" "$BACKUP_DIR/SHA256SUMS" "$STATE/done/backup"
+        fi
+        rm -f "$BACKUP_DIR/containers.current"
+    fi
+    # Legacy partial backups have no generation identity and cannot safely be reused.
+    if [ ! -d "$BACKUP_DIR/stages" ]; then
+        rm -rf "$BACKUP_DIR/volumes"
+        mkdir -p "$BACKUP_DIR/stages"
+        backup_containers > "$BACKUP_DIR/stages/containers.partial"
+        mv "$BACKUP_DIR/stages/containers.partial" "$BACKUP_DIR/stages/containers"
+        date -u +%FT%TZ > "$BACKUP_DIR/stages/generation"
+    fi
     rm -f "$BACKUP_DIR/SHA256SUMS"
-    tar -czf "$BACKUP_DIR/install-files.tgz" .env docker-compose*.yml compose $( [ -f .env.services ] && echo .env.services )
-    say "Postgres dump (as upgrade-hobby takes it)"
-    PROGRESS_FILE="$BACKUP_DIR/pg_dumpall.sql.gz.partial" PROGRESS_WHAT="dump written (compressed)" PROGRESS_OF=""
-    watch_run "$STATE/pg_dump.log" p_size dump_pg || { cat "$STATE/pg_dump.log"; echo "The Postgres dump failed."; exit 1; }
-    gunzip -t "$BACKUP_DIR/pg_dumpall.sql.gz.partial"
-    gunzip -c "$BACKUP_DIR/pg_dumpall.sql.gz.partial" | tail -5 | grep -q 'PostgreSQL database cluster dump complete' || { echo "The Postgres dump is incomplete (no end marker)."; exit 1; }
-    mv "$BACKUP_DIR/pg_dumpall.sql.gz.partial" "$BACKUP_DIR/pg_dumpall.sql.gz"
-    say "    $(du -h "$BACKUP_DIR/pg_dumpall.sql.gz" | cut -f1), complete"
+    if [ ! -f "$BACKUP_DIR/stages/dump-done" ]; then
+        tar -czf "$BACKUP_DIR/install-files.tgz" .env docker-compose*.yml compose $( [ -f .env.services ] && echo .env.services )
+        say "Postgres dump (as upgrade-hobby takes it)"
+        PROGRESS_FILE="$BACKUP_DIR/pg_dumpall.sql.gz.partial" PROGRESS_WHAT="dump written (compressed)" PROGRESS_OF=""
+        watch_run "$STATE/pg_dump.log" p_size dump_pg || { cat "$STATE/pg_dump.log"; echo "The Postgres dump failed."; exit 1; }
+        gunzip -t "$BACKUP_DIR/pg_dumpall.sql.gz.partial"
+        gunzip -c "$BACKUP_DIR/pg_dumpall.sql.gz.partial" | tail -5 | grep -q 'PostgreSQL database cluster dump complete' || { echo "The Postgres dump is incomplete (no end marker)."; exit 1; }
+        mv "$BACKUP_DIR/pg_dumpall.sql.gz.partial" "$BACKUP_DIR/pg_dumpall.sql.gz"
+        touch "$BACKUP_DIR/stages/dump-done"
+        say "    $(du -h "$BACKUP_DIR/pg_dumpall.sql.gz" | cut -f1), complete"
+    else
+        gunzip -t "$BACKUP_DIR/pg_dumpall.sql.gz"
+        say "Reusing the validated dump and configuration from this backup generation"
+    fi
     if [ "${SKIP_VOLUME_BACKUP:-0}" != 1 ]; then
         remember volume_backup yes
         say "stopping PostHog to copy its data volumes unchanged"
         dc stop
+        touch "$BACKUP_DIR/stages/stopped"
         mkdir -p "$BACKUP_DIR/volumes"
         # All of the install's volumes: ClickHouse's replicated tables also keep state in ZooKeeper, so a
         # backup of ClickHouse alone cannot be restored cleanly.
-        docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT" | sort > "$BACKUP_DIR/volumes/list.txt"
+        if [ ! -f "$BACKUP_DIR/volumes/list.txt" ]; then
+            docker volume ls -q --filter "label=com.docker.compose.project=$PROJECT" | sort > "$BACKUP_DIR/volumes/list.txt.partial"
+            mv "$BACKUP_DIR/volumes/list.txt.partial" "$BACKUP_DIR/volumes/list.txt"
+        fi
         n=$(wc -l < "$BACKUP_DIR/volumes/list.txt")
         i=0
         while read -r v; do
             i=$((i + 1))
-            if [ -f "$BACKUP_DIR/volumes/$v.tar" ]; then say "    volume $i of $n, $v: backed up already"; continue; fi
+            if [ -f "$BACKUP_DIR/stages/$v.archived" ] && [ -f "$BACKUP_DIR/volumes/$v.tar" ]; then say "    volume $i of $n, $v: backed up already"; continue; fi
             PROGRESS_FILE="$BACKUP_DIR/volumes/$v.tar.partial" PROGRESS_WHAT="$v" PROGRESS_OF=$(docker run --rm -v "$v:/v:ro" "$HELPER_IMAGE" du -sm /v | cut -f1)
             watch_run "$STATE/backup-$v.log" p_size tar_volume "$v" || { cat "$STATE/backup-$v.log"; echo "The backup of volume $v is incomplete."; exit 1; }
             mv "$BACKUP_DIR/volumes/$v.tar.partial" "$BACKUP_DIR/volumes/$v.tar"
+            touch "$BACKUP_DIR/stages/$v.archived"
             say "    volume $i of $n, $v: $(du -h "$BACKUP_DIR/volumes/$v.tar" | cut -f1) ($(tail -1 "$STATE/backup-$v.log"))"
         done < "$BACKUP_DIR/volumes/list.txt"
         say "checksums of the backup (rollback checks them before restoring anything)"
