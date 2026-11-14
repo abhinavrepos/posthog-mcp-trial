@@ -10,6 +10,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 
 // A throwaway database with two releases already counted, so the tools run without Jira or PostHog.
 const dir = mkdtempSync(join(tmpdir(), 'triage-mcp-'))
+process.env.FEATURE_JIRA = 'on'
 process.env.TRIAGE_DB = join(dir, 'test.db')
 const { db, run } = await import('../src/core/db.ts')
 const { registerTools } = await import('../src/mcp/tools.ts')
@@ -100,15 +101,15 @@ describe('release MCP tools', () => {
         assert.match(t, /- \*\*Clients complained\*\* \(1\): ACP-230\./)
         assert.match(t, /- \*\*Adopted\*\* \(1\): ACP-210\./)
         assert.match(t, /- \*\*Can't measure\*\* \(1\): ACP-234\./)
-        assert.match(t, /\*\*ACP-230\*\* Totals in base currency \(Story, 26\.8\.0\) \[more errors after the release, clients complained\]:.*survey rating 4.2 → 2.9/)
+        assert.match(t, /\*\*ACP-230\*\* Totals in base currency \(Story, 26\.8\.0\) \[more errors after the release, clients complained\]:.*survey rating <amount> → <amount>/)
         assert.match(t, /\*\*ACP-210\*\*.*\[adopted\]:.*86 of 100 active clients.*problems on Invoices are counted for ACP-230/)
         assert.ok(t.indexOf('**ACP-230**') < t.indexOf('**ACP-210**'), 'problems first')
         assert.match(await call('release_outcomes', { scope: 'Q3 2026' }), /ACP-200/)
         assert.match(await call('release_outcomes', { scope: 'Q9 1999' }), /Nothing called "Q9 1999"\. Releases: 26\.7\.0, 26\.8\.0/)
     })
-    test('client_feedback shows what clients said, worst first', async () => {
+    test('client_feedback omits unrestricted support excerpts but keeps masked survey answers', async () => {
         const t = await call('client_feedback', { scope: 'all' })
-        assert.match(t, /RCI SUP-1 .*"Export broken": We cannot send statements\./)
+        assert.match(t, /RCI SUP-1 .*"\[summary withheld\]": \[description withheld\]/)
         assert.match(t, /Survey 1\/5 \(brightwater, 2026-08-13\): "PDF export hangs"/)
     })
     test('a saved verdict shows up in later outcomes and in the evidence', async () => {

@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { anonymiseOn } from '../core/anonymise.ts'
 import { config, posthogMcpActive } from '../core/config.ts'
-import { can, canSurvey, chatPolicy, DEFAULT_CHAT_APPS, chatUrl, createMcpToken, listMcpTokens, revokeMcpToken, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
+import { can, canSurvey, canDashboard, chatPolicy, DEFAULT_CHAT_APPS, chatUrl, createMcpToken, listMcpTokens, revokeMcpToken, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
 import { APP_NAME, headerHtml, PAGER_JS, PAGE_CSS } from './replays.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -25,8 +25,8 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
     }
 }
 
-/** Anyone with some use of Lens: a clip role, or a survey role. */
-export const canConnect = (v: Viewer) => can(v.role, 'watch') || canSurvey(v.surveys, 'view')
+/** Anyone with some use of Lens: a clip, survey or dashboard role. */
+export const canConnect = (v: Viewer) => can(v.role, 'watch') || canSurvey(v.surveys, 'view') || canDashboard(v.dashboards, 'view')
 
 /** PostHog's MCP server is reachable through Lens (/posthog-mcp), with the same personal token. */
 const posthogOn = () => config.posthog.mcpViaLens && posthogMcpActive()

@@ -7,7 +7,8 @@ import type { TaskAttempt } from '../src/core/taskstypes.ts'
 
 const dir = mkdtempSync(join(tmpdir(), 'rescue-'))
 Object.assign(process.env, { TRIAGE_DB: join(dir, 'main.db'), TASKS_DB: join(dir, 'tasks.db'), APP_EVENTS_FILE: 'config/app-events.reval.json' })
-const { tasksDb, storeAttempts, forgetAnswers } = await import('../src/core/tasks.ts')
+const { tasksDb, storeAttempts: putAttempts, forgetAnswers } = await import('../src/core/tasks.ts')
+const storeAttempts: typeof putAttempts = (day, attempts, info) => putAttempts(day, attempts, { finalized: true, ...info })
 const { db } = await import('../src/core/db.ts')
 const { rescueQueue, setRescueAction, RESCUE } = await import('../src/core/rescue.ts')
 const { readAudit } = await import('../src/service/access.ts')
@@ -156,7 +157,7 @@ test('year of 50 clients × 40 tasks daily rows is under 1 second cold and 10ms 
     reset()
     const hist = JSON.stringify(Array.from({ length: 21 }, (_, i) => i === 2 ? 10 : 0))
     const row = tasksDb.prepare('INSERT OR REPLACE INTO task_daily VALUES (?,?,?,?,?,?,?,?,?)')
-    const ingest = tasksDb.prepare('INSERT OR REPLACE INTO task_ingest VALUES (?,0,0,0,0,0,?)')
+    const ingest = tasksDb.prepare('INSERT OR REPLACE INTO task_ingest VALUES (?,0,0,0,0,0,?,1)')
     tasksDb.exec('BEGIN')
     for (let i = 0; i < 365; i++) {
         const d = shift(window.to, -i); ingest.run(d, d)

@@ -308,6 +308,7 @@ export function revokeMcpToken(id: string, by: string, onlyFor?: string): boolea
 
 /** Who a chat request is from: the shared token, or a person's own token. Undefined: refuse. */
 export interface ChatCaller { who: string; email?: string; shared: boolean; surveyRole: SurveyRole; dashboardRole: DashboardRole; admin: boolean; insights: boolean }
+export const ADMIN_FLAG_DAYS = 14
 export function chatCaller(bearer: string | undefined, sharedToken: string): ChatCaller | undefined {
     if (!bearer) return undefined
     if (sharedToken) {
@@ -318,8 +319,13 @@ export function chatCaller(bearer: string | undefined, sharedToken: string): Cha
     const row = one<Record<string, unknown>>('SELECT * FROM mcp_tokens WHERE hash = ? AND revoked_at IS NULL', tokenHash(bearer))
     if (!row) return undefined
     const t = tokenRow(row)
-    // Removed from Lens (role none, no survey role) still works for other tools; an admin revokes the token to stop it.
-    const lensRole: Role = t.posthog_admin ? 'admin' : roleOf(t.email, false)
+    // Personal keys require the same current access as the Connect page. PostHog-admin authority comes
+    // from the owner's last sign-in to Lens (a key cannot ask PostHog), so it counts only while that is
+    // recent: a demoted or departed PostHog admin keeps it at most ADMIN_FLAG_DAYS.
+    const seen = Date.parse(String(row.posthog_admin_seen_at || row.created_at))
+    const adminFresh = t.posthog_admin && Date.now() - seen < ADMIN_FLAG_DAYS * 86_400_000
+    const lensRole: Role = adminFresh ? 'admin' : roleOf(t.email, false)
+    if (!can(lensRole, 'watch') && !canSurvey(surveyRoleOf(t.email, lensRole), 'view') && !canDashboard(dashboardRoleOf(t.email, lensRole), 'view')) return undefined
     const now = new Date().toISOString()
     if (!t.last_used_at || Date.parse(now) - Date.parse(t.last_used_at) > 60_000) run('UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?', now, t.id)
     return { who: t.email, email: t.email, shared: false, surveyRole: surveyRoleOf(t.email, lensRole), dashboardRole: dashboardRoleOf(t.email, lensRole), admin: can(lensRole, 'admin'), insights: can(lensRole, 'admin') || hasInsightGrant(t.email) }
@@ -470,18 +476,44 @@ export async function currentViewer(req: IncomingMessage): Promise<Viewer | unde
     if (!session || !/^[A-Za-z0-9:._-]{8,200}$/.test(session)) return undefined
     const id = await identity(session)
     if (!id) return undefined
+    // Confirms (or drops) the PostHog-admin flag on this person's keys; at most once an hour per person.
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString()
+    run('UPDATE mcp_tokens SET posthog_admin = ?, posthog_admin_seen_at = ? WHERE email = ? AND revoked_at IS NULL AND (posthog_admin != ? OR posthog_admin_seen_at IS NULL OR posthog_admin_seen_at < ?)', id.posthog_admin ? 1 : 0, new Date().toISOString(), id.email, id.posthog_admin ? 1 : 0, hourAgo)
     return { ...id, role: roleOf(id.email, id.posthog_admin), system: hasSystemGrant(id.email), insights: hasInsightGrant(id.email), surveys: surveyRoleOf(id.email, roleOf(id.email, id.posthog_admin)), dashboards: dashboardRoleOf(id.email, roleOf(id.email, id.posthog_admin)), session }
 }
 
 // ------------------------------------------------------------------ sign in and out through PostHog
 const attempts = new Map<string, number[]>()
+const emailAttempts = new Map<string, number[]>()
+const recentFailures = (map: Map<string, number[]>, key: string) => (map.get(key) || []).filter(t => Date.now() - t < 10 * 60_000)
+// Every attempt is counted when it starts (so many guesses sent at once cannot all pass before the
+// first failure is recorded); a successful one is taken off again, so busy offices sharing one address
+// are only ever limited by failures.
+function countAttempt(ip: string, email: string): number {
+    const at = Date.now()
+    for (const [map, key] of [[attempts, ip], [emailAttempts, email]] as const) {
+        const recent = recentFailures(map, key)
+        map.delete(key)
+        map.set(key, [...recent, at])
+        if (map.size > 10_000) map.delete(map.keys().next().value!)
+    }
+    return at
+}
+function succeeded(ip: string, email: string, at: number): void {
+    // Only this attempt's own entry in each counter: others (failures, or guesses still in flight from
+    // other addresses) may carry the same millisecond and must keep counting.
+    for (const [map, key] of [[attempts, ip], [emailAttempts, email]] as const) {
+        const list = map.get(key) || [], i = list.lastIndexOf(at)
+        if (i >= 0) list.splice(i, 1)
+        if (!list.length) map.delete(key)
+    }
+}
 
 /** Signs in with a PostHog account. Returns the PostHog session id, or a reason. */
 export async function signIn(ip: string, email: string, password: string): Promise<{ session?: string; csrf?: string; error?: string }> {
-    const now = Date.now()
-    const recent = (attempts.get(ip) || []).filter((t) => now - t < 10 * 60_000)
-    if (recent.length >= 10) return { error: 'Too many attempts. Wait 10 minutes.' }
-    attempts.set(ip, [...recent, now])
+    email = email.trim().toLowerCase()
+    if (recentFailures(attempts, ip).length >= 20 || recentFailures(emailAttempts, email).length >= 10) return { error: 'Too many attempts. Wait 10 minutes.' }
+    const at = countAttempt(ip, email)
     const res = await fetch(`${config.posthog.host}/api/login`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -498,7 +530,7 @@ export async function signIn(ip: string, email: string, password: string): Promi
     const pick = (name: string) => cookies.map((c) => new RegExp(`^${name}=([^;]+)`).exec(c)?.[1]).find(Boolean)
     const session = pick('sessionid')
     if (!session) return { error: 'PostHog did not start a session.' }
-    attempts.delete(ip)
+    succeeded(ip, email, at)
     return { session, csrf: pick('posthog_csrftoken') }
 }
 

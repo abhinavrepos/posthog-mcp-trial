@@ -1,6 +1,7 @@
 // MCP tools for in-app surveys: a PM describes a survey in chat, Lens checks it, estimates how many
 // would see it and saves it as a draft. Launching is never possible from chat: only on the Surveys page. Every survey and
 // its answers are also on the Surveys page (/replays/surveys).
+import { jsonResult } from './result.ts'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
@@ -34,7 +35,7 @@ const TOOLS_FOR: Record<SurveyRole, string[]> = {
 export const surveyToolNames = (role: SurveyRole = 'launch'): string[] => (surveysActive() && appEvents() ? SURVEY_TOOLS.filter((t) => TOOLS_FOR[role].includes(t)) : [])
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] })
-const json = (label: string, value: unknown) => text(`${label}\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``)
+const json = jsonResult
 const pageUrl = (id?: string) => `${config.service.publicUrl}/replays/surveys${id ? `#${id}` : ''}`
 
 const filter = z.union([

@@ -115,6 +115,7 @@ export const config = {
     },
     // Which MCP servers Claude gets. Each can be switched off on its own; both are on by default.
     features: {
+        jira: flag('FEATURE_JIRA', false),
         // This service's MCP tools (replay links, tickets, clients, releases): /mcp over HTTP, the
         // stdio server, and its entry in .mcp.json.
         lensMcp: flag('FEATURE_LENS_MCP', true),
@@ -195,7 +196,7 @@ export const config = {
 
 /** PostHog's MCP server is in use: switched on and configured. */
 /** Jira is connected: a site and a login. Without it, webhooks answer 503 and release outcomes keep the numbers they have. */
-export const jiraConfigured = () => !!config.jira.baseUrl && !!config.jira.email && !!config.jira.apiToken
+export const jiraConfigured = () => config.features.jira && !!config.jira.baseUrl && !!config.jira.email && !!config.jira.apiToken
 
 export const surveysActive = (): boolean => config.surveys.enabled && !!config.posthog.surveyApiKey && !!config.posthog.projectId
 

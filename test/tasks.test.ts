@@ -12,7 +12,8 @@ process.env.TRIAGE_DB = join(dir, 'triage.db')
 process.env.APP_EVENTS_FILE = 'config/app-events.reval.json'
 const { db: triageDb } = await import('../src/core/db.ts')
 const { parseAppEvents, toSteps } = await import('../src/core/appevents.ts')
-const { summariseSteps, extractAttempts, storeAttempts, tasksDb, taskMap, flowTime, findTasks, ingestDay, ingestStatus, runIngest, setTaskQuery, forgetAnswers } = await import('../src/core/tasks.ts')
+const { summariseSteps, extractAttempts, storeAttempts: putAttempts, tasksDb, taskMap, flowTime, findTasks, ingestDay, ingestStatus, runIngest, setTaskQuery, forgetAnswers } = await import('../src/core/tasks.ts')
+const storeAttempts: typeof putAttempts = (day, attempts, info) => putAttempts(day, attempts, { finalized: true, ...info })
 const reg = parseAppEvents(JSON.parse(readFileSync('config/app-events.reval.json', 'utf8')))
 after(() => { tasksDb.close(); triageDb.close(); rmSync(dir, { recursive: true, force: true }) })
 const DAY = 86_400_000
@@ -399,7 +400,8 @@ test('version 1 database upgrades in place preserving task history', async () =>
     old.close()
     child(`const {tasksDb: db} = await import(${JSON.stringify(url)});
         const assert = (await import('node:assert/strict')).default;
-        assert.equal(db.prepare('PRAGMA user_version').get().user_version, 5);
+        assert.equal(db.prepare('PRAGMA user_version').get().user_version, 6);
+        assert.equal(db.prepare('SELECT finalized FROM task_ingest').get().finalized, 0);
         assert.deepEqual(db.prepare('SELECT user FROM known_users').all().map((r) => r.user), ['C1PRD|01|OLD|USER7']);
         assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name='daily_client_day'").get());
         assert.equal(db.prepare("SELECT name FROM client_names WHERE client='OLD'").get().name, 'Old client');

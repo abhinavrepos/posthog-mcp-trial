@@ -192,6 +192,14 @@ interface Job {
     clip?: ClipRecord
 }
 const jobs = new Map<string, Job>()
+export function pruneJobs<T extends { finished_at?: number }>(entries: Map<string, T>, now = Date.now(), cap = 1000): void {
+    for (const [id, job] of entries) if (job.finished_at !== undefined && now - job.finished_at >= 3_600_000) entries.delete(id)
+    for (const [id, job] of entries) {
+        if (entries.size <= cap) break
+        if (job.finished_at !== undefined) entries.delete(id)
+    }
+}
+setInterval(() => pruneJobs(jobs), 60_000).unref()
 const queue: Job[] = []
 let busy = false
 const limit = new HourlyLimit(PER_HOUR)
@@ -220,6 +228,7 @@ async function work() {
                 console.error(JSON.stringify({ t: new Date().toISOString(), msg: 'clip job failed', job: job.id, error: msg.slice(0, 1000) }))
             }
             job.finished_at = Date.now()
+            pruneJobs(jobs)
         }
     } finally {
         busy = false
@@ -433,6 +442,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
             return true
         }
         const job: Job = { id: randomUUID(), state: 'queued', owner: viewer.email, session_id: input.sessionId, start_s: Math.floor(start), length_s: Math.max(3, Math.min(length, Math.ceil(info.duration_s - start))), info, created_at: Date.now() }
+        pruneJobs(jobs, Date.now(), 999)
         jobs.set(job.id, job)
         queue.push(job)
         audit(viewer.email, 'clip.requested', { session_id: job.session_id, start_s: job.start_s, length_s: job.length_s })
@@ -588,11 +598,14 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
 // ------------------------------------------------------------------ pages
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 
+// Colour rules for every page: neutral greys, one blue accent (links, current tab, primary
+// action), red for errors and real warnings, amber for "worth a look". Success and routine
+// states stay neutral (--ok is grey on purpose), so red and amber stand out where they matter.
 const CSS = `:root{color-scheme:light;--bg:#fafafb;--side-bg:#f4f5f7;--card:#fff;--ink:#20242c;--muted:#5f6b7a;--faint:#6f7a88;--line:#e3e6eb;--line-strong:#cfd4db;--control:#c9ced6;--chip:#f1f3f6;--hover:#f5f7fa;
---accent:#315dd9;--accent-ink:#fff;--accent-soft:#ebf0ff;--ok:#18734b;--ok-bg:#eaf5ee;--warn:#925b08;--warn-bg:#fff3db;--err:#b33730;--err-bg:#fcedea;
+--accent:#315dd9;--accent-ink:#fff;--accent-soft:#ebf0ff;--ok:#4f5b69;--ok-bg:#f1f3f6;--warn:#925b08;--warn-bg:#fff3db;--err:#b33730;--err-bg:#fcedea;
 --r:8px;--r-sm:6px;--shadow:none;--pop:0 12px 32px rgba(16,24,40,.16);--page:1440px;--hh:56px;--side:232px}
 @media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0e1218;--side-bg:#12171f;--card:#161c25;--ink:#e6eaf0;--muted:#9aa4b2;--faint:#7c8695;--line:#262f3b;--line-strong:#344050;--control:#3e4a5a;--chip:#1e2631;--hover:#1b222c;
---accent:#86a8ff;--accent-ink:#0b1630;--accent-soft:#1a2540;--ok:#7fd3a3;--ok-bg:#132a1d;--warn:#eec27a;--warn-bg:#2e2410;--err:#ff9a90;--err-bg:#331a19;--pop:0 12px 32px rgba(0,0,0,.5)}}
+--accent:#86a8ff;--accent-ink:#0b1630;--accent-soft:#1a2540;--ok:#a9b3c0;--ok-bg:#1e2631;--warn:#eec27a;--warn-bg:#2e2410;--err:#ff9a90;--err-bg:#331a19;--pop:0 12px 32px rgba(0,0,0,.5)}}
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}body{margin:0;background:var(--bg);color:var(--ink);font:14px/20px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased;font-feature-settings:'tnum' 1}
 header{display:flex;align-items:center;gap:16px;background:var(--card);border-bottom:1px solid var(--line);padding:0 24px;height:var(--hh)}
 .brand{display:inline-flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;white-space:nowrap;flex:none;line-height:1}
@@ -642,7 +655,7 @@ th{color:var(--muted);font-weight:500;font-size:12px;line-height:18px;vertical-a
 .card>.table-wrap{margin-left:-24px;margin-right:-24px;width:auto;max-width:none}.card>.table-wrap :is(th,td):first-child{padding-left:24px}.card>.table-wrap :is(th,td):last-child{padding-right:24px}
 .page-head{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin:0 0 20px}.page-head h1{margin:0}.page-head p{margin:4px 0 0;color:var(--muted)}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;margin:0 0 24px}.kpi{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 20px;min-width:0;text-decoration:none;color:inherit;display:block}a.kpi:hover{border-color:var(--line-strong);text-decoration:none;background:var(--hover)}
-.kpi .l{display:flex;min-height:32px;align-items:flex-start;gap:6px;font-size:12px;line-height:16px;color:var(--muted);font-weight:500}.kpi .v{display:block;font-size:28px;line-height:32px;font-weight:650;letter-spacing:-.02em;margin-top:8px}.kpi .s{display:block;font-size:12px;line-height:16px;color:var(--faint);margin-top:4px}.kpi.crit .v{color:var(--err)}.kpi.warn .v{color:var(--warn)}.kpi .dot{flex:0 0 6px;width:6px;height:6px;margin-top:5px;border-radius:50%;background:currentColor}.kpi.crit .dot{color:var(--err)}.kpi.warn .dot{color:var(--warn)}.kpi:not(.crit):not(.warn) .dot{display:none}
+.kpi .l{display:flex;min-height:32px;align-items:flex-start;gap:6px;font-size:12px;line-height:16px;color:var(--muted);font-weight:500}.kpi .v{display:block;font-size:28px;line-height:32px;font-weight:650;letter-spacing:-.02em;margin-top:8px}.kpi .s{display:block;font-size:12px;line-height:16px;color:var(--faint);margin-top:4px}.kpi.crit .v{color:var(--err)}.kpi.warn .v{color:var(--warn)}.kpi .dot{flex:0 0 6px;width:6px;height:6px;margin-top:5px;border-radius:50%;background:currentColor}.kpi .dot{display:none}
 main .tabs a[aria-current="page"]{font-weight:600;border-bottom-color:var(--accent);color:var(--accent)}
 .alert{background:var(--err-bg);border:1px solid color-mix(in srgb,var(--err) 35%,transparent);color:var(--err);border-radius:var(--r);padding:10px 14px;margin:8px 0}
 .note{background:var(--warn-bg);border:1px solid color-mix(in srgb,var(--warn) 30%,transparent);color:var(--warn);border-radius:var(--r);padding:10px 14px;margin:8px 0}

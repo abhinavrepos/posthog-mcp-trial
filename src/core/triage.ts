@@ -1,4 +1,5 @@
 // The triage pipeline both entry points share: Jira webhooks and the MCP tools.
+import { aiSafety } from './aisafety.ts'
 import { clientOfCodename, codenameOf, countBlock, hideClientsDeep, namesForCodenames, anonFor, syncClients } from './anonymise.ts'
 import { SCREENS } from './catalog.ts'
 import { renderClip, type Clip } from './clip.ts'
@@ -97,7 +98,8 @@ export async function triage(ticket: Ticket, opts: TriageOptions = {}): Promise<
             const anon = anonFor('triage')
             if (anon) syncClients(clients)
             const shown = anon ? clients.map((c) => { const code = codenameOf(c.id) || c.id; return { id: code, name: code } }) : clients
-            const read = await opts.ai.readTicket(anon ? hideTicket(ticket) : ticket, { clients: shown, screens: SCREENS.map(({ path, name }) => ({ path, name })) })
+            const safe = safeTicket(ticket, parsed, clients)
+            const read = await opts.ai.readTicket(await aiSafety(anon ? hideTicket(safe) : safe, 'triage'), { clients: shown, screens: SCREENS.map(({ path, name }) => ({ path, name })) })
             if (anon && read.clientId) read.clientId = clientOfCodename(read.clientId) || undefined
             aiUsed = true
             // Structured Jira fields stay on top; Claude's reading beats the keyword heuristics.
@@ -154,12 +156,12 @@ export async function triage(ticket: Ticket, opts: TriageOptions = {}): Promise<
         try {
             // Event and error data only: replay frames never go to Claude.
             if (anonFor('triage')) {
-                const h = hideClientsDeep(report)
+                const h = hideClientsDeep({ ...report, ticket: { ...report.ticket, summary: 'Support ticket' } })
                 if (h.n) countBlock('triage_cleaned')
-                const said = await opts.ai.hypothesis(h.value, [])
+                const said = await opts.ai.hypothesis(await aiSafety(h.value, 'triage'), [])
                 // People read the hypothesis: codenames become the real names again.
                 report.hypothesis = said && namesForCodenames(said)
-            } else report.hypothesis = await opts.ai.hypothesis(report, [])
+            } else report.hypothesis = await opts.ai.hypothesis(await aiSafety({ ...report, ticket: { ...report.ticket, summary: 'Support ticket' } }, 'triage'), [])
         } catch (e) {
             notes.push(`Claude could not suggest a cause (${(e as Error).message}).`)
         }
@@ -296,4 +298,15 @@ function hideTicket(t: Ticket): Ticket {
     const h = hideClientsDeep(t)
     if (h.n) countBlock('triage_cleaned')
     return h.value
+}
+
+/** Free text can name someone absent from the roster; Claude gets parsed facts only. */
+export function safeTicket(ticket: Ticket, parsed: ParsedTicket, clients: { id: string; name: string }[]): Ticket {
+    const text = `${ticket.summary}\n${ticket.description}`
+    const candidates = clients.filter(c => parsed.clientHint === c.id || text.includes(c.name) || text.includes(c.id))
+    return {
+        key: ticket.key, kind: ticket.kind, summary: 'Support ticket',
+        description: JSON.stringify({ clients: candidates, screen: parsed.screenPath, window: parsed.window,
+            trades: text.match(/\bTrade\s+(?:Id\s+)?[0-9]+\b/gi) || [] }),
+    }
 }

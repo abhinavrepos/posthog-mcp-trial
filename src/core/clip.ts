@@ -2,18 +2,18 @@
 // into vendor/ by scripts/build-rasterizer.mjs).
 //
 // Recordings are untrusted content: they are other people's DOM. The replay page therefore runs
-// with Chrome's DNS limited to CLIP_ALLOWED_HOSTS, so a recording cannot make the renderer reach
-// anything else on this machine's network.
+// through an allowlist proxy as well as DNS rules, so literal IPs cannot bypass containment.
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
 import { config, ROOT } from './config.ts'
+import { startEgress } from './egress.ts'
 import { moveFile } from './files.ts'
-import { getRecording, getSnapshotsJsonl } from './posthog.ts'
+import { getRecording, getSnapshotsJsonl, PostHogError } from './posthog.ts'
 
 const run = promisify(execFile)
 const require = createRequire(import.meta.url)
@@ -51,13 +51,16 @@ function findChrome(): string {
     throw new Error('chrome-headless-shell not found. Run `pnpm install` (puppeteer downloads it) or set CHROME_HEADLESS_SHELL.')
 }
 
-function hostResolverRules(): string {
+export function hostResolverRules(): string {
     const allowed = config.clip.allowedHosts
         .split(',')
         .map((h) => h.trim())
         .filter(Boolean)
-    // Every name resolves to nothing except the allowlist.
-    return ['MAP * ~NOTFOUND', ...allowed.map((h) => `EXCLUDE ${h}`)].join(', ')
+    // Every name resolves to nothing except the allowlist. Chrome applies these rules to the proxy's
+    // own address as well, so the egress proxy (127.0.0.1, src/core/egress.ts) is excluded: without it
+    // Chrome cannot reach the proxy and every clip fails. Pages still cannot reach 127.0.0.1 directly:
+    // all traffic, loopback included (<-loopback>), goes through the proxy, which refuses it.
+    return ['MAP * ~NOTFOUND', ...allowed.map((h) => `EXCLUDE ${h}`), 'EXCLUDE 127.0.0.1'].join(', ')
 }
 
 type Rasterizer = {
@@ -67,6 +70,8 @@ type Rasterizer = {
 
 let engine: { r: Rasterizer; pool: InstanceType<Rasterizer['BrowserPool']>; html: string } | undefined
 
+let egress: Awaited<ReturnType<typeof startEgress>> | undefined
+
 async function getEngine() {
     if (engine) return engine
     const bundle = join(ROOT, 'vendor/rasterizer.cjs')
@@ -75,8 +80,10 @@ async function getEngine() {
     process.env.PUPPETEER_EXECUTABLE_PATH = findChrome()
     process.env.PLAYER_HTML_PATH = join(ROOT, 'vendor/player.html')
     process.env.SITE_URL ||= config.posthog.publicHost
-    // No smokescreen proxy here; containment comes from the DNS allowlist below instead.
-    process.env.RASTERIZER_USE_PROXY = 'false'
+    egress ||= await startEgress([...config.clip.allowedHosts.split(','), new URL(process.env.SITE_URL).host])
+    // Node fetch ignores HTTPS_PROXY unless NODE_USE_ENV_PROXY is enabled; Lens keeps its own routing.
+    process.env.HTTPS_PROXY = egress.url
+    process.env.RASTERIZER_USE_PROXY = 'true'
     process.env.CHROME_HOST_RESOLVER_RULES = hostResolverRules()
     process.env.LOG_LEVEL ||= 'warn'
     const r = require(bundle) as Rasterizer
@@ -89,12 +96,28 @@ async function getEngine() {
 export async function shutdownClips(): Promise<void> {
     if (engine) await engine.pool.shutdown()
     engine = undefined
+    await egress?.close()
+    egress = undefined
 }
 
+// Leave recent directories alone: another service process may still be rendering there.
+export function cleanRenderWork(now = Date.now()): void {
+    const dir = join(config.clip.cacheDir, 'render')
+    if (!existsSync(dir)) return
+    for (const entry of readdirSync(dir)) {
+        const file = join(dir, entry)
+        if (now - statSync(file).mtimeMs > 86_400_000) rmSync(file, { recursive: true, force: true })
+    }
+}
+cleanRenderWork()
+
 // One render at a time: each one drives a full Chrome.
+let pending = 0
+export const pendingRenders = () => pending
 let queue: Promise<unknown> = Promise.resolve()
 function serial<T>(fn: () => Promise<T>): Promise<T> {
-    const next = queue.then(fn, fn)
+    pending++
+    const next = queue.then(fn, fn).finally(() => { pending-- })
     queue = next.catch(() => {})
     return next
 }
@@ -102,27 +125,35 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
 /** The recording's snapshots as a cached JSONL file (also read by replaynet.ts). */
 export async function snapshotsFile(sessionId: string): Promise<string> {
     const dir = join(config.clip.cacheDir, 'snapshots')
-    mkdirSync(dir, { recursive: true })
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
     const meta = await getRecording(sessionId)
     // The key includes the end time, so a recording that is still growing gets fetched again.
     const key = `${sessionId}_${Date.parse(meta.end_time) || 0}`.replace(/[^A-Za-z0-9_-]/g, '')
     const file = join(dir, `${key}.jsonl`)
     if (!existsSync(file)) {
-        writeFileSync(file + '.tmp', await getSnapshotsJsonl(sessionId))
-        renameSync(file + '.tmp', file)
-        pruneCache(dir)
+        try {
+            await getSnapshotsJsonl(sessionId, file + '.tmp')
+            if (statSync(file + '.tmp').size > config.clip.maxCacheMb * 1024 * 1024) throw new PostHogError('Recording too large for snapshot cache', 413)
+            renameSync(file + '.tmp', file)
+        } finally { rmSync(file + '.tmp', { force: true }) }
     }
+    if (statSync(file).size > config.clip.maxCacheMb * 1024 * 1024) {
+        rmSync(file, { force: true })
+        throw new PostHogError('Recording too large for snapshot cache', 413)
+    }
+    pruneCache(dir, file)
     return file
 }
 
 /** Deletes the oldest cached snapshot files once the cache passes CLIP_CACHE_MAX_MB. */
-function pruneCache(dir: string): void {
+export function pruneCache(dir: string, protectedFile: string): void {
     const files = readdirSync(dir)
         .filter((f) => f.endsWith('.jsonl'))
         .map((f) => ({ f: join(dir, f), ...statSync(join(dir, f)) }))
         .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    let total = 0
+    let total = statSync(protectedFile).size
     for (const x of files) {
+        if (x.f === protectedFile) continue
         total += x.size
         if (total > config.clip.maxCacheMb * 1024 * 1024) rmSync(x.f, { force: true })
     }
@@ -134,10 +165,16 @@ export function clipName(req: ClipRequest): string {
     return `${req.sessionId.replace(/[^A-Za-z0-9-]/g, '')}_${s}-${e}.mp4`
 }
 
+export async function withRenderWork<T>(work: string, render: () => Promise<T>): Promise<T> {
+    rmSync(work, { recursive: true, force: true })
+    try { return await render() }
+    finally { rmSync(work, { recursive: true, force: true }) }
+}
+
 export async function renderClip(req: ClipRequest): Promise<Clip> {
     const name = clipName(req)
     const outDir = config.clip.outDir
-    mkdirSync(outDir, { recursive: true })
+    mkdirSync(outDir, { recursive: true, mode: 0o700 })
     const file = join(outDir, name)
     const start = Math.max(0, Math.floor(req.startOffsetS))
     const end = start + Math.max(1, Math.round(req.durationS))
@@ -149,29 +186,29 @@ export async function renderClip(req: ClipRequest): Promise<Clip> {
         const input = await snapshotsFile(req.sessionId)
         const { r, pool, html } = await getEngine()
         const work = join(config.clip.cacheDir, 'render', name.replace(/\.mp4$/, ''))
-        rmSync(work, { recursive: true, force: true })
-        const out = await r.rasterizeFile(pool, html, input, work, {
-            start_offset_s: start,
-            end_offset_s: end,
-            playback_speed: 1,
-            skip_inactivity: false,
-            show_metadata_footer: true,
-            recording_fps: 12,
-            output_format: 'mp4',
+        return withRenderWork(work, async () => {
+            const out = await r.rasterizeFile(pool, html, input, work, {
+                start_offset_s: start,
+                end_offset_s: end,
+                playback_speed: 1,
+                skip_inactivity: false,
+                show_metadata_footer: true,
+                recording_fps: 12,
+                output_format: 'mp4',
+            })
+            moveFile(join(work, 'video.mp4'), file)
+            return {
+                session_id: req.sessionId,
+                file,
+                name,
+                start_offset_s: start,
+                end_offset_s: end,
+                video_duration_s: Number(out.video_duration_s ?? end - start),
+                size_bytes: statSync(file).size,
+                render_s: (Date.now() - t0) / 1000,
+                cached: false,
+            }
         })
-        moveFile(join(work, 'video.mp4'), file)
-        rmSync(work, { recursive: true, force: true })
-        return {
-            session_id: req.sessionId,
-            file,
-            name,
-            start_offset_s: start,
-            end_offset_s: end,
-            video_duration_s: Number(out.video_duration_s ?? end - start),
-            size_bytes: statSync(file).size,
-            render_s: (Date.now() - t0) / 1000,
-            cached: false,
-        }
     })
 }
 

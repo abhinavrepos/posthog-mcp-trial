@@ -30,7 +30,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { config, ROOT } from './config.ts'
 
 export const DB_FILE = process.env.TRIAGE_DB || join(ROOT, 'run/triage.db')
-mkdirSync(dirname(DB_FILE), { recursive: true })
+mkdirSync(dirname(DB_FILE), { recursive: true, mode: 0o700 })
 
 export const db = new DatabaseSync(DB_FILE)
 // auto_vacuum only takes effect on a new file; it lets deletes give the space back.
@@ -277,6 +277,9 @@ const MIGRATIONS: string[] = [
         updated_by TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );`,
+    // When a personal token's PostHog-admin flag was last confirmed by its owner signing in to Lens.
+    // A key cannot ask PostHog itself, so an unconfirmed flag stops counting after a while (access.ts).
+    `ALTER TABLE mcp_tokens ADD COLUMN posthog_admin_seen_at TEXT;`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

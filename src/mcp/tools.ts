@@ -1,5 +1,6 @@
 // MCP tools over the same core as the Jira automation. Each one answers a question a PM or
 // support lead asks that Jira alone cannot.
+import { jsonResult, reportResult, safeResult } from './result.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
@@ -9,7 +10,7 @@ import { completionWorkflow, discoverWorkflows, workflowCompletionReport } from 
 import { WORKFLOW_NAME_LIMIT } from '../core/workflows.ts'
 import { SCREENS } from '../core/catalog.ts'
 import { revalBrief } from '../core/brief.ts'
-import { renderClip } from '../core/clip.ts'
+import { pendingRenders, renderClip } from '../core/clip.ts'
 import { errorImpact } from '../core/impact.ts'
 import { bestPerSession, findIncidents } from '../core/incidents.ts'
 import { messageDoctor } from '../core/messagedoctor.ts'
@@ -32,7 +33,6 @@ import {
 } from '../core/releases.ts'
 import { addComment } from '../jira/client.ts'
 import { clientSource } from '../core/props.ts'
-import { renderReport } from '../core/report.ts'
 import { resolveClient, resolveScreen } from '../core/resolve.ts'
 import { struggleSessions } from '../core/silent.ts'
 import { emailsIn } from '../core/text.ts'
@@ -46,7 +46,7 @@ import type { ChatCaller } from '../service/access.ts'
 
 type Content = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }
 const text = (t: string): { content: Content[] } => ({ content: [{ type: 'text', text: t }] })
-const json = (label: string, value: unknown) => text(`${label}\n\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``)
+const json = jsonResult
 
 async function pickClient(client: string) {
     const matches = await resolveClient({ text: client, emails: emailsIn(client), clientHint: client })
@@ -81,13 +81,14 @@ export function sessionIdOf(value: string): string {
 const A = appEvents()?.app || 'your app'
 
 // Every tool name, for PostHog's proxied exec description ("use the lens server's tools (...)").
-export const CORE_TOOLS = ['resolve_client', 'find_client_incidents', 'get_replay_link', 'screen_usage', 'error_blast_radius', 'find_silent_issues', 'triage_ticket', 'list_releases', 'release_outcomes', 'ticket_evidence', 'client_feedback', 'record_verdict', 'correct_ticket_link', 'refresh_releases']
+export const CORE_TOOLS = ['resolve_client', 'find_client_incidents', 'get_replay_link', 'screen_usage', 'error_blast_radius', 'find_silent_issues', 'triage_ticket']
+export const RELEASE_TOOLS = ['list_releases', 'release_outcomes', 'ticket_evidence', 'client_feedback', 'record_verdict', 'correct_ticket_link', 'refresh_releases']
 export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor']
-export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(appEvents() ? APP_EVENT_TOOLS : []), ...surveyToolNames(), ...dashboardToolNames()]
+export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(config.features.jira ? RELEASE_TOOLS : []), ...(appEvents() ? APP_EVENT_TOOLS : []), ...surveyToolNames(), ...dashboardToolNames()]
 
 // Answers of the read-only analysis tools, shared by every chat session: the same question within two
 // minutes is answered from memory, and identical questions asked at once share one run. Only these
-// tools: their answers do not depend on who asks or change anything. Errors are never kept.
+// tools: answers are separated by insights access where needed. Errors are never kept.
 export const CACHED_TOOLS = new Set(['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor', 'screen_usage', 'find_silent_issues', 'error_blast_radius'])
 // All of these read PostHog events only. Lens's own writes (record_verdict, correct_ticket_link,
 // refresh_releases, triage_ticket) change releases, verdicts and ticket links, which only uncached tools
@@ -136,15 +137,36 @@ export async function cachedToolCall(name: string, args: unknown, run: () => Pro
     return structuredClone(await flight)
 }
 
-export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'dashboardRole' | 'admin' | 'insights'>>): void {
+const mcpRenders: number[] = []
+export function mcpClipRefusal(): string | undefined {
+    if (pendingRenders() >= 3) return 'the render queue is full'
+    const now = Date.now()
+    while (mcpRenders.length && now - mcpRenders[0]! >= 3_600_000) mcpRenders.shift()
+    if (mcpRenders.length >= (Number(process.env.CLIPS_PER_HOUR) || 20)) return 'the hourly MCP clip limit has been reached'
+    mcpRenders.push(now)
+}
+
+// Every Lens tool result goes through the AI-safety pass (src/core/aisafety.ts) at this one boundary,
+// whether or not client anonymisation is on. Errors are passed back masked the same way, not hidden:
+// "No client called X" is useful, and its text cannot carry anything the pass would not remove.
+export function wrapTools(server: McpServer, insights = false): void {
     const register = server.registerTool.bind(server)
     server.registerTool = ((name: string, cfg: { description?: string }, cb: unknown) => {
         const call = cb as (a: unknown, e: unknown) => unknown
-        const handler = typeof cb !== 'function' ? cb
-            : CACHED_TOOLS.has(name) ? (args: unknown, extra: unknown) => cachedToolCall(name, args, () => Promise.resolve(call(args, extra)))
+        const raw = typeof cb !== 'function' ? cb
+            : CACHED_TOOLS.has(name) ? (args: unknown, extra: unknown) => cachedToolCall(name, name === 'session_story' || name === 'attempt_timings' ? { args, insights } : args, () => Promise.resolve(call(args, extra)))
             : cb
+        const handler = typeof raw === 'function' ? async (args: unknown, extra: unknown) => {
+            try { return await safeResult(await (raw as (a: unknown, e: unknown) => unknown)(args, extra)) }
+            catch (e) { return { isError: true, content: [{ type: 'text', text: String(await safeResult(String((e as Error)?.message || 'The tool could not complete.'))) }] } }
+        } : raw
         return register(name, { ...cfg, description: `${cfg.description ?? ''} ${DIRECT_CALL}`.trim() } as never, handler as never)
     }) as typeof server.registerTool
+}
+
+export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'dashboardRole' | 'admin' | 'insights'>>): void {
+    const insights = !!caller?.admin || caller?.insights === true
+    wrapTools(server, insights)
     server.registerTool(
         'resolve_client',
         {
@@ -207,6 +229,8 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
             const session_id = sessionIdOf(raw)
             const lines = [`Replay in PostHog from ${Math.floor(start_s)}s (PostHog login needed): ${replayUrl(session_id, start_s)}`]
             try {
+                const refusal = mcpClipRefusal()
+                if (refusal) throw new Error(refusal)
                 const clip = await renderClip({ sessionId: session_id, startOffsetS: start_s, durationS: duration_s })
                 await recordClip(clip, 'claude (MCP)')
                 lines.push(`MP4 clip, ${Math.round(clip.video_duration_s)} s, on the clip page (sign-in and the "Watch clips" role needed): ${config.service.publicUrl}/replays?clip=${encodeURIComponent(clip.name)}`)
@@ -290,155 +314,163 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
         },
         async ({ summary, description, kind, reporter_timezone, clip }) => {
             const report = await triage({ key: 'MCP', kind, summary, description, reporter: { timeZone: reporter_timezone } }, { ai, clip })
-            return text(renderReport(report))
+            if (report.clip) {
+                await recordClip(report.clip, caller?.who || 'claude (MCP)')
+                // MCP links must pass the clip page's current access checks when opened.
+                report.clip.url = `${config.service.publicUrl}/replays?clip=${encodeURIComponent(report.clip.name)}`
+            }
+            return reportResult(report)
         }
     )
 
     // ------------------------------------------------------------------ release outcomes
     // Facts about the tickets each Jira release shipped, from the numbers the service stored
     // (src/core/releases.ts). The model judges what is risky; people's verdicts are saved.
-    const scopeArg = z.string().optional().describe('A release like "26.10.0", a quarter like "Q3 2026", "last 3", a range like "26.5.0..26.8.0", or "all" (default).')
-    const noScope = (q?: string) =>
-        text(`Nothing called "${q}". Releases: ${keptNames().join(', ')}. Quarters: ${quarters().map((x) => x.label).join(', ')}. Or "all", "last 3", "26.5.0..26.8.0".`)
-    const empty = () => text('No releases stored yet. Call refresh_releases first.')
+    if (config.features.jira) {
+        const scopeArg = z.string().optional().describe('A release like "26.10.0", a quarter like "Q3 2026", "last 3", a range like "26.5.0..26.8.0", or "all" (default).')
+        const noScope = (q?: string) =>
+            text(`Nothing called "${q}". Releases: ${keptNames().join(', ')}. Quarters: ${quarters().map((x) => x.label).join(', ')}. Or "all", "last 3", "26.5.0..26.8.0".`)
+        const empty = () => text('No releases stored yet. Call refresh_releases first.')
 
-    server.registerTool(
-        'list_releases',
-        {
-            title: 'List releases',
-            description: `Lists ${A} Jira releases, dates, available quarters and headline outcomes. Includes clients, errors and rage clicks per 1,000 sessions before and after, support tickets and survey ratings.`,
-            inputSchema: {},
-            annotations: { readOnlyHint: true },
-        },
-        async () => text(releasesMarkdown())
-    )
-
-    server.registerTool(
-        'release_outcomes',
-        {
-            title: 'Tickets by outcome',
-            description:
-                `Shows what happened after ${A} tickets shipped in a release, quarter or range, grouped by outcome. Includes errors, rage clicks, complaints, adoption, improvements and saved verdicts. Facts only: deciding what is risky is up to you. Start here for release reviews.`,
-            inputSchema: { scope: scopeArg },
-            annotations: { readOnlyHint: true },
-        },
-        async ({ scope }) => {
-            if (!keptNames().length) return empty()
-            const sc = resolveScope(scope)
-            return sc ? text(outcomesMarkdown(sc)) : noScope(scope)
-        }
-    )
-
-    server.registerTool(
-        'ticket_evidence',
-        {
-            title: 'One ticket in full',
-            description: `Explains the evidence for one ${A} Jira ticket and its release outcome. Includes its screen/event link, use before and after, errors, rage clicks, support tickets, survey comments in clients' words and earlier verdicts.`,
-            inputSchema: { key: z.string().describe('Jira key, e.g. ACP-230') },
-            annotations: { readOnlyHint: true },
-        },
-        async ({ key }) => text(evidenceMarkdown(key.trim().toUpperCase()) || `${key} is not in the kept releases.`)
-    )
-
-    server.registerTool(
-        'client_feedback',
-        {
-            title: 'What clients said',
-            description: `Shows what ${A} clients complained about after a release, grouped by screen, from support tickets and survey answers with ratings before and after. Use PostHog's exec instead for generic trends or funnels. Surveys themselves are handled only by the Lens survey tools (never PostHog), and launched only on the Lens Surveys page.`,
-            inputSchema: { scope: scopeArg, screen: z.string().optional().describe('A screen path like /invoices, to narrow it down') },
-            annotations: { readOnlyHint: true },
-        },
-        async ({ scope, screen }) => {
-            if (!keptNames().length) return empty()
-            const sc = resolveScope(scope)
-            return sc ? text(feedbackMarkdown(sc, screen)) : noScope(scope)
-        }
-    )
-
-    server.registerTool(
-        'record_verdict',
-        {
-            title: 'Save a verdict',
-            description:
-                `Saves an agreed verdict on a ${A} Jira ticket: risky, watch or fine, with the reason. Future calls show it next to the ticket. Only call this after the person agreed, and pass their name in decided_by. Optionally posts a comment to Jira.`,
-            inputSchema: {
-                key: z.string(),
-                verdict: z.enum(['risky', 'watch', 'fine']),
-                reason: z.string().min(5).describe('Why, citing the numbers or client words'),
-                decided_by: z.string().describe('Who agreed to it, e.g. "Priya (PM)", or "claude" if nobody reviewed it'),
-                post_to_jira: z.boolean().default(false),
+        server.registerTool(
+            'list_releases',
+            {
+                title: 'List releases',
+                description: `Lists ${A} Jira releases, dates, available quarters and headline outcomes. Includes clients, errors and rage clicks per 1,000 sessions before and after, support tickets and survey ratings.`,
+                inputSchema: {},
+                annotations: { readOnlyHint: true },
             },
-            annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
-        },
-        async ({ key, verdict, reason, decided_by, post_to_jira }) => {
-            const k = key.trim().toUpperCase()
-            let row
-            try {
-                row = recordVerdict(k, verdict, reason, decided_by)
-            } catch (e) {
-                return text((e as Error).message)
+            async () => text(releasesMarkdown())
+        )
+
+        server.registerTool(
+            'release_outcomes',
+            {
+                title: 'Tickets by outcome',
+                description:
+                    `Shows what happened after ${A} tickets shipped in a release, quarter or range, grouped by outcome. Includes errors, rage clicks, complaints, adoption, improvements and saved verdicts. Facts only: deciding what is risky is up to you. Start here for release reviews.`,
+                inputSchema: { scope: scopeArg },
+                annotations: { readOnlyHint: true },
+            },
+            async ({ scope }) => {
+                if (!keptNames().length) return empty()
+                const sc = resolveScope(scope)
+                return sc ? text(outcomesMarkdown(sc)) : noScope(scope)
             }
-            let jira = ''
-            if (post_to_jira) {
+        )
+
+        server.registerTool(
+            'ticket_evidence',
+            {
+                title: 'One ticket in full',
+                description: `Explains the evidence for one ${A} Jira ticket and its release outcome. Includes its screen/event link, use before and after, errors, rage clicks, support tickets, survey comments in clients' words and earlier verdicts.`,
+                inputSchema: { key: z.string().describe('Jira key, e.g. ACP-230') },
+                annotations: { readOnlyHint: true },
+            },
+            async ({ key }) => text(evidenceMarkdown(key.trim().toUpperCase(), true) || `${key} is not in the kept releases.`)
+        )
+
+        server.registerTool(
+            'client_feedback',
+            {
+                title: 'What clients said',
+                description: `Shows what ${A} clients complained about after a release, grouped by screen, from support tickets and survey answers with ratings before and after. Use PostHog's exec instead for generic trends or funnels. Surveys themselves are handled only by the Lens survey tools (never PostHog), and launched only on the Lens Surveys page.`,
+                inputSchema: { scope: scopeArg, screen: z.string().optional().describe('A screen path like /invoices, to narrow it down') },
+                annotations: { readOnlyHint: true },
+            },
+            async ({ scope, screen }) => {
+                if (!keptNames().length) return empty()
+                const sc = resolveScope(scope)
+                return sc ? text(feedbackMarkdown(sc, screen, true)) : noScope(scope)
+            }
+        )
+
+        server.registerTool(
+            'record_verdict',
+            {
+                title: 'Save a verdict',
+                description:
+                    `Saves an agreed verdict on a ${A} Jira ticket: risky, watch or fine, with the reason. Future calls show it next to the ticket. Only call this after the person agreed. Personal keys save the caller email; decided_by names the reviewer for shared keys. Admins can optionally post a comment to Jira.`,
+                inputSchema: {
+                    key: z.string(),
+                    verdict: z.enum(['risky', 'watch', 'fine']),
+                    reason: z.string().min(5).describe('Why, citing the numbers or client words'),
+                    decided_by: z.string().describe('Who agreed to it, e.g. "Priya (PM)", or "claude" if nobody reviewed it'),
+                    post_to_jira: z.boolean().default(false),
+                },
+                annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+            },
+            async ({ key, verdict, reason, decided_by, post_to_jira }) => {
+                decided_by = caller?.email || decided_by
+                if (post_to_jira && !caller?.admin) return text('Posting to Jira requires admin access.')
+                const k = key.trim().toUpperCase()
+                let row
                 try {
-                    await addComment(k, `**Release review: ${verdict}** (${decided_by})\n\n${reason}\n\n_From PostHog Lens release outcomes._`)
-                    jira = ' Posted to Jira.'
+                    row = recordVerdict(k, verdict, reason, decided_by)
                 } catch (e) {
-                    jira = ` Saved, but Jira refused the comment: ${(e as Error).message.slice(0, 160)}`
+                    return text((e as Error).message)
                 }
+                let jira = ''
+                if (post_to_jira) {
+                    try {
+                        await addComment(k, `**Release review: ${verdict}** (${decided_by})\n\n${reason}\n\n_From PostHog Lens release outcomes._`)
+                        jira = ' Posted to Jira.'
+                    } catch (e) {
+                        jira = ` Saved, but Jira refused the comment: ${(e as Error).message.slice(0, 160)}`
+                    }
+                }
+                return text(`Saved: ${k} (${row.release}) is ${verdict}, by ${decided_by}.${jira}`)
             }
-            return text(`Saved: ${k} (${row.release}) is ${verdict}, by ${decided_by}.${jira}`)
-        }
-    )
+        )
 
-    server.registerTool(
-        'correct_ticket_link',
-        {
-            title: 'Fix how a ticket is linked',
-            description:
-                `Fixes a ${A} Jira ticket's link to a screen or event, then recounts its release evidence. screen_problems controls whether screen errors, rage clicks and complaints count (auto lets the rules decide). reset=true restores the automatic link.`,
-            inputSchema: {
-                key: z.string(),
-                screen: z.string().optional().describe('Screen path, e.g. /settings'),
-                event: z.string().optional().describe('PostHog event name, e.g. theme_changed'),
-                screen_problems: z.enum(['auto', 'count', 'ignore']).default('auto'),
-                reset: z.boolean().default(false),
-                changed_by: z.string().describe('Who asked for the change'),
+        server.registerTool(
+            'correct_ticket_link',
+            {
+                title: 'Fix how a ticket is linked',
+                description:
+                    `Fixes a ${A} Jira ticket's link to a screen or event, then recounts its release evidence. screen_problems controls whether screen errors, rage clicks and complaints count (auto lets the rules decide). reset=true restores the automatic link.`,
+                inputSchema: {
+                    key: z.string(),
+                    screen: z.string().optional().describe('Screen path, e.g. /settings'),
+                    event: z.string().optional().describe('PostHog event name, e.g. theme_changed'),
+                    screen_problems: z.enum(['auto', 'count', 'ignore']).default('auto'),
+                    reset: z.boolean().default(false),
+                    changed_by: z.string().describe('Who asked for the change'),
+                },
+                annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
             },
-            annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
-        },
-        async ({ key, screen, event, screen_problems, reset, changed_by }) => {
-            const k = key.trim().toUpperCase()
-            const release = ticketRelease(k)
-            if (!release) return text(`${k} is not in the kept releases.`)
-            if (reset) setLink(k, null, changed_by)
-            else {
-                if (!screen && !event) return text('Give a screen, an event, or both (or reset=true).')
-                if (screen && !screen.startsWith('/')) return text('A screen is a path that starts with /, e.g. /invoices.')
-                setLink(k, { screen, event, ...(screen_problems === 'auto' ? {} : { risk: screen_problems === 'count' }) }, changed_by)
+            async ({ key, screen, event, screen_problems, reset, changed_by }) => {
+                const k = key.trim().toUpperCase()
+                const release = ticketRelease(k)
+                if (!release) return text(`${k} is not in the kept releases.`)
+                if (reset) setLink(k, null, changed_by)
+                else {
+                    if (!screen && !event) return text('Give a screen, an event, or both (or reset=true).')
+                    if (screen && !screen.startsWith('/')) return text('A screen is a path that starts with /, e.g. /invoices.')
+                    setLink(k, { screen, event, ...(screen_problems === 'auto' ? {} : { risk: screen_problems === 'count' }) }, changed_by)
+                }
+                await recompute(release)
+                return text(`Updated and recounted.\n\n${ticketText(k, true)}`)
             }
-            await recompute(release)
-            return text(`Updated and recounted.\n\n${ticketText(k)}`)
-        }
-    )
+        )
 
-    server.registerTool(
-        'refresh_releases',
-        {
-            title: 'Refresh from Jira and PostHog',
-            description: `Refreshes ${A} releases and tickets from Jira and recounts their PostHog evidence (about 15 seconds). The service also does this every 6 hours.`,
-            inputSchema: {},
-            annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
-        },
-        async () => {
-            const r = await syncReleases()
-            return text(`Refreshed ${r.releases.length} releases (${r.releases[0]} to ${r.releases.at(-1)}), ${r.tickets} tickets, in ${r.seconds} s.${r.dropped.length ? ` No longer kept: ${r.dropped.join(', ')}.` : ''}`)
-        }
-    )
+        server.registerTool(
+            'refresh_releases',
+            {
+                title: 'Refresh from Jira and PostHog',
+                description: `Refreshes ${A} releases and tickets from Jira and recounts their PostHog evidence (about 15 seconds). The service also does this every 6 hours.`,
+                inputSchema: {},
+                annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+            },
+            async () => {
+                const r = await syncReleases()
+                return text(`Refreshed ${r.releases.length} releases (${r.releases[0]} to ${r.releases.at(-1)}), ${r.tickets} tickets, in ${r.seconds} s.${r.dropped.length ? ` No longer kept: ${r.dropped.join(', ')}.` : ''}`)
+            }
+        )
+    }
+    if (appEvents()) registerAppEventTools(server, insights)
 
-    if (appEvents()) registerAppEventTools(server)
-
-    server.registerPrompt(
+    if (config.features.jira) server.registerPrompt(
         'review_release',
         {
             title: 'Review a release',
@@ -474,7 +506,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
 }
 
 // The app's own events (APP_EVENTS_FILE): what they are, one session as a story, where people fail.
-function registerAppEventTools(server: McpServer): void {
+function registerAppEventTools(server: McpServer, insights: boolean): void {
     const app = appEvents()!.app
     server.registerTool(
         'reval_brief',
@@ -545,12 +577,12 @@ function registerAppEventTools(server: McpServer): void {
             annotations: { readOnlyHint: true },
         },
         async ({ session_id, max_lines }) => {
-            const r = await sessionStory(sessionIdOf(session_id), { maxLines: max_lines })
+            const r = await sessionStory(sessionIdOf(session_id), { maxLines: max_lines, network: insights })
             const head = [
                 `Session ${r.session_id}: client ${r.client || '?'}, user ${r.user || '?'}, ${r.start.slice(0, 16).replace('T', ' ')} UTC${r.version ? `, ${r.version}` : ''}.`,
                 r.summary,
                 r.replay_url ? `Replay for the user (PostHog login needed): ${r.replay_url}` : 'No replay recorded for this session.',
-                `Server calls: ${r.network}.`,
+                ...(insights ? [`Server calls: ${r.network}.`] : []),
             ]
             const errs = r.errors.length ? ['', 'Errors:', ...r.errors.map((e) => `- ${e.at} ${e.dialog}: "${e.text}"${e.replay_url ? ` (watch: ${e.replay_url})` : ''}`)] : []
             return text([...head, ...errs, '', 'Timeline (+m:ss from the start of the recording):', ...r.story, r.truncated ? '… (cut; raise max_lines for more)' : ''].join('\n'))
@@ -611,6 +643,7 @@ function registerAppEventTools(server: McpServer): void {
             annotations: { readOnlyHint: true },
         },
         async ({ client, dialog, when: w, timezone, sessions }) => {
+            if (!insights) return text('Recording-derived timings require replay insights access.')
             const win = parseTimeWindow(w || 'last 7 days', new Date(), timezone)
             const best = client ? (await pickClient(client)).best : undefined
             return json(`${app} attempts and their server calls${best ? ` for ${best.name}` : ''}${dialog ? `, dialog "${dialog}"` : ''} (${win.label}):`, await slowAttempts({ from: win.from, to: win.to, clientId: best?.id, dialog, sessions }))
@@ -701,7 +734,7 @@ Relay the returned brief, including its evidence and limits. Add nothing invente
         title: 'Check a Reval client', description: 'How is this client doing?',
         argsSchema: { client: z.string().describe('Client name or id') },
     }, ({ client }) => briefPrompt({ question: 'How is this client doing?', client }))
-    server.registerPrompt('release_check', {
+    if (config.features.jira) server.registerPrompt('release_check', {
         title: 'Check after a release', description: 'What needs attention after a release?',
         argsSchema: { release: z.string().optional().describe('Release name or version, if known') },
     }, ({ release }) => briefPrompt({ question: `What should I worry about after release ${release || 'the latest release'}?`, when: 'last 14 days' }))

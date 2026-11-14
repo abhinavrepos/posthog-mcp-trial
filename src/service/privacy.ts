@@ -59,11 +59,11 @@ const STYLE = `.top{display:flex;justify-content:space-between;align-items:cente
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:8px 40px}
 .sw{appearance:none;-webkit-appearance:none;width:42px!important;height:24px;min-height:0!important;padding:0!important;border-radius:999px;background:var(--line-strong);position:relative;cursor:pointer;flex:none;margin:0;border:0!important;transition:background .15s}
 .sw::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:var(--card);box-shadow:0 1px 2px var(--line);transition:left .15s}
-.sw:checked{background:var(--ok)}
+.sw:checked{background:var(--accent)}
 .sw:checked::after{left:21px}
 .sw:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .sw:disabled{opacity:.5;cursor:default}
-.off-area{opacity:.55}
+.off-area{opacity:.75}
 .card .find{align-items:center;margin:0 0 16px}
 .stats{color:var(--muted);font-size:13px;margin:12px 0 0;padding-top:12px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px 24px}
 table.cn{width:100%;table-layout:fixed;border-collapse:collapse}

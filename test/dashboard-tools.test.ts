@@ -11,11 +11,13 @@ import type { Task, TaskMapParams, FlowTimeParams } from '../src/core/taskstypes
 
 const dir = mkdtempSync(join(tmpdir(), 'dashboard-tools-'))
 Object.assign(process.env, { TRIAGE_DB: join(dir, 'test.db'), TASKS_DB: join(dir, 'tasks.db'), APP_EVENTS_FILE: 'config/app-events.reval.json', POSTHOG_PROJECT_ID: '1', POSTHOG_SURVEY_API_KEY: 'test', FEATURE_SURVEYS: 'on' })
+const { wrapTools, DIRECT_CALL } = await import('../src/mcp/tools.ts')
 const { registerDashboardTools, dashboardToolNames, DASHBOARD_TOOLS } = await import('../src/mcp/dashboardtools.ts')
 const { serverInstructions, INSTRUCTIONS_LIMIT } = await import('../src/mcp/instructions.ts')
 const { config } = await import('../src/core/config.ts')
 const core = await import('../src/core/dashboards.ts')
 const access = await import('../src/service/access.ts')
+for (const email of ['pm@x.com', 'a@x.com', 'other@x.com']) access.setPerson(email, 'watch', 'test')
 const { handleAdmin } = await import('../src/service/admin.ts')
 after(() => rmSync(dir, { recursive: true, force: true }))
 
@@ -31,6 +33,7 @@ const deps = {
 type Deps = NonNullable<Parameters<typeof registerDashboardTools>[2]>
 async function chat(role: DashboardRole, personal = true, overrides: Deps = {}, surveyRole: import('../src/service/access.ts').SurveyRole = 'launch') {
     const server = new McpServer({ name: 'test', version: '1' })
+    wrapTools(server)
     registerDashboardTools(server, { who: 'pm@x.com', email: personal ? 'pm@x.com' : undefined, dashboardRole: role, surveyRole, admin: false }, { ...deps, ...overrides })
     const client = new Client({ name: 'test', version: '1' })
     const [a, b] = InMemoryTransport.createLinkedPair()
@@ -198,7 +201,7 @@ test('rescue chat shows top three reasons, limits rows and descriptions, links d
     try {
         const listed = (await c.client.listTools()).tools
         assert.equal(listed.some(t => t.name === 'set_rescue_status'), false)
-        assert.ok(listed.find(t => t.name === 'rescue_queue')!.description!.length < 200)
+        assert.ok(listed.find(t => t.name === 'rescue_queue')!.description!.replace(DIRECT_CALL, '').trim().length < 200)
         const forbidden = await c.client.callTool({ name: 'set_rescue_status', arguments: { client: 'rescue-client', status: 'resolved' } })
         assert.equal(forbidden.isError, true)
     } finally { await c.close() }

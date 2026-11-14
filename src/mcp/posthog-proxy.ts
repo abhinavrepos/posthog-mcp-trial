@@ -1,4 +1,6 @@
 // Routing text is pure; the HTTP adapter only handles authentication and transport.
+import { safetyWith, staffEmails } from '../core/aisafety.ts'
+import { identityTokens } from '../core/rescueprivacy.ts'
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable, Transform } from 'node:stream'
@@ -150,15 +152,18 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
     // Client anonymisation (Admin → Client privacy for AI): requests checked, every answer cleaned.
     // Checked again for every message: a stream opened before an admin turned it on is cleaned from then on.
     const anon = anonFor('posthog')
-    const clean = (v: unknown) => (anonFor('posthog') ? guardResponse(v, 'posthog_cleaned') : v)
+    let tokens: string[] = [], staff = new Set<string>()
+    const cleanText = (v: string) => safetyWith(v, tokens, staff)
+    const clean = (v: unknown) => (anonFor('posthog') ? guardResponse(safetyWith(v, tokens, staff), 'posthog_cleaned') : v)
     const out = (v: unknown) => clean(rewriteResponse(v, options.name, options.info))
     const sseLine = (line: string) => {
         if (!anonFor('posthog')) return rewriteSseLine(line, options.name, options.info)
-        if (!line.startsWith('data:')) return hideClients(line).text
+        if (!line.startsWith('data:')) return cleanText(hideClients(line).text)
         const m = /^(data: *)(.*?)(\r?)$/.exec(line)!
-        try { return `${m[1]}${JSON.stringify(out(JSON.parse(m[2])))}${m[3]}` } catch { return hideClients(line).text }
+        try { return `${m[1]}${JSON.stringify(out(JSON.parse(m[2])))}${m[3]}` } catch { return cleanText(hideClients(line).text) }
     }
     try {
+        tokens = await identityTokens(); staff = staffEmails()
         if (anon) await refreshRoster()
         let body: string | undefined
         let batch = false
@@ -226,7 +231,7 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
                 output = JSON.stringify(refusals.length ? [...(Array.isArray(value) ? value : [value]), ...refusals] : value)
             } else if (refusals.length) {
                 return send(res, 200, refusals)
-            } else if (anonFor('posthog')) output = hideClients(raw).text
+            } else if (anonFor('posthog')) output = cleanText(hideClients(raw).text)
             res.writeHead(upstream.status)
             res.end(output)
         }

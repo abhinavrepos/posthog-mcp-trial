@@ -129,12 +129,52 @@ export function firstValue(v: unknown): string {
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'" }
 const decode = (s: string) => s.replace(/&(#39|[a-z]+);/gi, (m, e) => ENTITIES[e.toLowerCase()] ?? m)
 
+// Scan numeric runs once: retrying a separator regex at every digit can be quadratic.
+export function maskAmounts(text: string): string {
+    const currency = /^(?:USD|EUR|GBP|CAD|CHF|JPY|AUD|INR|CNY|HKD|SGD|SEK|NOK|DKK|ZAR|MXN|BRL)$/i
+    return text.replace(/(?:\( ?)?[-−]?(?:(?:USD|EUR|GBP|CAD|CHF|JPY|AUD|INR|CNY|HKD|SGD|SEK|NOK|DKK|ZAR|MXN|BRL) ?|\p{Sc} ?)?[-−]?[0-9][0-9., ]*(?: ?(?:USD|EUR|GBP|CAD|CHF|JPY|AUD|INR|CNY|HKD|SGD|SEK|NOK|DKK|ZAR|MXN|BRL)(?![A-Za-z])| ?\p{Sc})?(?: ?\))?/giu, (token, offset) => {
+        const trimmed = token.trimEnd()
+        const codes = trimmed.match(/[A-Za-z]{3}/g) || []
+        if (/\p{Sc}/u.test(trimmed) || codes.some(c => currency.test(c)) || /[0-9][.,][0-9]|[0-9] [0-9]{3}(?:[^0-9]|$)/.test(trimmed)) return '<amount>' + token.slice(trimmed.length)
+        return token.replace(/\d{5,}/g, (digits, at) => {
+            const start = offset + at, end = start + digits.length
+            if (/[\p{L}\p{N}_]/u.test(text[start - 1] || '') || /[\p{L}\p{N}_]/u.test(text[end] || '')) return digits
+            return /(?:\b(?:id|no|number|ref|trade)|#)\s*[:#-]?\s*$/i.test(text.slice(Math.max(0, start - 64), start)) ? digits : '<amount>'
+        })
+    })
+}
+
+// Unknown exception text has no reviewed vocabulary; only explicit trade references are useful safely.
+export function errorTemplate(text: string): string {
+    const trades = text.match(/\bTrade\s+(?:Id\s+)?[0-9]+\b/gi) || []
+    const template = /^Notional exceeds limit:/i.test(text) ? 'Notional exceeds limit: <amount>' : 'Error reported'
+    return template + (trades.length ? ` (${trades.join(', ')})` : '')
+}
+
+// Anchoring each whole token avoids retrying an email match at every character.
+// Emails, in linear time: only tokens with an @ are looked at, and they are split at each @ instead of
+// matched with one regex (which retries from every position: quadratic on a long token without a dot).
+// A non-empty part before an @ and a part after it that starts like a domain (name.name) are one address,
+// also when more follows (alice@example.com@x -> …@x).
+const maskEmails = (s: string) => s.replace(/[\w.+@-]+/g, (t) => {
+    if (!t.includes('@')) return t
+    const parts = t.split('@'), out = [parts[0]!]
+    for (let i = 1; i < parts.length; i++) {
+        const domain = /^[\w-]+\.[\w.-]+/.exec(parts[i]!)
+        if (domain && out[out.length - 1]) out[out.length - 1] = '…' + parts[i]!.slice(domain[0].length)
+        else out.push(parts[i]!)
+    }
+    return out.join('@')
+})
+
 /** A message as shown: entities decoded, one line, the redact patterns applied (search text). Ids stay. */
 export function cleanMessage(text: string, reg: Pick<AppEvents, 'redact'>, max = 300): string {
     let s = firstValue(text)
         .replace(/&(#39|[a-z]+);/gi, (m, e) => ENTITIES[e.toLowerCase()] ?? m)
         .replace(/\\n|\s+/g, ' ')
         .trim()
+    // After the whitespace is one space: "USD<tab>1234" and "USD 1 234" are amounts too.
+    s = maskEmails(maskAmounts(s))
     for (const r of reg.redact) s = s.replace(new RegExp(r, 'i'), (_m, keep = '') => `${keep}…`)
     return s.length > max ? s.slice(0, max - 1) + '…' : s
 }
@@ -148,11 +188,10 @@ export function generalise(text: string, reg: Pick<AppEvents, 'redact'>, max = 2
         .replace(/&(#39|[a-z]+);/gi, (m, e) => ENTITIES[e.toLowerCase()] ?? m)
         .replace(/\\n|\s+/g, ' ')
         .trim()
+    // After the whitespace is one space: "USD<tab>1234" and "USD 1 234" are amounts too.
+    s = maskEmails(maskAmounts(s))
     for (const r of reg.redact) s = s.replace(new RegExp(r, 'i'), (_m, keep = '') => `${keep}…`)
     s = s
-        // Emails: only tokens that contain an @ are searched (scanning every position of a long run
-        // without one is quadratic).
-        .replace(/[\w.+@-]+/g, (t) => (t.includes('@') ? t.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '…') : t))
         .replace(/\b\d{4}[-/]\d{2}[-/]\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?/g, '<date>')
         .replace(/\b\d{1,2}[-/ ][A-Za-z]{3}[-/ ]\d{4}( \d{2}:\d{2}(:\d{2})?)?/g, '<date>')
         // A token mixing letters and digits (a code, a user id, a feed name) is an identifier. Each run of
@@ -600,7 +639,7 @@ export interface SessionStoryResult {
 }
 
 /** One session as a story, with a replay link at each error. */
-export async function sessionStory(sessionId: string, opts: { maxLines?: number } = {}): Promise<SessionStoryResult> {
+export async function sessionStory(sessionId: string, opts: { maxLines?: number; network?: boolean } = {}): Promise<SessionStoryResult> {
     const reg = required()
     const rows = await hogql(
         `SELECT ${columns(reg)} FROM events
@@ -616,7 +655,7 @@ export async function sessionStory(sessionId: string, opts: { maxLines?: number 
     const names = await dialogNames(new Date(first - 30 * 86_400_000), new Date(last + 60_000)).catch(() => new Map())
     const span = (await recordingSpans([sessionId]).catch(() => new Map())).get(sessionId)
     const startMs = span ? Math.min(Date.parse(span.start), first) : first
-    const timings = span ? await sessionTimings(sessionId, steps).catch(() => undefined) : undefined
+    const timings = span && opts.network !== false ? await sessionTimings(sessionId, steps).catch(() => undefined) : undefined
     const story = renderStory(steps, reg, { names: nameLookup(names), startMs, maxLines: opts.maxLines, timings })
     const version = events.map((e) => e.version).find((v) => v)
     return {
@@ -635,7 +674,7 @@ export async function sessionStory(sessionId: string, opts: { maxLines?: number 
             replay_url: span ? replayUrl(sessionId, Math.max(0, e.at_s - 10)) : undefined,
         })),
         replay_url: span ? replayUrl(sessionId, 0) : undefined,
-        network: !span ? 'no recording' : timings ? `server calls read from the recording for ${timings.size} of ${story.submits} attempts` : 'the recording has no network data',
+        network: opts.network === false ? 'not requested' : !span ? 'no recording' : timings ? `server calls read from the recording for ${timings.size} of ${story.submits} attempts` : 'the recording has no network data',
         truncated: story.truncated,
     }
 }

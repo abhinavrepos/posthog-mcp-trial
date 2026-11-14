@@ -267,7 +267,7 @@ setup() {
     if [ ! -f "$CONF" ]; then
         local ph site; ph="${POSTHOG_DIR:-$(grep -E '^POSTHOG_DIR=' "${INSTALL_STATE_DIR:-/var/lib/posthog-lens-install}/install.env" 2>/dev/null | tail -1 | cut -d= -f2-)}"
         [ -n "$ph" ] || die "where is PostHog installed? Run: sudo POSTHOG_DIR=/data04/<posthog folder> bash posthog-lens setup $tag"
-        umask 022
+        umask 077            # settings can hold keys and passwords (site.env, the installer's answers)
         cat >"$CONF" <<EOF
 # posthog-lens settings, and the answers deploy/install.sh uses (deploy/install.env.example lists them all).
 LENS_DIR=${LENS_DIR:-/data04/posthog-lens}
@@ -282,7 +282,7 @@ EOF
             { echo "SITE=$site"; grep -vE '^#' "$(dirname "$self")/sites/$site/site.env"; } >>"$CONF"
             say "settings for $site added"
         fi
-        chown root:root "$CONF"; chmod 644 "$CONF"
+        chown root:root "$CONF"; chmod 600 "$CONF"
         say "wrote $CONF"
     else
         say "keeping $CONF"

@@ -92,7 +92,10 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
     // Decode transport containers only; detectors never access text or non-allowlisted values.
     const unpack = (raw: any): any => {
         if (typeof raw !== 'string' || !raw.startsWith('\x1f\x8b')) return raw
-        try { return JSON.parse(gunzipSync(Buffer.from(raw, 'latin1')).toString('utf8')) } catch { return undefined }
+        try { return JSON.parse(gunzipSync(Buffer.from(raw, 'latin1'), { maxOutputLength: Math.max(1, Number(process.env.REPLAY_MAX_MB) || 200) * 1024 * 1024 }).toString('utf8')) } catch (e) {
+            if ((e as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE') throw new Error('Recording too large by decompression policy')
+            return undefined
+        }
     }
     const add = (root: any, parent: number | undefined, t: number) => {
         const stack = [{ node: root, parent }]

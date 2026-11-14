@@ -2,6 +2,9 @@
 //
 // Every HogQL query takes its values as {placeholders} bound through `values`. Ticket text is
 // untrusted, so nothing from a ticket is ever concatenated into a query string.
+import { open } from 'node:fs/promises'
+import { setImmediate as yieldTurn } from 'node:timers/promises'
+
 import { config, requirePosthog } from './config.ts'
 
 // How many HogQL queries Lens runs at once (POSTHOG_CONNECTIONS, 1-16, default 4): ClickHouse on a small box
@@ -189,47 +192,98 @@ interface SnapshotSource {
  * Downloads a recording's snapshots as JSONL lines of `[windowId, event]`, the format the
  * rasterizer reads.
  */
-export async function getSnapshotsJsonl(sessionId: string): Promise<string> {
+const snapshotLimit = () => Math.max(1, Number(process.env.REPLAY_MAX_MB) || 200) * 1024 * 1024
+const snapshotChunks = () => Math.max(1, Math.floor(Number(process.env.REPLAY_MAX_CHUNKS) || 1000))
+const tooLarge = () => new PostHogError('Recording too large by snapshot policy', 413)
+
+export async function getSnapshotsJsonl(sessionId: string, file?: string): Promise<string> {
     const base = projectPath(`/session_recordings/${encodeURIComponent(sessionId)}/snapshots`)
     const { sources } = await api<{ sources: SnapshotSource[] }>(`${base}?blob_v2=true`)
     const blobs = sources.filter((s) => s.source === 'blob_v2')
     if (!blobs.length) throw new PostHogError(`Recording ${sessionId} has no stored snapshots yet`)
-    const keys = blobs.map((s) => Number(s.blob_key)).filter((n) => Number.isFinite(n))
-    const first = Math.min(...keys)
-    const last = Math.max(...keys)
-    // A personal API key may span at most 20 blob keys per request (end - start <= 20).
-    const CHUNK = 20
-    let text = ''
-    for (let start = first; start <= last; start += CHUNK + 1) {
-        const end = Math.min(last, start + CHUNK)
-        const res = await fetch(`${config.posthog.host}${base}?source=blob_v2&start_blob_key=${start}&end_blob_key=${end}`, {
-            headers: { authorization: `Bearer ${config.posthog.personalApiKey}` },
-            signal: AbortSignal.timeout(60_000),
-        })
-        if (!res.ok) throw new PostHogError(`Snapshot download for ${sessionId} → ${res.status}`, res.status)
-        text += (await res.text()) + '\n'
+    const keys = blobs.map((s) => Number(s.blob_key)).filter((n) => Number.isSafeInteger(n) && n >= 0)
+    if (!keys.length) throw new PostHogError('Recording has invalid blob keys')
+    const first = keys.reduce((a, b) => Math.min(a, b)), last = keys.reduce((a, b) => Math.max(a, b))
+    // Bound both sparse blob ranges and decompressed response bodies, not just Content-Length.
+    if (Math.ceil((last - first + 1) / 21) > snapshotChunks()) throw tooLarge()
+    const output = file ? await open(file, 'w', 0o600) : undefined
+    const parts: string[] = []
+    let bytes = 0, normalizedBytes = 0
+    const emit = async (line: string) => {
+        if (!line.trim()) return
+        for (const normalized of snapshotLines(line)) {
+            normalizedBytes += Buffer.byteLength(normalized) + 1
+            if (normalizedBytes > snapshotLimit()) throw tooLarge()
+            if (output) await output.write(normalized + '\n')
+            else parts.push(normalized + '\n')
+            await yieldTurn()
+        }
     }
-    return normalizeSnapshotLines(text)
+    try {
+        for (let start = first; start <= last; start += 21) {
+            const end = Math.min(last, start + 20)
+            const res = await fetch(`${config.posthog.host}${base}?source=blob_v2&start_blob_key=${start}&end_blob_key=${end}`, {
+                headers: { authorization: `Bearer ${config.posthog.personalApiKey}` },
+                signal: AbortSignal.timeout(60_000),
+            })
+            if (!res.ok) { await res.body?.cancel(); throw new PostHogError(`Snapshot download for ${sessionId} → ${res.status}`, res.status) }
+            const reader = res.body?.getReader()
+            if (!reader) continue
+            const decoder = new TextDecoder()
+            let pending = ''
+            try {
+                for (;;) {
+                    const { value, done } = await reader.read()
+                    if (value) bytes += value.byteLength
+                    if (bytes > snapshotLimit()) throw tooLarge()
+                    pending += decoder.decode(value, { stream: !done })
+                    let offset = 0, end: number
+                    while ((end = pending.indexOf('\n', offset)) >= 0) {
+                        if (end - offset > 4 * 1024 * 1024) throw tooLarge()
+                        await emit(pending.slice(offset, end))
+                        offset = end + 1
+                    }
+                    pending = pending.slice(offset)
+                    // A single JSON value must also be bounded before synchronous parsing.
+                    if (pending.length > 4 * 1024 * 1024) throw tooLarge()
+                    if (done) { await emit(pending); break }
+                }
+            } finally { await reader.cancel().catch(() => {}); reader.releaseLock() }
+        }
+        return file ? '' : parts.join('') || '\n'
+    } finally { await output?.close() }
 }
 
 /** Accepts either `[windowId, event]` lines or `{window_id, data}` lines and emits the former. */
-export function normalizeSnapshotLines(text: string): string {
-    const out: string[] = []
+function* snapshotLines(text: string): Generator<string> {
     for (const line of text.split('\n')) {
         if (!line.trim()) continue
         const parsed = JSON.parse(line)
         if (Array.isArray(parsed)) {
-            out.push(JSON.stringify(parsed))
+            yield JSON.stringify(parsed)
         } else if (parsed && typeof parsed === 'object') {
             const windowId = parsed.window_id ?? parsed.windowId ?? ''
             const events = Array.isArray(parsed.data) ? parsed.data : [parsed.data ?? parsed]
-            for (const ev of events) out.push(JSON.stringify([windowId, ev]))
+            for (const ev of events) yield JSON.stringify([windowId, ev])
         }
+    }
+}
+
+export function normalizeSnapshotLines(text: string): string {
+    const out: string[] = []
+    let bytes = 0
+    for (const line of snapshotLines(text)) {
+        bytes += Buffer.byteLength(line) + 1
+        if (bytes > snapshotLimit()) throw tooLarge()
+        out.push(line)
     }
     return out.join('\n') + '\n'
 }
 
 export function replayUrl(sessionId: string, offsetSeconds = 0): string {
+    let decoded = sessionId
+    for (let i = 0; i < 3; i++) decoded = decoded.replace(/%([0-9a-f]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    if (decoded.includes('@') || decoded.includes(config.properties.distinctIdSeparator)) return `${config.service.publicUrl}/replays`
     const t = Math.max(0, Math.floor(offsetSeconds))
     return `${config.posthog.publicHost}/project/${config.posthog.projectId}/replay/${encodeURIComponent(sessionId)}${t ? `?t=${t}` : ''}`
 }

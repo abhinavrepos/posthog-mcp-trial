@@ -1,3 +1,4 @@
+import { jsonResult } from './result.ts'
 import { scorecard } from '../core/scorecard.ts'
 import { rescuePrivacy } from '../core/rescueprivacy.ts'
 import { clientStory, handoverPack } from '../core/story.ts'
@@ -27,7 +28,7 @@ export const dashboardToolNames = (role: DashboardRole = 'share', surveyRole: Su
 const realDeps = { scorecard, clientStory, handoverPack, mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
 type Caller = Pick<ChatCaller, 'who' | 'email' | 'dashboardRole' | 'admin'> & { surveyRole?: SurveyRole; insights?: boolean }
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
-const json = (value: unknown) => text(JSON.stringify(value, null, 2))
+const json = (value: unknown) => jsonResult('', value)
 const page = (id?: string) => `${config.service.publicUrl.replace(/\/$/, '')}/replays/dashboards${id ? '/' + id : ''}`
 const DAY = 86400000
 const day = (date: Date) => date.toISOString().slice(0, 10)
@@ -115,7 +116,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         const lines = [`${name}: ${x.verdict.toUpperCase()}. ${x.summary}`, `Usage: ${x.usage.text}`,
             ...x.findings.map((f) => `- ${f.severity === 'high' ? 'High' : 'Medium'}: ${f.text}${f.where.length ? ` Where: ${f.where.join(', ')}.` : ''}${f.replays[0] ? ` Watch: ${f.replays[0].url}` : ''}`),
             ...(x.next_steps.length ? ['Next steps:', ...x.next_steps.map((n) => `- ${n}`)] : []), x.note, `Open in Lens: ${page()}?${new URLSearchParams({ view: 'story', client: matches[0].id })}`]
-        return text(lines.join('\n') + '\n\n```json\n' + JSON.stringify(await rescuePrivacy({ ...x, client_name: name }), null, 2) + '\n```')
+        return jsonResult(lines.join('\n'), await rescuePrivacy({ ...x, client_name: name }))
     }))
     reg('friction_hotspots', {
         title: 'Where do clients struggle on screen?',
@@ -139,7 +140,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
     }, safe(async ({ client }) => {
         const matches = d.rescueClients(client)
         if (matches.length !== 1) return json(await rescuePrivacy({ message: 'Choose a client id.', candidates: matches }))
-        return text(await d.handoverPack(matches[0].id))
+        return text(await d.handoverPack(matches[0].id, true))
     }))
     reg('monday_brief', {
         description: 'What changed at my clients since last week, and what needs me today? A saved weekly briefing with actions and verified recoveries.', inputSchema: {},

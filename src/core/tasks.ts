@@ -15,7 +15,7 @@ const date = (ms: number) => new Date(ms).toISOString().slice(0, 10)
 const shift = (day: string, n: number) => date(Date.parse(day) + n * DAY)
 const today = () => date(Date.now())
 export const TASKS_DB_FILE = isAbsolute(config.tasks.db) ? config.tasks.db : join(ROOT, config.tasks.db)
-mkdirSync(dirname(TASKS_DB_FILE), { recursive: true })
+mkdirSync(dirname(TASKS_DB_FILE), { recursive: true, mode: 0o700 })
 // Exported for maintenance and bulk fixtures; application queries use the functions below.
 export const tasksDb = new DatabaseSync(TASKS_DB_FILE)
 // busy_timeout first: switching to WAL needs a lock, and without it a second process opening the file at
@@ -96,6 +96,15 @@ transaction(() => {
         INSERT OR IGNORE INTO known_users SELECT DISTINCT user FROM task_users_daily WHERE user != '';
         INSERT OR IGNORE INTO known_users SELECT DISTINCT user FROM user_daily WHERE user != '';
         PRAGMA user_version = 5;
+    `)
+    // Old rows did not record whether the scan ran after the day's scan window (that day and the next)
+    // had closed. done_at says when it ran, so rows scanned late enough are final already; only the rest
+    // (today, yesterday, and any day scanned too early) are scanned again. Without this an upgrade would
+    // treat a whole year of history as unprocessed: no flags, and up to 400 days scanned again.
+    if (version < 6) tasksDb.exec(`
+        ALTER TABLE task_ingest ADD COLUMN finalized INTEGER NOT NULL DEFAULT 0;
+        UPDATE task_ingest SET finalized = 1 WHERE truncated = 0 AND done_at >= date(day, '+2 days');
+        PRAGMA user_version = 6;
     `)
 })
 type Row = Record<string, unknown>
@@ -249,6 +258,7 @@ export function summariseSteps(sessions: Step[][], day: string, _reg: AppEvents)
 }
 
 export interface StoreInfo {
+    finalized?: boolean
     summary?: StepSummary
     sessions?: number; events?: number; truncated?: boolean; seconds?: number
     dialogNames?: Map<string, string>; clientNames?: Map<string, string>
@@ -367,8 +377,8 @@ export function storeAttempts(day: string, attempts: TaskAttempt[], info: StoreI
             const dialog = task.slice(2)
             run('INSERT OR REPLACE INTO task_catalog VALUES (?,?,?,?,?,?)', task, dialog, label(dialog, info.dialogNames) + (finish ? ` → ${finish}` : ''), finish, range.first, range.last)
         }
-        run('INSERT INTO task_ingest VALUES (?,?,?,?,?,?,?)', day, info.sessions ?? new Set(attempts.map((a) => a.session_id)).size,
-            info.events ?? 0, attempts.length, Number(info.truncated || false), info.seconds ?? 0, new Date().toISOString())
+        run('INSERT INTO task_ingest VALUES (?,?,?,?,?,?,?,?)', day, info.sessions ?? new Set(attempts.map((a) => a.session_id)).size,
+            info.events ?? 0, attempts.length, Number(info.truncated || false), info.seconds ?? 0, new Date().toISOString(), Number(!!info.finalized && !info.truncated))
     })
 }
 
@@ -428,11 +438,11 @@ export function metrics(a?: Aggregate, users = 0): TaskMapRow['now'] {
 }
 export function dataThrough(): string | null {
     // Today is mutable; only a complete, nontruncated day can be called fully processed.
-    return one<{ day: string }>('SELECT max(day) AS day FROM task_ingest WHERE day < ? AND truncated = 0', today())?.day || null
+    return one<{ day: string }>('SELECT max(day) AS day FROM task_ingest WHERE day < ? AND truncated = 0 AND finalized = 1', today())?.day || null
 }
 /** The days of these periods not fully processed yet (today never counts as complete). */
 export function coverage(...windows: Window[]): Coverage {
-    const done = new Set(all<{ day: string }>('SELECT day FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0 AND day < ?',
+    const done = new Set(all<{ day: string }>('SELECT day FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0 AND finalized = 1 AND day < ?',
         windows.map((w) => w.from).sort()[0], windows.map((w) => w.to).sort().at(-1)!, today()).map((r) => r.day))
     const unprocessed = new Set<string>()
     for (const w of windows) for (let d = w.from; d <= w.to && unprocessed.size < 400; d = shift(d, 1)) if (!done.has(d)) unprocessed.add(d)
@@ -442,7 +452,7 @@ export function coverage(...windows: Window[]): Coverage {
     return { complete: false, unprocessed: list, text: `Not processed yet: ${span}. Lens gives no flags until both periods are fully processed, so a day still missing is never shown as work that stopped. Choose dates up to ${dataThrough() ?? 'the last processed day'}, or wait for the history to catch up.` }
 }
 function note(w: Window): string {
-    const complete = one<{ n: number }>('SELECT count(*) AS n FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0', w.from, w.to)!.n
+    const complete = one<{ n: number }>('SELECT count(*) AS n FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0 AND finalized = 1', w.from, w.to)!.n
     const missing = Math.max(0, (Date.parse(w.to) - Date.parse(w.from)) / DAY + 1 - complete)
     const partial = one<{ n: number }>('SELECT count(*) AS n FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated != 0', w.from, w.to)!.n
     return `Done includes completed and accepted replies. Durations use interpolated buckets; the open final bucket is estimated as 7200–14400 seconds. Daily rollups and distinct user identities survive attempt retention. Slow attempts and top errors cover only the retained ${config.tasks.historyDays} days. Session scans cover the previous day through the following day; longer sessions may be partial.${missing ? ` ${missing} day(s) in this window are not fully processed.` : ''}${partial ? ` ${partial} day(s) hit a safety cap; results are truncated.` : ''}`
@@ -598,7 +608,7 @@ export async function patiently<T>(fn: () => Promise<T>, waits = [5_000, 20_000,
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits?: number[]): Promise<void> {
     validDay(day)
-    const started = performance.now(), reg = required()
+    const started = performance.now(), scanStarted = Date.now(), reg = required()
     const q: TaskQuery = (text, values) => patiently(() => query(text, values), waits)
     const values = { from: day, to: shift(day, 1), scan_from: shift(day, -1), scan_to: shift(day, 2), events: [reg.events.screen, reg.events.interaction] }
     // Sessions whose first Reval event is on this day (a session from the evening before is not this day's).
@@ -665,7 +675,8 @@ export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits
         }
     }
     const dialogNames = new Map([...dialogCounts].map(([d, c]) => [d, [...c].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0]]))
-    storeAttempts(day, attempts, { sessions: ids.length, events, truncated, seconds: (performance.now() - started) / 1000, clientNames, dialogNames, finishes, summary: summariseSteps(sessions, day, reg) })
+    // Tasks can finish the following day, so that entire scan window must have elapsed at the start.
+    storeAttempts(day, attempts, { finalized: scanStarted >= Date.parse(shift(day, 2)), sessions: ids.length, events, truncated, seconds: (performance.now() - started) / 1000, clientNames, dialogNames, finishes, summary: summariseSteps(sessions, day, reg) })
 }
 let running = false, scheduled = false
 function state(key: string, value: string) { run('INSERT OR REPLACE INTO task_state VALUES (?,?)', key, value) }
@@ -679,12 +690,12 @@ export async function runIngest(opts: { days?: string[]; maxBackfill?: number } 
     if (opts.maxBackfill !== undefined && (!Number.isInteger(opts.maxBackfill) || opts.maxBackfill < 0 || opts.maxBackfill > 400)) throw new Error('maxBackfill must be from 0 to 400')
     if (running) return
     running = true
-    state('last_run', new Date().toISOString()); run("DELETE FROM task_state WHERE key = 'last_error'")
     try {
+        state('last_run', new Date().toISOString()); run("DELETE FROM task_state WHERE key = 'last_error'")
         let days = opts.days
         if (!days) {
             days = [today(), shift(today(), -1)]
-            const processed = new Set(all<{ day: string }>('SELECT day FROM task_ingest WHERE truncated = 0').map((r) => r.day))
+            const processed = new Set(all<{ day: string }>('SELECT day FROM task_ingest WHERE truncated = 0 AND finalized = 1').map((r) => r.day))
             let remaining = opts.maxBackfill ?? config.tasks.backfillDaysPerRun
             for (let i = 2; i < config.tasks.historyDays && remaining > 0; i++) {
                 const d = shift(today(), -i)
@@ -704,7 +715,7 @@ export async function runIngest(opts: { days?: string[]; maxBackfill?: number } 
 }
 export function ingestStatus(): IngestStatus {
     const s = one<{ n: number; first: string | null; last: string | null; attempts: number }>('SELECT count(*) AS n, min(day) AS first, max(day) AS last, coalesce(sum(attempts), 0) AS attempts FROM task_ingest')!
-    const recent = one<{ n: number }>('SELECT count(*) AS n FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0', shift(today(), 1 - config.tasks.historyDays), today())!.n
+    const recent = one<{ n: number }>('SELECT count(*) AS n FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0 AND finalized = 1', shift(today(), 1 - config.tasks.historyDays), today())!.n
     return { days_done: s.n, first_day: s.first, last_day: s.last, behind_days: config.tasks.historyDays - recent, attempts: s.attempts,
         last_run: one<{ value: string }>("SELECT value FROM task_state WHERE key = 'last_run'")?.value || null,
         last_error: one<{ value: string }>("SELECT value FROM task_state WHERE key = 'last_error'")?.value || null, running }

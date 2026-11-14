@@ -106,8 +106,8 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
 export function surveysHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Surveys · ${APP_NAME}</title><style>${PAGE_CSS()}
 :root{--act:var(--accent);--good:var(--ok);--good-bg:var(--ok-bg);--down:var(--err);--grid:var(--line)}
-.chip.running{background:var(--good-bg);color:var(--good)}
-.chip.draft{background:var(--warn-bg);color:var(--warn)}
+.chip.running{background:var(--accent-soft);color:var(--accent)}
+.chip.draft{background:var(--chip);color:var(--muted)}
 .head h2{margin:0;font-size:21px;overflow-wrap:anywhere}
 .chain{display:flex;flex-wrap:wrap;gap:6px;align-items:stretch;margin:6px 0 10px}
 .chain .st b{display:block;font-size:11px;color:var(--muted);font-weight:600}
@@ -173,7 +173,7 @@ main details p{overflow-wrap:anywhere}
 .pv .scale i{flex:1;text-align:center;font-style:normal;padding:7px 0;border-radius:6px;border:1px solid var(--line);min-width:0;font-size:11px}
 .ldlg ol li::marker{font-weight:700;color:var(--ink)}
 .ldlg .ack{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;font-size:14px;cursor:pointer;border:0;border-radius:0;background:var(--hover);color:var(--ink)}
-#page-msg:empty,#a-msg:empty,#l-msg:empty{margin:0}
+#page-msg:empty,#a-msg:empty,#l-msg:empty{margin:0}#page-msg[role=alert]:not(:empty){color:var(--err);border-left:3px solid var(--err);padding-left:12px}
 main{min-width:0}
 main h1{font-size:24px;line-height:32px;font-weight:650;margin:0}
 main .page-head{margin-bottom:24px;align-items:center}

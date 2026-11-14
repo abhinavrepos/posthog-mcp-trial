@@ -179,6 +179,18 @@ firewall_off() {
 
 # The rules live in memory: this unit puts them back at boot and whenever docker restarts (docker
 # rebuilds its own chains then).
+# Quote one systemd argument, including specifiers and environment expansion.
+systemd_arg() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//%/%%}"
+    value="${value//\$/\$\$}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\t'/\\t}"
+    printf '"%s"' "$value"
+}
+
 unit() {
     have systemctl || return 0
     local env=""
@@ -193,7 +205,7 @@ PartOf=docker.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-${env}ExecStart=$HERE/no-internet.sh firewall
+${env}ExecStart=$(systemd_arg "$HERE/no-internet.sh") firewall
 
 [Install]
 WantedBy=multi-user.target docker.service

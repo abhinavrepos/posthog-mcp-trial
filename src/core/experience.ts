@@ -6,6 +6,7 @@
 //
 // Nothing here stores or returns replay content: only counts, timings and safe element names, per
 // session (for replay links) and per client.
+import { Worker } from 'node:worker_threads'
 import { createHash } from 'node:crypto'
 
 import { appEvents, isGeneratedId, prop } from './appevents.ts'
@@ -13,7 +14,7 @@ import { appEvents, isGeneratedId, prop } from './appevents.ts'
 import { snapshotsFile } from './clip.ts'
 import { getRecording, hogql, replayUrl } from './posthog.ts'
 import { P } from './props.ts'
-import { safeName, signalsFromReplay, type SessionSignals } from './replaysignals.ts'
+import { safeName, type SessionSignals } from './replaysignals.ts'
 import { tasksDb } from './tasks.ts'
 
 tasksDb.exec(`
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS replay_signals(session_id TEXT PRIMARY KEY, client TE
 CREATE INDEX IF NOT EXISTS replay_signals_client_day ON replay_signals(client, day);
 CREATE TABLE IF NOT EXISTS replay_analysis_runs (id INTEGER PRIMARY KEY CHECK(id=1), at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS replay_runs(at TEXT NOT NULL, read INTEGER NOT NULL, skipped INTEGER NOT NULL, candidates INTEGER NOT NULL, error TEXT);
+CREATE TABLE IF NOT EXISTS replay_retries(session_id TEXT PRIMARY KEY, attempts INTEGER NOT NULL, retry_after INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS replay_skips(session_id TEXT PRIMARY KEY, reason TEXT NOT NULL, at TEXT NOT NULL);
 `)
 
@@ -38,7 +40,7 @@ export async function candidates(days = 30, limit = 400, deps = { hogql }): Prom
         FROM events WHERE timestamp > now() - INTERVAL ${Math.max(1, Math.min(90, days))} DAY AND notEmpty($session_id) AND notEmpty(toString(${P.client}))
           AND $session_id IN (SELECT session_id FROM raw_session_replay_events WHERE min_first_timestamp > now() - INTERVAL ${Math.max(1, Math.min(90, days)) + 1} DAY)
         GROUP BY $session_id ORDER BY start DESC LIMIT ${Math.max(1, Math.min(5000, limit * 5))}`, {}, { timeoutMs: 60_000 })
-    const done = new Set((tasksDb.prepare('SELECT session_id FROM replay_signals UNION SELECT session_id FROM replay_skips').all() as { session_id: string }[]).map((r) => r.session_id))
+    const done = new Set((tasksDb.prepare('SELECT session_id FROM replay_signals UNION SELECT session_id FROM replay_skips UNION SELECT session_id FROM replay_retries WHERE retry_after > ?').all(Date.now()) as { session_id: string }[]).map((r) => r.session_id))
     return rows.map((r) => ({ session_id: String(r.session_id), client: String(r.client), user: String(r.user || ''), start: String(r.start), end: r.end ? String(r.end) : undefined }))
         .filter((c) => c.session_id && c.client && !done.has(c.session_id))
 }
@@ -90,7 +92,29 @@ export function lastReplayRun(): ReplayRun | undefined {
     return tasksDb.prepare('SELECT at,read,skipped,candidates,error FROM replay_runs ORDER BY rowid DESC LIMIT 1').get() as ReplayRun | undefined
 }
 
-/** Reads up to `perRun` replays and stores their signals. Failures are remembered so they are not retried forever. */
+/** Parsing and compressed rrweb payloads must not block the service's HTTP loop. */
+export function replaySignals(input: { file?: string; jsonl?: string }, duration: number | undefined, names: string[]): Promise<SessionSignals> {
+    return new Promise((resolve, reject) => {
+        const worker = new Worker(`
+            const { workerData, parentPort } = require('node:worker_threads');
+            const { readFileSync, statSync } = require('node:fs');
+            (async () => {
+                const { signalsFromReplay } = await import(workerData.module);
+                const limit = (Number(process.env.REPLAY_MAX_MB) || 200) * 1024 * 1024;
+                if (workerData.file && statSync(workerData.file).size > limit) throw new Error('Recording too large by snapshot policy');
+                const text = workerData.file ? readFileSync(workerData.file, 'utf8') : workerData.jsonl;
+                if (Buffer.byteLength(text) > limit) throw new Error('Recording too large by snapshot policy');
+                parentPort.postMessage(signalsFromReplay(text, workerData.duration, { names: workerData.names }));
+            })().catch(e => { throw e });
+        `, { eval: true, workerData: { ...input, duration, names, module: new URL('./replaysignals.ts', import.meta.url).href }, resourceLimits: { maxOldGenerationSizeMb: 512 } })
+        const timer = setTimeout(() => { void worker.terminate(); reject(new Error('Replay analysis timed out')) }, 60_000)
+        worker.once('message', (signals) => { resolve(signals); void worker.terminate() })
+        worker.once('error', reject)
+        worker.once('exit', (code) => { clearTimeout(timer); reject(new Error(`Replay analysis worker exited: ${code}`)) })
+    })
+}
+
+/** Reads up to `perRun` replays and stores their signals. Transient failures wait before another attempt. */
 export async function processReplays(perRun = 30, deps: { candidates?: typeof candidates; jsonl?: (id: string) => Promise<string>; durationMs?: (id: string) => Promise<number | undefined>; names?: () => Promise<string[]> } = {}): Promise<{ read: number; skipped: number }> {
     let ok = 0, skipped = 0, count = 0, error: string | null = null
     try {
@@ -99,7 +123,6 @@ export async function processReplays(perRun = 30, deps: { candidates?: typeof ca
         const list = fairOrder(candidatesFound, perRun)
         if (!list.length) return { read: 0, skipped: 0 }
         const names = await (deps.names || screenVocabulary)()
-        const read = deps.jsonl || (async (id: string) => (await import('node:fs')).readFileSync(await snapshotsFile(id), 'utf8'))
         // PostHog's recorder pauses while nobody moves: the session's real length comes from its metadata.
         const length = deps.durationMs || (async (id: string) => { try { return Math.round(Number((await getRecording(id)).recording_duration) * 1000) || undefined } catch { return undefined } })
         for (const c of list) {
@@ -107,14 +130,23 @@ export async function processReplays(perRun = 30, deps: { candidates?: typeof ca
                 // The recorder pauses while nobody moves, so the recording can be much shorter than the session:
                 // its real length is the longer of the recording's and the events' span.
                 const span = c.end ? Date.parse(c.end) - Date.parse(c.start) : 0
-                const s = signalsFromReplay(await read(c.session_id), Math.max((await length(c.session_id)) || 0, Number.isFinite(span) ? span : 0) || undefined, { names })
+                const input = deps.jsonl ? { jsonl: await deps.jsonl(c.session_id) } : { file: await snapshotsFile(c.session_id) }
+                const s = await replaySignals(input, Math.max((await length(c.session_id)) || 0, Number.isFinite(span) ? span : 0) || undefined, names)
                 if (s.duration_ms < 5_000) throw new Error('too short')
                 tasksDb.prepare('INSERT OR REPLACE INTO replay_signals (session_id,client,user_hash,day,duration_ms,signals,processed_at,started_at) VALUES (?,?,?,?,?,?,?,?)').run(c.session_id, c.client, hashUser(c.user), day(Date.parse(c.start)), Math.round(s.duration_ms), JSON.stringify(s), new Date().toISOString(), new Date(Date.parse(c.start)).toISOString())
+                tasksDb.prepare('DELETE FROM replay_retries WHERE session_id = ?').run(c.session_id)
                 ok++
             } catch (e) {
                 const reason = String((e as Error).message || e).slice(0, 120)
-                // A recording still being written gets another chance later; everything else is skipped for good.
-                if (!/no stored snapshots yet/i.test(reason)) tasksDb.prepare('INSERT OR REPLACE INTO replay_skips VALUES (?,?,?)').run(c.session_id, reason, new Date().toISOString())
+                const terminal = [404, 410, 413].includes((e as { status?: number }).status || 0) || /^too short$|Recording too large|recording deleted/i.test(reason)
+                if (terminal) {
+                    tasksDb.prepare('INSERT OR REPLACE INTO replay_skips VALUES (?,?,?)').run(c.session_id, reason, new Date().toISOString())
+                    tasksDb.prepare('DELETE FROM replay_retries WHERE session_id = ?').run(c.session_id)
+                } else {
+                    const prev = tasksDb.prepare('SELECT attempts FROM replay_retries WHERE session_id = ?').get(c.session_id) as { attempts: number } | undefined
+                    const attempts = Math.min(10, (prev?.attempts || 0) + 1)
+                    tasksDb.prepare('INSERT OR REPLACE INTO replay_retries VALUES (?,?,?)').run(c.session_id, attempts, Date.now() + Math.min(86_400_000, 60_000 * 2 ** attempts))
+                }
                 skipped++
             }
         }
