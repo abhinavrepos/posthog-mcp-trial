@@ -4,7 +4,10 @@ import { openSync, writeSync, closeSync, fchmodSync, constants } from 'node:fs'
 import { safetyWith } from './aisafety.ts'
 const cleanMessage = (error: unknown): string => {
     try {
-        let text = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+        // An MCP tool error ({content:[{text}], isError}) carries its reason in the text blocks.
+        const blocks = error && typeof error === 'object' && Array.isArray((error as { content?: unknown }).content)
+            ? (error as { content: { text?: unknown }[] }).content.map(c => typeof c?.text === 'string' ? c.text : '').join(' ') : ''
+        let text = error instanceof Error ? error.message : typeof error === 'string' ? error : blocks
         text = text.split(/\n|HogQL:|\bSELECT\b|\bINSERT\b|\bFROM\s+\w/i)[0]            // no query text
         text = text.replace(/(?:file:\/\/)?(?:\/[\w.@-]+){2,}(?::\d+(?::\d+)?)?/g, '[path]') // no file paths
         text = text.replace(/\b(?:(?:phx|phc)_|sk-)[\w-]+|\b(Bearer|Basic)\s+\S+/gi, '[redacted]')

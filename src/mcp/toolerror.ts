@@ -2,7 +2,7 @@ import { ToolInputError } from '../core/toolinputerror.ts'
 export { ToolInputError } from '../core/toolinputerror.ts'
 import { JobCapError, JobQueueError } from '../core/jobs.ts'
 import { errorDiagnostic } from '../core/errordiagnostics.ts'
-import { posthogPublicMessage, posthogFailure } from './posthog-error.ts'
+import { posthogPublicMessage, posthogFailure, posthogUsageError } from './posthog-error.ts'
 import { RescueInputError } from '../core/rescue.ts'
 import { toolCorrelationId } from '../core/toolcontext.ts'
 import { z } from 'zod'
@@ -12,7 +12,7 @@ export class ToolValidationError extends Error {}
 export function toolError(error: unknown, tool: string, id: string = toolCorrelationId(), contract?: {keys:string[];example:unknown}) {
     const raw = error instanceof Error ? error.message : String(error)
     let kind='internal', message='The tool could not complete. Retry later; if it persists, give the correlation id to a Lens administrator.'
-    if(posthogPublicMessage(raw)) {kind=/memory|timed out/.test(raw) ? 'capacity' : 'unavailable';message=raw}
+    if(posthogPublicMessage(raw)) {kind=posthogUsageError(raw) ? 'validation' : /memory|timed out/.test(raw) ? 'capacity' : 'unavailable';message=raw}
     else if(tool==='posthog_exec' && /memory limit|too much data|code:\s*241|timeout|timed out/i.test(raw)) {kind='capacity';message=posthogFailure(error).message}
     else if(error instanceof RateLimitError) {kind='rate_limit';message=raw}
     else if(error instanceof JobCapError || error instanceof JobQueueError) {kind='busy';message=error.message}

@@ -332,7 +332,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
     const insights = !!caller?.admin || caller?.insights === true
     if (!raw) installJobTools(server, wrapTools(server, insights, caller))
     if (config.posthog.mcpViaLens && posthogMcpActive()) server.registerTool('posthog_exec', {
-        description: `Runs PostHog commands for generic analytics and objects: trends, funnels, retention, insights, dashboards, flags, experiments, annotations, error-tracking administration, docs and SQL. Long analytics calls return a result or a job handle within 20 seconds; poll handles with get_job_result. ${execRoutingLine(config.mcp.name)}`,
+        description: `Runs PostHog commands for generic analytics and objects: trends, funnels, retention, insights, dashboards, flags, experiments, annotations, error-tracking administration, docs and SQL. command syntax: "tools" lists tools, "info <tool>" shows a tool's input schema, "call <tool> <json_input>" runs it (e.g. call query-trends {...}). Long analytics calls return a result or a job handle within 20 seconds; poll handles with get_job_result. ${execRoutingLine(config.mcp.name)}`,
         inputSchema: { command: z.string() },
     }, async ({ command }) => posthogExec(command, { url: config.posthog.mcpUrl, apiKey: config.posthog.mcpApiKey, name: config.mcp.name }))
     server.registerTool(
