@@ -129,21 +129,26 @@ export function compareClientPatterns(p:CompareOptions={}) {
     }
     const prepared:PreparedTimeline={window:w,tables:new Map()}
     const aligned=(group:Map<string,string>)=>{
-        const rows=new Map<number,TimelineBucket[]>(), contributing=new Set<string>()
+        const rows=new Map<number,TimelineBucket[]>(), contributing=new Set<string>(), excluded:{client:string;reason:string}[]=[]
         for(const [client,at] of group) {
             const end=new Date(at);end.setUTCDate(1)
             const start=new Date(end);start.setUTCMonth(start.getUTCMonth()-months)
-            const from=start.toISOString().slice(0,10), to=shift(end.toISOString().slice(0,10),-1)
-            if(from<w.from || to>w.to) continue
+            // A lookback reaching past the window is clamped to it (those months are simply unavailable); it used
+            // to drop the client silently, so a 12-month lookback in a window starting mid-month found no one.
+            const from=start.toISOString().slice(0,10) < w.from ? w.from : start.toISOString().slice(0,10), to=shift(end.toISOString().slice(0,10),-1)
+            if(to<from || to>w.to) { excluded.push({client,reason:to>w.to?'index date is after the window':'no complete month before the index date inside the window'}); continue }
             const timeline=clientTimeline({client,from,to,bucket:'month'},prepared)
-            timeline.buckets.forEach((b,i)=>{if(b.missing_days) return;contributing.add(client);const offset=i-months;if(!rows.has(offset))rows.set(offset,[]);rows.get(offset)!.push(b)})
+            // Offsets count back from the index month, whatever the clamped start.
+            const n=timeline.buckets.length
+            timeline.buckets.forEach((b,i)=>{if(b.missing_days) return;contributing.add(client);const offset=i-n;if(!rows.has(offset))rows.set(offset,[]);rows.get(offset)!.push(b)})
+            if(!contributing.has(client)) excluded.push({client,reason:'every month before the index date has missing days in Lens history'})
         }
-        return {rows,contributing}
+        return {rows,contributing,excluded}
     }
     const a=aligned(index),b=aligned(peers)
     const median=(values:(number|null)[])=>{const ns=values.filter((v):v is number=>v!==null).sort((a,b)=>a-b);return ns.length?(ns[Math.floor((ns.length-1)/2)]+ns[Math.floor(ns.length/2)])/2:null}
     const stats=(rows:TimelineBucket[])=>({clients:rows.length,sessions:median(rows.map(r=>r.sessions)),active_users:median(rows.map(r=>r.active_users)),attempts:median(rows.map(r=>r.attempts)),completion_rate:median(rows.map(r=>r.completion_rate)),error_rate:median(rows.map(r=>r.error_rate)),median_s:median(rows.map(r=>r.median_s)),exports:median(rows.map(r=>r.exports))})
     const series=Array.from({length:months},(_,i)=>({months_before_index:i-months,target:stats(a.rows.get(i-months)||[]),comparison:stats(b.rows.get(i-months)||[])}))
-    return {window:w,target_clients:a.contributing.size,comparison_clients:b.contributing.size,target_selected:index.size,comparison_selected:peers.size,series,coverage:cover,limits:historyLimits(series.length),
+    return {window:w,target_clients:a.contributing.size,comparison_clients:b.contributing.size,target_selected:index.size,comparison_selected:peers.size,target_excluded:a.excluded.slice(0,20),comparison_excluded:b.excluded.slice(0,20),series,coverage:cover,limits:historyLimits(series.length),
         note:'Descriptive association, no causation. Index is the dated outcome or first sustained usage silence; months are complete calendar months before its month. Stayed means confirmed renewed/stayed at follow-up or observed active through follow-up. Only completely observed months enter medians; each month gives its exact contributing group size. Selection, seasonality and survivor bias may explain differences.'}
 }

@@ -65,6 +65,15 @@ test('cohort alignment gives exact group sizes and excludes incomplete months',(
     tasksDb.prepare('DELETE FROM task_ingest WHERE day=?').run('2024-02-05');r=compareClientPatterns({from:'2024-01-01',to:'2024-12-31',months:3,followup_days:60})
     assert.equal(r.series[1].target.clients,0);assert.equal(r.series[1].target.sessions,null)
 })
+test('a lookback reaching before the window still counts the client (clamped), never drops it silently',()=>{
+    // Found by an agent run: 12 months before an outcome, in a window starting mid-month, gave 0 target clients.
+    observed('2024-01-01','2024-12-31');active('left2','2024-01-20','2024-02-01','2024-03-01');active('stay2','2024-01-21','2024-02-02','2024-03-02')
+    db.prepare('INSERT OR REPLACE INTO client_outcomes VALUES (?,?,?,?,?,?)').run('left2','left','2024-04-10','','admin','2024-04-10')
+    const r=compareClientPatterns({client:'left2',from:'2024-01-15',to:'2024-12-31',months:12,followup_days:60})
+    assert.equal(r.target_clients,1,'clamped lookback still counts the client')
+    assert.deepEqual(r.target_excluded,[])
+    assert.equal(r.series.at(-1)!.months_before_index,-1)
+})
 test('MCP disclosure preserves all requested dates and bounds rows with exact omission counts',()=>{
     observed('2021-01-01','2024-12-31')
     const r=analyticalResult('task_map',{when:'2021-01-01 to 2024-12-31'},{_lensJson:{label:'',value:{rows:Array.from({length:1000},(_,i)=>({id:i,payload:'x'.repeat(100)}))}}}) as {_lensJson:{value:{coverage:{requested:{from:string;to_exclusive:string}};omitted_rows_by_path:Record<string,number>}}}
