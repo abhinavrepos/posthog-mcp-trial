@@ -1,3 +1,4 @@
+import { ingestMessages, type Stored } from '../core/ingestmessages.ts'
 import { Worker } from 'node:worker_threads'
 import type { JobWork } from '../core/jobs.ts'
 
@@ -7,7 +8,10 @@ type Slot = { worker: Worker; task?: Task }
 export class AnalysisWorkerPool {
     private slots: Slot[] = []
     private queue: Task[] = []
-    constructor(readonly size = Math.max(1,Math.floor(Number(process.env.LENS_JOB_WORKERS) || 2))) {}
+    constructor(readonly size = Math.max(1,Math.floor(Number(process.env.LENS_JOB_WORKERS) || 2))) {
+        ingestMessages.on('stored', this.onStored)
+    }
+    private onStored = (message: Stored) => { for (const slot of this.slots) slot.worker.postMessage(message) }
     run(data: unknown): JobWork {
         let task!: Task
         const promise = new Promise((resolve,reject) => { task={data,resolve,reject,metadata:{}}; this.queue.push(task) })
@@ -48,6 +52,6 @@ export class AnalysisWorkerPool {
             slot.task=this.queue.shift()!; slot.worker.ref();slot.worker.postMessage(slot.task.data)
         }
     }
-    close() { const queued=this.queue.splice(0);for(const task of queued)task.reject(new Error('Worker pool closed.'));for(const slot of [...this.slots])this.retire(slot,new Error('Worker pool closed.')) }
+    close() { ingestMessages.off('stored', this.onStored); const queued=this.queue.splice(0);for(const task of queued)task.reject(new Error('Worker pool closed.'));for(const slot of [...this.slots])this.retire(slot,new Error('Worker pool closed.')) }
 }
 export const analysisWorkers = new AnalysisWorkerPool()

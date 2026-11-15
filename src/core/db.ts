@@ -36,7 +36,7 @@ export const db = new DatabaseSync(DB_FILE)
 // auto_vacuum only takes effect on a new file; it lets deletes give the space back.
 // busy_timeout first: switching to WAL needs a lock, and without it a process opening the file while
 // another one writes fails at once ("database is locked") instead of waiting.
-db.exec('PRAGMA busy_timeout = 5000; PRAGMA auto_vacuum = INCREMENTAL; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;')
+db.exec('PRAGMA busy_timeout = 30000; PRAGMA auto_vacuum = INCREMENTAL; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;')
 
 // Each entry runs once, in order. PRAGMA user_version counts how many have run.
 const MIGRATIONS: string[] = [

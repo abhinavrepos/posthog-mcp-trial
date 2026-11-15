@@ -1,3 +1,6 @@
+import { isMainThread } from 'node:worker_threads'
+import { ingestOwner } from './ingestowner.ts'
+import { ingestMessages, stored, type Stored } from './ingestmessages.ts'
 import { errorDiagnostic } from './errordiagnostics.ts'
 import { backfillPerformanceHistory } from './performancehistory.ts'
 import { initAggregateDaily, ingestAggregateDaily } from './aggregatedaily.ts'
@@ -28,7 +31,7 @@ export const tasksDb = new DatabaseSync(TASKS_DB_FILE)
 setWindowDataThrough(() => dataThrough())
 // busy_timeout first: switching to WAL needs a lock, and without it a second process opening the file at
 // the same moment fails at once ("database is locked") instead of waiting.
-tasksDb.exec('PRAGMA busy_timeout = 5000; PRAGMA auto_vacuum = INCREMENTAL; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -32768;')
+tasksDb.exec('PRAGMA busy_timeout = 30000; PRAGMA auto_vacuum = INCREMENTAL; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -32768;')
 function transaction<T>(fn: () => T): T {
     tasksDb.exec('BEGIN IMMEDIATE')
     try { const value = fn(); tasksDb.exec('COMMIT'); return value }
@@ -396,6 +399,15 @@ export function forgetAnswers(keepWeekly = false): void {
 export const taskMap = (p: TaskMapParams): Promise<TaskMap> => cached('map', p, () => computeTaskMap(p))
 export const flowTime = (p: FlowTimeParams): Promise<FlowTime> => cached('flow', p, () => computeFlowTime(p))
 
+/** Apply local cache effects only: weekly SQLite rows were already invalidated by the writer. */
+export function applyStored(message: Stored): void {
+    generation++
+    for (const day of message.days) invalidate(day)
+    coverageMemo.clear(); catalogMemo = undefined
+    if (message.kinds.some(kind => kind !== 'day')) forgetAnswers(true)
+}
+ingestMessages.on('stored', applyStored)
+
 export function storeAttempts(day: string, attempts: TaskAttempt[], info: StoreInfo = {}): void {
     generation++
     validDay(day)
@@ -467,6 +479,7 @@ export function storeAttempts(day: string, attempts: TaskAttempt[], info: StoreI
         run('INSERT INTO task_ingest VALUES (?,?,?,?,?,?,?,?)', day, info.sessions ?? new Set(attempts.map((a) => a.session_id)).size,
             info.events ?? 0, attempts.length, Number(info.truncated || false), info.seconds ?? 0, new Date().toISOString(), Number(!!info.finalized && !info.truncated))
     })
+    stored({ type: 'stored', days: [day], kinds: ['day'] })
 }
 
 export function validDay(s: string): void {
@@ -725,6 +738,7 @@ export async function patiently<T>(fn: () => Promise<T>, waits = [5_000, 20_000,
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits?: number[]): Promise<void> {
     validDay(day)
+    if (workerEnabled) return dispatchIngest({ day })
     const started = performance.now(), scanStarted = Date.now(), reg = required()
     const q: TaskQuery = (text, values) => patiently(() => query(text, values), waits)
     const values = { from: day, to: shift(day, 1), scan_from: shift(day, -1), scan_to: shift(day, 2), events: [reg.events.screen, reg.events.interaction] }
@@ -803,10 +817,25 @@ export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits
     }
     run('DELETE FROM task_state WHERE key IN (?,?)', 'query_failed:'+day, 'analysis_unavailable:'+day)
     storeAttempts(day, attempts, { finalized: scanStarted >= Date.parse(shift(day, 2)), sessions: ids.length, events, truncated, seconds: (performance.now() - started) / 1000, clientNames, dialogNames, finishes, analysisSessions: sessions, summary: summariseSteps(sessions, day, reg) })
-    if (!truncated && scanStarted >= Date.parse(shift(day, 2))) await ingestAggregateDaily(tasksDb, day, q)
+    if (!truncated && scanStarted >= Date.parse(shift(day, 2))) {
+        await ingestAggregateDaily(tasksDb, day, q)
+        stored({ type: 'stored', days: [day], kinds: ['aggregate'] })
+    }
     run('DELETE FROM task_attempts WHERE day < ?', shift(today(), -29))
 }
 let running = false, scheduled = false
+let workerEnabled = false
+/** Service mode. Offline scripts/tests retain in-process query injection by default.
+ * Enable before accepting manual ingestion requests; startTaskHistory does this automatically. */
+export function useTaskHistoryWorker(): void {
+    if (!isMainThread) throw new Error('Only the main thread can own ingestion')
+    workerEnabled = true
+}
+async function dispatchIngest(message: Parameters<typeof ingestOwner.run>[0]): Promise<void> {
+    if (running || ingestOwner.running) return
+    try { await ingestOwner.run(message) }
+    catch (e) { failure('worker', e); throw e }
+}
 function state(key: string, value: string) { run('INSERT OR REPLACE INTO task_state VALUES (?,?)', key, value) }
 function failure(day: string, e: unknown) {
     const error = e instanceof Error ? e.message : String(e)
@@ -817,6 +846,7 @@ function failure(day: string, e: unknown) {
 export async function runIngest(opts: { days?: string[]; maxBackfill?: number } = {}): Promise<void> {
     if (opts.days) opts.days.forEach(validDay)
     if (opts.maxBackfill !== undefined && (!Number.isInteger(opts.maxBackfill) || opts.maxBackfill < 0 || opts.maxBackfill > 1500)) throw new Error('maxBackfill must be from 0 to 1500')
+    if (workerEnabled) return dispatchIngest({ opts })
     if (running) return
     running = true
     try {
@@ -854,6 +884,7 @@ export async function runIngest(opts: { days?: string[]; maxBackfill?: number } 
         // shares the normal backfill budget (20 days a run: four years in about 12 hours, not 5 days at 2 a run).
         await backfillPerformanceHistory(config.tasks.backfillDaysPerRun, taskQuery)
         forgetAnswers(true) // old attempts only: weekly observations stay
+        stored({ type: 'stored', days: [], kinds: ['cleanup'] })
         tasksDb.exec('PRAGMA incremental_vacuum(1000)')
     } finally { running = false }
 }
@@ -862,11 +893,12 @@ export function ingestStatus(): IngestStatus {
     const recent = one<{ n: number }>('SELECT count(*) AS n FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0 AND finalized = 1', shift(today(), 1 - config.tasks.historyDays), today())!.n
     return { days_done: s.n, first_day: s.first, last_day: s.last, behind_days: config.tasks.historyDays - recent, attempts: s.attempts,
         last_run: one<{ value: string }>("SELECT value FROM task_state WHERE key = 'last_run'")?.value || null,
-        last_error: one<{ value: string }>("SELECT value FROM task_state WHERE key = 'last_error'")?.value || null, running }
+        last_error: one<{ value: string }>("SELECT value FROM task_state WHERE key = 'last_error'")?.value || null, running: running || ingestOwner.running }
 }
 export function startTaskHistory(): void {
     if (scheduled) return
     scheduled = true
+    useTaskHistoryWorker()
     const tick = async () => {
         try { await runIngest() } catch (e) { failure('scheduler', e) }
         setTimeout(tick, config.tasks.intervalMinutes * 60_000).unref()

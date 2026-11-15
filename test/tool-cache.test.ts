@@ -113,3 +113,15 @@ test('switching privacy mode or numbering cannot reuse prewarmed answers', async
         assert.deepEqual(await cachedToolCall('top_pains', { mode_test: true }, run), { mode: 'private', n: 3 })
     } finally { A.setAnonymise(previous) }
 })
+
+
+test('stored messages clear tool answers and prevent older flights repopulating the cache', async () => {
+    const { stored } = await import('../src/core/ingestmessages.ts')
+    clearToolAnswers()
+    let finish!: (value: unknown) => void
+    const old = cachedToolCall('top_pains', {}, () => new Promise(resolve => { finish = resolve }))
+    stored({ type: 'stored', days: ['2026-01-01'], kinds: ['day'] })
+    await cachedToolCall('top_pains', {}, async () => ({ content: ['fresh'] }))
+    finish({ content: ['stale'] }); await old
+    assert.deepEqual(await cachedToolCall('top_pains', {}, async () => assert.fail('fresh answer should be kept')), { content: ['fresh'] })
+})

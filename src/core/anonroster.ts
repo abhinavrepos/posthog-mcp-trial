@@ -1,6 +1,7 @@
+import { ingestMessages } from './ingestmessages.ts'
 // Which clients exist, for the anonymisation matcher: every client the task history, Lens's own tables and
 // PostHog's durable incremental roster know. Each gets a codename the first time it is seen.
-import { syncClients, whenUnknownClient } from './anonymise.ts'
+import { syncClients, whenUnknownClient, forgetMatcher } from './anonymise.ts'
 import { all } from './db.ts'
 import { tasksDb } from './tasks.ts'
 import { refreshClientStore, storedClients } from './clientroster.ts'
@@ -36,3 +37,6 @@ export const forgetRoster = () => { last = 0; lastPosthog = 0 }
 // A client Lens has no codename for showed up in an answer: look for new clients now (at most once a minute).
 let lastUnknown = 0
 whenUnknownClient(() => { if (Date.now() - lastUnknown > 60_000) { lastUnknown = Date.now(); void refreshRoster(0).catch(() => {}) } })
+
+// Ingestion updates client_names, one of the privacy roster's durable sources.
+ingestMessages.on('stored', () => { forgetRoster(); forgetMatcher() })

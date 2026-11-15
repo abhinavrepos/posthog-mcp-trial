@@ -1,3 +1,4 @@
+import { ingestMessages } from '../core/ingestmessages.ts'
 import { McpError } from '@modelcontextprotocol/sdk/types.js'
 import { errorDiagnostic } from '../core/errordiagnostics.ts'
 import { isPosthogQuery, posthogQueryContext } from './posthog-query.ts'
@@ -115,11 +116,13 @@ const TOOL_CACHE_BYTES = 16 * 1024 * 1024
 const toolAnswers = new Map<string, { at: number; value: unknown; bytes: number; ttl: number }>()
 const toolFlights = new Map<string, Promise<unknown>>()
 let toolBytes = 0
+let toolCacheEpoch = 0
+ingestMessages.on('stored', () => clearToolAnswers())
 // Arguments as text with object keys sorted at every level, so {a, b} and {b, a} are the same question.
 const stable = (v: unknown): string => Array.isArray(v) ? `[${v.map(stable).join(',')}]`
     : v && typeof v === 'object' ? `{${Object.keys(v).sort().map((k) => JSON.stringify(k) + ':' + stable((v as Record<string, unknown>)[k])).join(',')}}`
     : JSON.stringify(v) ?? 'null'
-export function clearToolAnswers(): void { toolAnswers.clear(); toolFlights.clear(); toolBytes = 0 }
+export function clearToolAnswers(): void { toolCacheEpoch++; toolAnswers.clear(); toolFlights.clear(); toolBytes = 0 }
 // Calls made by the background pre-warm (src/mcp/prewarm.ts) recompute their answer and keep it until the
 // next round. Only those calls: the flag travels with the pre-warm's own async work, so chat questions
 // asked during a round still get the kept answer at once.
@@ -144,11 +147,12 @@ export async function cachedToolCall(name: string, args: unknown, run: () => Pro
     if (hit && !refreshing && toolFlights.has(key)) return structuredClone(hit.value)
     let flight = toolFlights.get(key)
     if (!flight) {
+        const epoch = toolCacheEpoch
         const ttl = Math.max(TOOL_TTL_MS, prewarmTtl)
         flight = run().then((value) => {
-            if (!(value as { isError?: boolean } | undefined)?.isError) remember(key, value, ttl)
+            if (epoch === toolCacheEpoch && !(value as { isError?: boolean } | undefined)?.isError) remember(key, value, ttl)
             return value
-        }).finally(() => toolFlights.delete(key))
+        }).finally(() => { if (toolFlights.get(key) === flight) toolFlights.delete(key) })
         toolFlights.set(key, flight)
     }
     return structuredClone(await flight)

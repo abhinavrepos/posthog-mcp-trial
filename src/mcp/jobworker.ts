@@ -2,8 +2,15 @@ import { parentPort } from 'node:worker_threads'
 // Keep worker logs off stdio's protocol stream.
 console.log = console.error
 let bootstrapped = false
-parentPort!.on('message', async (workerData) => {
+let messages = Promise.resolve()
+parentPort!.on('message', workerData => { messages = messages.then(() => handle(workerData)) })
+async function handle(workerData: any) {
 try {
+    if (workerData.type === 'stored') {
+        const { stored } = await import('../core/ingestmessages.ts')
+        stored(workerData)
+        return
+    }
     if (!bootstrapped) {
         if (process.env.LENS_JOB_BOOTSTRAP) await (await import(process.env.LENS_JOB_BOOTSTRAP)).default()
         bootstrapped = true
@@ -27,4 +34,4 @@ try {
     await server.close()
     parentPort!.postMessage({ result, clients: [...clients], publicError: isPublicToolError(result) })
 } catch (e) { parentPort!.postMessage({ error: String((e as Error).message) }) }
-})
+}

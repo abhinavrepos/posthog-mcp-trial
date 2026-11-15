@@ -86,6 +86,7 @@ function loadScreens(): Screen[] | undefined {
 export const config = {
     tasks: {
         db: env('TASKS_DB', 'run/tasks.db'),
+        workerMemoryMb: intSetting('TASKS_WORKER_MEMORY_MB', 1536, 64, 32768),
         intervalMinutes: intSetting('TASKS_INTERVAL_MINUTES', 10, 1, 1440),
         backfillDaysPerRun: intSetting('TASKS_BACKFILL_DAYS_PER_RUN', 20, 0, 1500),
         historyDays: intSetting('TASKS_HISTORY_DAYS', 1500, 1, 1500),
