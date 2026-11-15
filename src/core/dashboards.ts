@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 // Pinned dashboards: a saved view (client task map or flow time, with its filters) that a person
 // pinned from chat or the Dashboards page, and the people it is shared with. Who may pin, share and
 // open them follows the dashboard roles (service/access.ts). Every change is in the activity log.
@@ -37,13 +38,13 @@ const row = (r: Record<string, unknown>): Dashboard => ({
 })
 
 function check(kind: unknown, title: unknown, params: unknown): { kind: DashboardKind; title: string; params: Record<string, unknown> } {
-    if (!DASHBOARD_KINDS.includes(kind as DashboardKind)) throw new Error('kind must be task_map or flow_time')
+    if (!DASHBOARD_KINDS.includes(kind as DashboardKind)) throw new ToolInputError('kind must be task_map or flow_time')
     const t = String(title ?? '').trim()
-    if (!t || t.length > 120) throw new Error('Give a title of 1-120 characters.')
-    if (!params || typeof params !== 'object' || Array.isArray(params)) throw new Error('params must be an object')
+    if (!t || t.length > 120) throw new ToolInputError('Give a title of 1-120 characters.')
+    if (!params || typeof params !== 'object' || Array.isArray(params)) throw new ToolInputError('params must be an object')
     const text = JSON.stringify(params)
-    if (text.length > 4000) throw new Error('params too large')
-    if (kind === 'flow_time' && typeof (params as { task?: unknown }).task !== 'string') throw new Error('A flow time dashboard needs a task.')
+    if (text.length > 4000) throw new ToolInputError('params too large')
+    if (kind === 'flow_time' && typeof (params as { task?: unknown }).task !== 'string') throw new ToolInputError('A flow time dashboard needs a task.')
     return { kind: kind as DashboardKind, title: t, params: params as Record<string, unknown> }
 }
 
@@ -52,7 +53,7 @@ export function createDashboard(owner: string, input: { kind: unknown; title: un
     const id = randomBytes(6).toString('hex')
     const now = new Date().toISOString()
     tx(() => {
-        if ((one<{ n: number }>('SELECT COUNT(*) AS n FROM dashboards WHERE owner = ?', owner.toLowerCase())?.n ?? 0) >= 200) throw new Error('At most 200 dashboards per person. Delete some first.')
+        if ((one<{ n: number }>('SELECT COUNT(*) AS n FROM dashboards WHERE owner = ?', owner.toLowerCase())?.n ?? 0) >= 200) throw new ToolInputError('At most 200 dashboards per person. Delete some first.')
         run('INSERT INTO dashboards (id, owner, kind, title, params, via, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', id, owner.toLowerCase(), c.kind, c.title, JSON.stringify(c.params), input.via ?? 'page', now, now)
         audit(owner, 'dashboard.pinned', { dashboard: id, kind: c.kind, title: c.title, via: input.via ?? 'page' })
     })
@@ -81,7 +82,7 @@ export function listDashboards(email: string, admin: boolean): Dashboard[] {
 
 export function updateDashboard(id: string, by: string, admin: boolean, change: { title?: unknown; params?: unknown }): Dashboard {
     const d = getDashboard(id)
-    if (!d || !canManage(d, by, admin)) throw new Error('No such dashboard, or it is not yours to change.')
+    if (!d || !canManage(d, by, admin)) throw new ToolInputError('No such dashboard, or it is not yours to change.')
     const c = check(d.kind, change.title ?? d.title, change.params ?? d.params)
     tx(() => {
         run('UPDATE dashboards SET title = ?, params = ?, updated_at = ? WHERE id = ?', c.title, JSON.stringify(c.params), new Date().toISOString(), id)
@@ -92,7 +93,7 @@ export function updateDashboard(id: string, by: string, admin: boolean, change: 
 
 export function deleteDashboard(id: string, by: string, admin: boolean): void {
     const d = getDashboard(id)
-    if (!d || !canManage(d, by, admin)) throw new Error('No such dashboard, or it is not yours to delete.')
+    if (!d || !canManage(d, by, admin)) throw new ToolInputError('No such dashboard, or it is not yours to delete.')
     tx(() => {
         run('DELETE FROM dashboards WHERE id = ?', id)
         audit(by, 'dashboard.deleted', { dashboard: id, title: d.title })
@@ -103,8 +104,8 @@ export function deleteDashboard(id: string, by: string, admin: boolean): void {
  * see it once an admin gives them a dashboard role. */
 export function shareDashboard(id: string, by: string, admin: boolean, emails: unknown): Dashboard {
     const d = getDashboard(id)
-    if (!d || !canManage(d, by, admin)) throw new Error('No such dashboard, or it is not yours to share.')
-    if (!Array.isArray(emails) || emails.length > 200) throw new Error('Give a list of up to 200 emails.')
+    if (!d || !canManage(d, by, admin)) throw new ToolInputError('No such dashboard, or it is not yours to share.')
+    if (!Array.isArray(emails) || emails.length > 200) throw new ToolInputError('Give a list of up to 200 emails.')
     const list = [...new Set(emails.map((e) => String(e).trim().toLowerCase()).filter(Boolean))]
     const bad = list.filter((e) => !EMAIL.test(e))
     if (bad.length) throw new Error(`Not emails: ${bad.slice(0, 3).join(', ')}`)

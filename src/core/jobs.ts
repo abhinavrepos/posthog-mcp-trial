@@ -1,5 +1,6 @@
 // Persisted in-process jobs. Work may run in a worker thread so synchronous SQLite/decoding cannot
 // prevent the MCP event loop from returning its handle on time. No request abort signal owns a job.
+import { ToolInputError } from './toolinputerror.ts'
 import { randomBytes, createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { gzipSync, gunzipSync } from 'node:zlib'
@@ -10,8 +11,12 @@ const stable = (v: unknown): string => Array.isArray(v) ? `[${v.map(stable)}]` :
     ? `{${Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stable((v as Record<string, unknown>)[k])).join(',')}}` : JSON.stringify(v) ?? 'null'
 /** The per-user cap was reached. Carries the caller's own running job ids, so the agent can poll them. */
 export class JobCapError extends Error {
-    constructor(readonly running: string[]) { super(`Two analyses are already running for you (job ids: ${running.join(', ')}). Call get_job_result with one of them until it finishes, then ask again.`) }
+    constructor(readonly running: string[]) { super(`${running.length} analyses are already running for you (job ids: ${running.join(', ')}). Call get_job_result with one of them until it finishes, then ask again.`) }
 }
+export class JobQueueError extends Error {
+    constructor() { super('Analysis queue is full. Retry later.') }
+}
+const integerOption = (value: number, fallback: number, minimum: number) => Number.isFinite(value) ? Math.max(minimum, Math.floor(value)) : fallback
 export class JobRunner {
     private active = new Map<string, { resolve: (v: unknown) => void; work: () => JobWork; cancel?: () => void; running: boolean; independent: boolean }>()
     private timer: NodeJS.Timeout
@@ -19,9 +24,13 @@ export class JobRunner {
     readonly instanceId = randomBytes(16).toString('hex')
     readonly ttlMs: number
     readonly concurrency: number
-    constructor(readonly db: DatabaseSync, options: { ttlMs?: number; concurrency?: number; pruneMs?: number; now?: () => number } = {}) {
+    readonly perUser: number
+    readonly queueLimit: number
+    constructor(readonly db: DatabaseSync, options: { ttlMs?: number; concurrency?: number; pruneMs?: number; perUser?: number; queueLimit?: number; now?: () => number } = {}) {
         this.ttlMs = Math.max(1, options.ttlMs ?? 3600000)
         this.concurrency = Math.max(1, options.concurrency ?? 2)
+        this.perUser = integerOption(options.perUser ?? Number(process.env.LENS_JOBS_PER_USER ?? 4), 4, 1)
+        this.queueLimit = integerOption(options.queueLimit ?? Number(process.env.LENS_JOB_QUEUE ?? 64), 64, 0)
         this.now = options.now ?? Date.now
         db.exec(`PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS analysis_jobs (
             id TEXT PRIMARY KEY, owner TEXT NOT NULL, revision TEXT NOT NULL, flight TEXT NOT NULL,
@@ -31,6 +40,7 @@ export class JobRunner {
             CREATE INDEX IF NOT EXISTS analysis_jobs_expiry ON analysis_jobs(expires);
             CREATE TABLE IF NOT EXISTS analysis_job_context (id TEXT PRIMARY KEY, context TEXT NOT NULL);`)
         const columns = new Set(db.prepare('PRAGMA table_info(analysis_jobs)').all().map(r=>r.name))
+        if(!columns.has('detached')) db.exec('ALTER TABLE analysis_jobs ADD COLUMN detached INTEGER NOT NULL DEFAULT 0')
         if(!columns.has('owner_instance')) db.exec('ALTER TABLE analysis_jobs ADD COLUMN owner_instance TEXT')
         if(!columns.has('lease_expires')) db.exec('ALTER TABLE analysis_jobs ADD COLUMN lease_expires INTEGER')
         db.prepare("UPDATE analysis_jobs SET status='failed', error='Server restarted before this job completed. Submit the tool again.', updated=? WHERE status='working' AND coalesce(lease_expires,0) < ?").run(this.now(), this.now()-60000)
@@ -49,8 +59,8 @@ export class JobRunner {
         const flight = createHash('sha256').update(stable([tool, args, revision, JSON.parse(serializedContext)])).digest('hex')
         const existing = this.db.prepare("SELECT id FROM analysis_jobs WHERE owner=? AND flight=? AND status='working' AND expires>?").get(owner, flight, this.now())
         if (existing) return { id: String(existing.id), done: this.wait(String(existing.id)) }
-        const running = (this.db.prepare("SELECT id FROM analysis_jobs WHERE owner=? AND status='working' AND expires>? ORDER BY created").all(owner, this.now()) as { id: string }[]).map(r => String(r.id))
-        if (running.length >= 2) throw new JobCapError(running)
+        const ordinary = [...this.active.values()].filter(a => !a.independent)
+        if (!independent && ordinary.length >= this.concurrency + this.queueLimit) throw new JobQueueError()
         const id = randomBytes(16).toString('hex'), now = this.now()
         this.db.prepare("INSERT INTO analysis_jobs (id,owner,revision,flight,status,created,updated,expires,result,error,owner_instance,lease_expires) VALUES (?,?,?,?,'working',?,?,?,?,NULL,?,?)").run(id, owner, revision, flight, now, now, now + Math.max(1, Math.min(this.ttlMs, ttlMs)), null, this.instanceId, now+30000)
         this.db.prepare('INSERT INTO analysis_job_context VALUES (?,?)').run(id, serializedContext)
@@ -60,6 +70,31 @@ export class JobRunner {
         // Always start after the caller has armed its deadline.
         setImmediate(() => this.pump())
         return { id, done }
+    }
+    /** Only a handle exposed to the caller consumes a detached slot. */
+    detach(owner: string, id: string, revision: string): void {
+        const row = this.get(owner, id, revision)
+        if (row.status !== 'working') return
+        const detached = this.db.prepare('SELECT detached FROM analysis_jobs WHERE id=?').get(id)
+        if (detached?.detached) return
+        const running = this.db.prepare("SELECT id FROM analysis_jobs WHERE owner=? AND status='working' AND detached=1 AND expires>? ORDER BY created").all(owner, this.now()).map(r => String(r.id))
+        if (running.length >= this.perUser) {
+            // This job has no public handle; do not leave rejected work consuming the queue.
+            this.cancel(owner, id, revision)
+            throw new JobCapError(running)
+        }
+        this.db.prepare('UPDATE analysis_jobs SET detached=1 WHERE id=?').run(id)
+    }
+    async poll(owner: string, id: string, revision: string, waitMs: number): Promise<void> {
+        const row = this.get(owner, id, revision)
+        if (row.status !== 'working') return
+        let timer: NodeJS.Timeout | undefined
+        try {
+            await Promise.race([this.wait(id), new Promise<void>(resolve => {
+                timer = setTimeout(resolve, Math.max(0, Math.min(20000, waitMs, row.expires - this.now())))
+            })])
+        } finally { if (timer) clearTimeout(timer) }
+        this.get(owner, id, revision)
     }
     private waiters = new Map<string, Promise<unknown>>()
     private foreignPolls = new Map<string,{timer:NodeJS.Timeout; resolve:(value:unknown)=>void}>()
@@ -71,7 +106,7 @@ export class JobRunner {
                 p = new Promise(resolve => {
                     const poll = setInterval(() => {
                         const row = this.db.prepare('SELECT * FROM analysis_jobs WHERE id=?').get(id) as unknown as JobRow | undefined
-                        if (!row || row.status !== 'working') { clearInterval(poll); this.foreignPolls.delete(id); this.waiters.delete(id); resolve(row?.status === 'completed' ? this.result(row) : undefined) }
+                        if (!row || row.expires <= this.now() || row.status !== 'working') { clearInterval(poll); this.foreignPolls.delete(id); this.waiters.delete(id); resolve(row?.status === 'completed' ? this.result(row) : undefined) }
                     },100)
                     this.foreignPolls.set(id,{timer:poll,resolve})
                     poll.unref()
@@ -92,8 +127,8 @@ export class JobRunner {
             a.running = true; if (!a.independent) running++
             try {
                 const work = a.work(); a.cancel = work.cancel
-                void work.promise.then(result => this.finish(id, 'completed', result, undefined, work.metadata?.()), error => this.finish(id, 'failed', undefined, String(error?.message || error)))
-            } catch (e) { this.finish(id, 'failed', undefined, String((e as Error).message)) }
+                void work.promise.then(result => this.finish(id, 'completed', result, undefined, work.metadata?.()), error => this.finish(id, 'failed', undefined, String(error?.message || error), { ...work.metadata?.(), inputError: error instanceof ToolInputError || work.metadata?.().inputError === true }))
+            } catch (e) { this.finish(id, 'failed', undefined, String((e as Error).message), {inputError: e instanceof ToolInputError}) }
         }
     }
     private finish(id: string, status: JobStatus, result?: unknown, error?: string, metadata?: Record<string, unknown>): void {

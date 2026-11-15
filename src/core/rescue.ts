@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 import { peerComparisons } from './peers.ts'
 import { newClientValues } from './newclients.ts'
 // Weekly account-team queue. Reads only Lens history; actions deliberately bypass the answer cache.
@@ -142,7 +143,7 @@ async function answer(p: RescueParams): Promise<RescueQueue> {
     const baseline = p.compare_with || p.baseline || { from: shift(window.from, -length), to: shift(window.from, -1) }
     validWindow(baseline)
     const min = p.min_attempts ?? RESCUE.default_min
-    if (!Number.isInteger(min) || min < 1 || min > 100000) throw new Error('min_attempts must be an integer from 1 to 100000')
+    if (!Number.isInteger(min) || min < 1 || min > 100000) throw new ToolInputError('min_attempts must be an integer from 1 to 100000')
     const current=coverage(window), previousCoverage=coverage(baseline)
     const cover={...current,complete:current.complete && previousCoverage.complete && p.compare!=='none',comparison:{requested:baseline,status:p.compare==='none'?'none':current.complete && previousCoverage.complete?'complete':'unavailable',reason:p.compare==='none'?'Comparison disabled':current.complete && previousCoverage.complete?'Both periods complete':'Comparisons require complete current and baseline periods; omitted'},baseline:previousCoverage}
     const base = { coverage: cover, window, baseline, data_through: through, hidden_snoozed: 0, note: 'Ranked from processed task history. Review the evidence with the account team.' }
@@ -158,7 +159,7 @@ async function answer(p: RescueParams): Promise<RescueQueue> {
 }
 export async function rescueQueue(p: RescueParams = {}): Promise<RescueQueue> {
     const { include_snoozed, ...params } = p
-    if (include_snoozed !== undefined && typeof include_snoozed !== 'boolean') throw new Error('include_snoozed must be boolean')
+    if (include_snoozed !== undefined && typeof include_snoozed !== 'boolean') throw new ToolInputError('include_snoozed must be boolean')
     // Sanitize immutable history once; fresh action metadata is sanitized on every read.
     const result = await cached('rescue', params, async () => rescuePrivacy(await answer(params)), 186)
     const metadata = await rescuePrivacy({ actions: all<RescueAction & { client: string }>('SELECT * FROM rescue_actions'),
@@ -192,7 +193,7 @@ export async function rescueQueue(p: RescueParams = {}): Promise<RescueQueue> {
     })
     return { ...result, clients, recovered, hidden_snoozed }
 }
-export class RescueInputError extends Error {}
+export class RescueInputError extends ToolInputError {}
 /** view: the period the person is looking at when snoozing, so the score kept for "worse since snoozed"
  * is the one they saw (default: the default view). */
 export async function setRescueAction(client: string, change: Record<string, unknown>, by: string, view: Omit<RescueParams, 'include_snoozed'> = {}): Promise<RescueAction> {

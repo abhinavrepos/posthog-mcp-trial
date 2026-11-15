@@ -190,3 +190,23 @@ test('worker pool reuses a small number of threads across sequential analytical 
   assert.equal((pool as unknown as {slots:unknown[]}).slots.length,1)
  }finally{pool.close()}
 })
+
+for (const later of [false, true]) test(`typed input errors survive job persistence (${later ? 'poll' : 'immediate'})`, async () => {
+    const { ToolInputError } = await import('../src/core/toolinputerror.ts')
+    const m = memory(); let reject!: (e: Error) => void
+    const c = await connect(`input-failure-${later}`, { runner: m.runner, budgetMs: later ? 1 : 1000, work: () => ({ promise: new Promise((_r, j) => { reject = j; if (!later) j(new ToolInputError('Choose 1–48 months and 1–1500 follow-up days')) }) }) })
+    try {
+        let result = await call(c.client)
+        if (later) { const id = handle(result); await turn(); reject(new ToolInputError('Choose 1–48 months and 1–1500 follow-up days')); result = await poll(c.client, id) }
+        assert.equal(result.isError, true); assert.match(text(result), /Choose 1–48 months/)
+        assert.equal(rows(`input-failure-${later}`).at(-1)?.error_kind, 'validation')
+    } finally { await c.close(); m.close() }
+})
+test('error_blast_radius missing identification returns actionable validation through a real worker', async () => {
+    const c = await connect('blast-input')
+    try {
+        const result = await c.client.callTool({name:'error_blast_radius',arguments:{}})
+        assert.equal(result.isError,true);assert.match(text(result),/Give issue_id, or error_type and error_message/)
+        assert.equal(rows('blast-input').at(-1)?.error_kind,'validation')
+    } finally {await c.close()}
+})

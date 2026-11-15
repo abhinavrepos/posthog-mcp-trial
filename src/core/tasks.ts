@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 import { isMainThread } from 'node:worker_threads'
 import { ingestOwner } from './ingestowner.ts'
 import { ingestMessages, stored, type Stored } from './ingestmessages.ts'
@@ -483,18 +484,18 @@ export function storeAttempts(day: string, attempts: TaskAttempt[], info: StoreI
 }
 
 export function validDay(s: string): void {
-    if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s) || !Number.isFinite(Date.parse(s)) || date(Date.parse(s)) !== s) throw new Error('Dates must be valid YYYY-MM-DD UTC dates')
+    if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s) || !Number.isFinite(Date.parse(s)) || date(Date.parse(s)) !== s) throw new ToolInputError('Dates must be valid YYYY-MM-DD UTC dates')
 }
 export function validWindow(w: Window): number {
-    if (!w) throw new Error('A window with from and to is required')
+    if (!w) throw new ToolInputError('A window with from and to is required')
     validDay(w.from); validDay(w.to)
     const days = (Date.parse(w.to) - Date.parse(w.from)) / DAY + 1
     analyticalWindow(`${w.from} to ${w.to}`)
     return days
 }
 function filters(task?: string, client?: string) {
-    if (task !== undefined && !/^t_[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(task)) throw new Error('Invalid task id; expected t_ followed by a dialog code')
-    if (client !== undefined && (typeof client !== 'string' || client.length > 256)) throw new Error('Client must be a string of at most 256 characters')
+    if (task !== undefined && !/^t_[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(task)) throw new ToolInputError('Invalid task id; expected t_ followed by a dialog code')
+    if (client !== undefined && (typeof client !== 'string' || client.length > 256)) throw new ToolInputError('Client must be a string of at most 256 characters')
     return { sql: ` AND day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= 'analysis_unavailable:' AND key < 'analysis_unavailable;')${task === undefined ? '' : ' AND task_id = ?'}${client === undefined ? '' : ' AND client = ?'}`, args: [task, client].filter((v): v is string => v !== undefined) }
 }
 interface Aggregate { client: string; task_id: string; attempts: number; done: number; failed: number; abandoned: number; hist: string }
@@ -597,7 +598,7 @@ async function computeTaskMap(p: TaskMapParams): Promise<TaskMap> {
     const current=coverage(p.window), previous=coverage(baseline)
     const cover={...current,complete:current.complete && previous.complete && p.compare!=='none',comparison:{requested:baseline,status:p.compare==='none'?'none':current.complete && previous.complete?'complete':'unavailable',reason:p.compare==='none'?'Comparison disabled':current.complete && previous.complete?'Both periods complete':'Comparisons require complete current and baseline periods; omitted'},baseline:previous}
     const min = p.min_attempts ?? 5
-    if (!Number.isInteger(min) || min < 1) throw new Error('min_attempts must be a positive integer')
+    if (!Number.isInteger(min) || min < 1) throw new ToolInputError('min_attempts must be a positive integer')
     const now = new Map(aggregates(p.window, p.task, p.client).map((r) => [key(r), r])), before = new Map(aggregates(baseline, p.task, p.client).map((r) => [key(r), r]))
     const un = userCounts(p.window, p.task, p.client), ub = userCounts(baseline, p.task, p.client)
     const names = new Map(all<{ client: string; name: string }>('SELECT * FROM client_names').map((r) => [r.client, r.name]))
@@ -656,9 +657,9 @@ function series(w: Window, task: string, granularity: 'day' | 'week', client?: s
 }
 async function computeFlowTime(p: FlowTimeParams): Promise<FlowTime> {
     const days = validWindow(p.window), f = filters(p.task, p.client), granularity = p.granularity ?? (days > 31 ? 'week' : 'day')
-    if (granularity !== 'day' && granularity !== 'week') throw new Error('granularity must be day or week')
+    if (granularity !== 'day' && granularity !== 'week') throw new ToolInputError('granularity must be day or week')
     const slowestLimit = p.slowest_limit ?? 10
-    if (!Number.isInteger(slowestLimit) || slowestLimit < 1 || slowestLimit > 100) throw new Error('slowest_limit must be an integer from 1 to 100')
+    if (!Number.isInteger(slowestLimit) || slowestLimit < 1 || slowestLimit > 100) throw new ToolInputError('slowest_limit must be an integer from 1 to 100')
     const cat = one<{ task_id: string; name: string; dialog: string }>('SELECT task_id, name, dialog FROM task_catalog WHERE task_id = ?', p.task)
     const summary = total(aggregates(p.window, p.task, p.client)), allSummary = p.client === undefined ? summary : total(aggregates(p.window, p.task))
     const users = one<{ n: number }>(`SELECT count(DISTINCT json_array(client, user)) AS n FROM task_users_daily WHERE day BETWEEN ? AND ?${f.sql}`, p.window.from, p.window.to, ...f.args)!.n
@@ -698,8 +699,8 @@ function taskCatalog(): (Task & { title: string })[] {
     return rows
 }
 export function findTasks(query: string, limit = 10): Task[] {
-    if (typeof query !== 'string' || query.length > 1024) throw new Error('Task search must be a string of at most 1024 characters')
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit must be from 1 to 100')
+    if (typeof query !== 'string' || query.length > 1024) throw new ToolInputError('Task search must be a string of at most 1024 characters')
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new ToolInputError('limit must be from 1 to 100')
     const words = query.toLowerCase().trim().split(/\s+/).filter(Boolean)
     return taskCatalog().filter((r) => words.every((w) => `${r.task_id} ${r.name} ${r.dialog} ${r.title}`.toLowerCase().includes(w))).slice(0, limit)
         .map(({ task_id, dialog, name, attempts_90d, clients_90d }) => ({ task_id, dialog, name, attempts_90d, clients_90d }))

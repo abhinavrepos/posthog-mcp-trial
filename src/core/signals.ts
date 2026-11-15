@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 // Explainable client signals from processed history. Identities never leave this module.
 import { cached, coverage, dataThrough, tasksDb, validDay } from './tasks.ts'
 import { config } from './config.ts'
@@ -42,7 +43,7 @@ export function clientSignals(p: { to?: string; client?: string } = {}): Promise
 function compute(p: { to?: string; client?: string }): ClientSignals {
     const to = p.to ?? dataThrough() ?? shift(new Date().toISOString().slice(0, 10), -1)
     validDay(to)
-    if (p.client !== undefined && (typeof p.client !== 'string' || p.client.length > 256)) throw new Error('Client must be a string of at most 256 characters')
+    if (p.client !== undefined && (typeof p.client !== 'string' || p.client.length > 256)) throw new ToolInputError('Client must be a string of at most 256 characters')
     const from = shift(to, 1 - SIGNALS.close_days)
     // v1 processed days lack captures, and task rollups survive capture retention.
     const missingCaptures = query<{ key: string }>("SELECT key FROM task_state WHERE key LIKE 'signals_missing:%'")

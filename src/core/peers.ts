@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 // Equal weight per client, using retained daily histograms rather than individual attempts.
 import { aggregates, cached, coverage, metrics, tasksDb, validWindow } from './tasks.ts'
 import { rescuePrivacy } from './rescueprivacy.ts'
@@ -44,6 +45,6 @@ export function peerComparisons(window: Window, rows?: ReturnType<typeof aggrega
     })
 }
 export async function peerBenchmark({ client, window }: { client: string; window: Window }) {
-    if (typeof client !== 'string' || !client.trim() || client.length > 256) throw new Error('Choose a client id')
+    if (typeof client !== 'string' || !client.trim() || client.length > 256) throw new ToolInputError('Choose a client id')
     return rescuePrivacy({ client, window, coverage: coverage(window), tasks: (await peerComparisons(window)).get(client) || [], note: `${window.from} to ${window.to}. Peers are the median of other clients’ medians and done rates, with at least five done per client and five other clients. Durations use interpolated daily buckets.` })
 }

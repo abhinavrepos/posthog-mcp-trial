@@ -1,3 +1,4 @@
+import { ToolInputError } from '../core/toolinputerror.ts'
 import { ingestMessages } from '../core/ingestmessages.ts'
 import { McpError } from '@modelcontextprotocol/sdk/types.js'
 import { errorDiagnostic } from '../core/errordiagnostics.ts'
@@ -24,7 +25,6 @@ import { z } from 'zod'
 import { appEvents, clientSignalsReport, describeAppEvents, dialogFriction, findTrade, sessionStory, slowAttempts, topPains } from '../core/appevents.ts'
 import { completionWorkflow, discoverWorkflows, workflowCompletionReport } from '../core/workflowqueries.ts'
 import { WORKFLOW_NAME_LIMIT } from '../core/workflows.ts'
-import { SCREENS } from '../core/catalog.ts'
 import { revalBrief } from '../core/brief.ts'
 import { pendingRenders, renderClip } from '../core/clip.ts'
 import { errorImpact } from '../core/impact.ts'
@@ -67,7 +67,7 @@ const json = jsonResult
 
 async function pickClient(client: string) {
     const matches = await resolveClient({ text: client, emails: emailsIn(client), clientHint: client })
-    if (!matches.length) throw new Error(`No client matches "${client}". Try the client name, its id, or a user's email.`)
+    if (!matches.length) throw new ToolInputError('No client matches. Try the client name, its id, or a user email.')
     auditClient(matches[0].id)
     return { best: matches[0], others: matches.slice(1, 4) }
 }
@@ -76,7 +76,7 @@ function screenPath(screen?: string): string | undefined {
     if (!screen) return undefined
     if (screen.startsWith('/')) return screen
     const m = resolveScreen(screen)[0]
-    if (!m) throw new Error(`No screen matches "${screen}". Known screens: ${SCREENS.map((s) => `${s.name} (${s.path})`).join(', ')}`)
+    if (!m) throw new ToolInputError('No screen matches. Use a configured screen name or path.')
     return m.path
 }
 
@@ -432,7 +432,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
             annotations: { readOnlyHint: true },
         },
         async ({ issue_id, error_type, error_message, screen, days }) => {
-            if (!issue_id && !error_type) throw new Error('Give issue_id, or error_type and error_message.')
+            if (!issue_id && (!error_type || !error_message)) throw new ToolInputError('Give issue_id, or error_type and error_message.')
             return json('Blast radius:', await errorImpact({ issue_id, error_type, error_message }, { days, pathname: screenPath(screen) }))
         }
     )

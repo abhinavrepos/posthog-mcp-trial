@@ -1,3 +1,4 @@
+import { ToolInputError } from '../core/toolinputerror.ts'
 import { parentPort } from 'node:worker_threads'
 // Keep worker logs off stdio's protocol stream.
 console.log = console.error
@@ -33,5 +34,5 @@ try {
     const { isPublicToolError } = await import('./publicerror.ts')
     await server.close()
     parentPort!.postMessage({ result, clients: [...clients], publicError: isPublicToolError(result) })
-} catch (e) { parentPort!.postMessage({ error: String((e as Error).message) }) }
+} catch (e) { parentPort!.postMessage({ error: String((e as Error).message), inputError: e instanceof ToolInputError }) }
 }

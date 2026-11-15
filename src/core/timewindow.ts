@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 export const PERIODS = ['today','yesterday','last_7_days','last_14_days','last_28_days','last_30_days','last_90_days','last_6_months','last_12_months','last_2_years','last_3_years','last_4_years','this_week','this_month','this_quarter','this_year','last_week','last_month','last_quarter','last_year','all_time'] as const
 // Turns "this afternoon", "yesterday around 3pm" or "30 Oct at 09:30" into a UTC window.
 // Times are read in the reporter's timezone (Jira gives it on the reporter), falling back to UTC.
@@ -88,12 +89,12 @@ export function analyticalWindow(text: string, now = new Date(), through: string
     const value = text.trim().toLowerCase().replaceAll('_', ' ')
     const make = (from: Date, to: Date): TimeWindow => {
         const days = (+to - +from) / DAY
-        if (!Number.isFinite(days) || days <= 0 || days > 1500) throw new Error('Choose an ordered window of at most 1500 days.')
+        if (!Number.isFinite(days) || days <= 0 || days > 1500) throw new ToolInputError('Choose an ordered window of at most 1500 days.')
         return { from, to, label: text, precision: 'range' }
     }
     const date = (s: string) => {
         const d = new Date(s)
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || !Number.isFinite(+d) || d.toISOString().slice(0,10) !== s) throw new Error('Dates must be valid YYYY-MM-DD UTC dates')
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || !Number.isFinite(+d) || d.toISOString().slice(0,10) !== s) throw new ToolInputError('Dates must be valid YYYY-MM-DD UTC dates')
         return d
     }
     const today = new Date(Math.floor(+now / DAY) * DAY)
@@ -125,7 +126,7 @@ export function analyticalWindow(text: string, now = new Date(), through: string
     m = /^(?:last|past)\s+(?:(\d+|a|one)\s+)?(days?|weeks?|months?|years?|quarter)$/.exec(value)
     if (m) {
         const n = !m[1] || ['a','one'].includes(m[1]) ? 1 : +m[1]
-        if (!Number.isSafeInteger(n) || n < 1 || n > 1500) throw new Error('Invalid relative window')
+        if (!Number.isSafeInteger(n) || n < 1 || n > 1500) throw new ToolInputError('Invalid relative window')
         const end = new Date(Math.min(Math.floor(+now / DAY)*DAY, through ? +date(through)+DAY : Infinity))
         const start = new Date(end)
         if (/year/.test(m[2])) start.setUTCFullYear(start.getUTCFullYear()-n)
@@ -255,7 +256,7 @@ export function parseTimeWindow(text: string, now: Date = new Date(), tzIn?: str
         return window(from, new Date(from.getTime() + DAY), `${dayLabel} (${tzLabel})`, 'day')
     }
 
-    if (text.trim()) throw new Error(`Invalid time window. Use period: ${PERIODS.join(', ')}; or from/to YYYY-MM-DD, e.g. 2024-11-01 to 2025-11-30.`)
+    if (text.trim()) throw new ToolInputError(`Invalid time window. Use period: ${PERIODS.join(', ')}; or from/to YYYY-MM-DD, e.g. 2024-11-01 to 2025-11-30.`)
     return window(new Date(now.getTime() - 7 * DAY), now, 'no time given; using the last 7 days', 'none')
 }
 

@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 // Administrative facts are separate from cached historical evidence.
 import { all, run, tx } from './db.ts'
 import { validDay } from './tasks.ts'
@@ -8,11 +9,11 @@ export const outcomeEpisodes = () => all<ClientOutcome>('SELECT * FROM client_ou
 export const clientOutcomes = () => all<ClientOutcome>('SELECT * FROM client_outcomes ORDER BY client')
 export function recordOutcome(v: Viewer, p: Record<string, unknown>, remove = false): void {
     if (!can(v.role,'admin')) throw new Error('Admins only')
-    if (typeof p.client !== 'string' || !p.client.trim() || p.client.length > 256) throw new Error('Give a client id of 1–256 characters')
+    if (typeof p.client !== 'string' || !p.client.trim() || p.client.length > 256) throw new ToolInputError('Give a client id of 1–256 characters')
     if (!remove) {
-        if (!OUTCOMES.includes(p.outcome as ClientOutcome['outcome'])) throw new Error('Choose left, contracted, renewed or stayed')
+        if (!OUTCOMES.includes(p.outcome as ClientOutcome['outcome'])) throw new ToolInputError('Choose left, contracted, renewed or stayed')
         validDay(p.decided_on as string)
-        if (p.note !== undefined && (typeof p.note !== 'string' || p.note.length > 500)) throw new Error('Note must be at most 500 characters')
+        if (p.note !== undefined && (typeof p.note !== 'string' || p.note.length > 500)) throw new ToolInputError('Note must be at most 500 characters')
     }
     tx(() => {
         if (remove) {

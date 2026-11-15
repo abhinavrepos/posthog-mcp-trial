@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 import { errorDiagnostic } from './errordiagnostics.ts'
 import { auditClient, toolCorrelationId } from './toolcontext.ts'
 // One deterministic PM entry point. Queries stay here; composeBrief only reads supplied results.
@@ -307,7 +308,7 @@ export async function revalBrief(input: BriefInput, sources = briefSources, now 
         (await import('./analysishistory.ts')).completeDayWindow(parsedWindow, input.when || parsedWindow.label.replace(/^the /, ''), now)
     const matches = input.client || input.question ? await optional('Client resolution', () => sources.resolveClient({ text: input.client || input.question || '', clientHint: input.client, emails: emailsIn(input.client || input.question || '') })) : []
     // An explicit client must never silently become an all-client query.
-    if (input.client && !confidentClient(matches || [])) throw new Error(`No unambiguous client matches “${input.client}”. Use its full name or id.`)
+    if (input.client && !confidentClient(matches || [])) throw new ToolInputError('No unambiguous client matches. Use its full name or id.')
     const names = provisional.kind !== 'trade' && !input.client && !confidentClient(matches || []) ?
         await optional('Dialog names', () => sources.dialogNames(win.from, win.to)) : undefined
     const route = detectBriefKind(input, matches, names)

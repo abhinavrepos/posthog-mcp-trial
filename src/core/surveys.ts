@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 import { requestedToolWindow } from './toolcontext.ts'
 import { analyticalWindow } from './timewindow.ts'
 import { rememberClientSurvey } from './surveylocal.ts'
@@ -261,7 +262,7 @@ export function compileStep(s: StepSpec, reg: AppEvents, where: string, problems
     if (kinds.length !== 1) return err(`give exactly one of opens, closes, button, field, message, message_pattern or event (got ${kinds.join(', ') || 'none'})`)
     const kind = kinds[0]
     const str = (v: unknown, what: string) => {
-        if (typeof v !== 'string' || !v.trim() || v.length > 500) throw new Error(`${what} must be text (1-500 characters)`)
+        if (typeof v !== 'string' || !v.trim() || v.length > 500) throw new ToolInputError(`${what} must be text (1-500 characters)`)
         return v.trim()
     }
     try {
@@ -593,8 +594,8 @@ export async function launchSurvey(id: string): Promise<PostHogSurvey> {
     const s = await surveyApi<PostHogSurvey>(`${checkId(id)}/`)
     const st = statusOf(s)
     if (st === 'running') return s
-    if (st === 'archived') throw new Error('This survey is archived.')
-    if (s.conditions?.lensChain && !s.conditions.lensChain.steps?.length) throw new Error('This survey has no chain steps.')
+    if (st === 'archived') throw new ToolInputError('This survey is archived.')
+    if (s.conditions?.lensChain && !s.conditions.lensChain.steps?.length) throw new ToolInputError('This survey has no chain steps.')
     const now = new Date().toISOString()
     return rememberSurvey(await surveyApi<PostHogSurvey>(`${encodeURIComponent(id)}/`, { method: 'PATCH', body: JSON.stringify(st === 'draft' ? { start_date: now } : { end_date: null }) }))
 }
@@ -1071,7 +1072,7 @@ export async function surveyAnswers(id: string, question: string, after?: string
         const s = await getSurvey(id)
         const index = s.questions.findIndex((q) => q.id === question)
         const at = index >= 0 ? index : s.questions.findIndex((q, i) => !q.id && String(i) === question)
-        if (at < 0) throw new RangeError('Question not found.')
+        if (at < 0) throw new ToolInputError('Question not found. Use a question id from get_survey.')
         return answerPage(s, at, days, cursor, size)
     }, (value, time) => ({ ...value, freshness: freshness(time) }))
 }

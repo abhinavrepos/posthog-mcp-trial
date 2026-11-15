@@ -42,7 +42,7 @@ export class AnalysisWorkerPool {
                     const task=current.task
                     if(!task) return
                     current.task=undefined
-                    task.metadata={clients:message.clients,publicError:message.publicError}
+                    task.metadata={clients:message.clients,publicError:message.publicError,inputError:message.inputError}
                     message.error ? task.reject(new Error(message.error)) : task.resolve(message.result)
                     worker.unref();this.pump()
                 })

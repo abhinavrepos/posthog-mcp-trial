@@ -261,3 +261,25 @@ test('error logs keep the error type and a cleaned message: amounts, people, pat
     assert.match(line, /Counterparty limit exceeded/); assert.match(line, /"error_type":"Error"/)
     for (const leak of ['250000', 'jane.doe', '/srv/lens', 'SELECT secret']) assert.ok(!line.includes(leak), leak)
 })
+
+test('core input checks use safe typed validation messages with contract help', async () => {
+ const {ToolInputError}=await import('../src/core/toolinputerror.ts')
+ const {compareClientPatterns,clientActivityChanges}=await import('../src/core/clientpatterns.ts')
+ const {workflowDialogsFromId,validateWorkflow}=await import('../src/core/workflows.ts')
+ const {createDashboard}=await import('../src/core/dashboards.ts')
+ const checks:[()=>unknown,RegExp][]=[
+  [()=>compareClientPatterns({months:49}),/Choose 1–48 months/],
+  [()=>clientActivityChanges({limit:151}),/Invalid silence/],
+  [()=>workflowDialogsFromId('private-invalid-id'),/Invalid discovered workflow id/],
+  [()=>validateWorkflow({}),/Workflow name must/],
+  [()=>createDashboard('owner',{kind:'private-kind',title:'a',params:{}}),/kind must be task_map or flow_time/],
+ ]
+ for(const [call,expected] of checks) assert.throws(call,e=>{
+  assert.ok(e instanceof ToolInputError)
+  const mapped=toolError(e,'example','cid',{keys:['period'],example:{period:'last_7_days'}})
+  assert.equal(mapped.kind,'validation');assert.match(mapped.result.content[0].text,expected)
+  assert.match(mapped.result.content[0].text,/Example:.*last_7_days/);assert.match(mapped.result.content[0].text,/YYYY-MM-DD/)
+  assert.doesNotMatch(mapped.result.content[0].text,/private-/);return true
+ })
+ assert.equal(toolError(new Error('Give issue_id, or error_type and error_message.'),'example','cid').kind,'internal')
+})

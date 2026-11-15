@@ -1,3 +1,4 @@
+import { ToolInputError } from '../core/toolinputerror.ts'
 import { z } from 'zod'
 import { parseTimeWindow, type TimeWindow } from '../core/timewindow.ts'
 
@@ -34,5 +35,5 @@ export const inclusiveWindow = (w: TimeWindow) => ({from:w.from.toISOString().sl
 export function resolveTime(input: Record<string, unknown>, fallback: number|string = 7): TimeWindow {
     const text = input.period ? String(input.period) : input.from ? `${input.from} to ${input.to}` : input.when ? String(input.when) : input.days || input.weeks ? `last ${input.days || Number(input.weeks)*7} days` : typeof fallback === 'string' ? fallback : `last ${fallback} days`
     try { return parseTimeWindow(text, new Date(), (input.period || input.from) ? undefined : input.timezone as string|undefined) }
-    catch { throw new Error('Invalid time window. ' + TIME_HELP) }
+    catch { throw new ToolInputError('Invalid time arguments. ' + TIME_HELP) }
 }

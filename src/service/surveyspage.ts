@@ -1,3 +1,4 @@
+import { ToolInputError } from '../core/toolinputerror.ts'
 // The Surveys page: every in-app survey, what makes it appear, how it looks, and the answers, with
 // Launch, Stop and Archive. PMs make and change surveys in chat (MCP tools); this page is where they and
 // their team come back to see them. Admins, and anyone an admin ticked "Surveys" for.
@@ -67,7 +68,7 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
                 const result = await surveyAnswers(m[1], question, url.searchParams.get('after') || undefined, Number(url.searchParams.get('limit') ?? 50), days(url, 90))
                 return (json(res, 200, result), true)
             } catch (e) {
-                if (e instanceof RangeError) return (json(res, 400, { error: e.message }), true)
+                if (e instanceof RangeError || e instanceof ToolInputError) return (json(res, 400, { error: e.message }), true)
                 throw e
             }
         }
@@ -97,6 +98,8 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
             return (json(res, 200, { ok: true }), true)
         }
     } catch (e) {
+        // Caller mistakes are 400 with their (server-authored) message; anything else is an upstream failure.
+        if (e instanceof ToolInputError) return (json(res, 400, { error: e.message }), true)
         return (json(res, 502, { error: (e as Error).message }), true)
     }
     json(res, 404, { error: 'Not found.' })

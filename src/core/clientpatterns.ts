@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 // Account timelines use retained sufficient statistics only: no event/replay reads.
 import { tasksDb, coverage, dataThrough, validWindow } from './tasks.ts'
 import { clientOutcomes } from './outcomes.ts'
@@ -19,7 +20,7 @@ export function timelineWindow(p:TimelineOptions): Window {
     let to=p.to || dataThrough() || shift(new Date().toISOString().slice(0,10),-1)
     if (p.anchor === 'outcome date' || p.anchor === 'outcome') {
         const outcome=clientOutcomes().filter(o=>o.client===p.client).sort((a,b)=>b.decided_on.localeCompare(a.decided_on))[0]
-        if (!outcome) throw new Error('No dated outcome is recorded for this client; supply an anchor date.')
+        if (!outcome) throw new ToolInputError('No dated outcome is recorded for this client; supply an anchor date.')
         to=outcome.decided_on
     } else if (p.anchor === 'last activity') {
         const last=query<{day:string|null}>(`SELECT max(day) day FROM client_daily WHERE client=? AND sessions>0 AND ${eligible}`,p.client)[0]?.day
@@ -85,7 +86,7 @@ export function clientTimeline(p:TimelineOptions,prepared?:PreparedTimeline) {
 export interface ActivityOptions { from?:string;to?:string;silence_days?:number;established_days?:number;limit?:number;all?:boolean }
 export function clientActivityChanges(p:ActivityOptions={}) {
     const silence=p.silence_days ?? 60, established=p.established_days ?? 3, limit=p.limit ?? 100
-    if(!Number.isInteger(silence)||silence<1||silence>1500||!Number.isInteger(established)||established<1||established>1500||!Number.isInteger(limit)||limit<1||limit>150) throw new Error('Invalid silence, established-use or result limit')
+    if(!Number.isInteger(silence)||silence<1||silence>1500||!Number.isInteger(established)||established<1||established>1500||!Number.isInteger(limit)||limit<1||limit>150) throw new ToolInputError('Invalid silence, established-use or result limit')
     const w=timelineWindow({client:'',from:p.from,to:p.to}), cover=coverage(w)
     const names=new Map(query<{client:string;name:string}>('SELECT client,name FROM client_names').map(r=>[r.client,r.name]))
     const clients=new Map<string,string[]>()
@@ -114,7 +115,7 @@ export function clientActivityChanges(p:ActivityOptions={}) {
 export interface CompareOptions { client?:string; group?:'left_or_contracted'|'inactive';from?:string;to?:string;months?:number;followup_days?:number;silence_days?:number }
 export function compareClientPatterns(p:CompareOptions={}) {
     const months=p.months ?? 12, followup=p.followup_days ?? 60
-    if(!Number.isInteger(months)||months<1||months>48||!Number.isInteger(followup)||followup<1||followup>1500) throw new Error('Choose 1–48 months and 1–1500 follow-up days')
+    if(!Number.isInteger(months)||months<1||months>48||!Number.isInteger(followup)||followup<1||followup>1500) throw new ToolInputError('Choose 1–48 months and 1–1500 follow-up days')
     const w=timelineWindow({client:'',from:p.from,to:p.to}), cover=coverage(w), outcomes=clientOutcomes()
     const index=new Map<string,string>(), peers=new Map<string,string>()
     if(p.client) {

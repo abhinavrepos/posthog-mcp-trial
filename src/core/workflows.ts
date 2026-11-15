@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 // Pure workflow definitions and reading. One start per episode, not per repeat open.
 import { dialogLabel, type AppEvents, type DialogNames, type Step } from './appevents.ts'
 
@@ -19,17 +20,17 @@ export function workflowDialogsFromId(id: string): string[] {
         if (id.startsWith('wf_') && Array.isArray(dialogs) && dialogs.length >= 1 && dialogs.length <= 10 &&
             dialogs.every((d) => typeof d === 'string' && DIALOG_CODE.test(d)) && workflowId(dialogs) === id) return dialogs
     } catch { /* Report a useful error for malformed ids. */ }
-    throw new Error('Invalid discovered workflow id. Use an id from discover_workflows or give dialogs.')
+    throw new ToolInputError('Invalid discovered workflow id. Use an id from discover_workflows or give dialogs.')
 }
 export function validateWorkflow(value: unknown): Workflow {
     const w = value as Workflow | undefined
-    if (!w || typeof w.name !== 'string' || !w.name.trim() || w.name.trim().length > WORKFLOW_NAME_LIMIT) throw new Error(`Workflow name must be 1–${WORKFLOW_NAME_LIMIT} characters.`)
+    if (!w || typeof w.name !== 'string' || !w.name.trim() || w.name.trim().length > WORKFLOW_NAME_LIMIT) throw new ToolInputError(`Workflow name must be 1–${WORKFLOW_NAME_LIMIT} characters.`)
     if (!Array.isArray(w.dialogs) || !w.dialogs.length || w.dialogs.length > 10 || !w.dialogs.every((d) => typeof d === 'string' && DIALOG_CODE.test(d)))
-        throw new Error('Workflow needs 1–10 dialog codes matching the vocabulary identifier pattern.')
-    if (!w.done || !w.dialogs.includes(w.done.dialog)) throw new Error('Done dialog must be one of the workflow dialogs.')
-    if (!['completed', 'accepted', 'either'].includes(w.done.outcome)) throw new Error('Done outcome must be completed, accepted or either.')
+        throw new ToolInputError('Workflow needs 1–10 dialog codes matching the vocabulary identifier pattern.')
+    if (!w.done || !w.dialogs.includes(w.done.dialog)) throw new ToolInputError('Done dialog must be one of the workflow dialogs.')
+    if (!['completed', 'accepted', 'either'].includes(w.done.outcome)) throw new ToolInputError('Done outcome must be completed, accepted or either.')
     if (w.done.buttons !== undefined && (!Array.isArray(w.done.buttons) || !w.done.buttons.length || w.done.buttons.length > 50 || !w.done.buttons.every((b) => typeof b === 'string' && !!b.trim() && b.length <= 80)))
-        throw new Error('Done buttons must be 1–50 nonempty button names of at most 80 characters.')
+        throw new ToolInputError('Done buttons must be 1–50 nonempty button names of at most 80 characters.')
     return { id: workflowId(w.dialogs), name: w.name.trim(), dialogs: [...w.dialogs], done: { dialog: w.done.dialog, outcome: w.done.outcome, ...(w.done.buttons ? { buttons: w.done.buttons.map((b) => b.trim()) } : {}) } }
 }
 

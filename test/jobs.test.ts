@@ -26,11 +26,10 @@ test('jobs race, complete, compress exact results, share flights, and bind owner
 })
 // Background work starts on a later tick: wait for the condition (bounded), not a fixed few milliseconds.
 const until=async(ok:()=>boolean,ms=2000)=>{const end=Date.now()+ms;while(!ok()&&Date.now()<end)await delay(5)}
-test('global concurrency, two per user, cancellation, failure, expiry and restart',async()=>{
+test('global concurrency, cancellation, failure, expiry and restart',async()=>{
  let now=100000;const db=new DatabaseSync(':memory:'),runner=new JobRunner(db,{concurrency:1,ttlMs:100,now:()=>now});let starts=0,cancelled=0
  const work=()=>{starts++;return {promise:new Promise(()=>{}),cancel:()=>{cancelled++}}}
  const a=runner.start('alice','a',{},'r',work),b=runner.start('alice','b',{},'r',work),c=runner.start('bob','c',{},'r',work)
- assert.throws(()=>runner.start('alice','d',{},'r',work),/Two analyses are already running/)
  await until(()=>starts>=1);await delay(20);assert.equal(starts,1)
  assert.equal(runner.cancel('alice',a.id,'r').status,'cancelled');await until(()=>starts>=2);assert.equal(starts,2);assert.equal(cancelled,1)
  now=100101;runner.prune();assert.throws(()=>runner.get('alice',b.id,'r'),/expired/);assert.throws(()=>runner.get('bob',c.id,'r'),/expired/)
@@ -74,4 +73,65 @@ test('the per-user cap reaches the agent as an actionable busy message with its 
     const mapped = toolError(new JobCapError(['aaa111', 'bbb222']), 'workflow_completion', 'cid')
     assert.equal(mapped.kind, 'busy')
     assert.match(mapped.result.content[0].text, /aaa111, bbb222/); assert.match(mapped.result.content[0].text, /get_job_result/)
+})
+
+test('fast calls beyond two bypass detached admission; four handles count and overflow names only own ids', async () => {
+ const db=new DatabaseSync(':memory:'), runner=new JobRunner(db,{concurrency:8})
+ try {
+  const fast=Array.from({length:8},(_,i)=>runner.start('alice','fast',{i},'r',()=>({promise:Promise.resolve(i)})))
+  assert.deepEqual(await Promise.all(fast.map(j=>j.done)),[0,1,2,3,4,5,6,7])
+  const slow=Array.from({length:5},(_,i)=>runner.start('alice','slow',{i},'r',()=>pending()))
+  const other=runner.start('bob','slow',{},'r',()=>pending());runner.detach('bob',other.id,'r')
+  for(const j of slow.slice(0,4))runner.detach('alice',j.id,'r')
+  assert.throws(()=>runner.detach('alice',slow[4].id,'r'),(e:unknown)=>{
+   assert.ok(e instanceof Error);assert.match(e.message,/4 analyses/)
+   for(const j of slow.slice(0,4))assert.ok(e.message.includes(j.id))
+   assert.ok(!e.message.includes(other.id));return true
+  })
+  assert.equal(runner.get('alice',slow[4].id,'r').status,'cancelled')
+  // Even with four detached handles, a fast result is admitted.
+  const quick=runner.start('alice','quick',{},'r',()=>({promise:Promise.resolve(42)}))
+  assert.equal(await quick.done,42);runner.detach('alice',quick.id,'r')
+ } finally {runner.close();db.close()}
+})
+test('bounded global queue rejects overflow as busy, with single-flight still admitted', async () => {
+ const {JobQueueError}=await import('../src/core/jobs.ts'),{toolError}=await import('../src/mcp/toolerror.ts')
+ const db=new DatabaseSync(':memory:'),runner=new JobRunner(db,{concurrency:1,queueLimit:1})
+ try {
+  const a=runner.start('a','slow',{},'r',()=>pending())
+  runner.start('b','slow',{},'r',()=>pending())
+  assert.equal(runner.start('a','slow',{},'r',()=>pending()).id,a.id)
+  assert.throws(()=>runner.start('c','slow',{},'r',()=>pending()),JobQueueError)
+  assert.equal(toolError(new JobQueueError(),'aggregate_events','cid').kind,'busy')
+ } finally {runner.close();db.close()}
+})
+test('long polling finishes early, waits for running work, and wakes for cancellation or expiry', async () => {
+ const db=new DatabaseSync(':memory:'),runner=new JobRunner(db,{ttlMs:10000})
+ try {
+  const p=pending(),a=runner.start('alice','a',{},'r',()=>p)
+  let start=Date.now();const early=runner.poll('alice',a.id,'r',500)
+  setTimeout(()=>p.resolve(42),30);await early
+  assert.ok(Date.now()-start<400);assert.equal(runner.get('alice',a.id,'r').status,'completed')
+  const b=runner.start('alice','b',{},'r',()=>pending())
+  start=Date.now();await runner.poll('alice',b.id,'r',50)
+  assert.ok(Date.now()-start>=40);assert.equal(runner.get('alice',b.id,'r').status,'working')
+  const cancelled=runner.poll('alice',b.id,'r',500);setTimeout(()=>runner.cancel('alice',b.id,'r'),20)
+  await cancelled;assert.equal(runner.get('alice',b.id,'r').status,'cancelled')
+  const exp=runner.start('alice','exp',{},'r',()=>pending(),30)
+  await assert.rejects(runner.poll('alice',exp.id,'r',500),/expired/)
+ } finally {runner.close();db.close()}
+})
+test('dispatch waits its budget before detached-cap refusal and still admits parallel fast calls', async () => {
+ const {createJobDispatch}=await import('../src/mcp/jobtools.ts')
+ const db=new DatabaseSync(':memory:'),runner=new JobRunner(db,{concurrency:8})
+ let slow=false
+ const dispatch=createJobDispatch({who:'dispatch-cap'},{runner,budgetMs:30,work:()=>slow ? pending() : {promise:Promise.resolve({content:[]})}})
+ try {
+  assert.equal((await Promise.all([0,1,2,3].map(i=>dispatch.execute('example',{i},undefined,{},async()=>({}))))).length,4)
+  slow=true
+  for(let i=0;i<4;i++)await dispatch.execute('example',{i},undefined,{},async()=>({}))
+  const start=Date.now()
+  await assert.rejects(dispatch.execute('example',{i:5},undefined,{},async()=>({})),/4 analyses.*get_job_result/)
+  assert.ok(Date.now()-start>=25)
+ } finally {runner.close();db.close()}
 })

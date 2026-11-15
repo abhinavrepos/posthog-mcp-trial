@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 import { clientTimeline, type TimelineOptions } from './clientpatterns.ts'
 import { peerBenchmark, type PeerTask } from './peers.ts'
 // A client account narrative from Lens's own history. Never query PostHog here.
@@ -60,8 +61,8 @@ export async function clientStory(p: TimelineOptions): Promise<ClientStory & { t
         return rescuePrivacy({client,client_name:query<{name:string}>('SELECT name FROM client_names WHERE client=?',client)[0]?.name || client,
             window:timeline.window,coverage:timeline.coverage,weeks:[],events:[],surveys:[],summary:`${timeline.buckets.length} ${timeline.bucket} buckets from ${timeline.window.from} to ${timeline.window.to}. ${unknown}`,unknown,timeline})
     }
-    if (typeof client !== 'string' || !client.trim() || client.length > 256) throw new Error('Choose a client id')
-    if (!Number.isInteger(weeks) || weeks < 1 || weeks > 209) throw new Error('Weeks must be an integer from 1 to 209')
+    if (typeof client !== 'string' || !client.trim() || client.length > 256) throw new ToolInputError('Choose a client id')
+    if (!Number.isInteger(weeks) || weeks < 1 || weeks > 209) throw new ToolInputError('Weeks must be an integer from 1 to 209')
     const to = dataThrough() || shift(new Date().toISOString().slice(0, 10), -1)
     const h = await cached('story-history', { client, weeks, to }, () => history(client, weeks, to), weeks * 7 + 186)
     const name = query<{ name: string }>('SELECT name FROM client_names WHERE client=?', client)[0]?.name || client

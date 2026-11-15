@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 import { dailyAggregate, RollupBudgetError } from './aggregatedaily.ts'
 import { tasksDb } from './tasks.ts'
 // Aggregate-only event counts for questions the daily history does not hold (by app version, tab, button, a
@@ -55,25 +56,25 @@ export async function aggregateEvents(q: AggregateQuery) {
     const metrics = [...new Set(q.metrics?.length ? q.metrics : ['events' as Metric])]
     for (const m of metrics) if (!(m in METRICS)) throw new Error(`Unknown metric "${m}". Choose from ${Object.keys(METRICS).join(', ')}.`)
     const groups = [...new Set(q.group_by || [])]
-    if (groups.length > 2) throw new Error('Group by at most two dimensions.')
+    if (groups.length > 2) throw new ToolInputError('Group by at most two dimensions.')
     for (const g of groups) if (!DIMENSIONS[g]) throw new Error(`Unknown dimension "${g}". Choose from ${Object.keys(DIMENSIONS).join(', ')}.`)
     const bucket = q.bucket || 'none'
     if (!(bucket in BUCKETS)) throw new Error(`Unknown bucket "${bucket}".`)
     const limit = q.limit ?? 50
-    if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new Error('limit is 1-200.')
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new ToolInputError('limit is 1-200.')
     const filters = q.filters || []
-    if (filters.length > 5) throw new Error('At most five filters.')
+    if (filters.length > 5) throw new ToolInputError('At most five filters.')
     const values: Record<string, unknown> = { from: q.from.toISOString(), to: q.to.toISOString(),
         events: q.events?.length ? q.events.map(String) : [reg.events.screen, reg.events.interaction] }
     const where = filters.map((f, i) => {
         const d = DIMENSIONS[f.dimension]
         if (!d) throw new Error(`Unknown filter dimension "${f.dimension}".`)
         const list = Array.isArray(f.value) ? f.value.map(String) : [String(f.value)]
-        if (!list.length || list.length > 50 || list.some((v) => v.length > 200)) throw new Error('A filter takes 1-50 values of at most 200 characters.')
+        if (!list.length || list.length > 50 || list.some((v) => v.length > 200)) throw new ToolInputError('A filter takes 1-50 values of at most 200 characters.')
         values[`f${i}`] = f.op === 'in' ? list : list[0]
         return f.op === 'in' ? `${d.expr(reg)} IN {f${i}}` : `${d.expr(reg)} ${f.op === 'neq' ? '!=' : '='} {f${i}}`
     })
-    if (bucket === 'day' && +q.to - +q.from > 400 * DAY) throw new Error('Daily periods are limited to 400 days; use week, month, quarter or year for longer windows.')
+    if (bucket === 'day' && +q.to - +q.from > 400 * DAY) throw new ToolInputError('Daily periods are limited to 400 days; use week, month, quarter or year for longer windows.')
     let rollupNote = ''
     try { const rolled = dailyAggregate(tasksDb, q); if (rolled) return rolled }
     catch(e) { if (!(e instanceof RollupBudgetError)) throw e; rollupNote = ' ' + e.message }

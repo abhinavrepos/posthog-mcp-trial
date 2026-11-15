@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 import { requestedToolWindow } from './toolcontext.ts'
 import { privacyMode } from './anonymise.ts'
 import { analyticalWindow } from './timewindow.ts'
@@ -1275,7 +1276,7 @@ export interface TradeHit {
 export async function findTrade(q: { id: string; from: Date; to: Date; clientId?: string; limit?: number }): Promise<{ id: string; sessions: TradeHit[]; note: string }> {
     const reg = required()
     const id = q.id.trim()
-    if (!/^\d{1,15}$/.test(id)) throw new Error('A trade or link id is a number, e.g. 4348.')
+    if (!/^\d{1,15}$/.test(id)) throw new ToolInputError('A trade or link id is a number, e.g. 4348.')
     const values = {
         from: q.from.toISOString(),
         to: q.to.toISOString(),

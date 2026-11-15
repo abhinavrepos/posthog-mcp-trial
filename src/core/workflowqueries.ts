@@ -1,3 +1,4 @@
+import { ToolInputError } from './toolinputerror.ts'
 import { comparisonWindow, type ComparisonOptions } from './comparison.ts'
 // Bounded queries for the pure workflow reader. PMs do not configure definitions.
 import { dialogLabel, dialogNames, required, type AppEvents, type RawEvent } from './appevents.ts'
@@ -71,41 +72,41 @@ export function resolveWorkflowDialogs(inputs: string[], reg: AppEvents, names: 
         const exact = [...codes].find((d) => d.toLowerCase() === want)
         if (exact) return exact
         const matches = [...codes].filter((d) => dialogLabel(d, reg, { get: (code) => names.get(code)?.name }).toLowerCase() === want)
-        if (matches.length > 1) throw new Error(`Ambiguous dialog name "${input}". Use a dialog code: ${matches.join(', ')}.`)
+        if (matches.length > 1) throw new ToolInputError('Ambiguous dialog name. Use a dialog code from discover_workflows.')
         if (matches.length) return matches[0]
         if (DIALOG_CODE.test(input.trim())) return input.trim()
-        throw new Error(`No dialog matches "${input}". Use its code or exact dialog name from discover_workflows.`)
+        throw new ToolInputError('No dialog matches. Use its code or exact dialog name from discover_workflows.')
     })
 }
 
 export async function completionWorkflow(q: Window & { workflow?: string; dialogs?: string[] }) {
-    if ((q.workflow !== undefined) === (q.dialogs !== undefined)) throw new Error('Give either a discovered workflow id/name or dialogs, not both.')
+    if ((q.workflow !== undefined) === (q.dialogs !== undefined)) throw new ToolInputError('Give either a discovered workflow id/name or dialogs, not both.')
     const reg = required()
     if (q.workflow !== undefined) {
         const input = q.workflow.trim()
-        if (!input) throw new Error('Give a discovered workflow id or name.')
+        if (!input) throw new ToolInputError('Give a discovered workflow id or name.')
         if (input.startsWith('wf_')) {
             const dialogs = workflowDialogsFromId(input)
             if (dialogs.some((d) => [...reg.dialogs.menu, ...reg.dialogs.messages, ...reg.dialogs.notices].includes(d)))
-                throw new Error('Use task dialogs, not menu, messagebox or toast.')
+                throw new ToolInputError('Use task dialogs, not menu, messagebox or toast.')
             return validateWorkflow({ name: dialogs.map((d) => dialogLabel(d, reg)).join(' → '), dialogs,
                 done: { dialog: dialogs.at(-1)!, outcome: 'either' } })
         }
         const matches = (await discoverWorkflows({ ...q, limit: Number.MAX_SAFE_INTEGER })).discovered
             .filter((w) => w.name.toLowerCase() === input.toLowerCase())
-        if (matches.length > 1) throw new Error(`Ambiguous workflow name "${input}". Use its discovered id.`)
-        if (!matches.length) throw new Error(`No discovered workflow "${input}" in this window. Use discover_workflows, a discovered id or dialogs.`)
+        if (matches.length > 1) throw new ToolInputError('Ambiguous workflow name. Use its discovered id.')
+        if (!matches.length) throw new ToolInputError('No discovered workflow in this window. Use discover_workflows, a discovered id or dialogs.')
         const w = matches[0]
         return validateWorkflow({ name: w.name, dialogs: w.dialogs, done: { dialog: w.dialogs.at(-1)!, outcome: 'either' } })
     }
-    if (!q.dialogs?.length || q.dialogs.length > 10) throw new Error('Give 1–10 dialogs.')
+    if (!q.dialogs?.length || q.dialogs.length > 10) throw new ToolInputError('Give 1–10 dialogs.')
     // Codes need no name lookup; names use the vocabulary and observed titles.
     const { historyDialogNames } = await import('./analysishistory.ts')
     const names = historyDialogNames(q) ?? (q.dialogs.every((d) => /^Dlg[A-Za-z0-9_$]+$/.test(d) && !Object.values(reg.aliases).some((n) => n.toLowerCase() === d.toLowerCase()))
         ? new Map<string, { name?: string }>() : await dialogNames(q.from, q.to, q.clientId))
     const dialogs = resolveWorkflowDialogs(q.dialogs, reg, names)
     const excluded = [...reg.dialogs.menu, ...reg.dialogs.messages, ...reg.dialogs.notices]
-    if (dialogs.some((d) => excluded.includes(d))) throw new Error('Use task dialogs, not menu, messagebox or toast.')
+    if (dialogs.some((d) => excluded.includes(d))) throw new ToolInputError('Use task dialogs, not menu, messagebox or toast.')
     return validateWorkflow({ name: dialogs.map((d) => dialogLabel(d, reg, { get: (code) => names.get(code)?.name })).join(' → '), dialogs,
         done: { dialog: dialogs.at(-1)!, outcome: 'completed' } })
 }
