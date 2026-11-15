@@ -904,12 +904,19 @@ export interface Vocabulary {
 /** What the app's events are and hold, from the vocabulary and the last days of data. */
 export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vocabulary> {
     const reg = required()
-    const {from,to}=requestedToolWindow() || analyticalWindow(`last ${days} days`)!
+    const requested=requestedToolWindow() || analyticalWindow(`last ${days} days`)!
+    const { dailyVocabulary } = await import('./aggregatedaily.ts')
+    const { tasksDb } = await import('./tasks.ts')
+    const retained = dailyVocabulary(tasksDb, requested.from, requested.to)
+    // Legacy/missing dimension history has an explicitly bounded vocabulary window. Counts are never
+    // presented as covering the requested years when only this recent window was read.
+    const {from,to}=retained ? requested : { from: new Date(Math.max(+requested.from, +requested.to-7*86400000)), to: requested.to }
+    const bounded = !retained && +from !== +requested.from
     const w = { from: from.toISOString(), to: to.toISOString(), events: [reg.events.screen, reg.events.interaction] }
     const roles = ROLES.filter((r) => reg.properties[r])
     const [events, props, names, msgs, clients, defined] = await Promise.all([
-        hogql(`SELECT event, count() AS n FROM events WHERE timestamp >= {from} AND timestamp < {to} GROUP BY event ORDER BY n DESC LIMIT 30`, w),
-        hogql(
+        retained ? Promise.resolve(retained.events) : hogql(`SELECT event, count() AS n FROM events WHERE timestamp >= {from} AND timestamp < {to} GROUP BY event ORDER BY n DESC LIMIT 30`, w),
+        retained ? Promise.resolve([Object.fromEntries([['n',retained.total],...roles.flatMap((r,i)=>{const counts=retained.values.get(r);return [[`f${i}`,counts ? [...counts].reduce((n,[v,k])=>n+(v?k:0),0) : null],[`t${i}`,counts ? [...counts].filter(([v])=>v).sort((a,b)=>b[1]-a[1]).slice(0,12).map(([v])=>v) : []]]})])]) : hogql(
             // Search text is what people typed (trades, counterparties): never an example.
             `SELECT count() AS n, ${roles
                 .map((r, i) => `countIf(notEmpty(${prop(reg, r)})) AS f${i}, topK(12)(${r === 'action' ? `if(upper(${prop(reg, 'control')}) = 'SEARCH', '', ${prop(reg, r)})` : prop(reg, r)}) AS t${i}`)
@@ -917,14 +924,14 @@ export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vo
              FROM events WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}`,
             w
         ),
-        dialogNames(from, to),
-        hogql(
+        retained ? Promise.resolve(retained.names) : dialogNames(from, to),
+        retained ? Promise.resolve(retained.msgs as Record<string,unknown>[]) : hogql(
             `SELECT ${prop(reg, 'dialog')} AS dialog, ${prop(reg, 'button')} AS button, ${prop(reg, 'action')} AS action FROM events
              WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND ${prop(reg, 'dialog')} IN {special}
              ORDER BY timestamp DESC LIMIT 5000`,
             { ...w, special: [...reg.dialogs.messages, ...reg.dialogs.notices] }
         ),
-        hogql(
+        retained ? Promise.resolve(retained.clients) : hogql(
             `SELECT toString(${P.client}) AS client, count() AS n FROM events WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}
              GROUP BY client ORDER BY n DESC LIMIT 25`,
             w
@@ -938,7 +945,7 @@ export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vo
         const raw = firstValue(r.button) || String(r.action || '')
         const text = generalise(raw, reg, 120)
         const e = m.get(text) || { count: 0, outcome: outcomeOf(raw, reg.dialogs.notices.includes(String(r.dialog)), reg), example: cleanMessage(raw, reg, 160) }
-        e.count++
+        e.count += retained ? Number(r.n) : 1
         m.set(text, e)
     }
     const describedNames = new Set(roles.map((r) => reg.properties[r]!.name))
@@ -955,8 +962,8 @@ export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vo
             role: r,
             name: reg.properties[r]!.name,
             meaning: reg.properties[r]!.meaning,
-            filled: total ? `${Math.round((100 * Number(p[`f${i}`])) / total)}% of ${total} ${reg.app} events` : 'no events in the window',
-            examples: ((p[`t${i}`] as unknown[]) || []).map((v) => (r === 'button' || r === 'action' ? generalise(String(v), reg, 60) : firstValue(v))).filter(Boolean),
+            filled: p[`f${i}`] === null ? 'This property is not retained in the dimension rollup.' : total ? `${Math.round((100 * Number(p[`f${i}`])) / total)}% of ${total} ${reg.app} events` : 'no events in the window',
+            examples: (retained && r === 'action' ? [] : (p[`t${i}`] as unknown[]) || []).map((v) => (r === 'button' || r === 'action' ? generalise(String(v), reg, 60) : firstValue(v))).filter(Boolean),
         })),
         dialogs: [...names.entries()]
             .filter(([d]) => d && !reg.dialogs.messages.includes(d) && !reg.dialogs.notices.includes(d))
@@ -970,7 +977,7 @@ export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vo
             `Errors: ${prop(reg, 'dialog')} IN (${reg.dialogs.messages.map((d) => `'${d}'`).join(', ')}); notices: IN (${reg.dialogs.notices.map((d) => `'${d}'`).join(', ')}). Messages carry no dialog of their own: the attempt just before them in the session is what failed.`,
             `Always bound queries by timestamp; event IN ('${reg.events.screen}', '${reg.events.interaction}').`,
         ],
-        window: `last ${days} days`,
+        window: bounded ? `Requested last ${days} days; vocabulary counts cover only ${from.toISOString()} to ${to.toISOString()} (at most 7 recent days). Older dimension rollups are not yet available.` : `last ${days} days`,
     }
 }
 

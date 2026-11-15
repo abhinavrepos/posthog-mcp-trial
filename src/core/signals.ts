@@ -66,7 +66,9 @@ function compute(p: { to?: string; client?: string }): ClientSignals {
         return [user, person, person.split('@')[0]].filter(Boolean)
     }
     const identities = new Set(people.flatMap(r => identityForms(r.user)))
-    for (const r of query<{ user: string }>(`SELECT DISTINCT user FROM task_users_daily WHERE day BETWEEN ? AND ?${suffix}`, from, to, ...args)) {
+    // Privacy uses a superset of identities, independent of the analysis window. This small retained
+    // roster avoids scanning millions of per-task membership rows solely to scrub names.
+    for (const r of query<{ user: string }>('SELECT user FROM known_users')) {
         for (const token of identityForms(r.user)) identities.add(token)
     }
     const tokens = [...identities].sort((a, b) => b.length - a.length)

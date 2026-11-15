@@ -1,3 +1,5 @@
+import { backfillPerformanceHistory } from './performancehistory.ts'
+import { initAggregateDaily, ingestAggregateDaily } from './aggregatedaily.ts'
 import { privacyKey } from './anonymise.ts'
 import { analyticalWindow, setWindowDataThrough } from './timewindow.ts'
 import { historyCoverage, type DayObservation } from './historycoverage.ts'
@@ -159,6 +161,10 @@ transaction(() => {
     `)
 
 })
+initAggregateDaily(tasksDb)
+tasksDb.exec(`CREATE TABLE IF NOT EXISTS workflow_episode_index_days(day TEXT PRIMARY KEY) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS task_active_users_daily(day TEXT NOT NULL,client TEXT NOT NULL,user TEXT NOT NULL,PRIMARY KEY(day,client,user)) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS task_active_users_days(day TEXT PRIMARY KEY) WITHOUT ROWID;`)
 type Row = Record<string, unknown>
 const all = <T = Row>(sql: string, ...args: SQLInputValue[]) => tasksDb.prepare(sql).all(...args) as T[]
 const one = <T = Row>(sql: string, ...args: SQLInputValue[]) => tasksDb.prepare(sql).get(...args) as T | undefined
@@ -175,11 +181,23 @@ const merge = (into: number[], h: number[]) => { for (let i = 0; i < into.length
 // Aggregate in SQLite to return one row per client/task. A numeric handle avoids copying JSON on every row;
 // SQLite calls result once per group, which releases the temporary histogram.
 let histId = 0
-const histStates = new Map<number, number[]>()
+const histStates = new Map<number, { hist: number[]; last: string; repeats: number }>()
+function flushHist(state: {hist:number[];last:string;repeats:number}) {
+    if(!state.repeats)return
+    const values=histogram(state.last)
+    for(let i=0;i<state.hist.length;i++)state.hist[i]+=(values[i]||0)*state.repeats
+}
 tasksDb.aggregate('hist_merge', {
-    start: () => { const id = ++histId; histStates.set(id, emptyHist()); return id },
-    step: (id, value) => { merge(histStates.get(Number(id))!, histogram(String(value))); return id },
-    result: (id) => { const h = histStates.get(Number(id))!; histStates.delete(Number(id)); return JSON.stringify(h) },
+    start: () => { const id = ++histId; histStates.set(id, {hist:emptyHist(),last:'',repeats:0}); return id },
+    step: (id, value) => {
+        const state=histStates.get(Number(id))!, text=String(value)
+        // Daily distributions often repeat. Accumulate the run before merging its bins, avoiding
+        // 21 additions and a histogram lookup for every repeated daily row.
+        if(state.last===text)state.repeats++
+        else {flushHist(state);state.last=text;state.repeats=1}
+        return id
+    },
+    result: (id) => { const state=histStates.get(Number(id))!;flushHist(state);histStates.delete(Number(id));return JSON.stringify(state.hist) },
 })
 
 function percentile(h: number[], q: number): number | null {
@@ -349,7 +367,7 @@ function rangeOf(v: unknown): [string, string] | undefined {
 }
 export function cached<T>(kind: string, p: object, compute: () => Promise<T>, lookbackDays = 0): Promise<T> {
     const key = privacyKey() + kind + JSON.stringify(p), hit = answers.get(key)
-    if (hit && Date.now() - hit.at < 600_000) return hit.value as Promise<T>
+    if (hit && Date.now() - hit.at < 600_000) { answers.delete(key); answers.set(key,hit); return hit.value as Promise<T> }
     const value = compute()
     const entry: { at: number; value: Promise<unknown>; range?: [string, string] } = { at: Date.now(), value }
     value.then((v) => {
@@ -366,12 +384,12 @@ function invalidate(day: string): void {
 }
 /** Drops every kept answer (tests, and after maintenance). */
 /** Increases whenever a day is stored: lets a computation tell whether history changed while it ran. */
-export const historyGeneration = (): number => generation
+export const historyGeneration = (): number => generation + Number(tasksDb.prepare('PRAGMA data_version').get()!.data_version) * 1_000_000_000
 /** Drops every kept answer, including stored weekly observations (tests, maintenance). keepWeekly: the daily
  * attempt clean-up keeps them, since weekly observations never read raw attempts. */
 export function forgetAnswers(keepWeekly = false): void {
     // Analysis history readers stream SQLite directly and keep no independent cached answers.
-    answers.clear(); catalogMemo = undefined
+    answers.clear(); coverageMemo.clear(); catalogMemo = undefined
     if (!keepWeekly) tasksDb.exec('DELETE FROM week_obs; DELETE FROM week_done')
 }
 export const taskMap = (p: TaskMapParams): Promise<TaskMap> => cached('map', p, () => computeTaskMap(p))
@@ -395,7 +413,10 @@ export function storeAttempts(day: string, attempts: TaskAttempt[], info: StoreI
     }
     transaction(() => {
         const affected = new Set([...all<{ task_id: string }>('SELECT DISTINCT task_id FROM task_daily WHERE day = ?', day).map((r) => r.task_id), ...attempts.map((a) => a.task_id)])
-        for (const table of ['task_errors_daily', 'task_attempts', 'task_daily', 'task_paths_daily', 'task_users_daily', 'task_finishes_daily', 'task_ingest', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily', 'friction_daily', 'workflow_daily', 'workflow_global_daily', 'workflow_support_daily', 'workflow_episodes_daily', 'analysis_names_daily', 'analysis_client_daily', 'analysis_days']) run(`DELETE FROM ${table} WHERE day = ?`, day)
+        for (const table of ['task_errors_daily', 'task_attempts', 'task_daily', 'task_paths_daily', 'task_users_daily', 'task_finishes_daily', 'task_ingest', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily', 'friction_daily', 'workflow_daily', 'workflow_global_daily', 'workflow_support_daily', 'workflow_episodes_daily', 'analysis_names_daily', 'analysis_client_daily', 'analysis_days', 'aggregate_dimension_daily', 'aggregate_dimension_skipped', 'workflow_episode_index_days', 'task_active_users_daily', 'task_active_users_days']) run(`DELETE FROM ${table} WHERE day = ?`, day)
+        const activeUser = tasksDb.prepare('INSERT OR IGNORE INTO task_active_users_daily VALUES (?,?,?)')
+        for (const a of attempts) activeUser.run(day,a.client,a.user)
+        tasksDb.prepare('INSERT INTO task_active_users_days VALUES (?)').run(day)
         if (info.analysisSessions) storeAnalysisDay(day, info.analysisSessions, required())
         if (info.summary) {
             run('DELETE FROM task_state WHERE key = ?', 'signals_missing:' + day)
@@ -513,7 +534,19 @@ function missingText(days: DayObservation[]): string {
     return [...by].map(([status, ds]) => `${MISSING_LABEL[status] || status}: ${ds.length} day${ds.length === 1 ? '' : 's'} (${ds.length === 1 ? ds[0] : `${ds[0]} to ${ds.at(-1)}`})`).join('; ')
 }
 /** The days of these periods not fully processed yet (today never counts as complete). */
+const coverageMemo = new Map<string,Coverage>()
 export function coverage(...windows: Window[]): Coverage {
+    // Include direct maintenance/test writes and commits from ingestion in another worker. Completed
+    // weekly observations do not make retained coverage facts stale, but may safely evict this cache.
+    const revision = `${historyGeneration()}:${tasksDb.prepare('SELECT total_changes() n').get()!.n}:${today()}`
+    const key=revision+JSON.stringify(windows)
+    let answer=coverageMemo.get(key)
+    if(!answer){answer=computeCoverage(...windows);if(coverageMemo.size>=128)coverageMemo.delete(coverageMemo.keys().next().value!);coverageMemo.set(key,answer)}
+    const result=structuredClone(answer)
+    Object.defineProperty(result,'days',{value:answer.days?.map(d=>({...d})),enumerable:false})
+    return result
+}
+function computeCoverage(...windows: Window[]): Coverage {
     const lo = windows.map(w=>w.from).sort()[0], hi = windows.map(w=>w.to).sort().at(-1)!
     const ingested = new Map(all<{day:string;truncated:number;finalized:number}>('SELECT day,truncated,finalized FROM task_ingest WHERE day BETWEEN ? AND ?',lo,hi).map(r=>[r.day,r]))
     // Only the states these days can have (the table also holds a row per day for other purposes).
@@ -769,6 +802,7 @@ export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits
     }
     run('DELETE FROM task_state WHERE key IN (?,?)', 'query_failed:'+day, 'analysis_unavailable:'+day)
     storeAttempts(day, attempts, { finalized: scanStarted >= Date.parse(shift(day, 2)), sessions: ids.length, events, truncated, seconds: (performance.now() - started) / 1000, clientNames, dialogNames, finishes, analysisSessions: sessions, summary: summariseSteps(sessions, day, reg) })
+    if (!truncated && scanStarted >= Date.parse(shift(day, 2))) await ingestAggregateDaily(tasksDb, day, q)
     run('DELETE FROM task_attempts WHERE day < ?', shift(today(), -29))
 }
 let running = false, scheduled = false
@@ -812,9 +846,10 @@ export async function runIngest(opts: { days?: string[]; maxBackfill?: number } 
             run('DELETE FROM task_attempts WHERE day < ?', shift(today(), -29))
             // Task rollups outlive captures. Keep their signal coverage honest after capture retention.
             run(`INSERT OR IGNORE INTO task_state SELECT 'signals_missing:' || day, '1' FROM task_ingest WHERE day < ?`, shift(today(), 1 - config.tasks.historyDays))
-            for (const table of ['task_errors_daily', 'task_attempts', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily', 'friction_daily', 'workflow_daily', 'workflow_global_daily', 'workflow_support_daily', 'workflow_episodes_daily', 'analysis_names_daily', 'analysis_client_daily', 'analysis_days'])
+            for (const table of ['task_errors_daily', 'task_attempts', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily', 'friction_daily', 'workflow_daily', 'workflow_global_daily', 'workflow_support_daily', 'workflow_episodes_daily', 'analysis_names_daily', 'analysis_client_daily', 'analysis_days', 'aggregate_dimension_daily', 'aggregate_dimension_skipped', 'workflow_episode_index_days', 'task_active_users_daily', 'task_active_users_days'])
                 run(`DELETE FROM ${table} WHERE day < ?`, shift(today(), 1 - config.tasks.historyDays))
         })
+        await backfillPerformanceHistory(Math.min(2, config.tasks.backfillDaysPerRun), taskQuery)
         forgetAnswers(true) // old attempts only: weekly observations stay
         tasksDb.exec('PRAGMA incremental_vacuum(1000)')
     } finally { running = false }

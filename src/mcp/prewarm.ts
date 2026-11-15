@@ -13,18 +13,18 @@ import { surveysActive } from '../core/config.ts'
 import { surveyOverview } from '../core/surveys.ts'
 
 const log = (msg: string, extra: Record<string, unknown> = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), msg, ...extra }))
-export const DEFAULT_PREWARM = ['reval_brief', 'top_pains', 'dialog_friction', 'client_signals', 'discover_workflows', 'message_doctor']
+export const DEFAULT_PREWARM = ['reval_brief', 'top_pains', 'dialog_friction', 'client_signals', 'discover_workflows', 'message_doctor', 'signal_scorecard']
 
 export function prewarmSettings(env = process.env): { minutes: number; tools: string[] } {
     const minutes = Math.min(1440, Math.max(0, Math.floor(Number(env.LENS_PREWARM_MINUTES ?? 15)) || 0))
-    const tools = (env.LENS_PREWARM_TOOLS ? env.LENS_PREWARM_TOOLS.split(',').map((t) => t.trim()) : DEFAULT_PREWARM).filter((t) => CACHED_TOOLS.has(t))
+    const tools = (env.LENS_PREWARM_TOOLS ? env.LENS_PREWARM_TOOLS.split(',').map((t) => t.trim()) : DEFAULT_PREWARM).filter((t) => CACHED_TOOLS.has(t) || t === 'signal_scorecard')
     return { minutes, tools }
 }
 
 /** One round: each tool once, in order. Returns how long each took (ms) or its error. */
 export async function prewarmRound(tools: string[], keepMs: number): Promise<Record<string, number | string>> {
     const server = new McpServer(lensServerInfo)
-    registerTools(server, undefined, { who: 'prewarm', surveyRole: 'none', dashboardRole: 'none', admin: false })
+    registerTools(server, undefined, { who: 'prewarm', surveyRole: 'none', dashboardRole: 'view', admin: false })
     const client = new Client({ name: 'lens-prewarm', version: '1' })
     const [a, b] = InMemoryTransport.createLinkedPair()
     await server.connect(a); await client.connect(b)
@@ -33,7 +33,15 @@ export async function prewarmRound(tools: string[], keepMs: number): Promise<Rec
         for (const name of tools) {
             const t = Date.now()
             try {
-                const r = await withPrewarm(keepMs, () => client.callTool({ name, arguments: {} }, undefined, { timeout: 300_000 }))
+                let r = await withPrewarm(keepMs, () => client.callTool({ name, arguments: name === 'signal_scorecard' ? { weeks: 209 } : {} }, undefined, { timeout: 300_000 }))
+                // The synchronous request has its normal deadline; prewarm itself waits in the background.
+                let job: { job_id?: string; status?: string } = {}
+                try { job = JSON.parse(String((r.content as {text?:string}[])[0]?.text || '{}')) } catch {}
+                while (job.status === 'running' && job.job_id) {
+                    await new Promise(resolve => setTimeout(resolve, 5000))
+                    r = await client.callTool({name:'get_job_result',arguments:{job_id:job.job_id}})
+                    try { job = JSON.parse(String((r.content as {text?:string}[])[0]?.text || '{}')) } catch { job = {} }
+                }
                 out[name] = r.isError ? 'error: ' + JSON.stringify(r.content).slice(0, 120) : Date.now() - t
             } catch (e) { out[name] = 'error: ' + (e as Error).message.slice(0, 120) }
         }
@@ -66,9 +74,7 @@ export function startPrewarm(): void {
         running = true
         try {
             log('prewarm round', await prewarmRound(tools, keep))
-            // The signal scorecard replays a year of weeks; computing missing weeks here keeps the page instant.
-            const t = Date.now(); await (await import('../core/scorecard.ts')).scorecard({ weeks: 52 })
-            log('prewarm scorecard', { ms: Date.now() - t })
+
         } catch (e) { log('prewarm failed', { error: (e as Error).message }) } finally { running = false }
     }
     // First round two minutes after start, so the service and PostHog settle first.

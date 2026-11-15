@@ -1,3 +1,5 @@
+import { dailyAggregate } from './aggregatedaily.ts'
+import { tasksDb } from './tasks.ts'
 // Aggregate-only event counts for questions the daily history does not hold (by app version, tab, button, a
 // property over years). Lens builds the HogQL from approved dimensions and bound values: no SQL from the
 // caller, no raw rows, exact distinct counts. Results go through the privacy layer like every tool answer.
@@ -71,12 +73,14 @@ export async function aggregateEvents(q: AggregateQuery) {
         values[`f${i}`] = f.op === 'in' ? list : list[0]
         return f.op === 'in' ? `${d.expr(reg)} IN {f${i}}` : `${d.expr(reg)} ${f.op === 'neq' ? '!=' : '='} {f${i}}`
     })
+    if (bucket === 'day' && +q.to - +q.from > 400 * DAY) throw new Error('Daily periods are limited to 400 days; use week, month, quarter or year for longer windows.')
+    const rolled = dailyAggregate(tasksDb, q)
+    if (rolled) return rolled
     const keys = [...(bucket !== 'none' ? [`${BUCKETS[bucket]} AS period`] : []), ...groups.map((g) => `${DIMENSIONS[g].expr(reg)} AS ${g}`)]
     const names = [...(bucket !== 'none' ? ['period'] : []), ...groups]
     const select = [...keys, ...metrics.map((m) => `${METRICS[m]} AS ${m}`)].join(', ')
     const scope = `FROM events WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}${where.length ? ' AND ' + where.join(' AND ') : ''}`
     const order = metrics[0], distinct = metrics.filter((m) => m !== 'events')
-    if (bucket === 'day' && +q.to - +q.from > 400 * DAY) throw new Error('Daily periods are limited to 400 days; use week, month, quarter or year for longer windows.')
     const started = performance.now()
     // Long windows run as one query per calendar year (Monday-aligned for weekly periods), one at a time, so no
     // single PostHog query has to scan four years before its time limit. This stays exact: event counts add up

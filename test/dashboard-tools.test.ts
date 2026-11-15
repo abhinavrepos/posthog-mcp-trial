@@ -33,7 +33,7 @@ const deps = {
 type Deps = NonNullable<Parameters<typeof registerDashboardTools>[2]>
 async function chat(role: DashboardRole, personal = true, overrides: Deps = {}, surveyRole: import('../src/service/access.ts').SurveyRole = 'launch') {
     const server = new McpServer({ name: 'test', version: '1' })
-    wrapTools(server)
+    wrapTools(server, false, undefined, { work: (_name, _args, _window, execute) => ({ promise: execute() }) })
     registerDashboardTools(server, { who: 'pm@x.com', email: personal ? 'pm@x.com' : undefined, dashboardRole: role, surveyRole, admin: false }, { ...deps, ...overrides })
     const client = new Client({ name: 'test', version: '1' })
     const [a, b] = InMemoryTransport.createLinkedPair()

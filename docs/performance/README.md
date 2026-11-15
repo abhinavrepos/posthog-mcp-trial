@@ -1,0 +1,89 @@
+# MCP analysis execution and security boundary
+
+Every ordinary `tools/call`, including job creation and `get_job_result`, enters `wrapTools`: rate accounting, strict schema validation and time resolution, execution, analytical coverage disclosures, `safeResult`, privacy-revision check, error mapping with correlation IDs, and one audit row. Job tools cost five budget units; polling costs one. Non-job execution retains its existing callback and cache path.
+
+Job dispatch is an execution step inside this boundary. Workers register raw callbacks and receive resolved arguments and the original requested window; workers do not run the limiter, audit, disclosures or output safety. SQLite stores the raw callback result, with tool/window/client and trusted public-error metadata separately in `analysis_job_context`. Both immediate completion and later polling pass through the output boundary using the original tool context. Polling checks owner, expiry and privacy/access revision before reading the answer. Unknown, expired and other-user handles have the same public error. Old persisted jobs without execution context require resubmission.
+
+Audit migration adds `result_kind` (`job_started` or `job_result`) and `job_hash` (SHA-256 of the random handle). A successful handle response has no error kind. Polling produces its own audit row; arguments and job IDs are never recorded verbatim in these rows.
+
+Native MCP Tasks are disabled: no Tasks capability, optional task support, or tasks lifecycle handlers are installed. The previous SDK interception bypassed the boundary for task creation and lifecycle operations. Follow-up: reintroduce Tasks only when creation and `tasks/get`, `tasks/result`, `tasks/list` and `tasks/cancel` share validation, rate accounting, auditing, mapped errors and output safety. Ordinary job handles, the 20-second race, progress notifications, single-flight, per-user caps and expiry remain supported.
+
+Task C validation (2026-11-15): `npx tsc --noEmit` and `git diff --check` pass. The final focused fallback run (`node --import tsx --test --test-concurrency=1` on `jobtools`, `jobs`, `tool-contract`, `dashboard-tools`, and `messagedoctor`) passes all five files, covering 100 individual tests. Regressions cover rate weights, polling audit, early/late internal errors, raw persistence, coverage and masking, privacy changes, hashed audit linkage, resolved windows, and Tasks removal. Lifecycle tests also verify that distinct resolved sub-day windows do not share a flight.
+
+`npm test` cannot start because the sandbox refuses tsx's IPC socket (`listen EPERM`). All 64 files were attempted with the Node fallback. Individual per-file runs report **994 cases: 963 passed, 18 existing skips, 13 failed**, plus `posthog-client.test.ts` aborting before it could report individual cases. Twelve failures are sandbox restrictions: `comments.test.ts` (ffmpeg child process), `egress.test.ts`, `security-server.test.ts`, `status-alerts.test.ts` and `posthog-client.test.ts` (local sockets), `install-permissions.test.ts`, `offline-upgrade.test.ts` and `survey-engine.test.ts` (child processes). The remaining failure is the partial-first-month comparison assertion in `fouryear.test.ts`; the identical failure was reproduced in a separate extraction of the untouched git baseline. These tests were not weakened or skipped. Consequently a completely green full suite cannot be claimed in this environment.
+
+Intentional test updates: `jobtools.test.ts` replaces native Tasks expectations with unsupported Tasks and boundary regressions; `dashboard-tools.test.ts` supplies an in-process job-work fixture so its dependency fakes still run inside the boundary; `tool-contract.test.ts` supplies the same fixture for heavy tools and expects one raw execution per completed job rather than caching job envelopes, while separately retaining a non-job cache/audit regression. `jobs.test.ts` adds the resolved-window single-flight assertion. No dependencies were installed and no commit was made.
+
+The following Task B measurements and validation describe the earlier performance implementation and are retained as historical evidence; references to native Tasks below describe that earlier version.
+
+## Task B: synchronous analysis budget
+
+The thirteen tools in `src/mcp/jobtools.ts` now run in process-owned worker threads with a 20-second synchronous deadline. They return either their ordinary MCP result or a normal JSON job handle. This protects the deadline from synchronous SQLite aggregation and decompression as well as slow PostHog queries. Other tools retain their existing execution paths; this change does not establish a universal server-wide p95 SLA.
+
+`get_job_result` returns the stored MCP result, still through the privacy/safety boundary. Jobs use crypto-random 128-bit IDs, user and access/privacy-revision binding, gzip results, SQLite persistence, configurable one-hour expiry, timer pruning, two outstanding jobs per user, and a global running-worker cap (default two). Identical concurrent requests share a job. Disconnecting a request does not cancel work. Restarted unfinished jobs fail with an explicit retry reason. Native MCP Tasks support is implemented and advertised as optional on these tools using the installed SDK 1.32.2: create, status, result, list and cancel. Ordinary calls remain bounded rather than using the SDK's unbounded automatic task polling. Progress notifications are sent every ten seconds while a call with a progress token waits.
+
+Configuration: `LENS_JOBS_DB` optionally selects a separate SQLite file; by default jobs use the existing main database; `LENS_JOB_TTL_SECONDS=3600`, `LENS_JOB_CONCURRENCY=2`. Use one runner process for a jobs database. Task-augmented calls can request a shorter TTL. `LENS_JOB_BOOTSTRAP` is an optional worker bootstrap module used by the lab bridge. Production workers reload the durable client roster locally rather than launching another live whole-project roster scan.
+
+## Exact retained statistics
+
+`aggregate_dimension_daily` stores the full joint event/client/app_version/dialog/dialog_name/tab/action/button grain, compressed with a daily dictionary and exact user/session sets. Arbitrary supported filters and pairs of dimensions remain combinable; users, sessions and clients are unioned across matching grains and days. Distinct session counts cannot be summed across overlapping dimension groups or midnight. Events are additive. This is an event-day query independent of session-owned task ingestion, so events without a session ID are counted too. No hashes, probabilistic distinct counts or sampled counts are used.
+
+Only complete UTC-day coverage enables the aggregate fast path. Otherwise the existing live year-chunked computation runs as a job. A daily payload over 700,000 compressed bytes or over 200,000 grains is explicitly left uncovered and falls back to live jobs. Never trim a distinct set to meet the storage allowance.
+
+Workflow episodes retain session ownership and exact original ordering. The existing `workflow_episodes_daily` payload table now has one header section and independently compressed sections indexed by dialog, using its existing primary key. Each step is stored once. Only the definition's dialogs are decoded; original indices reconstruct the same episodes, causes, durations and replay examples. Old daily blobs continue to work until atomically converted. No large duplicate episode table is added.
+
+Global daily friction totals avoid decoding all client payloads for all-client questions; client-specific reads keep the original exact payloads. Deduplicated task-active user-days replace repeated per-task membership scans in rescue. Histogram merging combines repeated daily distributions without repeatedly adding all bins. Coverage work is memoized with both local writes and SQLite's cross-connection version in its revision. Weekly scorecard prewarm now covers all 209 supported weeks in background workers, with completed observations read before recomputing coverage.
+
+Client comparisons lazily read task-user memberships only for missing capture months, and use the client-specific path when there is one participant. A partly excluded first calendar month no longer discards every later complete month. New-client weekly support computes the calendar week once per observed day rather than once per task row.
+
+New ingestion stores these statistics; the existing ingestion scheduler gradually upgrades two retained days per round. Source-expired and query-failed days remain unavailable. `describe_app_events` uses complete dimension history when present. Without complete dimension history, it explicitly limits vocabulary counts to at most seven recent days, instead of scanning years and risking the former `dialogNames` memory error. Unretained properties and the narrower window are disclosed; action examples that cannot exclude search input are omitted.
+
+## Measurements
+
+Single runs on 2026-11-15 under unrelated ingestion load; some measurements also overlapped validation runs. The timed run used a separate jobs SQLite file; the final default is the existing main database. ClickHouse held approximately 389.6M events over four years. SQLite was a backup of the supplied **365-day** history, modified only at `/root/chlab/taskB/tasks.db`. Four-year history requests therefore disclose partial coverage. These are not p95 measurements and do not establish fully covered four-year history performance. Version `HEAD` was extracted to a separate baseline directory without installing dependencies or changing the original lab databases.
+
+The comparison benchmark uses C04 over a four-year date range with 47 preceding complete calendar months so it actually has contributing months. An initial empty-cohort trial was discarded. The first worker initialization also correctly refused an activity result when local roster initialization advanced the privacy revision; the activity number below is the retry after roster initialization.
+
+Times include MCP and worker startup. A **job** time measures return of the handle, not completion of the analysis. Row counts are bridge-reported completed query rows. Baseline counts include asynchronous roster queries that completed during that tool's timing window. After counts include the worker's entire background computation, not just its first 20 seconds.
+
+| Tool / requested window | Before seconds | After seconds | MCP payload chars before → after | ClickHouse rows before → after |
+| --- | ---: | ---: | ---: | ---: |
+| aggregate_events, 4 years | 115.559 | 20.007 job | 4,806 → 186 | 389,332,928 → 389,332,928 |
+| signal_scorecard, 209 weeks | 574.941 cold | 0.847 warmed | 4,171 → 4,171 | 718,859,206 → 0 |
+| workflow_completion, 4 years | 35.944 | 20.008 job | 13,777 → 186 | 0 → 0 |
+| describe_app_events, 1,460 days | 117.459 error | 4.278 | 1,103 → 10,017 | 389,332,928 → 9,736,585 |
+| rescue_queue, 90 days | 42.253 | 20.013 job | 17,647 → 186 | 0 → 0 |
+| top_pains, 12 months | 22.588 | 7.412 | 5,860 → 5,860 | 0 → 0 |
+| discover_workflows, 12 months | 19.818 | 20.018 job | 8,621 → 186 | 0 → 0 |
+| client_signals, 90 days | 0.326 | 3.296 | 10,125 → 10,125 | 0 → 0 |
+| client_activity_changes, 4 years | 0.178 | 1.031 | 1,786 → 1,786 | 0 → 0 |
+| dialog_friction, 12 months | 16.080 | 4.657 | 33,311 → 33,311 | 0 → 0 |
+| compare_client_patterns, 4-year range | 20.858 | 1.756 | 18,980 → 18,980 | 0 → 0 |
+| message_doctor, 12 months | ≥180 client timeout | 20.018 job | no result → 186 | not captured |
+| find_trade, 4 years, id 4348 | ≥180 client timeout | 20.013 job | no result → 186 | not captured |
+
+The describe fallback answers the disclosed recent vocabulary window, not four-year event totals. The baseline describe failed with the supplied memory-limit problem. Zero-row ClickHouse entries mean retained SQLite reads, not empty answers. Worker startup adds overhead to already fast activity/signals queries.
+
+Background completion times: live aggregation **88.287 s**, workflow completion **22.051 s**, discovery **26.057 s**, rescue **38.197 s**. Live aggregation still needs a job because most requested days have not been backfilled into the new dimension table. The other three still need jobs for cold exact history computation under load. Cold scorecards also use jobs until weekly observations exist. `message_doctor` and `find_trade` timed out at the baseline client’s 180-second limit. Both delivered handles in about 20.02 seconds; these two benchmark jobs were then explicitly cancelled through native Tasks. Their final payloads and ClickHouse rows were not captured.
+
+For seven covered lab days, aggregate_events returned all four metrics in **1.885 s**, with 905 payload characters and zero ClickHouse rows. Covered describe returned in **2.357 s**, 9,872 characters, zero ClickHouse rows. A live-versus-rollup check through the same MCP safety boundary matched exactly: **1,860,452 events, 52,192 sessions, 899 users, 150 clients**, including the app-version group. See `measurements.json` and `lab-parity.mts`.
+
+## Storage projection
+
+Seven real days of full-grain dimension payloads were 444,619–448,881 bytes per day (3,133,029 bytes total). SQLite allocated 3,153,920 bytes: approximately **658 MB at 1,461 days**. Exact task-active user-days occupied 12,115,968 bytes for the supplied year: approximately **48.5 MB** for four years. Small coverage/index metadata adds less than 0.2 MB. Global friction adds about 7.8 MB of compressed payload, conservatively allow 16 MB including overhead.
+
+Vertical episodes reuse their existing table. The new year occupies 332,726,272 bytes physically, against 262,339,644 bytes of original compressed payload alone. Conservatively charging that entire difference gives **282 MB** of four-year incremental space. The combined incremental projection is about **1.01 GB**, below 1.5 GB, plus small one-hour job results (64 KB in the separate jobs database used for the timed run; production defaults to the main database). This is a lab-data projection, not a guarantee for arbitrary higher-cardinality projects; dimension days exceeding the allowance use live jobs.
+
+The working copy and artifacts stayed below the 10 GB disk allowance; free disk remained above 42 GB. Obsolete experimental index tables were removed from the copy. Original databases, `/root/chlab/agent/`, `/root/chlab/lensdb/fy/`, and dependency installations were untouched.
+
+## Verification and review boundaries
+
+`npx tsc --noEmit` is clean. `npm test -- --test-concurrency=1`: **938 tests, 923 passed, 15 existing skips, 0 failures**, 39.324 seconds. Serial execution reduces contention. Existing known-limit skips remain in `anonymise-attack.test.ts` and `replaysignals-attack.test.ts`; no tests were blocked by tsx IPC. Timing assertions were not weakened. Concurrent and earlier serial runs occasionally exceeded the existing five-second cold-scorecard threshold under ingestion load; the passing final run is recorded in `validation.txt`.
+
+Added tests cover every aggregate dimension and metric across days/months, filters, two-dimensional groups, cross-midnight distinct sessions, empty identities, coverage gaps, expired-source backfill, job race/completion/compression/single-flight/user/revision binding/expiry/restart/caps/cancellation, progress tokens, real worker execution and native Tasks, indexed workflow parity, unrelated-dialog avoidance, legacy index backfill, and comparison user-count fallback and month clipping.
+
+`src/mcp/tools.ts` has exactly three registration-related changes: import `installJobTools`; call it immediately before `wrapTools`; add `get_job_result` to `CORE_TOOLS`. No schemas, `wrapTools` error handling, access/rate-limit code, server limiter, or audit-table migration were edited. No commit was made.
+
+Reproduction scripts in this directory use the supplied lab bridge and copied database paths. Set `LENS_ROOT` to the source tree. `bench-before.mts` uses `BENCH_MODE=before`; `bench-after.mts` polls handles and records synchronous and final payload sizes. `bench-patterns.mts` isolates the populated comparison. The bootstrap path is explicitly supplied through `LENS_JOB_BOOTSTRAP`; the lab bootstrap uses `installClickhouseBridge`. The CPU profile identified histogram SQL/JS callbacks and new-client weekly support as major cold-scorecard costs; calendar-week materialization and repeated-histogram merging keep the generated-data calculation below its existing threshold in clean serial runs. `extra-handles.mts` measures and cancels the two additional live-tool jobs. Raw logs, CPU profile and database copy remain under `/root/chlab/taskB/` and `/tmp/taskB-profile/`.
+
+Source inventory: `src/core/jobs.ts` owns lifecycle and persistence; `src/mcp/jobtools.ts` and `jobworker.ts` own bounded MCP execution and Tasks; `src/core/aggregatedaily.ts`, `aggregate.ts`, `tasks.ts` and `performancehistory.ts` own exact dimension ingestion and retained upgrades; `analysishistory.ts` owns indexed episodes and global friction; `clientpatterns.ts`, `signals.ts`, `rescue.ts` and `newclients.ts` remove repeated reads; `weekly.ts`, `src/mcp/prewarm.ts` and `instructions.ts` complete the lookup and polling paths. Tests and benchmark artifacts are listed alongside the measurements.

@@ -23,8 +23,8 @@ Lens (${config.mcp.name}) = ${app} clients/users, tasks, flows, trades, dialogs,
 ${withPosthog ? `Use ${config.posthog.mcpViaLens && posthogMcpActive() ? 'posthog_exec in Lens' : "PostHog's server"} for trends, funnels, retention, insights, dashboards, flags, experiments, annotations, error-tracking admin, docs${anonFor('lens') ? '; SQL is refused in private mode' : ' and SQL (execute-sql)'}. It takes a command string. ${privacyMode() === 'open' ? 'Person reads allowed' : 'Person lists refused'}; sessions, error investigation, messaging, surveys: use Lens. SQL client: ${P.client}.
 ` : ''}Privacy: ${privacyMode()}; ${privacyMode() === 'open' ? 'source identities/amounts visible' : 'people/amounts masked'}. Call Lens tools directly (JSON).
 
-A client is ${client}, not a person or cohort.
-Lens tools:
+Client = ${client}.
+Lens tools; poll jobs: get_job_result:
 - client name/id/email: resolve_client; recent problems: find_client_incidents
 - screen use by clients: screen_usage; who hit an error: error_blast_radius; struggle without errors: find_silent_issues
 - Jira triage: triage_ticket

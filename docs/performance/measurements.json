@@ -1,0 +1,247 @@
+{
+  "date": "2026-11-15",
+  "events_in_clickhouse": "389.6M over four years",
+  "sqlite_history": "365 days; partial coverage for four-year requests",
+  "machine": "under unrelated ingestion load; single measurements, not p95",
+  "rows_read": "Bridge-reported completed queries. Baseline window counts include asynchronous roster refreshes; worker counts cover that tool until background completion.",
+  "comparisons": "C04, four-year date range, 47 preceding complete calendar months, to avoid an empty-cohort benchmark.",
+  "tools": [
+    {
+      "tool": "aggregate_events",
+      "before_seconds": 115.559,
+      "before_payload_chars": 4806,
+      "before_clickhouse_rows_read": 389332928,
+      "after_seconds": 20.007,
+      "after_payload_chars": 186,
+      "after_clickhouse_rows_read": 389332928,
+      "background_completion_seconds": 88.287,
+      "final_payload_chars": 4805,
+      "returned_job": true,
+      "before_is_error": false
+    },
+    {
+      "tool": "signal_scorecard",
+      "before_seconds": 574.941,
+      "before_payload_chars": 4171,
+      "before_clickhouse_rows_read": 718859206,
+      "after_seconds": 0.847,
+      "after_payload_chars": 4171,
+      "after_clickhouse_rows_read": 0,
+      "background_completion_seconds": 0.848,
+      "final_payload_chars": 4171,
+      "returned_job": false,
+      "before_is_error": false
+    },
+    {
+      "tool": "workflow_completion",
+      "before_seconds": 35.944,
+      "before_payload_chars": 13777,
+      "before_clickhouse_rows_read": 0,
+      "after_seconds": 20.008,
+      "after_payload_chars": 186,
+      "after_clickhouse_rows_read": 0,
+      "background_completion_seconds": 22.051,
+      "final_payload_chars": 13777,
+      "returned_job": true,
+      "before_is_error": false
+    },
+    {
+      "tool": "describe_app_events",
+      "before_seconds": 117.459,
+      "before_payload_chars": 1103,
+      "before_clickhouse_rows_read": 389332928,
+      "after_seconds": 4.278,
+      "after_payload_chars": 10017,
+      "after_clickhouse_rows_read": 9736585,
+      "background_completion_seconds": 4.278,
+      "final_payload_chars": 10017,
+      "returned_job": false,
+      "before_is_error": true
+    },
+    {
+      "tool": "rescue_queue",
+      "before_seconds": 42.253,
+      "before_payload_chars": 17647,
+      "before_clickhouse_rows_read": 0,
+      "after_seconds": 20.013,
+      "after_payload_chars": 186,
+      "after_clickhouse_rows_read": 0,
+      "background_completion_seconds": 38.197,
+      "final_payload_chars": 17647,
+      "returned_job": true,
+      "before_is_error": false
+    },
+    {
+      "tool": "top_pains",
+      "before_seconds": 22.588,
+      "before_payload_chars": 5860,
+      "before_clickhouse_rows_read": 0,
+      "after_seconds": 7.412,
+      "after_payload_chars": 5860,
+      "after_clickhouse_rows_read": 0,
+      "background_completion_seconds": 7.412,
+      "final_payload_chars": 5860,
+      "returned_job": false,
+      "before_is_error": false
+    },
+    {
+      "tool": "discover_workflows",
+      "before_seconds": 19.818,
+      "before_payload_chars": 8621,
+      "before_clickhouse_rows_read": 0,
+      "after_seconds": 20.018,
+      "after_payload_chars": 186,
+      "after_clickhouse_rows_read": 0,
+      "background_completion_seconds": 26.057,
+      "final_payload_chars": 8621,
+      "returned_job": true,
+      "before_is_error": false
+    },
+    {
+      "tool": "client_signals",
+      "before_seconds": 0.326,
+      "before_payload_chars": 10125,
+      "before_clickhouse_rows_read": 0,
+      "after_seconds": 3.296,
+      "after_payload_chars": 10125,
+      "after_clickhouse_rows_read": 0,
+      "background_completion_seconds": 3.296,
+      "final_payload_chars": 10125,
+      "returned_job": false,
+      "before_is_error": false
+    },
+    {
+      "tool": "client_activity_changes",
+      "before_seconds": 0.178,
+      "before_payload_chars": 1786,
+      "before_clickhouse_rows_read": 0,
+      "after_seconds": 1.031,
+      "after_payload_chars": 1786,
+      "after_clickhouse_rows_read": 0,
+      "background_completion_seconds": 1.032,
+      "final_payload_chars": 1786,
+      "returned_job": false,
+      "before_is_error": false
+    },
+    {
+      "tool": "dialog_friction",
+      "before_seconds": 16.08,
+      "before_payload_chars": 33311,
+      "before_clickhouse_rows_read": 0,
+      "after_seconds": 4.657,
+      "after_payload_chars": 33311,
+      "after_clickhouse_rows_read": 0,
+      "background_completion_seconds": 4.658,
+      "final_payload_chars": 33311,
+      "returned_job": false,
+      "before_is_error": false
+    },
+    {
+      "tool": "compare_client_patterns",
+      "before_seconds": 20.858,
+      "before_payload_chars": 18980,
+      "before_clickhouse_rows_read": 0,
+      "after_seconds": 1.756,
+      "after_payload_chars": 18980,
+      "after_clickhouse_rows_read": 0,
+      "background_completion_seconds": 1.756,
+      "final_payload_chars": 18980,
+      "returned_job": false,
+      "before_is_error": false
+    },
+    {
+      "tool": "message_doctor",
+      "before_seconds": ">=180 (client timeout)",
+      "before_payload_chars": null,
+      "before_clickhouse_rows_read": null,
+      "after_seconds": 20.018,
+      "after_payload_chars": 186,
+      "after_clickhouse_rows_read": null,
+      "returned_job": true,
+      "background_completion_seconds": null,
+      "final_payload_chars": null,
+      "note": "Benchmark job explicitly cancelled through native Tasks immediately after measuring handle delivery. ClickHouse rows and final answer were not captured."
+    },
+    {
+      "tool": "find_trade",
+      "before_seconds": ">=180 (client timeout)",
+      "before_payload_chars": null,
+      "before_clickhouse_rows_read": null,
+      "after_seconds": 20.013,
+      "after_payload_chars": 186,
+      "after_clickhouse_rows_read": null,
+      "returned_job": true,
+      "background_completion_seconds": null,
+      "final_payload_chars": null,
+      "note": "Benchmark job explicitly cancelled through native Tasks immediately after measuring handle delivery. ClickHouse rows and final answer were not captured."
+    }
+  ],
+  "covered_checks": [
+    {
+      "name": "aggregate_events_covered",
+      "seconds": 1.884954778000014,
+      "chars": 905,
+      "complete_seconds": 1.8850573840000142,
+      "result_chars": 905
+    },
+    {
+      "name": "describe_app_events_covered",
+      "seconds": 2.357267120000004,
+      "chars": 9872,
+      "complete_seconds": 2.3573698159999914,
+      "result_chars": 9872
+    }
+  ],
+  "aggregate_lab_parity": {
+    "seconds": 6.7762687249999995,
+    "parity": true,
+    "live": {
+      "totals": {
+        "events": 1860452,
+        "sessions": 52192,
+        "users": 899,
+        "clients": 150
+      },
+      "rows": [
+        {
+          "period": "2026-11-01",
+          "app_version": "Reval <amount>",
+          "events": 1860452,
+          "sessions": 52192,
+          "users": 899,
+          "clients": 150
+        }
+      ]
+    },
+    "boundary": "same MCP safeResult/jsonResult",
+    "rolled": {
+      "totals": {
+        "events": 1860452,
+        "sessions": 52192,
+        "users": 899,
+        "clients": 150
+      },
+      "rows": [
+        {
+          "period": "2026-11-01",
+          "app_version": "Reval <amount>",
+          "events": 1860452,
+          "sessions": 52192,
+          "users": 899,
+          "clients": 150
+        }
+      ]
+    }
+  },
+  "baseline_git_revision": "ac5893692c60f260a3bb227c37f0c09411b200f8",
+  "validation": {
+    "typecheck": "npx tsc --noEmit: clean",
+    "suite_command": "npm test -- --test-concurrency=1",
+    "tests": 938,
+    "passed": 923,
+    "failed": 0,
+    "skipped": 15,
+    "seconds": 39.324,
+    "skips": "Existing known-limit cases in anonymise-attack.test.ts and replaysignals-attack.test.ts; no IPC-blocked test files."
+  }
+}

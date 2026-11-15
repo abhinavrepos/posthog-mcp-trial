@@ -18,10 +18,10 @@ export const periodsOf = (w: string) => ({ window: { from: shift(w, -27), to: w 
 const pending = new Map<string, Promise<WeekObservation>>()
 export function weekObservation(w: string): Promise<WeekObservation> {
     const { window, baseline } = periodsOf(w)
-    if (!coverage(window, baseline).complete) return Promise.resolve({ week_end: w, complete: false, signals_complete: false, rows: [] })
     const done = tasksDb.prepare('SELECT signals_complete FROM week_done WHERE week_end = ?').get(w) as { signals_complete: number } | undefined
     if (done) return Promise.resolve({ week_end: w, complete: true, signals_complete: !!done.signals_complete,
         rows: tasksDb.prepare('SELECT client, source, kind, key, text FROM week_obs WHERE week_end = ?').all(w) as unknown as WeekRow[] })
+    if (!coverage(window, baseline).complete) return Promise.resolve({ week_end: w, complete: false, signals_complete: false, rows: [] })
     let p = pending.get(w)
     if (!p) {
         p = (async () => {

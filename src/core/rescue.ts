@@ -76,9 +76,12 @@ async function compute(window: Window, baseline: Window, min: number): Promise<R
         if (n.done >= RESCUE.done_min && prev.done >= RESCUE.done_min && n.median_s !== null && prev.median_s !== null && n.median_s >= prev.median_s * RESCUE.slower && n.median_s - prev.median_s >= RESCUE.slower_seconds)
             add('slower', `${task.task_name} takes longer: median ${Math.round(n.median_s)} s, from ${Math.round(prev.median_s)} s`, n.median_s, prev.median_s)
     }
+    const days = [...new Set([window,baseline].flatMap(w=>{const ds:string[]=[];for(let d=w.from;d<=w.to;d=shift(d,1))ds.push(d);return ds}))]
+    const readyDays = new Set(query<{day:string}>('SELECT day FROM task_active_users_days WHERE day BETWEEN ? AND ?',days.slice().sort()[0],days.slice().sort().at(-1)!).map(r=>r.day))
+    const userTable = days.every(d=>readyDays.has(d)) ? 'task_active_users_daily' : 'task_users_daily'
     const regular = query<{ client: string; user: string; last_seen: string; active: number }>(`SELECT b.client, b.user, max(CASE WHEN b.day BETWEEN ? AND ? THEN b.day END) AS last_seen,
         max(CASE WHEN b.day BETWEEN ? AND ? THEN 1 ELSE 0 END) AS active
-        FROM task_users_daily b WHERE (b.day BETWEEN ? AND ? OR b.day BETWEEN ? AND ?) AND b.user != ''
+        FROM ${userTable} b WHERE (b.day BETWEEN ? AND ? OR b.day BETWEEN ? AND ?) AND b.user != ''
         GROUP BY b.client, b.user HAVING count(DISTINCT CASE WHEN b.day BETWEEN ? AND ? THEN strftime('%G-%V', b.day) END) >= ${RESCUE.regular_weeks}`,
         baseline.from, baseline.to, window.from, window.to, baseline.from, baseline.to, window.from, window.to, baseline.from, baseline.to)
     const users = new Map<string, typeof regular>()

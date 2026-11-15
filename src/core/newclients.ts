@@ -22,10 +22,12 @@ export function newClientValues(to: string): Promise<NewClient[]> {
         const candidates = new Set(first.map(c=>c.client))
         const grouped = new Map<string, Omit<NewClient['tasks'][number], 'established'>[]>()
         if (first.length) {
-            const rows = tasksDb.prepare(`SELECT d.client,d.task_id,coalesce(c.name,d.task_id) AS task_name,sum(d.attempts) AS attempts,sum(d.done) AS done,
-                count(DISTINCT CASE WHEN d.done>0 THEN strftime('%G-%V',d.day) END) AS done_weeks FROM task_daily d
-                JOIN task_ingest i USING(day) LEFT JOIN task_catalog c USING(task_id) WHERE d.day BETWEEN ? AND ? AND i.truncated=0
-                GROUP BY d.client,d.task_id ORDER BY d.client,attempts DESC,d.task_id`).all(from,to) as (Omit<NewClient['tasks'][number], 'established'> & {client:string})[]
+            const rows = tasksDb.prepare(`WITH observed_weeks AS MATERIALIZED (
+                SELECT day,strftime('%G-%V',day) AS week FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated=0
+            ) SELECT d.client,d.task_id,coalesce(c.name,d.task_id) AS task_name,sum(d.attempts) AS attempts,sum(d.done) AS done,
+                count(DISTINCT CASE WHEN d.done>0 THEN i.week END) AS done_weeks FROM task_daily d
+                JOIN observed_weeks i USING(day) LEFT JOIN task_catalog c USING(task_id) WHERE d.day BETWEEN ? AND ?
+                GROUP BY d.client,d.task_id ORDER BY d.client,attempts DESC,d.task_id`).all(from,to,from,to) as (Omit<NewClient['tasks'][number], 'established'> & {client:string})[]
             for (const {client,...r} of rows) if (candidates.has(client)) {
                 const list=grouped.get(client)||[]; if(list.length<3)list.push(r);grouped.set(client,list)
             }

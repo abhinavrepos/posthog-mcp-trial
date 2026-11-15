@@ -309,6 +309,8 @@ const MIGRATIONS: string[] = [
     CREATE INDEX tool_audit_at ON tool_audit(at);
     CREATE INDEX tool_audit_user ON tool_audit(user_email,at);`,
 
+    `ALTER TABLE tool_audit ADD COLUMN result_kind TEXT;
+     ALTER TABLE tool_audit ADD COLUMN job_hash TEXT;`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

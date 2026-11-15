@@ -50,7 +50,10 @@ export function clientTimeline(p:TimelineOptions,prepared?:PreparedTimeline) {
     }
     const sessions=new Map(read('client_daily','sum(sessions) n').map(r=>[r.period,r.n]))
     const users=new Map(read('user_daily',"count(DISTINCT nullif(user,'')) n").map(r=>[r.period,r.n]))
-    const taskUsers=new Map(read('task_users_daily',"count(DISTINCT nullif(user,'')) n").map(r=>[r.period,r.n]))
+    // Task membership is only a fallback for legacy months without signal captures. Reading it
+    // eagerly scanned millions of rows even when user_daily already answered every observed month.
+    let taskUsers: Map<string,number> | undefined
+    const fallbackUsers=(period:string)=>{taskUsers ??= new Map(read('task_users_daily',"count(DISTINCT nullif(user,'')) n").map(r=>[r.period,r.n]));return taskUsers.get(period)||0}
     const exports=new Map(read('ops_daily',"sum(CASE WHEN family='export' THEN submits ELSE 0 END) n").map(r=>[r.period,r.n]))
     const tasks=read('task_daily','task_id,sum(attempts) attempts,sum(done) done,sum(failed) failed,hist_merge(dur_hist) hist',',task_id')
     const periods=new Map<string,{from:string;to:string}>()
@@ -71,7 +74,7 @@ export function clientTimeline(p:TimelineOptions,prepared?:PreparedTimeline) {
         const bounds=[0,5,10,15,20,30,45,60,90,120,180,240,300,420,600,900,1200,1800,2700,3600,7200,14400]
         for(let i=0; i<hist.length && total; i++) { if(cumulative+hist[i]>=total*.5) {median=bounds[i]+(bounds[i+1]-bounds[i])*(total*.5-cumulative)/hist[i];break} cumulative+=hist[i] }
         buckets.push({...window,covered_days:covered,missing_days:days.length-covered,sessions:covered ? sessions.get(period)||0 : null,
-            active_users:covered ? users.get(period) ?? taskUsers.get(period) ?? 0 : null,attempts:covered?attempts:null,done:covered?done:null,
+            active_users:covered ? users.get(period) ?? fallbackUsers(period) : null,attempts:covered?attempts:null,done:covered?done:null,
             completion_rate:attempts?done/attempts:null,error_rate:attempts?failed/attempts:null,median_s:median,exports:covered?exports.get(period)||0:null,
             tasks:rows.slice(0,5).map(r=>({task:r.task_id,attempts:r.attempts,done:r.done})),tasks_rest:{tasks:rest.length,attempts:rest.reduce((n,r)=>n+r.attempts,0),done:rest.reduce((n,r)=>n+r.done,0)},
             warnings:[...new Set([...days.filter(d=>d.status!=='complete').map(d=>d.status),...warnings.filter(r=>r.week_end>=window.from&&r.week_end<=window.to).map(r=>r.kind)])]})
@@ -133,15 +136,14 @@ export function compareClientPatterns(p:CompareOptions={}) {
         for(const [client,at] of group) {
             const end=new Date(at);end.setUTCDate(1)
             const start=new Date(end);start.setUTCMonth(start.getUTCMonth()-months)
-            // A lookback reaching past the window is clamped to it (those months are simply unavailable); it used
-            // to drop the client silently, so a 12-month lookback in a window starting mid-month found no one.
-            const from=start.toISOString().slice(0,10) < w.from ? w.from : start.toISOString().slice(0,10), to=shift(end.toISOString().slice(0,10),-1)
-            if(to<from || to>w.to) { excluded.push({client,reason:to>w.to?'index date is after the window':'no complete month before the index date inside the window'}); continue }
-            const timeline=clientTimeline({client,from,to,bucket:'month'},prepared)
-            // Offsets count back from the index month, whatever the clamped start.
-            const n=timeline.buckets.length
-            timeline.buckets.forEach((b,i)=>{if(b.missing_days) return;contributing.add(client);const offset=i-n;if(!rows.has(offset))rows.set(offset,[]);rows.get(offset)!.push(b)})
-            if(!contributing.has(client)) excluded.push({client,reason:'every month before the index date has missing days in Lens history'})
+            const from=start.toISOString().slice(0,10), to=shift(end.toISOString().slice(0,10),-1)
+            if(to>w.to) { excluded.push({client,reason:'index date is after the window'}); continue }
+            // A lookback reaching past the window used to drop the client silently (a 12-month lookback in a window
+            // starting mid-month found no one). Months outside the window, partial ones included (half a month is
+            // not comparable with full months), or with missing days are unavailable; the rest still count.
+            const timeline=clientTimeline({client,from,to,bucket:'month'},index.size+peers.size===1?undefined:prepared)
+            timeline.buckets.forEach((b,i)=>{if(b.from<w.from || b.to>w.to || b.missing_days) return;contributing.add(client);const offset=i-months;if(!rows.has(offset))rows.set(offset,[]);rows.get(offset)!.push(b)})
+            if(!contributing.has(client)) excluded.push({client,reason:'no complete month before the index date inside the window and Lens history'})
         }
         return {rows,contributing,excluded}
     }

@@ -277,3 +277,35 @@ test('a live window too large to read refuses with a way forward, before reading
     assert.equal(queries.length, 1)
     assert.match(queries[0], /SELECT count\(\) AS n FROM events WHERE timestamp >= \{from\} AND timestamp < \{to\}/)
 })
+
+test('vertical dialog index avoids unrelated payloads and backfills legacy episodes without changing results', async () => {
+    const { brotliCompressSync,brotliDecompressSync } = await import('node:zlib')
+    const { indexWorkflowDay } = await import('../src/core/analysishistory.ts')
+    const owner='2026-05-10', window={from:new Date(owner),to:new Date('2026-05-11')}
+    put('2026-05-09',[])
+    const relevant=session(owner,'a','X')
+    const unrelated=session(owner,'z','Y').map(s=>({...s,dialog:s.dialog==='DlgA'?'DlgZ':s.dialog==='DlgB'?'DlgQ':s.dialog}))
+    put(owner,[relevant,unrelated])
+    const expected=historyCompletion(window,def)
+    const code=tasksDb.prepare("SELECT id FROM analysis_dictionary WHERE value='DlgZ'").get()!.id
+    const original=tasksDb.prepare('SELECT value FROM workflow_episodes_daily WHERE day=? AND client=?').get(owner,'@dialog:'+code)!.value
+    tasksDb.prepare('UPDATE workflow_episodes_daily SET value=? WHERE day=? AND client=?').run(Buffer.from('not a compressed blob'),owner,'@dialog:'+code)
+    assert.deepEqual(historyCompletion(window,def),expected,'unrelated dialogs are never decompressed')
+    tasksDb.prepare('UPDATE workflow_episodes_daily SET value=? WHERE day=? AND client=?').run(original,owner,'@dialog:'+code)
+    const decode=(v:unknown)=>JSON.parse(brotliDecompressSync(v as Uint8Array).toString())
+    const headers=decode(tasksDb.prepare("SELECT value FROM workflow_episodes_daily WHERE day=? AND client='@header'").get(owner)!.value) as [string,string,number,number][]
+    const rows=new Map<number,(number|string)[][]>()
+    for(const r of tasksDb.prepare("SELECT value FROM workflow_episodes_daily WHERE day=? AND client LIKE '@dialog:%'").all(owner))for(const [id,csv] of decode(r.value) as [number,string][]) {
+        if(!rows.has(id))rows.set(id,[])
+        rows.get(id)!.push(...csv.split(';').map(r=>r.split(',').map((v,i)=>i===2||i===4?v:Number(v))))
+    }
+    const groups=new Map<string,unknown[]>()
+    headers.forEach(([client,sid,n,base],id)=>{if(!groups.has(client))groups.set(client,[]);groups.get(client)!.push([sid,n,[base,...rows.get(id)!.sort((a,b)=>Number(a[0])-Number(b[0]))]])})
+    tasksDb.prepare('DELETE FROM workflow_episodes_daily WHERE day=?').run(owner)
+    tasksDb.prepare('DELETE FROM workflow_episode_index_days WHERE day=?').run(owner)
+    tasksDb.prepare('INSERT INTO workflow_episodes_daily VALUES (?,?,?)').run(owner,'',brotliCompressSync(Buffer.from(JSON.stringify([...groups]))))
+    assert.deepEqual(historyCompletion(window,def),expected)
+    indexWorkflowDay(owner)
+    assert.deepEqual(historyCompletion(window,def),expected)
+    assert.ok(tasksDb.prepare("SELECT 1 FROM workflow_episodes_daily WHERE day=? AND client='@header'").get(owner))
+})

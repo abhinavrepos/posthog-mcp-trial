@@ -68,7 +68,7 @@ test('pre-warm settings: default tools, interval, off switch, only cacheable too
     assert.deepEqual(prewarmSettings({}), { minutes: 15, tools: DEFAULT_PREWARM })
     assert.equal(prewarmSettings({ LENS_PREWARM_MINUTES: '0' }).minutes, 0)
     assert.deepEqual(prewarmSettings({ LENS_PREWARM_TOOLS: 'top_pains, record_verdict ,nope' }).tools, ['top_pains'])
-    for (const t of DEFAULT_PREWARM) assert.ok(CACHED_TOOLS.has(t), t)
+    for (const t of DEFAULT_PREWARM) assert.ok(CACHED_TOOLS.has(t) || t === 'signal_scorecard', t)
 })
 
 test('pre-warm refresh: the flag reaches the tool through the MCP transport; chat meanwhile gets the kept answer', async () => {

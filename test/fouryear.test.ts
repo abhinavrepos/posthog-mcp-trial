@@ -80,3 +80,23 @@ test('MCP disclosure preserves all requested dates and bounds rows with exact om
     assert.equal(r._lensJson.value.coverage.requested.from,'2021-01-01');assert.equal(r._lensJson.value.coverage.requested.to_exclusive,'2025-01-01');assert.ok(r._lensJson.value.omitted_rows_by_path.rows>0);assert.ok(JSON.stringify(r).length<30000)
     assert.equal(coverage({from:'2021-01-01',to:'2024-12-31'}).covered_days,1461)
 })
+
+test('a partial first calendar month does not discard every later complete comparison month',()=>{
+    observed('2024-01-01','2024-12-31');active('left','2024-01-20','2024-02-01','2024-03-01')
+    db.prepare('INSERT INTO client_outcomes VALUES (?,?,?,?,?,?)').run('left','left','2024-04-01','','admin','2024-04-01')
+    const result=compareClientPatterns({from:'2024-01-15',to:'2024-12-31',months:3})
+    assert.equal(result.target_clients,1)
+    assert.deepEqual(result.series.map(s=>s.target.clients),[0,1,1])
+    assert.equal(result.series[1].target.sessions,1)
+})
+
+test('timeline uses captured users when present and exact task memberships only for missing capture months',()=>{
+    observed('2024-01-01','2024-03-31');active('A','2024-01-01','2024-02-01','2024-03-01')
+    const user=tasksDb.prepare('INSERT INTO user_daily VALUES (?,?,?,1,1)')
+    user.run('2024-01-01','A','one');user.run('2024-01-02','A','two')
+    const member=tasksDb.prepare('INSERT INTO task_users_daily VALUES (?,?,?,?)')
+    member.run('2024-01-01','A','t_A','legacy')
+    member.run('2024-02-01','A','t_A','one');member.run('2024-02-02','A','t_B','one');member.run('2024-02-02','A','t_B','two')
+    const timeline=clientTimeline({client:'A',from:'2024-01-01',to:'2024-03-31',bucket:'month'})
+    assert.deepEqual(timeline.buckets.map(b=>b.active_users),[2,2,0])
+})

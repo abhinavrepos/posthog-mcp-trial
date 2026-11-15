@@ -111,7 +111,6 @@ export function storeAnalysisDay(owner: string, sessions: Step[][], reg: AppEven
     const fIns = tasksDb.prepare('INSERT INTO friction_daily VALUES (?,?,?)')
     const wIns = tasksDb.prepare('INSERT INTO workflow_daily VALUES (?,?,?,?)')
     const intern = dictionary()
-    const eIns = tasksDb.prepare('INSERT INTO workflow_episodes_daily VALUES (?,?,?)')
     const nIns = tasksDb.prepare('INSERT INTO analysis_names_daily VALUES (?,?,?,?,?,?)')
     const packedFriction: [string, FrictionCandidate[]][] = []
     const packedWorkflows = new Map<string, [string, unknown[]][]>()
@@ -164,8 +163,9 @@ export function storeAnalysisDay(owner: string, sessions: Step[][], reg: AppEven
         packedEpisodes.push([client, episodes])
     }
     fIns.run(owner, '', encode(packedFriction))
+    storeGlobalFriction(owner, packedFriction)
     for (const [start, rows] of packedWorkflows) wIns.run(owner, start, '', encode(rows))
-    eIns.run(owner, '', encode(packedEpisodes, 10, 20))
+    storeIndexedEpisodes(owner, packedEpisodes)
     rebuildWorkflowGlobalDay(owner)
     storeClientMetrics(owner, sessions, reg, intern)
     tasksDb.prepare('INSERT INTO analysis_days VALUES (?)').run(owner)
@@ -185,11 +185,22 @@ export function analysisMeta(q: EventWindow, margin = false) {
     const coverage = analysisCoverage(q, margin)
     return { source: coverage.aligned && (coverage.covered_days>0 || +q.to-+q.from>7*DAY) ? 'history' as const : 'live' as const, coverage, data_through: dataThrough(), sample_rate: 1 }
 }
+function storeGlobalFriction(owner: string, groups: [string,FrictionCandidate[]][]) {
+    const by=new Map<string,FrictionCandidate>()
+    for(const [,fs] of groups)for(const f of fs){const old=by.get(f.dialog);if(old)mergeFriction(old,f);else by.set(f.dialog,f)}
+    tasksDb.prepare('INSERT OR REPLACE INTO friction_daily VALUES (?,?,?)').run(owner,'*',encode([['*',[...by.values()]]]))
+}
+export function backfillGlobalFriction(owner: string) {
+    if(tasksDb.prepare("SELECT 1 FROM friction_daily WHERE day=? AND client='*'").get(owner))return
+    const row=tasksDb.prepare("SELECT value FROM friction_daily WHERE day=? AND client=''").get(owner)
+    if(row)storeGlobalFriction(owner,decodeFriction(row.value))
+}
 export function historyFriction(q: EventWindow) {
-    if (!analysisCoverage(q).aligned || (!analysisCoverage(q).covered_days && +q.to-+q.from<=7*DAY)) return undefined
+    const cover = analysisCoverage(q)
+    if (!cover.aligned || (!cover.covered_days && +q.to-+q.from<=7*DAY)) return undefined
     const by = new Map<string, FrictionCandidate>()
-    const rows = tasksDb.prepare(`SELECT value FROM friction_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= 'analysis_unavailable:' AND key < 'analysis_unavailable;') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND day >= ? AND day < ? ORDER BY day, client`)
-        .iterate(day(q.from), day(q.to))
+    const rows = tasksDb.prepare(`SELECT value FROM friction_daily WHERE ((? != '' AND client = '') OR (? = '' AND (client = '*' OR (client = '' AND day NOT IN (SELECT day FROM friction_daily WHERE client='*'))))) AND day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= 'analysis_unavailable:' AND key < 'analysis_unavailable;') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND day >= ? AND day < ? ORDER BY day, client`)
+        .iterate(q.clientId || '', q.clientId || '', day(q.from), day(q.to))
     for (const row of rows) {
         for (const [client, fs] of decodeFriction(row.value)) {
             if (q.clientId && client !== q.clientId) continue
@@ -203,7 +214,8 @@ export function historyFriction(q: EventWindow) {
 }
 /** Complete observed name counts, usable for name resolution without another PostHog scan. */
 export function historyDialogNames(q: EventWindow) {
-    if (!analysisCoverage(q, true).aligned || (!analysisCoverage(q).covered_days && +q.to-+q.from<=7*DAY)) return undefined
+    const cover = analysisCoverage(q, true)
+    if (!cover.aligned || (!cover.covered_days && +q.to-+q.from<=7*DAY)) return undefined
     const names = new Map<string, { name?: string }>()
     for (const row of tasksDb.prepare(`SELECT coalesce(d.value,a.dialog) AS dialog,coalesce(n.value,a.name) AS name,sum(a.n) AS total FROM analysis_names_daily a
         LEFT JOIN analysis_dictionary d ON d.id = a.dialog LEFT JOIN analysis_dictionary n ON n.id = a.name
@@ -214,7 +226,8 @@ export function historyDialogNames(q: EventWindow) {
     return names
 }
 export function historyDiscovery(q: EventWindow, limit?: number) {
-    if (!analysisCoverage(q, true).aligned || (!analysisCoverage(q).covered_days && +q.to-+q.from<=7*DAY)) return undefined
+    const cover = analysisCoverage(q, true)
+    if (!cover.aligned || (!cover.covered_days && +q.to-+q.from<=7*DAY)) return undefined
     const dict = analysisDictionary()
     const lo = day(q.from), hi = day(q.to)
     // Four 12-bit dictionary codes plus a length tag fit exactly in a JS number.
@@ -348,26 +361,102 @@ export function historyDiscovery(q: EventWindow, limit?: number) {
     return finishDiscovery(candidates, required(), { limit, names: { get: (d) => names?.get(d)?.name } })
 }
 
+type EpisodeGroups = [string, [string, number, EncodedEpisode][]][]
+/** Vertical episode index: one header per episode, each step stored once under its dialog.
+ * Completion reads only the requested dialogs; no per-episode SQL rows or duplicated step payloads. */
+function storeIndexedEpisodes(owner: string, groups: EpisodeGroups) {
+    const headers: [string,string,number,number][] = []
+    const byDialog = new Map<number, [number,string][]>()
+    for (const [client, episodes] of groups) for (const [sid,n,value] of episodes) {
+        const id = headers.length
+        headers.push([client,sid,n,value[0]])
+        const rows = typeof value[1] === 'string' ? (value[2] as string).split(';') : (value.slice(1) as StepRow[]).map(r=>r.join(','))
+        const parts = new Map<number,string[]>()
+        for (const row of rows) {
+            const fields = row.split(','); const dialog = Number(fields[3])
+            if(!parts.has(dialog))parts.set(dialog,[])
+            parts.get(dialog)!.push(row)
+        }
+        for(const [dialog,rows] of parts) {
+            if(!byDialog.has(dialog))byDialog.set(dialog,[])
+            byDialog.get(dialog)!.push([id,rows.join(';')])
+        }
+    }
+    // Reuse the existing payload table: its legacy client key now identifies an indexed section.
+    tasksDb.prepare('INSERT INTO workflow_episodes_daily VALUES (?,?,?)').run(owner,'@header',encode(headers,5,20))
+    const insert=tasksDb.prepare('INSERT INTO workflow_episodes_daily VALUES (?,?,?)')
+    for(const [dialog,rows] of byDialog)insert.run(owner,'@dialog:'+dialog,encode(rows,5,20))
+    tasksDb.prepare('INSERT INTO workflow_episode_index_days VALUES (?)').run(owner)
+}
+/** Maintenance backfill uses existing exact episodes, with one atomic day at a time. */
+export function indexWorkflowDay(owner: string): void {
+    if (tasksDb.prepare('SELECT 1 FROM workflow_episode_index_days WHERE day=?').get(owner)) return
+    const groups: EpisodeGroups = []
+    for (const r of tasksDb.prepare('SELECT value FROM workflow_episodes_daily WHERE day=?').all(owner)) groups.push(...decodePlain<EpisodeGroups>(r.value))
+    tasksDb.exec('BEGIN IMMEDIATE')
+    try {
+        tasksDb.prepare('DELETE FROM workflow_episodes_daily WHERE day=?').run(owner)
+        storeIndexedEpisodes(owner, groups)
+        tasksDb.exec('COMMIT')
+    } catch(e) { tasksDb.exec('ROLLBACK'); throw e }
+}
+
 export function historyCompletion(q: EventWindow, definition: Workflow) {
-    if (!analysisCoverage(q, true).aligned || (!analysisCoverage(q).covered_days && +q.to-+q.from<=7*DAY)) return undefined
+    const cover = analysisCoverage(q, true)
+    if (!cover.aligned || (!cover.covered_days && +q.to-+q.from<=7*DAY)) return undefined
     const attempts: ReturnType<typeof completionAttempts> = []
     const dict = analysisDictionary(), reg = required()
     const excluded = new Set([...reg.dialogs.menu, ...reg.dialogs.messages, ...reg.dialogs.notices])
     const codes = new Set([...dict].filter(([,value]) => definition.dialogs.includes(value)).map(([id]) => id))
     const startCode = [...dict].find(([,value]) => value === definition.dialogs[0])?.[0]
-    for (const row of tasksDb.prepare('SELECT value FROM workflow_episodes_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= \'analysis_unavailable:\' AND key < \'analysis_unavailable;\') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND day >= ? AND day < ? ORDER BY day').iterate(day(+q.from - DAY), day(q.to))) {
-        const batch = []
-        for (const [client, episodes] of decodePlain<[string, [string, number, EncodedEpisode][]][]>(row.value)) {
-            if (q.clientId && client !== q.clientId) continue
-            for (const [sid, , value] of episodes) {
-                const selected = selectEpisode(value, codes, startCode)
-                if (!selected) continue
-                const steps = episodeDecode(selected, sid, client, dict)
-                batch.push({ steps, opens: steps.filter((s) => s.kind === 'open' && !!s.dialog && !excluded.has(s.dialog)) })
+    let owner = ''
+    let candidates: { client: string; sid: string; n: number; value: ExpandedEpisode }[] = []
+    const flush = () => {
+        const batch = candidates.sort((a,b)=>a.client.localeCompare(b.client)||a.sid.localeCompare(b.sid)||a.n-b.n).map(({client,sid,value})=>{
+            const steps = episodeDecode(value, sid, client, dict)
+            return { steps, opens: steps.filter(s=>s.kind==='open' && !!s.dialog && !excluded.has(s.dialog)) }
+        })
+        attempts.push(...completionAttempts([], definition, reg, q, batch))
+        candidates = []
+    }
+    const lo=day(+q.from-DAY), hi=day(q.to)
+    const eligible = `day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0)
+        AND day NOT IN (SELECT substr(key,22) FROM task_state WHERE key >= 'analysis_unavailable:' AND key < 'analysis_unavailable;')`
+    for(const row of tasksDb.prepare(`SELECT day FROM analysis_days WHERE day >= ? AND day < ? AND ${eligible} ORDER BY day`).iterate(lo,hi)) {
+        if(owner)flush()
+        owner=String(row.day)
+        const header=tasksDb.prepare("SELECT value FROM workflow_episodes_daily WHERE day=? AND client='@header'").get(owner)
+        if(header) {
+            if(startCode===undefined)continue
+            const headers=decodePlain<[string,string,number,number][]>(header.value)
+            const start=tasksDb.prepare('SELECT value FROM workflow_episodes_daily WHERE day=? AND client=?').get(owner,'@dialog:'+startCode)
+            if(!start)continue
+            const parts=new Map<number,string[]>()
+            for(const [id,rows] of decodePlain<[number,string][]>(start.value)) {
+                if(q.clientId && headers[id][0]!==q.clientId)continue
+                const strings=rows.split(';')
+                if(strings.some(r=>r.split(',')[2]==='o'))parts.set(id,strings)
+            }
+            for(const code of codes)if(code!==startCode) {
+                const part=tasksDb.prepare('SELECT value FROM workflow_episodes_daily WHERE day=? AND client=?').get(owner,'@dialog:'+code)
+                if(part)for(const [id,rows] of decodePlain<[number,string][]>(part.value))if(parts.has(id))parts.get(id)!.push(...rows.split(';'))
+            }
+            for(const [id,rows] of parts) {
+                const [client,sid,n,base]=headers[id]
+                const steps=rows.map(row=>row.split(',').map((v,i)=>i===2||i===4?v:Number(v)) as StepRow).sort((a,b)=>a[0]-b[0])
+                candidates.push({client,sid,n,value:[base,...steps]})
+            }
+        } else {
+            // Old retained days remain readable until the incremental index backfill reaches them.
+            for(const legacy of tasksDb.prepare('SELECT value FROM workflow_episodes_daily WHERE day=? ORDER BY client').iterate(owner)) {
+                for(const [client,episodes] of decodePlain<EpisodeGroups>(legacy.value)) {
+                    if(q.clientId && client!==q.clientId)continue
+                    for(const [sid,n,value] of episodes){const selected=selectEpisode(value,codes,startCode);if(selected)candidates.push({client,sid,n,value:selected})}
+                }
             }
         }
-        attempts.push(...completionAttempts([], definition, reg, q, batch))
     }
+    flush()
     const names = historyDialogNames(q)
     return finishCompletion(attempts, definition, reg, { get: (d) => names?.get(d)?.name })
 }
@@ -407,7 +496,8 @@ function storeClientMetrics(owner: string, sessions: Step[][], reg: AppEvents, i
     tasksDb.prepare('INSERT INTO analysis_client_daily VALUES (?,?)').run(owner, encode(rows))
 }
 export function historyClientSignals(q: EventWindow & ComparisonOptions) {
-    if (!analysisCoverage(q, true).aligned || (!analysisCoverage(q).covered_days && +q.to-+q.from<=7*DAY)) return undefined
+    const cover = analysisCoverage(q, true)
+    if (!cover.aligned || (!cover.covered_days && +q.to-+q.from<=7*DAY)) return undefined
     const baseline = comparisonWindow(q)
     const baselineComplete = !!baseline && analysisCoverage(baseline).complete
     const currentComplete = analysisCoverage(q).complete

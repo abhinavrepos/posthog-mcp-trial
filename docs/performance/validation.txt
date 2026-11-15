@@ -1,0 +1,15 @@
+npx tsc --noEmit: exit 0
+
+npm test -- --test-concurrency=1
+tests 938
+suites 80
+pass 923
+fail 0
+cancelled 0
+skipped 15
+todo 0
+duration_ms 39323.626325
+
+15 skips are existing documented known-limit cases in anonymise-attack.test.ts and replaysignals-attack.test.ts. No test files were blocked by tsx IPC. Earlier overlapping runs exceeded timing assertions; no thresholds were changed.
+
+Final source changes use the main SQLite database by default. The measured lab run used a separate jobs DB, selectable with LENS_JOBS_DB.

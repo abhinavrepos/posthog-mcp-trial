@@ -91,7 +91,7 @@ test('every advertised windowed tool has typed inputs and short business-first d
 test('SDK boundary validates, maps failures, resolves comparison and audits keys without values',async()=>{
     clearToolAnswers();setWindowDataThrough(()=> '2025-03-30')
     const server=new McpServer({name:'test',version:'1'})
-    wrapTools(server,false,{who:'PM',email:'pm@x.com',tokenId:'token-id'})
+    wrapTools(server,false,{who:'PM',email:'pm@x.com',tokenId:'token-id'}, {work: (_name,_args,_window,execute)=>({promise:execute()})})
     let seen:unknown
     server.registerTool('aggregate_events',{description:'Counts work.',inputSchema:{when:z.string().optional(),client:z.string(),compare:z.enum(['previous','none']).optional(),compare_with:z.object({from:z.string(),to:z.string()}).optional()}},async args=>{
         seen=args;auditClient('resolved-123')
@@ -142,13 +142,13 @@ test('day-count core queries use the explicit UTC range, including exclusive SQL
     assert.ok(seen.length>=5)
     for(const values of seen) {assert.equal(values.from,'2024-02-01T00:00:00.000Z');assert.equal(values.to,'2024-03-01T00:00:00.000Z')}
 })
-test('cache hits are counted and audited, heavy calls exhaust the shared user budget across tokens',async t=>{
+test('job executions are counted and audited, heavy calls exhaust the shared user budget across tokens',async t=>{
     t.mock.method(console,'error',()=>{})
     clearToolAnswers()
     let runs=0
     const servers=await Promise.all(['one','two'].map(async token=>{
         const server=new McpServer({name:'test',version:'1'})
-        wrapTools(server,false,{who:'limits',email:'limits@x.com',tokenId:token})
+        wrapTools(server,false,{who:'limits',email:'limits@x.com',tokenId:token}, {work: (_name,_args,_window,execute)=>({promise:execute()})})
         server.registerTool('top_pains',{inputSchema:{when:z.string().optional()}},async()=>{runs++;auditClient('client-id');return {content:[{type:'text',text:'ok'}]}})
         return connect(server)
     }))
@@ -156,7 +156,7 @@ test('cache hits are counted and audited, heavy calls exhaust the shared user bu
         for(let i=0;i<12;i++)assert.ok(!(await servers[i%2].client.callTool({name:'top_pains',arguments:{period:'last_7_days'}})).isError)
         const rejected=await servers[1].client.callTool({name:'top_pains',arguments:{period:'last_7_days'}})
         assert.equal(rejected.isError,true);assert.match(JSON.stringify(rejected),/Rate limit:.*try again in.*Correlation id/)
-        assert.equal(runs,1)
+        assert.equal(runs,12)
         const rows=all<Record<string,unknown>>("SELECT * FROM tool_audit WHERE user_email='limits@x.com'")
         assert.equal(rows.length,13);assert.equal(rows.filter(r=>r.is_error===1).length,1)
         assert.equal(rows.at(-1)?.error_kind,'rate_limit')
@@ -191,4 +191,21 @@ test('returned upstream execution errors also withhold arbitrary paths and diagn
         assert.equal(result.isError,true);assert.match(JSON.stringify(result),/Correlation id/)
         assert.doesNotMatch(JSON.stringify(result),/\/opt|queries.sql|query plan/)
     }finally{await c.close()}
+})
+
+
+test('non-job cache hits still consume budget and produce separate audit rows', async () => {
+    clearToolAnswers()
+    let runs=0
+    const server=new McpServer({name:'test',version:'1'})
+    wrapTools(server,false,{who:'cached-light',tokenId:'cached-light'})
+    server.registerTool('screen_usage',{inputSchema:{}},async()=>{runs++;auditClient('cached-client');return {content:[{type:'text',text:'cached'}]}})
+    const c=await connect(server)
+    try {
+        for(let i=0;i<3;i++) assert.ok(!(await c.client.callTool({name:'screen_usage',arguments:{}})).isError)
+        assert.equal(runs,1)
+        const rows=all<Record<string,unknown>>("SELECT * FROM tool_audit WHERE user_email='cached-light'")
+        assert.equal(rows.length,3)
+        for(const row of rows) assert.equal(row.client_ids,'["cached-client"]')
+    } finally {await c.close()}
 })

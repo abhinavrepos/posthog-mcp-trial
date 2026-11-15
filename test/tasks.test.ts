@@ -246,6 +246,7 @@ test('scheduler continues after errors, serializes runs, backfills newest first,
     const wait = new Promise<void>((resolve) => { release = resolve })
     setTaskQuery(async (_sql, values = {}) => {
         if (_sql.includes('min(timestamp) AS first_event')) return [{first_event:'2020-01-01'}]
+        if (_sql.includes('groupUniqArray')) return []
         seen.push(String(values.from))
         if (seen.length === 1) { await wait; throw new Error('temporary failure') }
         return []

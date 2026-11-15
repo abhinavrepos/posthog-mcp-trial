@@ -8,6 +8,8 @@ export function toolError(error: unknown, tool: string, id: string = toolCorrela
     const raw = error instanceof Error ? error.message : String(error)
     let kind='internal', message='The tool could not complete. Retry later; if it persists, give the correlation id to a Lens administrator.'
     if(error instanceof RateLimitError) {kind='rate_limit';message=raw}
+    else if(raw === 'Unknown or expired job id.') {kind='not_found';message=raw}
+    else if(raw === 'Privacy or access settings changed. Submit the tool again.') {kind='privacy_changed';message=raw}
     else if(error instanceof z.ZodError) {
         kind='validation'
         // Never echo input values or unknown property names, which may contain identities.

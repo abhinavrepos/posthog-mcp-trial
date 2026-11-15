@@ -1,0 +1,68 @@
+import { Worker } from 'node:worker_threads'
+import { DatabaseSync } from 'node:sqlite'
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { z } from 'zod'
+import { privacyKey } from '../core/anonymise.ts'
+import { JobRunner, runningResult, waitForJob, type JobWork } from '../core/jobs.ts'
+import { db } from '../core/db.ts'
+import type { ChatCaller } from '../service/access.ts'
+import type { TimeWindow } from '../core/timewindow.ts'
+
+export const JOB_TOOLS = new Set(['aggregate_events', 'workflow_completion', 'discover_workflows', 'signal_scorecard', 'describe_app_events', 'message_doctor', 'find_trade', 'top_pains', 'rescue_queue', 'dialog_friction', 'client_signals', 'client_activity_changes', 'compare_client_patterns'])
+let runner: JobRunner | undefined
+const jobs = () => runner ??= new JobRunner(process.env.LENS_JOBS_DB ? new DatabaseSync(process.env.LENS_JOBS_DB) : db, {
+    ttlMs: Number(process.env.LENS_JOB_TTL_SECONDS || 3600) * 1000,
+    concurrency: Number(process.env.LENS_JOB_CONCURRENCY || 2),
+})
+type Caller = Pick<ChatCaller, 'who'> & Partial<Pick<ChatCaller, 'surveyRole' | 'email' | 'dashboardRole' | 'admin' | 'insights'>>
+interface Context { name: string; args: Record<string, unknown>; window?: TimeWindow; clients?: string[]; publicError?: boolean }
+/** Internal execution envelope. Only the raw callback result is stored in analysis_jobs. */
+export class JobAnswer {
+    constructor(readonly result: unknown, readonly context: Context, readonly id: string, readonly started = false) {}
+}
+export interface JobOptions {
+    runner?: JobRunner
+    budgetMs?: number
+    /** Injectable worker factory for deterministic boundary tests; production always uses Worker. */
+    work?: (name: string, args: Record<string, unknown>, window: TimeWindow | undefined, execute: () => Promise<unknown>) => JobWork
+}
+export function createJobDispatch(caller?: Caller, options: JobOptions = {}) {
+    const owner = caller?.who || 'stdio'
+    const revision = () => JSON.stringify([privacyKey(), caller?.admin || false, caller?.insights || false, caller?.dashboardRole, caller?.surveyRole])
+    const work = options.work ?? ((name, args, window) => {
+        const worker = new Worker(new URL('./jobworker.ts', import.meta.url), { workerData: { name, args, window, caller } })
+        let metadata: Record<string, unknown> = {}
+        const promise = new Promise<unknown>((resolve, reject) => {
+            worker.once('message', message => { metadata = {clients: message.clients, publicError: message.publicError}; void worker.terminate(); message.error ? reject(new Error(message.error)) : resolve(message.result) })
+            worker.once('error', reject)
+            worker.once('exit', code => reject(new Error(`Analysis worker exited (${code}) before returning a result.`)))
+        })
+        return { promise, metadata: () => metadata, cancel: () => { void worker.terminate() } }
+    })
+    const getRunner = () => options.runner ?? jobs()
+    const read = (id: string): JobAnswer => {
+        const runner = getRunner(), row = runner.get(owner, id, revision())
+        const context = runner.context(row) as Context
+        if (context.window) context.window = { ...context.window, from: new Date(context.window.from), to: new Date(context.window.to) }
+        if (row.status === 'failed' || row.status === 'cancelled') throw new Error(row.error || 'Analysis job failed.')
+        return new JobAnswer(row.status === 'completed' ? runner.result(row) : json(runningResult(id)), context, id, row.status === 'working')
+    }
+    return {
+        read,
+        async execute(name: string, args: Record<string, unknown>, window: TimeWindow | undefined, extra: unknown, execute: () => Promise<unknown>) {
+            const runner = getRunner(), startedRevision = revision(), context = { name, args, window }
+            const job = runner.start(owner, name, args, startedRevision, () => work(name, args, window, execute), runner.ttlMs, context)
+            await waitForJob(job, extra as never, options.budgetMs)
+            if (revision() !== startedRevision) throw new Error('Privacy or access settings changed. Submit the tool again.')
+            return read(job.id)
+        },
+    }
+}
+const json = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
+/** Register through wrapTools; no SDK dispatcher interception or native Tasks handlers. */
+export function installJobTools(server: McpServer, dispatch: ReturnType<typeof createJobDispatch>): void {
+    server.registerTool('get_job_result', {
+        description: 'Read your analysis job result or running status. Job handles expire after one hour by default. Call this tool directly.',
+        inputSchema: { job_id: z.string().regex(/^[0-9a-f]{32}$/) }, annotations: { readOnlyHint: true },
+    }, async ({ job_id }) => dispatch.read(job_id) as never)
+}

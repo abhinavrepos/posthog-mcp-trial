@@ -1,11 +1,13 @@
-import { isPublicToolError } from './publicerror.ts'
-import { randomUUID } from 'node:crypto'
+import { isPublicToolError, publicToolError } from './publicerror.ts'
+import { randomUUID, createHash } from 'node:crypto'
+import { isMainThread } from 'node:worker_threads'
 import { timeShape, checkTime, resolveTime, inclusiveWindow } from './timeinput.ts'
 import { toolError, argumentExample } from './toolerror.ts'
 import { toolLimiter } from './ratelimit.ts'
 import { writeToolAudit } from './toolaudit.ts'
-import { toolContext, auditClient } from '../core/toolcontext.ts'
+import { toolContext, auditClient, requestedToolWindow } from '../core/toolcontext.ts'
 import { privacyMode } from '../core/anonymise.ts'
+import { installJobTools, createJobDispatch, JobAnswer, JOB_TOOLS, type JobOptions } from './jobtools.ts'
 import { privacyCurrent, PRIVACY_CHANGED, privacyKey, withPrivacy } from '../core/anonymise.ts'
 import { analyticalResult } from './historyresult.ts'
 // MCP tools over the same core as the Jira automation. Each one answers a question a PM or
@@ -93,7 +95,7 @@ export function sessionIdOf(value: string): string {
 const A = appEvents()?.app || 'your app'
 
 // Every tool name, for PostHog's proxied exec description ("use the lens server's tools (...)").
-export const CORE_TOOLS = ['resolve_client', 'find_client_incidents', 'get_replay_link', 'screen_usage', 'error_blast_radius', 'find_silent_issues', 'triage_ticket']
+export const CORE_TOOLS = ['get_job_result', 'resolve_client', 'find_client_incidents', 'get_replay_link', 'screen_usage', 'error_blast_radius', 'find_silent_issues', 'triage_ticket']
 export const RELEASE_TOOLS = ['list_releases', 'release_outcomes', 'ticket_evidence', 'client_feedback', 'record_verdict', 'correct_ticket_link', 'refresh_releases']
 export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor', 'aggregate_events']
 export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(config.features.jira ? RELEASE_TOOLS : []), ...(appEvents() ? APP_EVENT_TOOLS : []), ...surveyToolNames(), ...dashboardToolNames()]
@@ -162,7 +164,7 @@ export function mcpClipRefusal(): string | undefined {
 // whether or not client anonymisation is on. Execution errors are mapped to actionable public messages;
 // their full diagnostics stay in server logs, joined to the metadata audit by correlation id.
 export const WINDOW_DEFAULTS: Record<string,number|string> = {screen_usage:30,error_blast_radius:30,describe_app_events:7,client_signals:14,find_trade:30,aggregate_events:30,reval_brief:14,task_map:28,flow_time:90,rescue_queue:28,set_rescue_status:28,client_experience:28,friction_hotspots:28,client_story:182,pin_dashboard:28,signal_scorecard:364,design_survey:14,list_surveys:30,survey_results:90,client_activity_changes:'last_4_years',compare_client_patterns:'last_4_years'}
-type ToolCaller = Pick<ChatCaller, 'who'> & Partial<Pick<ChatCaller,'email'|'tokenId'>>
+type ToolCaller = Pick<ChatCaller, 'who'> & Partial<Pick<ChatCaller,'email'|'tokenId'|'surveyRole'|'dashboardRole'|'admin'|'insights'>>
 /** Account for authenticated invocations refused by the transport's privacy guard. */
 export function auditToolRefusal(name:string,keys:string[],refusal:unknown,caller?:ToolCaller): unknown {
     const started=Date.now(),correlation_id=randomUUID()
@@ -177,7 +179,8 @@ export function auditToolRefusal(name:string,keys:string[],refusal:unknown,calle
     }
     return result
 }
-export function wrapTools(server: McpServer, insights = false, caller?: ToolCaller): void {
+export function wrapTools(server: McpServer, insights = false, caller?: ToolCaller, jobOptions?: JobOptions) {
+    const dispatch = createJobDispatch(caller, jobOptions)
     const register = server.registerTool.bind(server)
     // The SDK otherwise validates before invoking handlers. Delegate that step to our boundary so
     // rejected input also gets rate accounting, audit, and a safe execution error. listTools still
@@ -200,17 +203,19 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
         const call = cb as (a: unknown, e: unknown) => unknown
         const handler = async (input: unknown, extra: unknown) => withPrivacy(async () => {
             const started=Date.now(), correlation=randomUUID(), clients=new Set<string>()
+            let resultKind:string|undefined, jobHash:string|undefined
             let release:(()=>void)|undefined, errorKind:string|undefined, result:unknown, window:ReturnType<typeof inclusiveWindow>|undefined
             const keys = input && typeof input === 'object' && !Array.isArray(input) ? Object.keys(input) : []
             try {
                 release=toolLimiter.acquire(caller?.email || caller?.who || 'stdio',caller?.tokenId || caller?.who || 'stdio',name)
                 const parsed=schema.parse(input) as Record<string,unknown>
                 const args = z.object(shape).parse(parsed) as Record<string,unknown>
+                if(name==='get_job_result') jobHash=createHash('sha256').update(String(args.job_id)).digest('hex')
                 const resolved=windowed ? resolveTime(parsed,name==='reval_brief' && parsed.trade ? 30 : name==='pin_dashboard' && parsed.kind==='flow_time' ? 90 : WINDOW_DEFAULTS[name] || 7) : undefined
                 if(resolved) {
                     window=inclusiveWindow(resolved)
-                    if('when' in original) args.when=parsed.when || `${window.from} to ${window.to}`
-                    if(('from' in original || 'to' in original) && (parsed.period || parsed.from || parsed.when)) {args.from=window.from;args.to=window.to}
+                    if('when' in original) args.when=(!JOB_TOOLS.has(name) && parsed.when) || `${window.from} to ${window.to}`
+                    if(('from' in original || 'to' in original) && (JOB_TOOLS.has(name) || parsed.period || parsed.from || parsed.when)) {args.from=window.from;args.to=window.to}
                     if('days' in original) args.days=Math.max(1,Math.ceil((+resolved.to-+resolved.from)/86400000))
                     if('weeks' in original) args.weeks=Math.max(1,Math.ceil((+resolved.to-+resolved.from)/604800000))
                     if(parsed.compare_from) args.compare_with={from:parsed.compare_from,to:parsed.compare_to}
@@ -219,10 +224,27 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
                 }
                 for(const key of Object.keys(timeShape)) if(!(key in original)) delete args[key]
                 result=await toolContext.run({window:resolved,clients,correlationId:correlation},async()=>{
-                    const execute=async()=>{const result=await call(args,extra);return {result,clients:[...clients],isError:!!(result as {isError?:boolean})?.isError}}
-                    const answer=await (CACHED_TOOLS.has(name) ? cachedToolCall(name,{args,insights,window},execute) : execute()) as {result:unknown;clients:string[]}
+                    const execute=async()=>{
+                        const result=JOB_TOOLS.has(name)
+                            ? await dispatch.execute(name,args,resolved,extra,AsyncLocalStorage.bind(async()=>call(args,extra)))
+                            : await call(args,extra)
+                        return {result,clients:[...clients],isError:!!(result as {isError?:boolean})?.isError}
+                    }
+                    const answer=await (CACHED_TOOLS.has(name) && !JOB_TOOLS.has(name) ? cachedToolCall(name,{args,insights,window},execute) : execute()) as {result:unknown;clients:string[]}
                     for(const id of answer.clients) clients.add(id)
-                    const value=answer.result as {isError?:boolean;content?:unknown;_lensJson?:{value?:{window?:{from:string;to:string};period?:{from:string;to:string}}}}
+                    let output=answer.result, outputName=name, outputArgs=args, outputWindow=resolved
+                    if(output instanceof JobAnswer) {
+                        jobHash=createHash('sha256').update(output.id).digest('hex')
+                        resultKind=output.started ? 'job_started' : 'job_result'
+                        outputName=output.context.name;outputArgs=output.context.args;outputWindow=output.context.window
+                        if(outputWindow) window=inclusiveWindow(outputWindow)
+                        const started=output.started
+                        for(const id of output.context.clients || []) clients.add(id)
+                        if(output.context.publicError && output.result && typeof output.result === 'object') publicToolError(output.result)
+                        output=output.result
+                        if(started) return safeResult(output)
+                    }
+                    const value=output as {isError?:boolean;content?:unknown;_lensJson?:{value?:{window?:{from:string;to:string};period?:{from:string;to:string}}}}
                     const effective=value?._lensJson?.value?.window || value?._lensJson?.value?.period
                     if(effective && typeof effective.from === 'string' && typeof effective.to === 'string') {
                         const from=new Date(effective.from),to=new Date(effective.to.length===10 ? Date.parse(effective.to)+86400000 : effective.to)
@@ -230,18 +252,18 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
                     }
                     if(value?.isError) {
                         const content=JSON.stringify(value.content)
-                        if(!isPublicToolError(answer.result)) throw new Error(content)
+                        if(!isPublicToolError(output)) throw new Error(content)
                         errorKind='tool_error'
                         return safeResult({...value,content:[...(Array.isArray(value.content)?value.content:[]),{type:'text',text:`Correlation id: ${correlation}`}]})
                     }
-                    return safeResult(analyticalResult(name,args,answer.result,resolved))
+                    return safeResult(analyticalResult(outputName,outputArgs,output,outputWindow))
                 })
                 if(!privacyCurrent()) {errorKind='privacy_changed';result={isError:true,content:[{type:'text',text:`${PRIVACY_CHANGED} Correlation id: ${correlation}` }]}}
             } catch(error) {const mapped=toolError(error,name,correlation,contract);errorKind=mapped.kind;result=mapped.result}
             finally {
                 release?.()
                 // Only schema-defined argument keys; unknown keys can themselves contain private values.
-                try {writeToolAudit({at:new Date(started).toISOString(),user_email:caller?.email || caller?.who || 'stdio',token_id:caller?.tokenId || 'stdio',tool:name,argument_keys:keys.filter(k=>k in shape).sort(),resolved_window:window,client_ids:[...clients],duration_ms:Date.now()-started,result_chars:JSON.stringify(result ?? {}).length,is_error:!!(result as {isError?:boolean})?.isError,error_kind:errorKind,privacy_mode:privacyMode(),correlation_id:correlation})}
+                try {writeToolAudit({at:new Date(started).toISOString(),user_email:caller?.email || caller?.who || 'stdio',token_id:caller?.tokenId || 'stdio',tool:name,argument_keys:keys.filter(k=>k in shape).sort(),resolved_window:window,client_ids:[...clients],duration_ms:Date.now()-started,result_chars:JSON.stringify(result ?? {}).length,is_error:!!(result as {isError?:boolean})?.isError,error_kind:errorKind,result_kind:resultKind,job_hash:jobHash,privacy_mode:privacyMode(),correlation_id:correlation})}
                 catch(error) {console.error('Lens tool audit failed',{correlation_id:correlation,error})}
             }
             return result
@@ -252,6 +274,7 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
         const rest=description.slice(first.length)
         return register(name, {...cfg,inputSchema:schema,description:`${first.trim()}${windowed ? ` Time: period or from/to (YYYY-MM-DD). Default: ${typeof WINDOW_DEFAULTS[name] === 'string' ? String(WINDOW_DEFAULTS[name]).replaceAll('_',' ') : `last ${WINDOW_DEFAULTS[name] || 7} days`}.` : ''} ${rest} ${DIRECT_CALL}`.trim()} as never,handler as never)
     }) as typeof server.registerTool
+    return dispatch
 }
 
 // Which clients hit errors: the count is exact, the ids are examples. A list of every client per dialog grew
@@ -263,9 +286,11 @@ const CLIENT_EXAMPLES = 10
 const fewClients = <T extends { clients_with_errors: string[] }>(d: T) =>
     ({ ...d, clients_with_errors_count: d.clients_with_errors.length, clients_with_errors: d.clients_with_errors.slice(0, CLIENT_EXAMPLES) })
 
-export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'tokenId' | 'dashboardRole' | 'admin' | 'insights'>>): void {
+/** raw is reserved for the isolated analysis worker: it calls handlers directly, never tools/call. */
+export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'tokenId' | 'dashboardRole' | 'admin' | 'insights'>>, raw = false): void {
+    if (raw && isMainThread) throw new Error('Raw registration is reserved for isolated analysis workers.')
     const insights = !!caller?.admin || caller?.insights === true
-    wrapTools(server, insights, caller)
+    if (!raw) installJobTools(server, wrapTools(server, insights, caller))
     if (config.posthog.mcpViaLens && posthogMcpActive()) server.registerTool('posthog_exec', {
         description: `Runs PostHog commands for generic analytics and objects: trends, funnels, retention, insights, dashboards, flags, experiments, annotations, error-tracking administration, docs and SQL. ${execRoutingLine(config.mcp.name)}`,
         inputSchema: { command: z.string() },
@@ -637,7 +662,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             annotations: { readOnlyHint: true },
         },
         async ({ when: w, client, limit }) => {
-            const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 7 days'), w)
+            const win = (await import('../core/analysishistory.ts')).completeDayWindow(requestedToolWindow() || parseTimeWindow(w || 'last 7 days'), w)
             const best = client ? (await pickClient(client)).best : undefined
             return json(`${app} workflows (${win.label}):`, await discoverWorkflows({ from: win.from, to: win.to, clientId: best?.id, limit }))
         }
@@ -660,7 +685,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             annotations: { readOnlyHint: true },
         },
         async ({ when: w, client, filters, ...rest }) => {
-            const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 30 days'), w)
+            const win = (await import('../core/analysishistory.ts')).completeDayWindow(requestedToolWindow() || parseTimeWindow(w || 'last 30 days'), w)
             const best = client ? (await pickClient(client)).best : undefined
             const { aggregateEvents } = await import('../core/aggregate.ts')
             return json(`${app} event counts (${win.label}):`, await aggregateEvents({ ...rest, from: win.from, to: win.to,
@@ -676,7 +701,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             annotations: { readOnlyHint: true },
         },
         async ({ workflow, dialogs, client, when: w, ...comparison }) => {
-            const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 7 days'), w)
+            const win = (await import('../core/analysishistory.ts')).completeDayWindow(requestedToolWindow() || parseTimeWindow(w || 'last 7 days'), w)
             const best = client ? (await pickClient(client)).best : undefined
             const q = { from: win.from, to: win.to, clientId: best?.id }
             const definition = await completionWorkflow({ ...q, workflow, dialogs })
@@ -731,7 +756,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             annotations: { readOnlyHint: true },
         },
         async ({ client, dialog, when: w, timezone, limit }) => {
-            const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 7 days', new Date(), timezone), w)
+            const win = (await import('../core/analysishistory.ts')).completeDayWindow(requestedToolWindow() || parseTimeWindow(w || 'last 7 days', new Date(), timezone), w)
             const best = client ? (await pickClient(client)).best : undefined
             const r = await dialogFriction({ from: win.from, to: win.to, clientId: best?.id, dialog, limit })
             return json(`${app} friction${best ? ` for ${best.name}` : ''}${dialog ? `, dialog "${dialog}"` : ''} (${win.label}):`, { ...r, dialogs: r.dialogs.map(fewClients) })
@@ -751,7 +776,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             annotations: { readOnlyHint: true },
         },
         async ({ client, dialog, message, when: w }) => {
-            const win = parseTimeWindow(w || 'last 7 days')
+            const win = requestedToolWindow() || parseTimeWindow(w || 'last 7 days')
             const best = client ? (await pickClient(client)).best : undefined
             return json(`${app} message doctor${best ? ` for ${best.name}` : ''} (${win.label}):`, await messageDoctor({ from: win.from, to: win.to, clientId: best?.id, dialog, message }))
         }
@@ -786,7 +811,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             annotations: { readOnlyHint: true },
         },
         async ({ when: w, timezone, max, ...comparison }) => {
-            const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 7 days', new Date(), timezone), w)
+            const win = (await import('../core/analysishistory.ts')).completeDayWindow(requestedToolWindow() || parseTimeWindow(w || 'last 7 days', new Date(), timezone), w)
             const pains = await topPains({ from: win.from, to: win.to, max, ...comparisonArgs(comparison) })
             return json(`${app}: top pains (${win.label}):`, { ...pains, pains: pains.pains.map((p) => ({ ...p, clients_hit_count: p.clients_hit.length, clients_hit: p.clients_hit.slice(0, CLIENT_EXAMPLES) })) })
         }
@@ -805,7 +830,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             annotations: { readOnlyHint: true },
         },
         async ({ id, client, when: w, timezone }) => {
-            const win = parseTimeWindow(w || 'last 30 days', new Date(), timezone)
+            const win = requestedToolWindow() || parseTimeWindow(w || 'last 30 days', new Date(), timezone)
             const best = client ? (await pickClient(client)).best : undefined
             return json(`${app}: id ${id}${best ? ` for ${best.name}` : ''} (${win.label}):`, await findTrade({ id, from: win.from, to: win.to, clientId: best?.id }))
         }
@@ -824,7 +849,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             annotations: { readOnlyHint: true },
         },
         async ({ client, when: w, timezone, limit, ...comparison }) => {
-            const win = parseTimeWindow(w || 'last 14 days', new Date(), timezone)
+            const win = requestedToolWindow() || parseTimeWindow(w || 'last 14 days', new Date(), timezone)
             const best = client ? (await pickClient(client)).best : undefined
             return json(`${app} clients, ${win.label} against the period before${best ? ` (${best.name})` : ''}:`, await clientSignalsReport({ from: win.from, to: win.to, clientId: best?.id, limit, ...comparisonArgs(comparison) }))
         }

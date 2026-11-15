@@ -1,0 +1,70 @@
+import assert from 'node:assert/strict'
+import { mkdtempSync,rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { after,test } from 'node:test'
+const dir=mkdtempSync(join(tmpdir(),'lens-dimensions-'))
+Object.assign(process.env,{TRIAGE_DB:join(dir,'m.db'),TASKS_DB:join(dir,'t.db'),APP_EVENTS_FILE:'config/app-events.reval.json'})
+const {tasksDb}=await import('../src/core/tasks.ts')
+const {dailyAggregate,storeAggregateDaily,ROLLUP_DIMENSIONS,ingestAggregateDaily}=await import('../src/core/aggregatedaily.ts')
+const {aggregateEvents}=await import('../src/core/aggregate.ts')
+const {required}=await import('../src/core/appevents.ts')
+import type { DailyRow } from '../src/core/aggregatedaily.ts'
+const reg=required(),DAY=86400000
+const days=['2026-01-30','2026-01-31','2026-02-01','2026-02-02','2026-03-01']
+const raw:{day:string;dims:Record<string,string>;user:string;sid:string}[]=[]
+for(const [d,day] of days.entries()) {
+ const rows:DailyRow[]=[]
+ for(let i=0;i<250;i++) {
+  const dims={event:i%2?reg.events.screen:reg.events.interaction,client:'C'+i%3,app_version:'v'+i%2,dialog:'D'+i%4,dialog_name:'Title'+i%4,tab:'tab'+i%2,action:i%2?'OPEN':'CHANGE',button:'button'+i%5}
+  const user='u'+i%7,sid=i%11===0?'cross-midnight':'session-'+d+'-'+i%13
+  raw.push({day,dims,user,sid});rows.push({...dims,n:1,users:[user],sessions:[sid]})
+ }
+ assert.equal(storeAggregateDaily(tasksDb,day,rows),true)
+}
+// Empty processed days are coverage too, spanning multiple months without inventing activity.
+for(let t=Date.parse(days[0]);t<=Date.parse(days.at(-1)!);t+=DAY){const day=new Date(t).toISOString().slice(0,10);if(!days.includes(day))storeAggregateDaily(tasksDb,day,[])}
+after(()=>{tasksDb.close();rmSync(dir,{recursive:true,force:true})})
+const metrics=['events','sessions','users','clients'] as const
+function count(rows:typeof raw){return {events:rows.length,sessions:new Set(rows.map(r=>r.sid)).size,users:new Set(rows.map(r=>r.user)).size,clients:new Set(rows.map(r=>r.dims.client)).size}}
+test('every dimension and metric equals full raw event computation across days and months',async()=>{
+ for(const [from,to] of [['2026-01-30','2026-02-03'],['2026-01-30','2026-03-02'],['2026-02-01','2026-03-02']])for(const dim of ROLLUP_DIMENSIONS)for(const bucket of ['none','day','week','month','quarter','year'] as const) {
+  const q={from:new Date(from),to:new Date(to),group_by:[dim],metrics:[...metrics],bucket,limit:200}
+  const result=await aggregateEvents(q);assert.equal(result.source,'history');const observed=raw.filter(r=>r.day>=from&&r.day<to)
+  assert.deepEqual(result.totals,count(observed))
+  const groups=new Map<string,typeof raw>()
+  const period=(day:string)=>{const d=new Date(day);return bucket==='week'?new Date(+d-((d.getUTCDay()+6)%7)*DAY).toISOString().slice(0,10):bucket==='month'?day.slice(0,7)+'-01':bucket==='quarter'||bucket==='year'?'2026-01-01':day}
+  for(const r of observed){const key=JSON.stringify([bucket==='none'?'':period(r.day),r.dims[dim]]);if(!groups.has(key))groups.set(key,[]);groups.get(key)!.push(r)}
+  assert.equal(result.rows.length,groups.size)
+  for(const r of result.rows){const rows=groups.get(JSON.stringify([r.period||'',r[dim]]))!;for(const metric of metrics)assert.equal(r[metric],count(rows)[metric],`${dim}/${bucket}/${metric}`)}
+ }
+})
+test('two dimensions, all filter operators, events override, cross-day sessions and exact totals independent of row limit',()=>{
+ for(const op of ['eq','neq','in'] as const) {
+  const q={from:new Date('2026-01-30'),to:new Date('2026-03-02'),metrics:[...metrics],group_by:['dialog','button'],events:[reg.events.interaction],filters:[{dimension:'client',op,value:op==='in'?['C0','C1']:'C0'}],limit:1}
+  const result=dailyAggregate(tasksDb,q)!
+  const selected=raw.filter(r=>r.dims.event===reg.events.interaction&&(op==='neq'?r.dims.client!=='C0':op==='eq'?r.dims.client==='C0':['C0','C1'].includes(r.dims.client)))
+  assert.deepEqual(result.totals,count(selected));assert.equal(result.rows.length,1);assert.ok(result.groups_omitted>0)
+ }
+ assert.equal(dailyAggregate(tasksDb,{from:new Date('2026-01-29'),to:new Date('2026-02-02')}),undefined)
+ assert.equal(dailyAggregate(tasksDb,{from:new Date('2026-01-30T12:00Z'),to:new Date('2026-02-02')}),undefined)
+})
+test('ingestion counts all event-day rows including empty session identities and uses bound days',async()=>{
+ let seen=''
+ await ingestAggregateDaily(tasksDb,'2026-04-01',async(sql,values)=>{seen=sql;assert.equal(values.from,'2026-04-01');assert.equal(values.to,'2026-04-02');return [{...Object.fromEntries(ROLLUP_DIMENSIONS.map(d=>[d,d==='event'?reg.events.screen:''])),n:3,users:[''],sessions:['']}]})
+ const result=dailyAggregate(tasksDb,{from:new Date('2026-04-01'),to:new Date('2026-04-02'),metrics:[...metrics]})!
+ assert.deepEqual(result.totals,{events:3,sessions:1,users:1,clients:1});assert.match(seen,/groupUniqArray/);assert.doesNotMatch(seen,/session.*!= ''/)
+})
+
+test('incremental backfill leaves expired and failed source days unavailable',async()=>{
+ const {storeAttempts}=await import('../src/core/tasks.ts')
+ const {backfillPerformanceHistory}=await import('../src/core/performancehistory.ts')
+ for(const [day,reason] of [['2026-04-02','analysis_unavailable:'],['2026-04-03','query_failed:']]) {
+  storeAttempts(day,[],{finalized:true,analysisSessions:[]})
+  tasksDb.prepare('INSERT OR REPLACE INTO task_state VALUES (?,?)').run(reason+day,'source unavailable')
+ }
+ let queries=0
+ await backfillPerformanceHistory(2,async()=>{queries++;return []})
+ assert.equal(queries,0)
+ assert.equal(dailyAggregate(tasksDb,{from:new Date('2026-04-02'),to:new Date('2026-04-04')}),undefined)
+})
