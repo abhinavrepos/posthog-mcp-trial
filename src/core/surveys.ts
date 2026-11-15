@@ -1,3 +1,4 @@
+import { requestedToolWindow } from './toolcontext.ts'
 import { analyticalWindow } from './timewindow.ts'
 import { rememberClientSurvey } from './surveylocal.ts'
 // Surveys made from Lens: a PM describes one in the app's own words (which dialog, which button, which
@@ -41,7 +42,7 @@ const freshness = (at: number): SurveyFreshness => ({ stale: true, cached_at: ne
 async function cachedSurvey<T>(key: unknown[], load: () => Promise<T>, stale?: (value: T, at: number) => T): Promise<T> {
     requireSurveys() // never serve cached data after surveys are disabled
     const scope = [config.posthog.host, config.posthog.projectId, config.posthog.personalApiKey, config.posthog.surveyApiKey, config.posthog.surveyGate]
-    const k = JSON.stringify([scope, key])
+    const k = JSON.stringify([scope, key, requestedToolWindow()])
     const hit = surveyCache.get(k)
     const age = hit ? Date.now() - hit.at : Infinity
     const ttl = key[0] === 'list' || key[0] === 'get' ? 30_000 : 60_000
@@ -83,7 +84,7 @@ let surveyQueryTail: Promise<unknown> = Promise.resolve()
 let surveyQueries = 0
 function surveyQuery(query: string, values: Record<string, unknown> = {}) {
     if(typeof values.days === 'number') {
-        const window=analyticalWindow(`last ${values.days} days`)!
+        const window=requestedToolWindow() || analyticalWindow(`last ${values.days} days`)!
         query=query.replaceAll('timestamp > now() - toIntervalDay({days})','timestamp >= {history_from} AND timestamp < {history_to}')
         values={...values,history_from:window.from.toISOString(),history_to:window.to.toISOString()}
     }

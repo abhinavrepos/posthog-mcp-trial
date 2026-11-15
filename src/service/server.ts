@@ -29,7 +29,7 @@ import { guardTransport, registryOf } from '../mcp/anonymise.ts'
 import { anonymiseOn } from '../core/anonymise.ts'
 import { refreshRoster } from '../core/anonroster.ts'
 import { serverInstructions } from '../mcp/instructions.ts'
-import { lensToolNames, registerTools } from '../mcp/tools.ts'
+import { lensToolNames, registerTools, auditToolRefusal } from '../mcp/tools.ts'
 import { appEvents } from '../core/appevents.ts'
 import { startTaskHistory } from '../core/tasks.ts'
 import { audit, chatCaller, loadAccess } from './access.ts'
@@ -172,7 +172,7 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse) {
     await server.connect(transport)
     // Client anonymisation (Admin → Client privacy for AI): every message in and out goes through the guard.
     if (anonymiseOn()) await refreshRoster()
-    guardTransport(transport, registryOf(server))
+    guardTransport(transport, registryOf(server), (name,keys,result)=>auditToolRefusal(name,keys,result,caller))
     const body = req.method === 'POST' ? JSON.parse((await readRaw(req, 5_000_000)).toString('utf8') || 'null') : undefined
     await transport.handleRequest(req, res, body)
 }

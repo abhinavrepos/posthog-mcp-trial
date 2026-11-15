@@ -1,3 +1,11 @@
+import { isPublicToolError } from './publicerror.ts'
+import { randomUUID } from 'node:crypto'
+import { timeShape, checkTime, resolveTime, inclusiveWindow } from './timeinput.ts'
+import { toolError, argumentExample } from './toolerror.ts'
+import { toolLimiter } from './ratelimit.ts'
+import { writeToolAudit } from './toolaudit.ts'
+import { toolContext, auditClient } from '../core/toolcontext.ts'
+import { privacyMode } from '../core/anonymise.ts'
 import { privacyCurrent, PRIVACY_CHANGED, privacyKey, withPrivacy } from '../core/anonymise.ts'
 import { analyticalResult } from './historyresult.ts'
 // MCP tools over the same core as the Jira automation. Each one answers a question a PM or
@@ -54,6 +62,7 @@ const json = jsonResult
 async function pickClient(client: string) {
     const matches = await resolveClient({ text: client, emails: emailsIn(client), clientHint: client })
     if (!matches.length) throw new Error(`No client matches "${client}". Try the client name, its id, or a user's email.`)
+    auditClient(matches[0].id)
     return { best: matches[0], others: matches.slice(1, 4) }
 }
 
@@ -150,23 +159,98 @@ export function mcpClipRefusal(): string | undefined {
 }
 
 // Every Lens tool result goes through the AI-safety pass (src/core/aisafety.ts) at this one boundary,
-// whether or not client anonymisation is on. Errors are passed back masked the same way, not hidden:
-// "No client called X" is useful, and its text cannot carry anything the pass would not remove.
-export function wrapTools(server: McpServer, insights = false): void {
+// whether or not client anonymisation is on. Execution errors are mapped to actionable public messages;
+// their full diagnostics stay in server logs, joined to the metadata audit by correlation id.
+export const WINDOW_DEFAULTS: Record<string,number|string> = {screen_usage:30,error_blast_radius:30,describe_app_events:7,client_signals:14,find_trade:30,aggregate_events:30,reval_brief:14,task_map:28,flow_time:90,rescue_queue:28,set_rescue_status:28,client_experience:28,friction_hotspots:28,client_story:182,pin_dashboard:28,signal_scorecard:364,design_survey:14,list_surveys:30,survey_results:90,client_activity_changes:'last_4_years',compare_client_patterns:'last_4_years'}
+type ToolCaller = Pick<ChatCaller, 'who'> & Partial<Pick<ChatCaller,'email'|'tokenId'>>
+/** Account for authenticated invocations refused by the transport's privacy guard. */
+export function auditToolRefusal(name:string,keys:string[],refusal:unknown,caller?:ToolCaller): unknown {
+    const started=Date.now(),correlation_id=randomUUID()
+    let release:(()=>void)|undefined,kind='privacy_refused'
+    let result={...(refusal as {isError:boolean;content:unknown[]}),content:[...(refusal as {content:unknown[]}).content,{type:'text',text:`Correlation id: ${correlation_id}`} ]}
+    try {release=toolLimiter.acquire(caller?.email || caller?.who || 'stdio',caller?.tokenId || caller?.who || 'stdio',name)}
+    catch(error) {const mapped=toolError(error,name,correlation_id);result=mapped.result;kind=mapped.kind}
+    finally {
+        release?.()
+        try {writeToolAudit({at:new Date(started).toISOString(),user_email:caller?.email || caller?.who || 'stdio',token_id:caller?.tokenId || 'stdio',tool:name,argument_keys:keys,client_ids:[],duration_ms:Date.now()-started,result_chars:JSON.stringify(result).length,is_error:true,error_kind:kind,privacy_mode:privacyMode(),correlation_id})}
+        catch(error) {console.error('Lens refusal audit failed',{correlation_id,error})}
+    }
+    return result
+}
+export function wrapTools(server: McpServer, insights = false, caller?: ToolCaller): void {
     const register = server.registerTool.bind(server)
-    server.registerTool = ((name: string, cfg: { description?: string }, cb: unknown) => {
+    // The SDK otherwise validates before invoking handlers. Delegate that step to our boundary so
+    // rejected input also gets rate accounting, audit, and a safe execution error. listTools still
+    // advertises the full strict schema. This SDK integration is covered by in-memory MCP tests.
+    const boundary = server as unknown as {validateToolInput:(tool:unknown,args:unknown,name:string)=>Promise<unknown>}
+    const validate = boundary.validateToolInput.bind(server)
+    const wrapped = new Set<string>()
+    boundary.validateToolInput = (tool,args,name) => wrapped.has(name) ? Promise.resolve(args ?? {}) : validate(tool,args,name)
+    server.registerTool = ((name: string, cfg: { description?: string; inputSchema?: z.ZodRawShape }, cb: unknown) => {
+        const original = cfg.inputSchema || {}
+        const windowed = ['when','days','weeks','from','to'].some(k=>k in original)
+        const shared = {...timeShape}
+        if(!['compare','compare_with','compared_with'].some(k=>k in original)) for(const key of ['compare','compare_from','compare_to','compare_with','compared_with']) delete (shared as Record<string,unknown>)[key]
+        const shape = windowed ? {...original,...shared} : original
+        // Legacy defaults are applied only after exclusive time selectors have been validated.
+        const validationShape = {...shape}
+        for(const key of ['days','weeks']) if(key in validationShape) validationShape[key] = validationShape[key] instanceof z.ZodDefault ? (validationShape[key].removeDefault() as z.ZodType).optional() : (validationShape[key] as z.ZodType).optional()
+        const schema = z.object(validationShape).strict().superRefine((input,ctx)=>{if(windowed)checkTime(input,ctx)})
+        const contract={keys:Object.keys(shape),example:argumentExample(z.toJSONSchema(schema,{io:'input'}) as Record<string,unknown>)}
         const call = cb as (a: unknown, e: unknown) => unknown
-        const raw = typeof cb !== 'function' ? cb
-            : CACHED_TOOLS.has(name) ? (args: unknown, extra: unknown) => cachedToolCall(name, name === 'session_story' || name === 'attempt_timings' ? { args, insights } : args, () => Promise.resolve(call(args, extra)))
-            : cb
-        const handler = typeof raw === 'function' ? (args: unknown, extra: unknown) => withPrivacy(async () => {
+        const handler = async (input: unknown, extra: unknown) => withPrivacy(async () => {
+            const started=Date.now(), correlation=randomUUID(), clients=new Set<string>()
+            let release:(()=>void)|undefined, errorKind:string|undefined, result:unknown, window:ReturnType<typeof inclusiveWindow>|undefined
+            const keys = input && typeof input === 'object' && !Array.isArray(input) ? Object.keys(input) : []
             try {
-                const result = await safeResult(analyticalResult(name, args, await (raw as (a: unknown, e: unknown) => unknown)(args, extra)))
-                return privacyCurrent() ? result : { isError: true, content: [{ type: 'text', text: PRIVACY_CHANGED }] }
+                release=toolLimiter.acquire(caller?.email || caller?.who || 'stdio',caller?.tokenId || caller?.who || 'stdio',name)
+                const parsed=schema.parse(input) as Record<string,unknown>
+                const args = z.object(shape).parse(parsed) as Record<string,unknown>
+                const resolved=windowed ? resolveTime(parsed,name==='reval_brief' && parsed.trade ? 30 : name==='pin_dashboard' && parsed.kind==='flow_time' ? 90 : WINDOW_DEFAULTS[name] || 7) : undefined
+                if(resolved) {
+                    window=inclusiveWindow(resolved)
+                    if('when' in original) args.when=parsed.when || `${window.from} to ${window.to}`
+                    if(('from' in original || 'to' in original) && (parsed.period || parsed.from || parsed.when)) {args.from=window.from;args.to=window.to}
+                    if('days' in original) args.days=Math.max(1,Math.ceil((+resolved.to-+resolved.from)/86400000))
+                    if('weeks' in original) args.weeks=Math.max(1,Math.ceil((+resolved.to-+resolved.from)/604800000))
+                    if(parsed.compare_from) args.compare_with={from:parsed.compare_from,to:parsed.compare_to}
+                    if(parsed.compared_with) {const c=inclusiveWindow(resolveTime({when:parsed.compared_with}));args.compare_with=c}
+                    if(args.compare_with && 'compared_with' in original) {const c=args.compare_with as {from:string;to:string};args.compared_with=`${c.from} to ${c.to}`}
+                }
+                for(const key of Object.keys(timeShape)) if(!(key in original)) delete args[key]
+                result=await toolContext.run({window:resolved,clients,correlationId:correlation},async()=>{
+                    const execute=async()=>{const result=await call(args,extra);return {result,clients:[...clients],isError:!!(result as {isError?:boolean})?.isError}}
+                    const answer=await (CACHED_TOOLS.has(name) ? cachedToolCall(name,{args,insights,window},execute) : execute()) as {result:unknown;clients:string[]}
+                    for(const id of answer.clients) clients.add(id)
+                    const value=answer.result as {isError?:boolean;content?:unknown;_lensJson?:{value?:{window?:{from:string;to:string};period?:{from:string;to:string}}}}
+                    const effective=value?._lensJson?.value?.window || value?._lensJson?.value?.period
+                    if(effective && typeof effective.from === 'string' && typeof effective.to === 'string') {
+                        const from=new Date(effective.from),to=new Date(effective.to.length===10 ? Date.parse(effective.to)+86400000 : effective.to)
+                        if(Number.isFinite(+from) && Number.isFinite(+to)) window=inclusiveWindow({from,to,label:'answered',precision:'range'})
+                    }
+                    if(value?.isError) {
+                        const content=JSON.stringify(value.content)
+                        if(!isPublicToolError(answer.result)) throw new Error(content)
+                        errorKind='tool_error'
+                        return safeResult({...value,content:[...(Array.isArray(value.content)?value.content:[]),{type:'text',text:`Correlation id: ${correlation}`}]})
+                    }
+                    return safeResult(analyticalResult(name,args,answer.result,resolved))
+                })
+                if(!privacyCurrent()) {errorKind='privacy_changed';result={isError:true,content:[{type:'text',text:`${PRIVACY_CHANGED} Correlation id: ${correlation}` }]}}
+            } catch(error) {const mapped=toolError(error,name,correlation,contract);errorKind=mapped.kind;result=mapped.result}
+            finally {
+                release?.()
+                // Only schema-defined argument keys; unknown keys can themselves contain private values.
+                try {writeToolAudit({at:new Date(started).toISOString(),user_email:caller?.email || caller?.who || 'stdio',token_id:caller?.tokenId || 'stdio',tool:name,argument_keys:keys.filter(k=>k in shape).sort(),resolved_window:window,client_ids:[...clients],duration_ms:Date.now()-started,result_chars:JSON.stringify(result ?? {}).length,is_error:!!(result as {isError?:boolean})?.isError,error_kind:errorKind,privacy_mode:privacyMode(),correlation_id:correlation})}
+                catch(error) {console.error('Lens tool audit failed',{correlation_id:correlation,error})}
             }
-            catch (e) { return { isError: true, content: [{ type: 'text', text: String(await safeResult(String((e as Error)?.message || 'The tool could not complete.'))) }] } }
-        }) : raw
-        return register(name, { ...cfg, description: `${cfg.description ?? ''} ${DIRECT_CALL}`.trim() } as never, handler as never)
+            return result
+        })
+        wrapped.add(name)
+        const description=cfg.description || ''
+        const first=description.match(/^.*?[.!?](?:\s|$)/)?.[0] || description
+        const rest=description.slice(first.length)
+        return register(name, {...cfg,inputSchema:schema,description:`${first.trim()}${windowed ? ` Time: period or from/to (YYYY-MM-DD). Default: ${typeof WINDOW_DEFAULTS[name] === 'string' ? String(WINDOW_DEFAULTS[name]).replaceAll('_',' ') : `last ${WINDOW_DEFAULTS[name] || 7} days`}.` : ''} ${rest} ${DIRECT_CALL}`.trim()} as never,handler as never)
     }) as typeof server.registerTool
 }
 
@@ -179,9 +263,9 @@ const CLIENT_EXAMPLES = 10
 const fewClients = <T extends { clients_with_errors: string[] }>(d: T) =>
     ({ ...d, clients_with_errors_count: d.clients_with_errors.length, clients_with_errors: d.clients_with_errors.slice(0, CLIENT_EXAMPLES) })
 
-export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'dashboardRole' | 'admin' | 'insights'>>): void {
+export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'tokenId' | 'dashboardRole' | 'admin' | 'insights'>>): void {
     const insights = !!caller?.admin || caller?.insights === true
-    wrapTools(server, insights)
+    wrapTools(server, insights, caller)
     if (config.posthog.mcpViaLens && posthogMcpActive()) server.registerTool('posthog_exec', {
         description: `Runs PostHog commands for generic analytics and objects: trends, funnels, retention, insights, dashboards, flags, experiments, annotations, error-tracking administration, docs and SQL. ${execRoutingLine(config.mcp.name)}`,
         inputSchema: { command: z.string() },
@@ -249,12 +333,16 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
             const lines = [`Replay in PostHog from ${Math.floor(start_s)}s (PostHog login needed): ${replayUrl(session_id, start_s)}`]
             try {
                 const refusal = mcpClipRefusal()
-                if (refusal) throw new Error(refusal)
+                if (refusal) {
+                    lines.push(`No MP4 clip: ${refusal}. Use the PostHog replay link above.`)
+                    return text(lines.join('\n'))
+                }
                 const clip = await renderClip({ sessionId: session_id, startOffsetS: start_s, durationS: duration_s })
                 await recordClip(clip, 'claude (MCP)')
                 lines.push(`MP4 clip, ${Math.round(clip.video_duration_s)} s, on the clip page (sign-in and the "Watch clips" role needed): ${config.service.publicUrl}/replays?clip=${encodeURIComponent(clip.name)}`)
             } catch (e) {
-                lines.push(`No MP4 clip: rendering is not available (${(e as Error).message.split('\n')[0].slice(0, 120)}).`)
+                const mapped=toolError(e,'get_replay_link')
+                lines.push(`No MP4 clip is available. Use the PostHog replay link above. Correlation id: ${mapped.id}.`)
             }
             lines.push('These links are for the user to open. The replay content is not available to you.')
             return text(lines.join('\n'))
@@ -423,19 +511,15 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
                 decided_by = caller?.email || decided_by
                 if (post_to_jira && !caller?.admin) return text('Posting to Jira requires admin access.')
                 const k = key.trim().toUpperCase()
-                let row
-                try {
-                    row = recordVerdict(k, verdict, reason, decided_by)
-                } catch (e) {
-                    return text((e as Error).message)
-                }
+                const row = recordVerdict(k, verdict, reason, decided_by)
                 let jira = ''
                 if (post_to_jira) {
                     try {
                         await addComment(k, `**Release review: ${verdict}** (${decided_by})\n\n${reason}\n\n_From PostHog Lens release outcomes._`)
                         jira = ' Posted to Jira.'
                     } catch (e) {
-                        jira = ` Saved, but Jira refused the comment: ${(e as Error).message.slice(0, 160)}`
+                        const mapped=toolError(e,'record_verdict')
+                        jira = ` The verdict was saved, but the Jira comment could not be posted. Check Jira access. Correlation id: ${mapped.id}.`
                     }
                 }
                 return text(`Saved: ${k} (${row.release}) is ${verdict}, by ${decided_by}.${jira}`)
@@ -578,7 +662,6 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
         async ({ when: w, client, filters, ...rest }) => {
             const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 30 days'), w)
             const best = client ? (await pickClient(client)).best : undefined
-            if (client && !best) return { isError: true, content: [{ type: 'text' as const, text: `No client matches "${client}".` }] }
             const { aggregateEvents } = await import('../core/aggregate.ts')
             return json(`${app} event counts (${win.label}):`, await aggregateEvents({ ...rest, from: win.from, to: win.to,
                 filters: [...(filters || []), ...(best ? [{ dimension: 'client', op: 'eq' as const, value: best.id }] : [])] }))

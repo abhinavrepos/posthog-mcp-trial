@@ -1,3 +1,4 @@
+import { readToolAudit } from '../mcp/toolaudit.ts'
 import { clientOutcomes, recordOutcome, OUTCOMES } from '../core/outcomes.ts'
 import { tasksDb } from '../core/tasks.ts'
 /** Clients seen in history, for picking one by name when recording an outcome. */
@@ -75,6 +76,10 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
         res.end(adminHtml(v))
         return true
+    }
+
+    if (p === '/replays/admin/api/tool-audit' && req.method === 'GET') {
+        json(res,200,{audit:readToolAudit(Number(url.searchParams.get('limit') || 100),Number(url.searchParams.get('offset') || 0))}); return true
     }
 
     if (p === '/replays/admin/api/outcomes') {

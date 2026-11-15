@@ -33,7 +33,7 @@ test('fair order: every client gets replays read before any client gets many', (
 
 test('real lab recordings: read, stored, and each persona comes out as it behaved', async () => {
     // Three rounds of the six personas (the same recordings under new ids) so every client has enough replays.
-    const cands = sessions.flatMap((s) => [0, 1, 2].map((k) => ({ session_id: `${s.session_id}-${k}`, client: s.client_id, user: `${s.persona}-${k}@lab`, start: new Date().toISOString(), real: s.session_id, duration: s.duration_ms })))
+    const cands = sessions.flatMap((s) => [0, 1, 2].map((k) => ({ session_id: `${s.session_id}-${k}`, client: s.client_id, user: `${s.persona}-${k}@lab`, start: new Date(Date.now()-86400000).toISOString(), real: s.session_id, duration: s.duration_ms })))
     tasksDb.exec("CREATE TABLE IF NOT EXISTS client_names(client TEXT PRIMARY KEY, name TEXT NOT NULL)")
     for (const s of sessions) tasksDb.prepare('INSERT OR REPLACE INTO client_names VALUES (?,?)').run(s.client_id, s.client_name)
     const r = await X.processReplays(100, {

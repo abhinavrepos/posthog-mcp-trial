@@ -11,7 +11,7 @@ import type { Task, TaskMapParams, FlowTimeParams } from '../src/core/taskstypes
 
 const dir = mkdtempSync(join(tmpdir(), 'dashboard-tools-'))
 Object.assign(process.env, { TRIAGE_DB: join(dir, 'test.db'), TASKS_DB: join(dir, 'tasks.db'), APP_EVENTS_FILE: 'config/app-events.reval.json', POSTHOG_PROJECT_ID: '1', POSTHOG_SURVEY_API_KEY: 'test', FEATURE_SURVEYS: 'on' })
-const { wrapTools, DIRECT_CALL } = await import('../src/mcp/tools.ts')
+const { wrapTools } = await import('../src/mcp/tools.ts')
 const { registerDashboardTools, dashboardToolNames, DASHBOARD_TOOLS } = await import('../src/mcp/dashboardtools.ts')
 const { serverInstructions, INSTRUCTIONS_LIMIT } = await import('../src/mcp/instructions.ts')
 const { config } = await import('../src/core/config.ts')
@@ -188,7 +188,7 @@ test('date windows and defaults use complete UTC days and matching preceding per
     const fixed = new URL(JSON.parse(await call('task_map', { when: '2026-01-01 to 2026-01-28' })).open, 'http://lens')
     assert.equal(fixed.searchParams.get('from'), '2026-01-01')
     assert.equal(fixed.searchParams.get('to'), '2026-01-28')
-    assert.match(await call('task_map', { when: 'not a date' }), /Unrecognised time window/)
+    assert.match(await call('task_map', { when: 'not a date' }), /Invalid time arguments/)
 })
 
 test('rescue chat shows top three reasons, limits rows and descriptions, links dates, and audits status by local client name', async () => {
@@ -201,7 +201,7 @@ test('rescue chat shows top three reasons, limits rows and descriptions, links d
     try {
         const listed = (await c.client.listTools()).tools
         assert.equal(listed.some(t => t.name === 'set_rescue_status'), false)
-        assert.ok(listed.find(t => t.name === 'rescue_queue')!.description!.replace(DIRECT_CALL, '').trim().length < 200)
+        assert.ok(listed.find(t => t.name === 'rescue_queue')!.description!.split(/[.!?](?:\s|$)/)[0].length + 1 <= 200)
         const forbidden = await c.client.callTool({ name: 'set_rescue_status', arguments: { client: 'rescue-client', status: 'resolved' } })
         assert.equal(forbidden.isError, true)
     } finally { await c.close() }

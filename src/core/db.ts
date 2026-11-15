@@ -300,6 +300,15 @@ const MIGRATIONS: string[] = [
         PRIMARY KEY(client,decided_on)
     ) WITHOUT ROWID;
     INSERT INTO client_outcome_episodes SELECT * FROM client_outcomes;`,
+    `CREATE TABLE tool_audit (
+        id INTEGER PRIMARY KEY, at TEXT NOT NULL, user_email TEXT NOT NULL, token_id TEXT NOT NULL,
+        tool TEXT NOT NULL, argument_keys TEXT NOT NULL, resolved_window TEXT, client_ids TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL, result_chars INTEGER NOT NULL, is_error INTEGER NOT NULL,
+        error_kind TEXT, privacy_mode TEXT NOT NULL, correlation_id TEXT NOT NULL
+    );
+    CREATE INDEX tool_audit_at ON tool_audit(at);
+    CREATE INDEX tool_audit_user ON tool_audit(user_email,at);`,
+
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

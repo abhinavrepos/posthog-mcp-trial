@@ -307,13 +307,13 @@ export function revokeMcpToken(id: string, by: string, onlyFor?: string): boolea
 }
 
 /** Who a chat request is from: the shared token, or a person's own token. Undefined: refuse. */
-export interface ChatCaller { who: string; email?: string; shared: boolean; surveyRole: SurveyRole; dashboardRole: DashboardRole; admin: boolean; insights: boolean }
+export interface ChatCaller { tokenId?: string; who: string; email?: string; shared: boolean; surveyRole: SurveyRole; dashboardRole: DashboardRole; admin: boolean; insights: boolean }
 export const ADMIN_FLAG_DAYS = 14
 export function chatCaller(bearer: string | undefined, sharedToken: string): ChatCaller | undefined {
     if (!bearer) return undefined
     if (sharedToken) {
         const a = Buffer.from(bearer), b = Buffer.from(sharedToken)
-        if (a.length === b.length && timingSafeEqual(a, b)) return { who: 'mcp (shared token)', shared: true, surveyRole: sharedTokenSurveyRole(), dashboardRole: sharedTokenDashboardRole(), admin: false, insights: false }
+        if (a.length === b.length && timingSafeEqual(a, b)) return { tokenId: 'shared', who: 'mcp (shared token)', shared: true, surveyRole: sharedTokenSurveyRole(), dashboardRole: sharedTokenDashboardRole(), admin: false, insights: false }
     }
     if (!/^lens_[A-Za-z0-9_-]{20,64}$/.test(bearer)) return undefined
     const row = one<Record<string, unknown>>('SELECT * FROM mcp_tokens WHERE hash = ? AND revoked_at IS NULL', tokenHash(bearer))
@@ -328,7 +328,7 @@ export function chatCaller(bearer: string | undefined, sharedToken: string): Cha
     if (!can(lensRole, 'watch') && !canSurvey(surveyRoleOf(t.email, lensRole), 'view') && !canDashboard(dashboardRoleOf(t.email, lensRole), 'view')) return undefined
     const now = new Date().toISOString()
     if (!t.last_used_at || Date.parse(now) - Date.parse(t.last_used_at) > 60_000) run('UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?', now, t.id)
-    return { who: t.email, email: t.email, shared: false, surveyRole: surveyRoleOf(t.email, lensRole), dashboardRole: dashboardRoleOf(t.email, lensRole), admin: can(lensRole, 'admin'), insights: can(lensRole, 'admin') || hasInsightGrant(t.email) }
+    return { tokenId: t.id, who: t.email, email: t.email, shared: false, surveyRole: surveyRoleOf(t.email, lensRole), dashboardRole: dashboardRoleOf(t.email, lensRole), admin: can(lensRole, 'admin'), insights: can(lensRole, 'admin') || hasInsightGrant(t.email) }
 }
 
 /** Lets a person see the System page, or stops it, and records who did it. */

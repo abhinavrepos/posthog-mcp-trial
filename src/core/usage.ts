@@ -1,3 +1,4 @@
+import { requestedToolWindow } from './toolcontext.ts'
 import { analyticalWindow } from './timewindow.ts'
 // "How many clients use this screen, and when?" Usage of one screen over a period.
 import { hogql } from './posthog.ts'
@@ -22,7 +23,7 @@ const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Satur
 
 export async function screenUsage(pathname: string, opts: { days?: number; clientId?: string } = {}): Promise<ScreenUsage> {
     const days = opts.days ?? 30
-    const window=analyticalWindow(`last ${days} days`)!
+    const window=requestedToolWindow() || analyticalWindow(`last ${days} days`)!
     const values = { path: pathname, days, from:window.from.toISOString(),to:window.to.toISOString() }
     const scope = `event = '$pageview' AND timestamp >= {from} AND timestamp < {to} AND notEmpty(toString(${P.client}))`
 

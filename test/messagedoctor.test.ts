@@ -303,7 +303,7 @@ test('message_doctor is registered with the promised question and inputs', async
         const tool = (await client.listTools()).tools.find((t) => t.name === 'message_doctor')!
         assert.ok(APP_EVENT_TOOLS.includes(tool.name))
         assert.ok(tool.description!.startsWith("Which of Reval's error messages leave people stuck, and what do they do to recover?"))
-        assert.deepEqual(Object.keys(tool.inputSchema.properties!), ['client', 'dialog', 'message', 'when'])
+        assert.deepEqual(Object.keys(tool.inputSchema.properties!), ['client', 'dialog', 'message', 'when', 'period', 'from', 'to'])
         assert.equal(tool.annotations?.readOnlyHint, true)
     } finally {
         await client.close()

@@ -15,7 +15,7 @@ export interface StoryWeek { covered_days?:number; missing_days?:number; week_st
 export interface StoryEvent { date: string; kind: 'reason_seen' | 'reason_cleared' | 'signal_seen' | 'action' | 'survey' | 'note'; text: string }
 export interface ClientStory {
     peers?: PeerTask[]; peer_note?: string
-    client: string; client_name: string; coverage: Coverage; weeks: StoryWeek[]; events: StoryEvent[]; summary: string
+    client: string; client_name: string; window?: {from:string;to:string}; coverage: Coverage; weeks: StoryWeek[]; events: StoryEvent[]; summary: string
     surveys: { name: string; date: string; status: string }[]; action?: RescueAction; unknown: string
 }
 async function history(client: string, weeks: number, to: string) {
@@ -58,7 +58,7 @@ export async function clientStory(p: TimelineOptions): Promise<ClientStory & { t
         const timeline=clientTimeline(p)
         const unknown=timeline.note
         return rescuePrivacy({client,client_name:query<{name:string}>('SELECT name FROM client_names WHERE client=?',client)[0]?.name || client,
-            coverage:timeline.coverage,weeks:[],events:[],surveys:[],summary:`${timeline.buckets.length} ${timeline.bucket} buckets from ${timeline.window.from} to ${timeline.window.to}. ${unknown}`,unknown,timeline})
+            window:timeline.window,coverage:timeline.coverage,weeks:[],events:[],surveys:[],summary:`${timeline.buckets.length} ${timeline.bucket} buckets from ${timeline.window.from} to ${timeline.window.to}. ${unknown}`,unknown,timeline})
     }
     if (typeof client !== 'string' || !client.trim() || client.length > 256) throw new Error('Choose a client id')
     if (!Number.isInteger(weeks) || weeks < 1 || weeks > 209) throw new Error('Weeks must be an integer from 1 to 209')
@@ -88,7 +88,7 @@ export async function clientStory(p: TimelineOptions): Promise<ClientStory & { t
     const doing = action ? `The account action is ${action.status.replaceAll('_', ' ')} with ${action.owner || 'no owner assigned'}${action.due ? ` and due ${action.due}` : ''}; ${surveys.length} survey records are available.` : `No account action is recorded; ${surveys.length} survey records are available.`
     const unknown = `History cannot tell us why use changed or whether work moved elsewhere; ${h.coverage.complete ? 'processed days cover this series' : 'some days are unprocessed'}, survey status is last recorded locally and weekly flags compare trailing 28-day periods rather than exact onset dates.`
     const peer = await peerBenchmark({ client, window: { from: shift(to,-27), to } })
-    return rescuePrivacy({ peers: peer.tasks.filter(p => p.ratio >= 1.5 - 1e-12 || p.peer_done_rate-p.done_rate >= .15 - 1e-12), peer_note: peer.coverage.complete ? peer.note : peer.coverage.text, client, client_name: name, coverage: h.coverage, weeks: h.weeks, events, surveys, ...(action ? { action } : {}), summary: `${changed} ${doing} ${unknown}`, unknown })
+    return rescuePrivacy({ window:h.window,peers: peer.tasks.filter(p => p.ratio >= 1.5 - 1e-12 || p.peer_done_rate-p.done_rate >= .15 - 1e-12), peer_note: peer.coverage.complete ? peer.note : peer.coverage.text, client, client_name: name, coverage: h.coverage, weeks: h.weeks, events, surveys, ...(action ? { action } : {}), summary: `${changed} ${doing} ${unknown}`, unknown })
 }
 export async function handoverPack(client: string, ai = false): Promise<string> {
     const story = await clientStory({ client }), to = dataThrough() || shift(new Date().toISOString().slice(0,10), -1), from = shift(to, -89)

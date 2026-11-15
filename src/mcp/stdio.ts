@@ -7,7 +7,7 @@ import { shutdownClips } from '../core/clip.ts'
 import { config } from '../core/config.ts'
 import { lensServerInfo } from './server-info.ts'
 import { serverInstructions } from './instructions.ts'
-import { registerTools } from './tools.ts'
+import { registerTools, auditToolRefusal } from './tools.ts'
 import { guardTransport, registryOf } from './anonymise.ts'
 import { refreshRoster } from '../core/anonroster.ts'
 
@@ -26,7 +26,7 @@ registerTools(server, makeAi())
 await refreshRoster().catch(() => {})
 const transport = new StdioServerTransport()
 await server.connect(transport)
-guardTransport(transport, registryOf(server))
+guardTransport(transport, registryOf(server), auditToolRefusal)
 setInterval(() => void refreshRoster().catch(() => {}), 60_000).unref()
 
 const stop = async () => {

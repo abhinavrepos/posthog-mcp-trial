@@ -1,3 +1,4 @@
+import { requestedToolWindow } from './toolcontext.ts'
 import { privacyMode } from './anonymise.ts'
 import { analyticalWindow } from './timewindow.ts'
 import { comparisonWindow, type ComparisonOptions } from './comparison.ts'
@@ -903,7 +904,7 @@ export interface Vocabulary {
 /** What the app's events are and hold, from the vocabulary and the last days of data. */
 export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vocabulary> {
     const reg = required()
-    const {from,to}=analyticalWindow(`last ${days} days`)!
+    const {from,to}=requestedToolWindow() || analyticalWindow(`last ${days} days`)!
     const w = { from: from.toISOString(), to: to.toISOString(), events: [reg.events.screen, reg.events.interaction] }
     const roles = ROLES.filter((r) => reg.properties[r])
     const [events, props, names, msgs, clients, defined] = await Promise.all([

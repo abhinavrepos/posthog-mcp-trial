@@ -67,9 +67,9 @@ test('MCP clip admission skips full queues and hourly limits while preserving th
     const admission = source.slice(source.indexOf('const mcpRenders:'), source.indexOf('// Every Lens tool result goes through the AI-safety pass'))
     const callback = source.slice(source.indexOf('async ({ session_id: raw'), source.indexOf("\n    server.registerTool(\n        'screen_usage'")).replace(/\n    \)\s*$/, '')
     let pending = 3, renders = 0
-    const handler = new Function('pendingRenders', 'renderClip', 'recordClip', 'sessionIdOf', 'replayUrl', 'config', 'text',
+    const handler = new Function('pendingRenders', 'renderClip', 'recordClip', 'sessionIdOf', 'replayUrl', 'config', 'text', 'toolError',
         stripTypeScriptTypes(admission.replace('export function', 'function') + '\nconst handler = ' + callback) + '\nreturn handler'
-    )(() => pending, async () => { renders++; throw new Error('fake renderer') }, () => {}, (s: string) => s, () => 'https://posthog/replay', config, (s: string) => s)
+    )(() => pending, async () => { renders++; throw new Error('fake renderer') }, () => {}, (s: string) => s, () => 'https://posthog/replay', config, (s: string) => s, () => ({id:'test-correlation'}))
     const call = () => handler({ session_id: 'test', start_s: 0, duration_s: 30 }) as Promise<string>
     assert.match(await call(), /queue is full/)
     assert.equal(renders, 0)

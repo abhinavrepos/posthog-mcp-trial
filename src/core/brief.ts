@@ -1,3 +1,4 @@
+import { auditClient, toolCorrelationId } from './toolcontext.ts'
 // One deterministic PM entry point. Queries stay here; composeBrief only reads supplied results.
 import {
     appEvents, clientSignalsReport, dialogFriction, dialogNames, findTrade,
@@ -293,7 +294,11 @@ export const briefSources = { resolveClient, dialogNames, topPains, clientSignal
 export async function revalBrief(input: BriefInput, sources = briefSources, now = new Date()): Promise<string> {
     const limits: string[] = []
     const optional = async <T>(label: string, work: () => Promise<T>): Promise<T | undefined> => {
-        try { return await work() } catch { limits.push(`${label} unavailable.`); return undefined }
+        try { return await work() } catch(error) {
+            const id=toolCorrelationId()
+            console.error('Lens brief source error',{correlation_id:id,source:label,error})
+            limits.push(`${label} unavailable. Try a narrower window or retry later. Correlation id: ${id}.`); return undefined
+        }
     }
     const provisional = detectBriefKind(input)
     const parsedWindow = briefWindow(input, provisional.kind, now)
@@ -305,6 +310,7 @@ export async function revalBrief(input: BriefInput, sources = briefSources, now 
     const names = provisional.kind !== 'trade' && !input.client && !confidentClient(matches || []) ?
         await optional('Dialog names', () => sources.dialogNames(win.from, win.to)) : undefined
     const route = detectBriefKind(input, matches, names)
+    if(route.clientId) auditClient(route.clientId)
     if (matches?.length && !confidentClient(matches)) limits.push('Client name matches were uncertain; no client filter was applied.')
     const r: BriefResults = { route, question: input.question, window: { from: win.from.toISOString(), to: win.to.toISOString(), label: win.label }, limits }
     const q = { from: win.from, to: win.to, clientId: route.clientId }

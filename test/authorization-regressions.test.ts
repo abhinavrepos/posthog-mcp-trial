@@ -122,22 +122,24 @@ test('MCP recording tools enforce insights and partition cached session stories'
         assert.equal(result.includes('private timing'), insights)
     }
     assert.equal(reads, 1)
-    // Exercise the registration wrapper to verify cache identity, including privileged-first calls.
-    // The wrapper as registerTools uses it: wrapTools(server, insights), the safety pass stubbed out.
-    const wrapper = tools.slice(tools.indexOf('export function wrapTools'), tools.indexOf('export function registerTools')).replace('export function', 'function')
-        + '\nwrapTools(server, !!caller?.admin || caller?.insights === true)'
-    const cache = new Map<string, unknown>()
-    const cachedToolCall = async (name: string, args: unknown, run: () => unknown) => {
-        const key = name + JSON.stringify(args)
-        if (!cache.has(key)) cache.set(key, await run())
-        return cache.get(key)
-    }
+    // Exercise the real SDK boundary, including privileged-first cache entries.
+    const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js')
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js')
+    const { z } = await import('zod')
+    const { wrapTools, clearToolAnswers } = await import('../src/mcp/tools.ts')
+    clearToolAnswers()
     for (const caller of [{ insights: true }, { insights: false }, { admin: true }, undefined]) {
         const insights = !!caller?.admin || caller?.insights === true
-        let call!: (args: unknown) => Promise<string>
-        const server = { registerTool: (_name: string, _cfg: unknown, cb: typeof call) => { call = cb } }
-        new Function('caller', 'server', 'CACHED_TOOLS', 'cachedToolCall', 'DIRECT_CALL', 'safeResult', 'withPrivacy', 'privacyCurrent', 'PRIVACY_CHANGED', 'analyticalResult', stripTypeScriptTypes(wrapper))(caller, server, new Set(['session_story']), cachedToolCall, '', async (r: unknown) => r, (f: () => unknown) => f(), () => true, 'privacy changed', (_name: unknown, _args: unknown, r: unknown) => r)
-        server.registerTool('session_story', {}, async () => insights ? 'recording timing' : 'event only')
-        assert.equal(await call({ session_id: 's' }), insights ? 'recording timing' : 'event only')
+        const server = new McpServer({name:'test',version:'1'})
+        wrapTools(server,insights)
+        server.registerTool('session_story',{inputSchema:{session_id:z.string()}},async()=>({content:[{type:'text',text:insights ? 'recording timing' : 'event only'}]}))
+        const client = new Client({name:'test',version:'1'}),[a,b]=InMemoryTransport.createLinkedPair()
+        await Promise.all([server.connect(a),client.connect(b)])
+        try {
+            const result=await client.callTool({name:'session_story',arguments:{session_id:'s'}})
+            assert.match(JSON.stringify(result),insights ? /recording timing/ : /event only/)
+            if(!insights) assert.doesNotMatch(JSON.stringify(result),/recording timing/)
+        } finally {await client.close();await server.close()}
     }
 })

@@ -20,7 +20,7 @@ function observed(from:string,to:string) {for(let d=from;d<=to;d=shift(d,1))task
 function active(client:string,...days:string[]) {for(const d of days)tasksDb.prepare('INSERT INTO client_daily VALUES (?,?,1,1,0,1,0)').run(d,client)}
 test('validated shared calendar and four-year relative contract never falls back',()=>{
     const now=new Date('2026-11-15T12:00:00Z')
-    for(const [input,from,to] of [ ['last 4 years','2022-11-15','2026-11-15'],['last 90 days','2026-08-17','2026-11-15'],['past 18 months','2025-05-15','2026-11-15'],['last quarter','2026-08-15','2026-11-15'],['2024','2024-01-01','2025-01-01'],['Q3 2025','2025-07-01','2025-10-01'],['March 2023','2023-03-01','2023-04-01'],['2023-01-01 to 2024-06-30','2023-01-01','2024-07-01']]) {
+    for(const [input,from,to] of [ ['last 4 years','2022-11-15','2026-11-15'],['last 90 days','2026-08-17','2026-11-15'],['past 18 months','2025-05-15','2026-11-15'],['last quarter','2026-07-01','2026-10-01'],['2024','2024-01-01','2025-01-01'],['Q3 2025','2025-07-01','2025-10-01'],['March 2023','2023-03-01','2023-04-01'],['2023-01-01 to 2024-06-30','2023-01-01','2024-07-01']]) {
         const w=analyticalWindow(input,now,null)!;assert.equal(w.from.toISOString().slice(0,10),from);assert.equal(w.to.toISOString().slice(0,10),to)
     }
     assert.equal(analyticalWindow('last 4 years',now,'2026-11-10')!.to.toISOString(),'2026-11-11T00:00:00.000Z')

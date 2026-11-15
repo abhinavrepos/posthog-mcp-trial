@@ -1,3 +1,4 @@
+import { auditClient } from '../core/toolcontext.ts'
 // MCP tools for in-app surveys: a PM describes a survey in chat, Lens checks it, estimates how many
 // would see it and saves it as a draft. Launching is never possible from chat: only on the Surveys page. Every survey and
 // its answers are also on the Surveys page (/replays/surveys).
@@ -113,7 +114,7 @@ async function clientIds(names: string[] = []): Promise<{ ids: string[]; unclear
     const unclear: string[] = []
     for (const n of names) {
         const m = await resolveClient({ text: n, clientHint: n })
-        if (m[0] && m[0].confidence >= 0.7 && !(m[1] && m[1].confidence >= m[0].confidence)) ids.push(m[0].id)
+        if (m[0] && m[0].confidence >= 0.7 && !(m[1] && m[1].confidence >= m[0].confidence)) {ids.push(m[0].id);auditClient(m[0].id)}
         else unclear.push(m.length ? `"${n}": ${m.slice(0, 4).map((x) => `${x.name} (${x.id})`).join(', ')}?` : `"${n}": no client matches`)
     }
     return { ids: [...new Set(ids)], unclear }
@@ -140,7 +141,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             const { ids, unclear } = await clientIds(spec.clients)
             const c = compileSurvey(spec as SurveySpec, { clientIds: ids })
             const errors = c.problems.filter((p) => p.level === 'error')
-            const reach = estimate && !errors.length ? await estimateReach(c.chain,days).catch((e) => ({ error: (e as Error).message })) : undefined
+            const reach = estimate && !errors.length ? await estimateReach(c.chain,days) : undefined
             const conflicts = conflictsFor(c.chain, {}, await listSurveys())
             const q = queueAlert(c.chain, conflicts)
             return json(`${q.level === 'clear' ? '' : q.alert + '\n\n'}${errors.length || unclear.length ? 'This survey cannot be saved yet:' : 'The survey checks out. Show the person this plan (lead with any ⚠ alert above), then save_survey.'}`, {

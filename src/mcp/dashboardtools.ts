@@ -1,7 +1,8 @@
+import { auditClient, requestedToolWindow } from '../core/toolcontext.ts'
 import { replayMonths } from './historyresult.ts'
 import { clientActivityChanges, compareClientPatterns } from '../core/clientpatterns.ts'
 import { jsonResult } from './result.ts'
-import { scorecard } from '../core/scorecard.ts'
+import { windowedScorecard as scorecard } from './scorecardwindow.ts'
 import { rescuePrivacy } from '../core/rescueprivacy.ts'
 import { clientStory, handoverPack } from '../core/story.ts'
 // Chat views and pinned dashboards use the same filters as the Dashboards page.
@@ -57,7 +58,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
     const allowed = new Set(dashboardToolNames(caller.admin ? 'share' : caller.dashboardRole, caller.admin ? 'launch' : caller.surveyRole || 'none', caller.admin || caller.insights === true))
     const reg = ((name: string, ...rest: unknown[]) => allowed.has(name) ? (server.registerTool as (...a: unknown[]) => unknown)(name, ...rest) : undefined) as typeof server.registerTool
     const safe = <T>(fn: (input: T) => Promise<ReturnType<typeof text>>) => async (input: T) => {
-        try { return await fn(input) } catch (e) { return text((e as Error).message) }
+        return fn(input)
     }
     const ready = () => {
         const status = d.ingestStatus()
@@ -71,7 +72,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
             const exact = matches.filter(c => c.id.toLowerCase() === input.client!.trim().toLowerCase() || c.name.toLowerCase() === input.client!.trim().toLowerCase())
             const chosen = exact.length === 1 ? exact[0] : matches.length === 1 && matches[0].confidence >= .8 ? matches[0] : undefined
             if (!chosen) return { reply: json({ message: 'Which client did you mean? Choose a client id.', candidates: matches }) }
-            client = chosen.id
+            client = chosen.id; auditClient(chosen.id)
         }
         if (input.task) {
             const matches = await d.findTasks(input.task)
@@ -100,8 +101,9 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         inputSchema: { client: z.string().describe('Client name or id'), days: z.number().int().min(7).max(1500).default(28) }, annotations: { readOnlyHint: true },
     }, safe(async ({ client, days }) => {
         const matches = d.rescueClients(client)
+        if(matches.length === 1) auditClient(matches[0].id)
         if (matches.length !== 1) return json(await rescuePrivacy({ message: 'Choose a client id.', candidates: matches }))
-        const x = clientExperience(matches[0].id, { days })
+        const x = clientExperience(matches[0].id, { days, window: requestedToolWindow() })
         const name = matches[0].name || matches[0].id
         const lines = [`${name}: ${x.verdict.toUpperCase()}. ${x.summary}`, `Usage: ${x.usage.text}`,
             ...x.findings.map((f) => `- ${f.severity === 'high' ? 'High' : 'Medium'}: ${f.text}${f.where.length ? ` Where: ${f.where.join(', ')}.` : ''}${f.replays[0] ? ` Watch: ${f.replays[0].url}` : ''}`),
@@ -113,8 +115,8 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         description: 'Where on screen clients struggle most, across all clients. From session replays: the buttons and fields where friction gathers (rage clicks, clicks that do nothing, error loops, heavy re-editing), by how many clients hit them. Use it for "what should we fix first".',
         inputSchema: { days: z.number().int().min(7).max(1500).default(28) }, annotations: { readOnlyHint: true },
     }, safe(async ({ days }) => {
-        const h = frictionHotspots({ days }), c = replayCoverage()
-        const window=windowFor(`last ${days} days`,28)
+        const h = frictionHotspots({ days, window: requestedToolWindow() }), c = replayCoverage()
+        const window=requestedToolWindow() ? {from:day(requestedToolWindow()!.from),to:day(new Date(+requestedToolWindow()!.to-1))} : windowFor(`last ${days} days`,28)
         return json({ window,recording_months:replayMonths(window.from,window.to),hotspots: h, replays_read: c.sessions, clients: c.clients, note: h.length ? 'Ranked by how many clients hit each place, then by how often.' : 'No friction found yet in the replays read so far.' })
     }))
     reg('client_story', {
@@ -122,6 +124,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         inputSchema: { client: z.string(), weeks: z.number().int().min(1).max(209).optional(), from:z.string().optional(), to:z.string().optional(), bucket:z.enum(['month','week']).optional(), anchor:z.string().optional() }, annotations: { readOnlyHint: true },
     }, safe(async ({ client, ...options }) => {
         const matches = d.rescueClients(client)
+        if(matches.length === 1) auditClient(matches[0].id)
         if (matches.length !== 1) return json(await rescuePrivacy({ message: 'Choose a client id.', candidates: matches }))
         return json(await rescuePrivacy({ ...await d.clientStory({ client: matches[0].id, ...options }), open: page() + '?' + new URLSearchParams({ view: 'story', client: matches[0].id }) }))
     }))
@@ -133,7 +136,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         description:'How did a departing or inactive client’s usage differ from clients that stayed? Compares monthly medians before dated outcomes or usage silence, without claiming causation.',
         inputSchema:{client:z.string().optional(),group:z.enum(['left_or_contracted','inactive']).optional(),from:z.string().optional(),to:z.string().optional(),months:z.number().int().min(1).max(48).optional(),followup_days:z.number().int().min(1).max(1500).optional(),silence_days:z.number().int().min(1).max(1500).optional()},annotations:{readOnlyHint:true},
     },safe(async input=>{
-        if(input.client) { const matches=d.rescueClients(input.client);if(matches.length!==1)return json(await rescuePrivacy({message:'Choose a client id.',candidates:matches}));input.client=matches[0].id }
+        if(input.client) { const matches=d.rescueClients(input.client);if(matches.length!==1)return json(await rescuePrivacy({message:'Choose a client id.',candidates:matches}));input.client=matches[0].id;auditClient(matches[0].id) }
         return json(await rescuePrivacy(d.compareClientPatterns(input)))
     }))
     reg('handover_pack', {
@@ -141,6 +144,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         inputSchema: { client: z.string() }, annotations: { readOnlyHint: true },
     }, safe(async ({ client }) => {
         const matches = d.rescueClients(client)
+        if(matches.length === 1) auditClient(matches[0].id)
         if (matches.length !== 1) return json(await rescuePrivacy({ message: 'Choose a client id.', candidates: matches }))
         return text(await d.handoverPack(matches[0].id, true))
     }))
@@ -151,6 +155,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         description: 'Ask an affected client a short in-app question by creating a targeted draft to review and launch on the Surveys page.', inputSchema: { client: z.string() },
     }, safe(async ({ client }) => {
         const matches = d.rescueClients(client)
+        if(matches.length === 1) auditClient(matches[0].id)
         if (matches.length !== 1) return json({ message: 'Choose a client id.', candidates: matches })
         return json(await d.draftRescueSurvey(matches[0].id, caller.email || caller.who, d))
     }))
@@ -168,12 +173,13 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
     }))
     reg('set_rescue_status', {
         description: 'Set the owner, status, note, due date or expected-decline snooze for a client in the rescue queue.',
-        inputSchema: { client: z.string(), owner: z.string().optional(), status: z.enum(RESCUE_STATUSES).optional(), note: z.string().max(500).optional(), due: z.string().optional(), snooze_until: z.string().optional(), when: filters.when, compared_with: filters.compared_with },
-    }, safe(async ({ client, when, compared_with, ...change }) => {
+        inputSchema: { client: z.string(), owner: z.string().optional(), status: z.enum(RESCUE_STATUSES).optional(), note: z.string().max(500).optional(), due: z.string().optional(), snooze_until: z.string().optional(), when: filters.when, compared_with: filters.compared_with, compare: filters.compare, compare_with: filters.compare_with },
+    }, safe(async ({ client, when, compared_with, compare, compare_with, ...change }) => {
         const matches = await d.rescueClients(client)
+        if(matches.length === 1) auditClient(matches[0].id)
         if (matches.length !== 1) return json({ message: 'Which client did you mean? Choose a client id.', candidates: matches })
         // The period being discussed, so a snooze keeps the score the person saw (as on the page).
-        const view = { ...(when ? { window: windowFor(when, 28) } : {}), ...(compared_with ? { baseline: windowFor(compared_with, 28) } : {}) }
+        const view = { compare,compare_with,...(when ? { window: windowFor(when, 28) } : {}), ...(compared_with ? { baseline: windowFor(compared_with, 28) } : {}) }
         return json(await d.setRescueAction(matches[0].id, Object.fromEntries(Object.entries(change).filter(([, v]) => v !== undefined)), caller.email || caller.who, view))
     }))
     reg('find_task', {
@@ -255,7 +261,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         const baseline = input.compared_with ? windowFor(input.compared_with, 28) : input.keep_dates_fixed ? previous(window) : undefined
         const params = {
             window: input.keep_dates_fixed ? window : { last_days: days(window) }, client: r.client, task: r.task,
-            ...(input.kind === 'task_map' ? { only_flagged: input.only_flagged, ...(baseline ? { baseline } : {}) } : {}),
+            ...(input.kind === 'task_map' ? { only_flagged: input.only_flagged, ...(input.compare ? {compare:input.compare} : {}), ...(input.compare_with ? {compare_with:input.compare_with} : {}), ...(baseline ? { baseline } : {}) } : {}),
         }
         let dashboard = await d.createDashboard(caller.email, { kind: input.kind, title: input.title, params, via: 'chat' })
         if (input.share_with) dashboard = await d.shareDashboard(dashboard.id, caller.email, caller.admin, input.share_with)

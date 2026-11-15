@@ -1,3 +1,4 @@
+import { publicToolError } from './publicerror.ts'
 // Routing text is pure; the HTTP adapter only handles authentication and transport.
 import { safetyWith, metadataSafetyWith, staffEmails } from '../core/aisafety.ts'
 import { identityTokens } from '../core/rescueprivacy.ts'
@@ -299,11 +300,11 @@ export function posthogExec(command: string, options: Pick<ProxyOptions, 'url' |
 async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
     let call: unknown = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'exec', arguments: { command } } }
     const refused = commandRefusal(call, options.name)
-    if (refused) return { isError: true, content: [{ type: 'text', text: refused.error.message }] }
+    if (refused) return publicToolError({ isError: true, content: [{ type: 'text', text: refused.error.message }] })
     if (anonFor('posthog')) {
         await refreshRoster()
         const a = anonRefusal(call, options.name)
-        if (a.refusal) return a.refusal.result
+        if (a.refusal) return publicToolError(a.refusal.result)
         call = a.value
     }
     const controller = new AbortController()

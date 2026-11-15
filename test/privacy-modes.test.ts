@@ -59,6 +59,12 @@ test('all modes render MCP JSON and errors through the actual tool boundary', as
             A.setAnonymise({mode})
             for(const name of ['mode_output','mode_error']) {
                 const result=await client.callTool({name,arguments:{}}),text=JSON.stringify(result)
+                if(name === 'mode_error') {
+                    assert.equal(result.isError,true)
+                    assert.match(text,/Correlation id/)
+                    assert.doesNotMatch(text,/123456789|person@example.com|250000|opaque-person|ACME0|Zorblax/)
+                    continue
+                }
                 assert.match(text,/123456789/)
                 if(mode==='open') { assert.match(text,/person@example.com/);assert.match(text,/250000/);assert.match(text,/Zorblax Treasury 0/) }
                 else { assert.doesNotMatch(text,/person@example.com|250000|opaque-person/);assert.match(text,/<amount>/) }

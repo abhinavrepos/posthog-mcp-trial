@@ -1,3 +1,4 @@
+import { requestedToolWindow } from './toolcontext.ts'
 import { analyticalWindow } from './timewindow.ts'
 // "Is it just them?" Blast radius of one error: who else hit it, since when, and on which release.
 import { hogql, issueUrl } from './posthog.ts'
@@ -36,7 +37,7 @@ export async function errorImpact(
     opts: { days?: number; pathname?: string } = {}
 ): Promise<ErrorImpact> {
     const days = opts.days ?? 30
-    const window=analyticalWindow(`last ${days} days`)!
+    const window=requestedToolWindow() || analyticalWindow(`last ${days} days`)!
     const f = errorFilter(e)
     const values = { ...f.values, days, from:window.from.toISOString(),to:window.to.toISOString() }
     const base = `event = '$exception' AND timestamp >= {from} AND timestamp < {to} AND ${f.where}`
@@ -125,7 +126,7 @@ export async function errorImpact(
 
 /** The most frequent errors on a screen, for risk reviews that name a screen but not an error. */
 export async function topErrorsOnScreen(pathname: string, days = 14, limit = 3): Promise<{ issue_id: string; error_type: string; error_message: string; occurrences: number; clients: number }[]> {
-    const window=analyticalWindow(`last ${days} days`)!
+    const window=requestedToolWindow() || analyticalWindow(`last ${days} days`)!
     const rows = await hogql(
         `SELECT toString(properties.$exception_issue_id) AS issue, any(toString(properties.$exception_types[1])) AS etype,
                 any(toString(properties.$exception_values[1])) AS evalue, count() AS n, count(DISTINCT toString(${P.client})) AS clients

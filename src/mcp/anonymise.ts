@@ -127,7 +127,7 @@ function withoutMedia(v: unknown): unknown {
 }
 
 /** Wraps a connected transport (HTTP or stdio): both directions go through the guard. */
-export function guardTransport(t: Transport, registry?: Registry): void {
+export function guardTransport(t: Transport, registry?: Registry, onToolRefusal?: (tool:string,argumentKeys:string[],result:unknown)=>unknown): void {
     const send = t.send.bind(t)
     t.send = async (message, options) => {
         const safe = { ...message } as Rpc
@@ -141,7 +141,15 @@ export function guardTransport(t: Transport, registry?: Registry): void {
     if (!onmessage) throw new Error('guardTransport: connect the server first')
     t.onmessage = (message, extra) => withPrivacy(() => {
         const g = guardRequest(message, 'lens_refused', registry)
-        if (g.answer) { void send(g.answer as JSONRPCMessage); return }
+        if (g.answer) {
+            if((message as Rpc).method==='tools/call' && onToolRefusal) {
+                const params=(message as Rpc).params || {},known=registry?.tools().get(String(params.name))
+                const name=known ? String(params.name) : 'unknown'
+                const keys=isObj(params.arguments) ? Object.keys(params.arguments).filter(k=>known?.includes(k)).sort() : []
+                g.answer.result=onToolRefusal(name,keys,g.answer.result)
+            }
+            void send(g.answer as JSONRPCMessage); return
+        }
         onmessage(g.msg as JSONRPCMessage, extra)
     })
 }

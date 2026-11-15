@@ -1,3 +1,4 @@
+export const PERIODS = ['today','yesterday','last_7_days','last_14_days','last_28_days','last_30_days','last_90_days','last_6_months','last_12_months','last_2_years','last_3_years','last_4_years','this_week','this_month','this_quarter','this_year','last_week','last_month','last_quarter','last_year','all_time'] as const
 // Turns "this afternoon", "yesterday around 3pm" or "30 Oct at 09:30" into a UTC window.
 // Times are read in the reporter's timezone (Jira gives it on the reporter), falling back to UTC.
 
@@ -84,7 +85,7 @@ export function setWindowDataThrough(read: () => string | null | undefined): voi
 
 /** Validated UTC analytical windows. `through` is an inclusive completed day. */
 export function analyticalWindow(text: string, now = new Date(), through: string | null | undefined = completedThrough()): TimeWindow | undefined {
-    const value = text.trim().toLowerCase()
+    const value = text.trim().toLowerCase().replaceAll('_', ' ')
     const make = (from: Date, to: Date): TimeWindow => {
         const days = (+to - +from) / DAY
         if (!Number.isFinite(days) || days <= 0 || days > 1500) throw new Error('Choose an ordered window of at most 1500 days.')
@@ -94,6 +95,22 @@ export function analyticalWindow(text: string, now = new Date(), through: string
         const d = new Date(s)
         if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || !Number.isFinite(+d) || d.toISOString().slice(0,10) !== s) throw new Error('Dates must be valid YYYY-MM-DD UTC dates')
         return d
+    }
+    const today = new Date(Math.floor(+now / DAY) * DAY)
+    if (value === 'today' || value === 'yesterday') {
+        const from = new Date(+today - (value === 'yesterday' ? DAY : 0))
+        return make(from, new Date(+from + DAY))
+    }
+    // Singular last units mean the previous full calendar unit, anchored to the literal UTC date.
+    const calendar = /^last (week|month|quarter|year)$/.exec(value)
+    if (calendar) {
+        const unit = calendar[1], y = today.getUTCFullYear(), m = today.getUTCMonth()
+        const to = unit === 'week' ? new Date(+today - ((today.getUTCDay()+6)%7)*DAY)
+            : new Date(Date.UTC(y, unit === 'year' ? 0 : unit === 'quarter' ? Math.floor(m/3)*3 : m, 1))
+        const from = new Date(to)
+        if(unit === 'week') from.setUTCDate(from.getUTCDate()-7)
+        else from.setUTCMonth(from.getUTCMonth() - (unit === 'year' ? 12 : unit === 'quarter' ? 3 : 1))
+        return make(from,to)
     }
     let m = /^(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})$/.exec(value)
     if (m) return make(date(m[1]), new Date(+date(m[2]) + DAY))
@@ -125,17 +142,17 @@ export function analyticalWindow(text: string, now = new Date(), through: string
     // "all time"). They end at the last fully processed day, like the relative windows above.
     const end = new Date(Math.min(Math.floor(+now / DAY)*DAY, through ? +date(through)+DAY : Infinity))
     const startOf = (unit: 'week'|'month'|'quarter'|'year') => {
-        const d = new Date(+end - DAY)
+        const d = today
         if (unit === 'week') return new Date(+d - ((d.getUTCDay() + 6) % 7) * DAY)
         if (unit === 'month') return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1))
         if (unit === 'quarter') return new Date(Date.UTC(d.getUTCFullYear(), Math.floor(d.getUTCMonth()/3)*3, 1))
         return new Date(Date.UTC(d.getUTCFullYear(), 0, 1))
     }
     m = /^(?:this|current)\s+(week|month|quarter|year)$/.exec(value) || /^(week|month|quarter|year)\s+to\s+date$/.exec(value)
-    if (m) return make(startOf(m[1] as 'week'), end)
-    if (value === 'ytd') return make(startOf('year'), end)
-    if (value === 'mtd') return make(startOf('month'), end)
-    if (value === 'qtd') return make(startOf('quarter'), end)
+    if (m) return make(startOf(m[1] as 'week'), new Date(Math.max(+startOf(m[1] as 'week') + DAY, +end)))
+    if (value === 'ytd') return make(startOf('year'), new Date(Math.max(+startOf('year')+DAY,+end)))
+    if (value === 'mtd') return make(startOf('month'), new Date(Math.max(+startOf('month')+DAY,+end)))
+    if (value === 'qtd') return make(startOf('quarter'), new Date(Math.max(+startOf('quarter')+DAY,+end)))
     if (/^(?:all(?:\s+(?:time|data|history))?|ever|since\s+(?:the\s+)?(?:beginning|start)(?:\s+of\s+(?:our\s+|the\s+)?data)?|everything)$/.test(value)) return make(new Date(+end - 1500 * DAY), end)
     m = /^since\s+(.+)$/.exec(value)
     if (m) {
@@ -146,7 +163,7 @@ export function analyticalWindow(text: string, now = new Date(), through: string
 }
 
 export function parseTimeWindow(text: string, now: Date = new Date(), tzIn?: string): TimeWindow {
-    const analytical = analyticalWindow(text, now)
+    const analytical = tzIn && /^(today|yesterday)$/i.test(text.trim()) ? undefined : analyticalWindow(text, now)
     if (analytical) return analytical
     const tz = validTz(tzIn)
     const t = ` ${text.toLowerCase()} `
@@ -238,7 +255,7 @@ export function parseTimeWindow(text: string, now: Date = new Date(), tzIn?: str
         return window(from, new Date(from.getTime() + DAY), `${dayLabel} (${tzLabel})`, 'day')
     }
 
-    if (text.trim()) throw new Error(`Unrecognised time window: ${text}`)
+    if (text.trim()) throw new Error(`Invalid time window. Use period: ${PERIODS.join(', ')}; or from/to YYYY-MM-DD, e.g. 2024-11-01 to 2025-11-30.`)
     return window(new Date(now.getTime() - 7 * DAY), now, 'no time given; using the last 7 days', 'none')
 }
 
