@@ -18,6 +18,7 @@ import { all } from '../core/db.ts'
 import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSurveyRole, resetSurveyRole, setSurveySettings, chatPolicy, setChatPolicy, SURVEY_ROLES, SURVEY_ROLE_TEXT, defaultSurveyRole, sharedTokenSurveyRole, surveyRoleOf, listMcpTokens, revokeMcpToken, chatUrl, setChatUrl, type SurveyRole, setSystemAccess, setInsightAccess, insightPeople, surveyPeople, systemViewers, type Role, type Viewer } from './access.ts'
 import { dashboardPeople, dashboardRoleOf, setDashboardRole, resetDashboardRole, setDashboardSettings, defaultDashboardRole, sharedTokenDashboardRole, DASHBOARD_ROLES, DASHBOARD_ROLE_TEXT, type DashboardRole } from './access.ts'
 import { adminTabs } from './privacy.ts'
+import { MAX_DAYS, MIN_DAYS, parseRetentionDays, previewRetention, retentionDays, retentionStatus, setRetentionDays } from './replayretention.ts'
 import { APP_NAME, deleteClip, headerHtml, PAGER_JS, listClips, PAGE_CSS, setSaved, storage } from './replays.ts'
 
 interface Member {
@@ -286,6 +287,28 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         return (json(res, ok ? 200 : 404, ok ? { ok: true } : { error: 'No such clip.' }), true)
     }
 
+    // Session replay retention (replayretention.ts): the setting, a preview that never deletes, and saving
+    // it, which needs confirm: true whenever the new value would delete anything (or the count is unknown).
+    if (p === '/replays/admin/api/replay-retention' && req.method === 'GET') return (json(res, 200, retentionStatus()), true)
+    if (p === '/replays/admin/api/replay-retention/preview' && req.method === 'GET') {
+        let days: number | null
+        try { days = parseRetentionDays(url.searchParams.get('days')) } catch (e) { return (json(res, 400, { error: (e as Error).message }), true) }
+        if (days === null) return (json(res, 200, { days: null, count: 0, oldest: null, cutoff: null, clips: { delete: 0, kept_saved: 0 } }), true)
+        return (json(res, 200, await previewRetention(days)), true)
+    }
+    if (p === '/replays/admin/api/replay-retention' && req.method === 'POST') {
+        if (req.headers['x-clip-page'] !== '1') return (json(res, 403, { error: 'A page request header is required.' }), true)
+        const body = await readJson(req)
+        let days: number | null
+        try { days = parseRetentionDays(body.days) } catch (e) { return (json(res, 400, { error: (e as Error).message }), true) }
+        if (days === retentionDays()) return (json(res, 200, { ok: true, unchanged: true, ...retentionStatus() }), true)
+        const preview = days === null ? undefined : await previewRetention(days)
+        const destructive = !!preview && (preview.count === null || preview.count > 0 || preview.clips.delete > 0)
+        if (destructive && body.confirm !== true) return (json(res, 409, { error: 'This would delete recordings. Look at the preview and confirm.', needs_confirm: true, preview }), true)
+        setRetentionDays(days, v.email, preview)
+        return (json(res, 200, { ok: true, preview, ...retentionStatus() }), true)
+    }
+
     json(res, 404, { error: 'Not found.' })
     return true
 }
@@ -465,6 +488,16 @@ ${adminTabs()}
 
 </div>
 <div class="tabpanel" role="tabpanel" id="tab-clips" data-panel="clips">
+<div class="card" id="retention-card"><h2>Session replay retention</h2>
+<p class="small muted">How many days of session replays PostHog keeps. Every day, recordings that started before midnight UTC that many days ago are deleted in PostHog, with Lens clips made from them. Saved clips stay until someone unsaves them. Event data is not affected.</p>
+<p class="small"><b>Deleting cannot be undone.</b> Lowering the number deletes more recordings. Raising it later, or turning it off, does not bring deleted recordings back.</p>
+<div class="toolbar"><div><label for="ret-mode">Keep session replays</label><select id="ret-mode"><option value="off">Forever (off, nothing is deleted)</option><option value="days">For a number of days</option></select></div>
+<div><label for="ret-days">Days (${MIN_DAYS} to ${MAX_DAYS})</label><input id="ret-days" type="number" min="${MIN_DAYS}" max="${MAX_DAYS}" step="1" value="14"></div>
+<div style="flex:0"><button type="button" id="ret-preview-btn" class="ghost">Preview</button></div></div>
+<p id="ret-preview" class="small" aria-live="polite"></p>
+<p id="ret-confirm-wrap" hidden><label class="check" for="ret-confirm"><input id="ret-confirm" type="checkbox"> <span id="ret-confirm-text">I understand these recordings will be permanently deleted.</span></label></p>
+<div><button type="button" id="ret-save">Save retention</button></div>
+<p id="ret-status" class="small muted"></p><p id="ret-msg" class="small" aria-live="polite"></p></div>
 <div class="card"><h2>Clips</h2><p class="small muted" id="space"></p>
 <div class="toolbar"><div><label for="clip-filter">Show</label><select id="clip-filter"><option value="">All clips</option><option value="saved">Saved only</option><option value="expiring">Deleted within 3 days</option></select></div></div>
 <div class="table-wrap"><table><thead><tr><th scope="col">Clip</th><th scope="col">Who has it</th><th scope="col">Size</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="clips"><tr><td colspan="5">Loading clips…</td></tr></tbody></table></div><div id="clips-pager"></div></div>
@@ -591,5 +624,37 @@ $('outcome-client').oninput=()=>{const field=$('outcome-client'),option=[...$('o
 $('outcome-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;try{await api('/replays/admin/api/outcomes',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(form)))});$('outcome-msg').textContent='Outcome saved.';form.reset();await loadOutcomes()}catch(err){$('outcome-msg').textContent=err.message}}
 loadOutcomes().catch(e=>{$('outcome-msg').textContent=e.message})
 load().catch(e=>{msg('people-msg',e.message+' Reload the page to try again.');$('people').innerHTML='<tr><td colspan="7" class="err"></td></tr>';$('people').querySelector('td').textContent=e.message});
+(()=>{let shown=null,current=null
+const chosen=()=>$('ret-mode').value==='off'?'off':String($('ret-days').value).trim()
+const utcDay=t=>new Date(t).toLocaleDateString([], {dateStyle:'medium',timeZone:'UTC'})
+const describe=p=>{if(!p||p.days===null)return 'Off: nothing is deleted.'
+const head=p.count===null?'PostHog could not count the recordings right now, so this may delete recordings recorded before '+utcDay(p.cutoff)+' (UTC).':p.count===0?'With '+p.days+' days, no recordings would be deleted (cutoff '+utcDay(p.cutoff)+' UTC).':'With '+p.days+' days, '+Number(p.count).toLocaleString()+' recording'+(p.count===1?'':'s')+' recorded before '+utcDay(p.cutoff)+' (UTC) would be deleted'+(p.oldest?', the oldest from '+utcDay(p.oldest):'')+'.'
+const clips=(p.clips.delete?' '+n(p.clips.delete,'unsaved Lens clip')+' of older recordings would be deleted too.':'')+(p.clips.kept_saved?' '+n(p.clips.kept_saved,'saved clip')+' of older recordings stay until unsaved.':'')
+return head+clips}
+const risky=p=>!!p&&p.days!==null&&(p.count===null||p.count>0||p.clips.delete>0)
+const status=s=>{current=s.days;$('ret-mode').value=s.days===null?'off':'days';if(s.days!==null)$('ret-days').value=s.days;$('ret-days').disabled=s.days===null
+const parts=[s.days===null?'Now: off.':'Now: '+s.days+' days.']
+if(!s.configured)parts.push('LENS_REPLAY_RETENTION_API_KEY is not set, so nothing is deleted yet.')
+if(s.dry_run)parts.push('Dry run (LENS_REPLAY_RETENTION_DRY_RUN): the daily job only logs what it would delete.')
+parts.push('At most '+Number(s.max_per_run).toLocaleString()+' recordings a day.')
+if(s.last_run)parts.push('Last run '+when(s.last_run.at)+': '+(s.last_run.dry_run?(s.last_run.would_delete||0)+' would be deleted':(s.last_run.deleted||0)+' deleted')+(s.last_run.error?', stopped: '+s.last_run.error:'')+'.')
+if(s.retry_at)parts.push('Next try after '+when(s.retry_at)+'.')
+$('ret-status').textContent=parts.join(' ')}
+const reset=()=>{shown=null;$('ret-preview').textContent='';$('ret-confirm-wrap').hidden=true;$('ret-confirm').checked=false}
+const preview=async()=>{reset();const v=chosen();if(v==='off'){$('ret-preview').textContent=describe(null);return null}
+try{const p=await api('/replays/admin/api/replay-retention/preview?days='+encodeURIComponent(v));shown=p;$('ret-preview').textContent=describe(p);$('ret-preview').className='small '+(risky(p)?'err':'ok');if(risky(p)){$('ret-confirm-wrap').hidden=false;$('ret-confirm-text').textContent=p.count===null?'I understand recordings may be permanently deleted.':'I understand '+n(p.count,'recording')+' will be permanently deleted. Raising the number later will not bring them back.'}return p}catch(e){msg('ret-msg',e.message);return null}}
+$('ret-mode').onchange=()=>{$('ret-days').disabled=$('ret-mode').value==='off';void preview()}
+$('ret-days').onchange=()=>void preview()
+$('ret-preview-btn').onclick=()=>void preview()
+$('ret-save').onclick=async()=>{const v=chosen();let p=shown
+if(v!=='off'&&(!p||String(p.days)!==v))p=await preview()
+if(v!=='off'&&!p)return
+if(risky(p)&&!$('ret-confirm').checked){msg('ret-msg','Read the preview and tick the box to confirm the deletion.');return}
+try{const r=await fetch('/replays/admin/api/replay-retention',{method:'POST',headers:{'content-type':'application/json','x-clip-page':'1'},body:JSON.stringify({days:v,confirm:risky(p)&&$('ret-confirm').checked})})
+const b=await r.json().catch(()=>({}))
+if(r.status===409&&b.preview){shown=b.preview;$('ret-preview').textContent=describe(b.preview);$('ret-confirm-wrap').hidden=false;$('ret-confirm').checked=false;msg('ret-msg','The numbers changed. Read the preview again and confirm.');return}
+if(!r.ok)throw new Error(b.error||('Error '+r.status))
+status(b);reset();msg('ret-msg',b.unchanged?'Nothing changed.':'Saved.',true)}catch(e){msg('ret-msg',e.message)}}
+api('/replays/admin/api/replay-retention').then(status).catch(e=>msg('ret-msg',e.message))})();
 </script></body></html>`
 }

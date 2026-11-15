@@ -36,6 +36,7 @@ import { audit, chatCaller, loadAccess } from './access.ts'
 import { keptReleases, syncReleases, syncStatus } from '../core/releases.ts'
 import { captionedFile } from '../core/comments.ts'
 import { getClip, handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
+import { startReplayRetention } from './replayretention.ts'
 
 const ai = makeAi()
 
@@ -309,6 +310,8 @@ if (config.features.lensMcp) {
     setInterval(() => void refreshRoster(5 * 60_000).catch(() => {}), 5 * 60_000).unref()
 }
 setInterval(() => pruneOldClips(), 6 * 3_600_000).unref()
+// Session replay retention set on the admin page (off by default): once a UTC day, see replayretention.ts.
+startReplayRetention()
 
 // The release dashboard reads Jira and PostHog at start (when its data is older than an hour)
 // and every 6 hours. Numbers for the latest release keep moving while it is new.

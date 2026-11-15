@@ -21,6 +21,8 @@
 //   a clip nobody saved, CLIP_RETENTION_DAYS (14) after it was last asked for;
 //   activity older than AUDIT_RETENTION_DAYS (365).
 // A saved clip stays until everyone who saved it unsaves it, or an admin deletes it.
+// With session replay retention on (settings.replay_retention_days, service/replayretention.ts), unsaved
+// clips of recordings older than its cutoff go too; saved ones still stay until unsaved.
 //
 // SQLite is built into Node, so there is no database server to run.
 import { chownSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
