@@ -38,6 +38,14 @@ async function connect(server: McpServer) {
     return { client, tools, close: async () => { await client.close(); await server.close() } }
 }
 const fenced = (r: Result) => { const t = r.content[0].text, m = /```json\n([\s\S]*)\n```$/.exec(t); return JSON.parse(m ? m[1] : t) }
+/** structuredContent minus the `overview` (the label above the fenced JSON), which must equal that label exactly. */
+const bare = (r: Result) => {
+    const { overview, ...rest } = (r.structuredContent || {}) as Record<string, unknown>
+    const t = r.content[0].text, i = t.indexOf('\n\n```json\n')
+    if (overview !== undefined) assert.equal(overview, t.slice(0, i), 'overview equals the label above the JSON')
+    else assert.ok(i < 0 || t.slice(0, i) === '', 'a label above the JSON must also be in structuredContent.overview')
+    return rest
+}
 const ajv = new AjvJsonSchemaValidator()
 const conforms = (schema: unknown, value: unknown) => { const v = ajv.getValidator(schema as never)(value); assert.ok(v.valid, `${v.errorMessage} ${JSON.stringify(value).slice(0, 300)}`) }
 
@@ -82,7 +90,7 @@ test('analysis tools advertise outputSchema exactly where every answer path conf
         // A real normal answer: aggregate_events from the stored rollup, run in a real analysis worker.
         const r = await c.client.callTool({ name: 'aggregate_events', arguments: { from: '2026-01-01', to: '2026-01-01' } }) as Result
         assert.ok(!r.isError, JSON.stringify(r)); conforms(c.tools.find(t => t.name === 'aggregate_events')!.outputSchema, r.structuredContent)
-        assert.deepEqual(r.structuredContent, fenced(r))
+        assert.deepEqual(bare(r), fenced(r))
     } finally { await c.close() }
 })
 
@@ -103,11 +111,11 @@ test('structuredContent of every tool with an outputSchema validates for a norma
         for (const [name, t] of schemas) {
             const r = await normal.client.callTool({ name, arguments: {} }) as Result
             assert.ok(!r.isError, `${name}: ${JSON.stringify(r).slice(0, 400)}`)
-            conforms(t.outputSchema, r.structuredContent); assert.deepEqual(r.structuredContent, fenced(r), name)
+            conforms(t.outputSchema, r.structuredContent); assert.deepEqual(bare(r), fenced(r), name)
             if (ANALYSIS_SCHEMA_TOOLS.has(name)) { assert.ok(r.structuredContent!.window && r.structuredContent!.coverage, name) }
             if (DETAIL_TOOLS.has(name)) {
                 const concise = await normal.client.callTool({ name, arguments: { detail: 'concise' } }) as Result
-                conforms(t.outputSchema, concise.structuredContent); assert.deepEqual(concise.structuredContent, fenced(concise), name)
+                conforms(t.outputSchema, concise.structuredContent); assert.deepEqual(bare(concise), fenced(concise), name)
             }
         }
     } finally { await normal.close() }
@@ -151,10 +159,10 @@ test('a masked email, amount and client codename are masked identically in text 
                 for (const leak of [/QZX901/i, /Zorblax/i, /ben\.okafor/, /brightwater/, /250000/]) { assert.doesNotMatch(text, leak); assert.doesNotMatch(structured, leak) }
                 assert.ok(text.includes(codename) && structured.includes(codename), `${name}: codename in both`)
                 if (name === 'top_pains') { assert.match(text, /<amount>/); assert.match(structured, /<amount>/); assert.match(text, /\[person\]/); assert.match(structured, /\[person\]/) }
-                assert.deepEqual(r.structuredContent, name === 'resolve_client' ? { rows: fenced(r) } : fenced(r))
+                assert.deepEqual(bare(r), name === 'resolve_client' ? { rows: fenced(r) } : fenced(r))
                 // The HTTP/stdio transport guard walks the whole message, structuredContent included.
                 const guarded = guardResponse(r)
-                assert.deepEqual(guarded.structuredContent, name === 'resolve_client' ? { rows: fenced(guarded) } : fenced(guarded))
+                assert.deepEqual(bare(guarded), name === 'resolve_client' ? { rows: fenced(guarded) } : fenced(guarded))
             }
         } finally { await c.close() }
     } finally { A.setAnonymise({ mode: 'standard' }) }

@@ -21,7 +21,11 @@ export async function safeResult(result: unknown): Promise<unknown> {
         const { label, value } = await aiSafety(_lensJson)
         const body = JSON.stringify(value, roundNumbers, value && typeof value==='object' && 'coverage' in value ? undefined : 2)
         // structuredContent is parsed back from the very text the client sees: same masking, same rounding.
-        const structuredContent = body === undefined ? undefined : structuredOf(JSON.parse(body))
+        // VS Code Copilot sends ONLY structuredContent to the model when it is present (microsoft/vscode#290063),
+        // so the label above the JSON (verdicts, next steps, "Nothing was saved" notices) travels inside it as
+        // `overview`, already masked by the same aiSafety pass.
+        const parsed = body === undefined ? undefined : structuredOf(JSON.parse(body))
+        const structuredContent = parsed && label && !('overview' in parsed) ? { overview: label, ...parsed } : parsed
         return { ...rest, content: [{ type: 'text', text: label ? `${label}\n\n\`\`\`json\n${body}\n\`\`\`` : body }], ...(structuredContent ? { structuredContent } : {}) }
     }
     return aiSafety(result)
