@@ -95,7 +95,7 @@ Retain all seven defaults. This run measures a closed-loop PM workload with one 
 
 | Setting | Recommendation | Evidence and limits |
 |---|---:|---|
-| LENS_MCP_CALLS_PER_MINUTE | Keep 60 weighted credits (later raised to 120, see below) | No throttles in the measured mix; the three scenarios peaked at 28, 16 and 13 successful weighted credits per user in a rolling minute. Light-intent top_pains, dialog_friction and rescue_queue cost five credits too. There is no measured need to raise this budget. |
+| LENS_MCP_CALLS_PER_MINUTE | Keep 60 weighted credits | No throttles in the measured mix; the three scenarios peaked at 28, 16 and 13 successful weighted credits per user in a rolling minute. Light-intent top_pains, dialog_friction and rescue_queue cost five credits too. There is no measured need to raise this budget. |
 | LENS_MCP_CALLS_PER_HOUR | Keep 600 weighted credits | No hourly throttles occurred. Eight-minute scenarios and partially depleted buckets are insufficient to validate an hour of sustained traffic; retain this longer-term protection rather than extrapolating a new default from short runs. |
 | LENS_MCP_CONCURRENT_CALLS | Keep 4 | Users serialized business operations and polls; this experiment does not stress four concurrent calls from one user. Global PM concurrency is not the same limit. |
 | LENS_JOBS_PER_USER | Keep 4 | Users normally had one detached analysis at a time. No per-user busy refusals occurred; this does not prove that allowing more detached analyses per person is safe. |
@@ -137,6 +137,8 @@ Business operations completed in eight minutes rose from 85 to 110 (+29%), with 
 
 Conclusion: doubling workers helps modestly but light, rollup-backed tools (0.3–8 s alone) still wait 25–40 s because the pool is a single FIFO and they queue behind 50–150 s heavy jobs. More workers also cost memory roughly linearly. The fix is scheduling, not raw parallelism: a dedicated light lane so light tools never queue behind heavy analyses. `LENS_JOB_WORKERS` stays at 2 pending that change.
 
-## Follow-up: per-minute budget raised to 120 (agent regression v5)
+## Follow-up: concurrent calls per person raised to 8 (agent regression v5)
 
-The 30-question Sonnet agent regression (one PM, latest code) hit `rate_limit` six times. Each time the agent fanned out roughly a dozen heavy analyses in parallel; at five credits each that exhausts a 60-credit minute. That burst pattern is normal agent behaviour, and the closed-loop multi-user test above never exercised it. Load on the server is already bounded independently of this budget: 4 concurrent calls per person, 4 detached jobs per person, a 64-job queue, 2 workers. With at most five people, `LENS_MCP_CALLS_PER_MINUTE` defaults to 120. `LENS_MCP_CALLS_PER_HOUR` stays 600, so sustained use is capped exactly as before.
+The 30-question Sonnet agent regression (one PM, latest code) was refused with `rate_limit` six times. Every refusal said "try again in 1 seconds", which only the concurrency check produces: the agent had more than four Lens calls in flight at once while fanning out analyses in parallel. The per-minute and hourly budgets were never exhausted. The old message ("N calls in the last minute") named the wrong limit for all three cases; refusals now say which limit applied (calls at once, per-minute budget, or hourly budget).
+
+`LENS_MCP_CONCURRENT_CALLS` defaults to 8. With at most five people that is at most 40 calls in flight, and heavy work stays bounded by 4 detached jobs per person, the 64-job queue and 2 workers. `LENS_MCP_CALLS_PER_MINUTE` stays 60 and `LENS_MCP_CALLS_PER_HOUR` stays 600: no evidence called for changing them.

@@ -46,7 +46,7 @@ test('deprecated when still parses times; failures enumerate typed alternatives'
 test('token bucket burst, refill, heavy cost and hour budget',()=>{
     let now=0;const limiter=new ToolLimiter(60,600,4,()=>now)
     for(let i=0;i<12;i++)limiter.acquire('u','t','top_pains')()
-    assert.throws(()=>limiter.acquire('u','t','light'),/Rate limit: 60 calls.*1 seconds/)
+    assert.throws(()=>limiter.acquire('u','t','light'),/per-minute budget \(60 units.*1 seconds/)
     now=1000;limiter.acquire('u','t','light')()
     now=61000;for(let i=0;i<60;i++)limiter.acquire('u','t','light')()
     const hourly=new ToolLimiter(1000,5,4,()=>now)
@@ -57,7 +57,7 @@ test('token bucket burst, refill, heavy cost and hour budget',()=>{
 test('concurrency is per user across tokens; release is idempotent; token budget spans users',()=>{
     const limiter=new ToolLimiter(60,600,4)
     const release=Array.from({length:4},(_,i)=>limiter.acquire('U@X.COM',`t${i}`,'light'))
-    assert.throws(()=>limiter.acquire('u@x.com','new','light'),/Rate limit/)
+    assert.throws(()=>limiter.acquire('u@x.com','new','light'),/Too many calls at once/)
     release[0]();release[0]();limiter.acquire('u@x.com','new','light')()
     release.slice(1).forEach(r=>r())
     const token=new ToolLimiter(1,600,4)
@@ -284,10 +284,18 @@ test('core input checks use safe typed validation messages with contract help', 
  assert.equal(toolError(new Error('Give issue_id, or error_type and error_message.'),'example','cid').kind,'internal')
 })
 
-test('per-minute budget defaults to 120 weighted credits; the hour budget stays 600', async () => {
+test('defaults: 60 units a minute, 600 an hour, 8 calls at once; refusals name the limit', async () => {
   const {ToolLimiter}=await import('../src/mcp/ratelimit.ts')
   const saved=process.env.LENS_MCP_CALLS_PER_MINUTE
   delete process.env.LENS_MCP_CALLS_PER_MINUTE
-  try { const l=new ToolLimiter(); assert.equal(l.minute,120); assert.equal(l.hour,600) }
+  try {
+    const l=new ToolLimiter(); assert.equal(l.minute,60); assert.equal(l.hour,600); assert.equal(l.concurrent,8)
+    const running=Array.from({length:8},()=>l.acquire('a@example.invalid','t1','resolve_client'))
+    assert.throws(()=>l.acquire('a@example.invalid','t1','resolve_client'),/Too many calls at once: 8 .*limit 8/)
+    running.forEach(r=>r())
+    const m=new ToolLimiter(10,600,8)
+    m.acquire('b@example.invalid','t2','aggregate_events')(); m.acquire('b@example.invalid','t2','aggregate_events')()
+    assert.throws(()=>m.acquire('b@example.invalid','t2','aggregate_events'),/per-minute budget \(10 units/)
+  }
   finally { process.env.LENS_MCP_CALLS_PER_MINUTE=saved }
 })

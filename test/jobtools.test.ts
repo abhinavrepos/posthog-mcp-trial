@@ -65,7 +65,7 @@ test('all job tools cost five; polling costs one and every refused call is audit
     try {
         for (let i = 0; i < 12; i++) assert.ok(!(await call(c.client)).isError)
         const refused = await call(c.client)
-        assert.equal(refused.isError, true); assert.match(text(refused), /Rate limit.*60 calls/); assert.equal(executions, 12)
+        assert.equal(refused.isError, true); assert.match(text(refused), /Rate limit: the per-minute budget \(60 units/); assert.equal(executions, 12)
         const refusedPoll = await poll(c.client, 'a'.repeat(32))
         assert.match(text(refusedPoll), /Rate limit/)
         const audit = rows('limited'); assert.equal(audit.length, 14)
