@@ -121,6 +121,27 @@ export function analyticalWindow(text: string, now = new Date(), through: string
         return make(start,end)
     }
     if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return make(date(value),new Date(+date(value)+DAY))
+    // Calendar-to-date and open-ended phrases PMs use ("this month", "year to date", "since March 2024",
+    // "all time"). They end at the last fully processed day, like the relative windows above.
+    const end = new Date(Math.min(Math.floor(+now / DAY)*DAY, through ? +date(through)+DAY : Infinity))
+    const startOf = (unit: 'week'|'month'|'quarter'|'year') => {
+        const d = new Date(+end - DAY)
+        if (unit === 'week') return new Date(+d - ((d.getUTCDay() + 6) % 7) * DAY)
+        if (unit === 'month') return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1))
+        if (unit === 'quarter') return new Date(Date.UTC(d.getUTCFullYear(), Math.floor(d.getUTCMonth()/3)*3, 1))
+        return new Date(Date.UTC(d.getUTCFullYear(), 0, 1))
+    }
+    m = /^(?:this|current)\s+(week|month|quarter|year)$/.exec(value) || /^(week|month|quarter|year)\s+to\s+date$/.exec(value)
+    if (m) return make(startOf(m[1] as 'week'), end)
+    if (value === 'ytd') return make(startOf('year'), end)
+    if (value === 'mtd') return make(startOf('month'), end)
+    if (value === 'qtd') return make(startOf('quarter'), end)
+    if (/^(?:all(?:\s+(?:time|data|history))?|ever|since\s+(?:the\s+)?(?:beginning|start)(?:\s+of\s+(?:our\s+|the\s+)?data)?|everything)$/.test(value)) return make(new Date(+end - 1500 * DAY), end)
+    m = /^since\s+(.+)$/.exec(value)
+    if (m) {
+        const from = analyticalWindow(m[1], now, through)?.from
+        if (from) return make(from, end)
+    }
     return undefined
 }
 

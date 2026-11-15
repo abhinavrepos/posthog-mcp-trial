@@ -49,6 +49,16 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
             const parsed = JSON.parse(s)
             if (parsed && typeof parsed === 'object') return JSON.stringify(walk(parsed))
         } catch { /* ordinary text */ }
+        // A tool answer as sent: a heading, then a fenced JSON block. Walk the JSON by key (only money fields are
+        // amounts) instead of masking it as prose, where every long number looks like cash: counts such as
+        // "events": 10941928 were coming out as <amount> on this second, transport-level pass.
+        const fenced = /^([\s\S]*?)```json\n([\s\S]*)\n```\s*$/.exec(s)
+        if (fenced) {
+            try {
+                const parsed = JSON.parse(fenced[2])
+                if (parsed && typeof parsed === 'object') return `${fenced[1] ? text(fenced[1]) : ''}\`\`\`json\n${JSON.stringify(walk(parsed), null, /\n {2}"/.test(fenced[2]) ? 2 : undefined)}\n\`\`\``
+            } catch { /* not JSON after all: treated as prose below */ }
+        }
         const versions: string[] = []
         const keep = (id: string) => { versions.push(id); return `\uE000v${versions.length - 1}\uE001` }
         s = protectCodenameTokens(s, keep)

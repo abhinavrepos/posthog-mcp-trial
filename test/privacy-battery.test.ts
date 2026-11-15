@@ -80,3 +80,13 @@ test('emails outside the BMP are masked; placeholders cannot be forged', () => {
     assert.equal(JSON.parse(clean('0 12:30:45')), '0 12:30:45')
     assert.equal(JSON.parse(clean('v0 Release 26.10.0')), 'v0 Release 26.10.0')
 })
+
+test('a tool answer as sent (heading + fenced JSON) keeps counts; only money fields and amounts in text are masked', async () => {
+    const { safetyWith } = await import('../src/core/aisafety.ts')
+    const msg = 'Reval event counts (last 4 years):\n\n```json\n' + JSON.stringify({ totals: { events: 10941928, sessions: 345000 }, seconds: 87.3,
+        rows: [{ events: 4002949, notional: 250000, note: 'limit 250000 USD for jane.doe@client07.example' }] }) + '\n```'
+    const out = safetyWith(msg, ['jane.doe@client07.example'])
+    assert.match(out, /"events":10941928/); assert.match(out, /"sessions":345000/); assert.match(out, /"seconds":87\.3/); assert.match(out, /"events":4002949/)
+    assert.match(out, /"notional":"<amount>"/); assert.doesNotMatch(out, /250000/); assert.doesNotMatch(out, /jane\.doe/)
+    assert.ok(out.startsWith('Reval event counts (last 4 years):'))
+})
