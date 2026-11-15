@@ -18,7 +18,7 @@ export async function safeResult(result: unknown): Promise<unknown> {
     if (r?._lensJson) {
         const { _lensJson, ...rest } = r
         const { label, value } = await aiSafety(_lensJson)
-        return { ...rest, content: [{ type: 'text', text: label ? `${label}\n\n\`\`\`json\n${JSON.stringify(value, roundNumbers, 2)}\n\`\`\`` : JSON.stringify(value, roundNumbers, 2) }] }
+        return { ...rest, content: [{ type: 'text', text: label ? `${label}\n\n\`\`\`json\n${JSON.stringify(value, roundNumbers, value && typeof value==='object' && 'coverage' in value ? undefined : 2)}\n\`\`\`` : JSON.stringify(value, roundNumbers, value && typeof value==='object' && 'coverage' in value ? undefined : 2) }] }
     }
     return aiSafety(result)
 }

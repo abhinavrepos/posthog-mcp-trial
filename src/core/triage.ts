@@ -1,3 +1,4 @@
+import { privacyMode, withPrivacy } from './anonymise.ts'
 // The triage pipeline both entry points share: Jira webhooks and the MCP tools.
 import { aiSafety } from './aisafety.ts'
 import { clientOfCodename, codenameOf, countBlock, hideClientsDeep, namesForCodenames, anonFor, syncClients } from './anonymise.ts'
@@ -81,7 +82,10 @@ function clipFailure(e: unknown): string {
 
 const lengthOf = (r?: { start: string; end: string }) => (r ? (Date.parse(r.end) - Date.parse(r.start)) / 1000 : 0)
 
-export async function triage(ticket: Ticket, opts: TriageOptions = {}): Promise<TriageReport> {
+export function triage(ticket: Ticket, opts: TriageOptions = {}): Promise<TriageReport> {
+    return withPrivacy(() => triageFrozen(ticket, opts))
+}
+async function triageFrozen(ticket: Ticket, opts: TriageOptions): Promise<TriageReport> {
     const t0 = Date.now()
     const now = opts.now || new Date()
     const notes: string[] = []
@@ -98,7 +102,7 @@ export async function triage(ticket: Ticket, opts: TriageOptions = {}): Promise<
             const anon = anonFor('triage')
             if (anon) syncClients(clients)
             const shown = anon ? clients.map((c) => { const code = codenameOf(c.id) || c.id; return { id: code, name: code } }) : clients
-            const safe = safeTicket(ticket, parsed, clients)
+            const safe = privacyMode() === 'open' ? ticket : safeTicket(ticket, parsed, clients)
             const read = await opts.ai.readTicket(await aiSafety(anon ? hideTicket(safe) : safe, 'triage'), { clients: shown, screens: SCREENS.map(({ path, name }) => ({ path, name })) })
             if (anon && read.clientId) read.clientId = clientOfCodename(read.clientId) || undefined
             aiUsed = true

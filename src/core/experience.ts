@@ -219,7 +219,7 @@ export function usageOf(client: string, from: string, to: string): Usage {
 const MIN_SESSIONS = 3, MIN_PEER_CLIENTS = 3
 /** Findings for one client: measures well above other clients' typical value (or above a fixed floor when there are too few peers). */
 export function clientExperience(client: string, opts: { days?: number; now?: number } = {}): ClientExperience {
-    const days = Math.max(7, Math.min(90, opts.days ?? 28)), to = day(opts.now ?? Date.now()), from = day((opts.now ?? Date.now()) - (days - 1) * 86_400_000)
+    const days = Math.max(7, Math.min(1500, opts.days ?? 28)), to = day(opts.now ?? Date.now()), from = day((opts.now ?? Date.now()) - (days - 1) * 86_400_000)
     const all = stored(from, to), mine = all.filter((x) => x.client === client)
     const others = new Map<string, Stored[]>()
     for (const x of all) if (x.client !== client) { const l = others.get(x.client); if (l) l.push(x); else others.set(x.client, [x]) }
@@ -316,7 +316,7 @@ function nextSteps(f: Finding[]): string[] {
 
 /** Across all clients: where friction gathers (button or field), for "what should we fix first". */
 export function frictionHotspots(opts: { days?: number; now?: number } = {}): { where: string; what: string; count: number; clients: number }[] {
-    const days = Math.max(7, Math.min(90, opts.days ?? 28)), to = day(opts.now ?? Date.now()), from = day((opts.now ?? Date.now()) - (days - 1) * 86_400_000)
+    const days = Math.max(7, Math.min(1500, opts.days ?? 28)), to = day(opts.now ?? Date.now()), from = day((opts.now ?? Date.now()) - (days - 1) * 86_400_000)
     const m = new Map<string, { where: string; what: string; count: number; clients: Set<string> }>()
     for (const x of stored(from, to)) for (const h of hotspots([x])) {
         const k = h.what + '|' + h.where; const e = m.get(k)

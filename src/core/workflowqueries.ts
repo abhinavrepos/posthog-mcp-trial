@@ -1,3 +1,4 @@
+import { comparisonWindow, type ComparisonOptions } from './comparison.ts'
 // Bounded queries for the pure workflow reader. PMs do not configure definitions.
 import { dialogLabel, dialogNames, required, type AppEvents, type RawEvent } from './appevents.ts'
 import { recordingSpans } from './incidents.ts'
@@ -14,6 +15,10 @@ export async function workflowSessions(q: Window, dialogs?: string[]) {
     const reg = required()
     const values = { from: q.from.toISOString(), to: q.to.toISOString(), client: q.clientId || '', screen: reg.events.screen,
         open: reg.screenActions.open, events: [reg.events.screen, reg.events.interaction], dialogs: dialogs || [''], all: dialogs ? 0 : 1 }
+    // Session-by-session reads are not counted per batch: check the whole window (with its edge days) first,
+    // or a year-long live window runs for half an hour (seen in the 100M-event lab).
+    const { assertLiveWindow } = await import('./liveevents.ts')
+    await assertLiveWindow({ ...q, from: new Date(+q.from - 86400000), to: new Date(+q.to + 86400000) })
     const ids: string[] = []
     let cursor = ''
     while (true) {
@@ -111,20 +116,22 @@ function trend(now: CompletionMetrics, before: CompletionMetrics) {
         median_time_s_change: now.median_time_s === null || before.median_time_s === null ? null : now.median_time_s - before.median_time_s }
 }
 
-export async function workflowCompletionReport(q: Window & { definition: Workflow }) {
+export async function workflowCompletionReport(q: Window & { definition: Workflow } & ComparisonOptions) {
     const definition = validateWorkflow(q.definition)
-    const previous = { from: new Date(+q.from - (+q.to - +q.from)), to: q.from }
-    const { historyCompletion, analysisMeta } = await import('./analysishistory.ts')
-    const historyNow = historyCompletion(q, definition), historyBefore = historyCompletion({ ...q, ...previous }, definition)
-    const historical = !!historyNow && !!historyBefore
-    const data = historical ? { sessions: [], sessions_selected: 0, rows_read: 0, truncated: false } : await workflowSessions({ ...q, from: previous.from }, definition.dialogs)
+    const requestedBaseline=comparisonWindow(q)
+    const previous = requestedBaseline || {from:q.from,to:q.to}
+    const { historyCompletion, analysisMeta, analysisCoverage } = await import('./analysishistory.ts')
+    const comparable=!!requestedBaseline && analysisCoverage(q).complete && analysisCoverage(previous).complete
+    const historyNow = historyCompletion(q, definition), historyBefore = comparable ? historyCompletion({ ...q, ...previous }, definition) : historyCompletion({...q,from:q.from,to:q.from},definition)
+    const historical = !!historyNow
+    const data = historical ? { sessions: [], sessions_selected: 0, rows_read: 0, truncated: false } : await workflowSessions(q, definition.dialogs)
     const reg = required(), names = labels(data.sessions)
     const now = historical ? historyNow! : workflowCompletion(data.sessions, definition, reg, q, names)
-    const before = historical ? historyBefore! : workflowCompletion(data.sessions, definition, reg, previous, names)
+    const before = historyBefore || workflowCompletion([],definition,reg,previous,names)
     const empty = workflowCompletion([], definition, reg, undefined, names).overall
     const allClients = [...new Set([...now.clients, ...before.clients].map((c) => c.client))].sort().map((client) => {
         const n = now.clients.find((c) => c.client === client) || empty, b = before.clients.find((c) => c.client === client) || empty
-        return { client, now: n, before: b, trend: trend(n, b) }
+        return { client, now: n, before: b, trend: comparable ? trend(n, b) : null }
     })
     allClients.sort((a, b) => b.now.started + b.before.started - a.now.started - a.before.started || a.client.localeCompare(b.client))
     const clients = allClients.slice(0, 8)
@@ -143,8 +150,8 @@ export async function workflowCompletionReport(q: Window & { definition: Workflo
         if (span) e.replay_url = replayUrl(e.session_id, Math.max(0, (Date.parse(e.at) - Date.parse(span.start)) / 1000 - 10))
     }
     const result = { workflow: definition, window: { from: q.from.toISOString(), to: q.to.toISOString() }, previous_window: { from: previous.from.toISOString(), to: previous.to.toISOString() },
-        ...analysisMeta({ ...q, from: previous.from }, true),
-        overall: { now: now.overall, before: before.overall, trend: trend(now.overall, before.overall) }, clients, clients_rest: rest(),
+        ...analysisMeta(q, true), comparison:{requested:requestedBaseline,status:q.compare==='none'?'none':comparable?'complete':'unavailable',reason:comparable?'Complete periods':'Baseline or current history incomplete; comparison omitted; no live baseline read'},
+        overall: { now: now.overall, before: before.overall, trend: comparable ? trend(now.overall, before.overall) : null }, clients, clients_rest: rest(),
         sessions_selected: data.sessions_selected, rows_read: data.rows_read, truncated: data.truncated,
         note: 'One start per episode opening the first dialog in the window. Funnel requires dialog opens in order, allowing other dialogs between steps. Done requires all steps and a matching submit/outcome in that episode; queued is separate from completed. Ad hoc workflows require completed. Failures count error submits; retries repeat the same dialog/button within 5 minutes after an error, before done. Dropout is the last reached step among abandoned episodes. Durations end at the outcome message. Full selected sessions can finish after the window; abandonment means no observed done before the episode ended. Sessions still active may change. Previous window has equal length. History evaluates compact daily episode statistics, combining all attempts with exact durations; sessions_selected and rows_read describe live reads (zero for history). Live reads page all selected sessions and events with a one-day margin at both window edges; longer sessions may be partial. Client rows show at most eight clients ranked by attempts across both periods; clients_rest contains totals for the rest. Replay links are for the person only.' }
     while (clients.length && JSON.stringify(result).length >= 29500) { clients.pop(); result.clients_rest = rest() }

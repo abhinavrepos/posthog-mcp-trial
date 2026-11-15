@@ -14,7 +14,7 @@ export interface ScoreRow {
     first_flags: { client: string; first_flag: string; lead_days: number }[]
 }
 export async function scorecard({ weeks = 52 }: { weeks?: number } = {}) {
-    if (!Number.isInteger(weeks) || weeks<1 || weeks>52) throw new Error('Weeks must be an integer from 1 to 52')
+    if (!Number.isInteger(weeks) || weeks<1 || weeks>209) throw new Error('Weeks must be an integer from 1 to 209')
     const to=dataThrough() || shift(new Date().toISOString().slice(0,10),-1)
     // Full UTC weeks ending Sunday. Never replay an unfinished calendar week.
     const end=shift(to,-new Date(to).getUTCDay())

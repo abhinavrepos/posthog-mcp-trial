@@ -1,3 +1,5 @@
+import { replayMonths } from './historyresult.ts'
+import { clientActivityChanges, compareClientPatterns } from '../core/clientpatterns.ts'
 import { jsonResult } from './result.ts'
 import { scorecard } from '../core/scorecard.ts'
 import { rescuePrivacy } from '../core/rescueprivacy.ts'
@@ -17,15 +19,15 @@ import { rescueQueue, setRescueAction, rescueClients, RESCUE_STATUSES } from '..
 import { taskMap, flowTime, findTasks, ingestStatus, dataThrough } from '../core/tasks.ts'
 import { createDashboard, shareDashboard, listDashboards, getDashboard, canManage } from '../core/dashboards.ts'
 import { resolveClient } from '../core/resolve.ts'
-import { parseTimeWindow } from '../core/timewindow.ts'
+import { parseTimeWindow, analyticalWindow } from '../core/timewindow.ts'
 import type { FlowTimeParams, TaskMapParams, Window } from '../core/taskstypes.ts'
 import { REPLAY_INSIGHT_TOOLS, type ChatCaller, type DashboardRole } from '../service/access.ts'
 
-export const DASHBOARD_TOOLS = ['client_experience', 'friction_hotspots', 'signal_scorecard', 'client_story', 'handover_pack', 'monday_brief', 'draft_rescue_survey', 'rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'share_dashboard']
+export const DASHBOARD_TOOLS = ['client_experience', 'friction_hotspots', 'signal_scorecard', 'client_story', 'client_activity_changes', 'compare_client_patterns', 'handover_pack', 'monday_brief', 'draft_rescue_survey', 'rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'share_dashboard']
 /** Replay insights (client_experience, friction_hotspots) need their own grant from a Lens admin, on top of dashboard access. */
 export const dashboardToolNames = (role: DashboardRole = 'share', surveyRole: SurveyRole = 'launch', insights = true): string[] =>
     !appEvents() || role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => (t !== 'draft_rescue_survey' || surveysActive() && canSurvey(surveyRole, 'edit')) && (role === 'share' || !['pin_dashboard', 'share_dashboard', 'set_rescue_status'].includes(t)) && (insights || !REPLAY_INSIGHT_TOOLS.includes(t)))
-const realDeps = { scorecard, clientStory, handoverPack, mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
+const realDeps = { clientActivityChanges, compareClientPatterns, scorecard, clientStory, handoverPack, mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
 type Caller = Pick<ChatCaller, 'who' | 'email' | 'dashboardRole' | 'admin'> & { surveyRole?: SurveyRole; insights?: boolean }
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
 const json = (value: unknown) => jsonResult('', value)
@@ -35,32 +37,17 @@ const day = (date: Date) => date.toISOString().slice(0, 10)
 const days = (w: Window) => Math.round((Date.parse(w.to) - Date.parse(w.from)) / DAY) + 1
 
 function windowFor(input: string | undefined, fallback: number): Window {
-    const value = (input?.trim() || `last ${fallback} days`).replace(/^(last|past) (a |one )?(week|month)$/i, '$1 1 $3')
-    const dates = value.match(/\b\d{4}-\d{2}-\d{2}\b/g)
-    if (dates?.length === 2) {
-        const window = { from: day(parseTimeWindow(dates[0], new Date(), 'UTC').from), to: day(parseTimeWindow(dates[1], new Date(), 'UTC').from) }
-        if (days(window) < 1 || days(window) > 366) throw new Error('Choose dates in order, at most 366 days apart.')
-        return window
-    }
-    const relative = /^(?:last|past)\s+(\d+)\s+(days?|weeks?|months?)$/i.exec(value)
-    // The shared parser understands days and calendar dates; expand weeks and months first.
-    const count = relative ? Number(relative[1]) * (/week/i.test(relative[2]) ? 7 : /month/i.test(relative[2]) ? 30 : 1) : undefined
-    const parsed = parseTimeWindow(count ? `last ${Math.min(count, 99)} days` : value, new Date(), 'UTC')
-    if (parsed.precision === 'none' || count === 0 || (count !== undefined && count > 366)) throw new Error('I could not read those dates. Try "last 4 weeks", "yesterday", or "2026-10-01".')
-    if (count) {
-        // "Last N days" ends on the last fully processed day (as the rescue queue does): yesterday is never
-        // complete yet, and a window that includes it gives no flags at all.
-        const yesterday = Date.parse(day(parsed.to)) - DAY, through = dataThrough()
-        const end = new Date(through ? Math.min(yesterday, Date.parse(through)) : yesterday)
-        return { from: day(new Date(end.getTime() - (count - 1) * DAY)), to: day(end) }
-    }
-    return { from: day(parsed.from), to: day(new Date(Math.max(parsed.from.getTime(), parsed.to.getTime() - 1))) }
+    const value = input?.trim() || `last ${fallback} days`
+    const parsed = analyticalWindow(value, new Date(), dataThrough()) || parseTimeWindow(value)
+    return { from: day(parsed.from), to: day(new Date(+parsed.to - 1)) }
 }
 const previous = (w: Window): Window => ({ from: day(new Date(Date.parse(w.from) - days(w) * DAY)), to: day(new Date(Date.parse(w.from) - DAY)) })
 const filters = {
     client: z.string().optional().describe('Client name, id or user email; omit for all clients.'),
     when: z.string().optional().describe('Plain words such as last 4 weeks or yesterday; default last 28 days for a task map, 90 days for flow time.'),
     task: z.string().optional().describe('Task words or task id. Required for flow time.'),
+    compare:z.enum(['previous','none']).optional(),
+    compare_with:z.object({from:z.string(),to:z.string()}).optional(),
     compared_with: z.string().optional().describe('Comparison dates in plain words; omit for the preceding period.'),
     only_flagged: z.boolean().default(true).describe('Only tasks needing attention in the task map.'),
 }
@@ -105,12 +92,12 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
     }
     reg('signal_scorecard', {
         description: 'How did client flags compare with recorded outcomes? Weekly historical sanity check with hits, misses and lead days; never a probability.',
-        inputSchema: { weeks: z.number().int().min(1).max(52).optional() }, annotations: { readOnlyHint: true },
+        inputSchema: { weeks: z.number().int().min(1).max(209).optional() }, annotations: { readOnlyHint: true },
     }, safe(async input => json(await d.scorecard(input))))
     reg('client_experience', {
         title: 'How is this client doing?',
         description: 'How a client is doing: their usage and how their people actually work, from replays. Use it first for "how is <client> doing / are they using it / do they struggle": usage (sessions, people, completed work against the period before) and, from session replays, (hesitation, cursor circling, scrolling to find things, clicks that do nothing, rage clicks, error loops, idle time, failed calls), compared with other clients, with plain findings, where it happens, next steps and replay links for the person. Replays are read as structure only: no values or text.',
-        inputSchema: { client: z.string().describe('Client name or id'), days: z.number().int().min(7).max(90).default(28) }, annotations: { readOnlyHint: true },
+        inputSchema: { client: z.string().describe('Client name or id'), days: z.number().int().min(7).max(1500).default(28) }, annotations: { readOnlyHint: true },
     }, safe(async ({ client, days }) => {
         const matches = d.rescueClients(client)
         if (matches.length !== 1) return json(await rescuePrivacy({ message: 'Choose a client id.', candidates: matches }))
@@ -119,23 +106,35 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         const lines = [`${name}: ${x.verdict.toUpperCase()}. ${x.summary}`, `Usage: ${x.usage.text}`,
             ...x.findings.map((f) => `- ${f.severity === 'high' ? 'High' : 'Medium'}: ${f.text}${f.where.length ? ` Where: ${f.where.join(', ')}.` : ''}${f.replays[0] ? ` Watch: ${f.replays[0].url}` : ''}`),
             ...(x.next_steps.length ? ['Next steps:', ...x.next_steps.map((n) => `- ${n}`)] : []), x.note, `Open in Lens: ${page()}?${new URLSearchParams({ view: 'story', client: matches[0].id })}`]
-        return jsonResult(lines.join('\n'), await rescuePrivacy({ ...x, client_name: name }))
+        return jsonResult(lines.join('\n'), await rescuePrivacy({ ...x, recording_months:replayMonths(x.window.from,x.window.to,matches[0].id),client_name: name }))
     }))
     reg('friction_hotspots', {
         title: 'Where do clients struggle on screen?',
         description: 'Where on screen clients struggle most, across all clients. From session replays: the buttons and fields where friction gathers (rage clicks, clicks that do nothing, error loops, heavy re-editing), by how many clients hit them. Use it for "what should we fix first".',
-        inputSchema: { days: z.number().int().min(7).max(90).default(28) }, annotations: { readOnlyHint: true },
+        inputSchema: { days: z.number().int().min(7).max(1500).default(28) }, annotations: { readOnlyHint: true },
     }, safe(async ({ days }) => {
         const h = frictionHotspots({ days }), c = replayCoverage()
-        return json({ hotspots: h, replays_read: c.sessions, clients: c.clients, note: h.length ? 'Ranked by how many clients hit each place, then by how often.' : 'No friction found yet in the replays read so far.' })
+        const window=windowFor(`last ${days} days`,28)
+        return json({ window,recording_months:replayMonths(window.from,window.to),hotspots: h, replays_read: c.sessions, clients: c.clients, note: h.length ? 'Ranked by how many clients hit each place, then by how often.' : 'No friction found yet in the replays read so far.' })
     }))
     reg('client_story', {
         description: 'One client story: weekly work counts, changes, signals, actions, surveys and unknowns from local Lens history only.',
-        inputSchema: { client: z.string(), weeks: z.number().int().min(1).max(52).optional() }, annotations: { readOnlyHint: true },
-    }, safe(async ({ client, weeks }) => {
+        inputSchema: { client: z.string(), weeks: z.number().int().min(1).max(209).optional(), from:z.string().optional(), to:z.string().optional(), bucket:z.enum(['month','week']).optional(), anchor:z.string().optional() }, annotations: { readOnlyHint: true },
+    }, safe(async ({ client, ...options }) => {
         const matches = d.rescueClients(client)
         if (matches.length !== 1) return json(await rescuePrivacy({ message: 'Choose a client id.', candidates: matches }))
-        return json(await rescuePrivacy({ ...await d.clientStory({ client: matches[0].id, weeks }), open: page() + '?' + new URLSearchParams({ view: 'story', client: matches[0].id }) }))
+        return json(await rescuePrivacy({ ...await d.clientStory({ client: matches[0].id, ...options }), open: page() + '?' + new URLSearchParams({ view: 'story', client: matches[0].id }) }))
+    }))
+    reg('client_activity_changes', {
+        description:'Which clients went quiet after established use, and which returned? Uses complete daily history; usage-based inactivity is not confirmed churn.',
+        inputSchema:{from:z.string().optional(),to:z.string().optional(),silence_days:z.number().int().min(1).max(1500).optional(),established_days:z.number().int().min(1).max(1500).optional(),limit:z.number().int().min(1).max(150).optional()},annotations:{readOnlyHint:true},
+    },safe(async input=>json(await rescuePrivacy(d.clientActivityChanges(input)))))
+    reg('compare_client_patterns', {
+        description:'How did a departing or inactive client’s usage differ from clients that stayed? Compares monthly medians before dated outcomes or usage silence, without claiming causation.',
+        inputSchema:{client:z.string().optional(),group:z.enum(['left_or_contracted','inactive']).optional(),from:z.string().optional(),to:z.string().optional(),months:z.number().int().min(1).max(48).optional(),followup_days:z.number().int().min(1).max(1500).optional(),silence_days:z.number().int().min(1).max(1500).optional()},annotations:{readOnlyHint:true},
+    },safe(async input=>{
+        if(input.client) { const matches=d.rescueClients(input.client);if(matches.length!==1)return json(await rescuePrivacy({message:'Choose a client id.',candidates:matches}));input.client=matches[0].id }
+        return json(await rescuePrivacy(d.compareClientPatterns(input)))
     }))
     reg('handover_pack', {
         description: 'Copyable Markdown handover for a client: established tasks, recent changes, actions and owners, surveys, replay links and unknowns. No user identities.',
@@ -157,10 +156,10 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
     }))
     reg('rescue_queue', {
         description: 'Which clients need someone this week, and why? Ranked rescue queue with evidence, next steps, owner and status from processed Lens history.',
-        inputSchema: { when: filters.when, compared_with: filters.compared_with, min_attempts: z.number().int().min(1).max(100000).optional(), include_snoozed: z.boolean().optional(), limit: z.number().int().min(1).max(50).default(10) },
+        inputSchema: { when: filters.when, compared_with: filters.compared_with, compare:filters.compare,compare_with:filters.compare_with,min_attempts: z.number().int().min(1).max(100000).optional(), include_snoozed: z.boolean().optional(), limit: z.number().int().min(1).max(50).default(10) },
         annotations: { readOnlyHint: true },
     }, safe(async input => {
-        const result = await d.rescueQueue({ ...(input.when ? { window: windowFor(input.when, 28) } : {}), ...(input.compared_with ? { baseline: windowFor(input.compared_with, 28) } : {}), min_attempts: input.min_attempts, include_snoozed: input.include_snoozed })
+        const result = await d.rescueQueue({compare:input.compare,compare_with:input.compare_with, ...(input.when ? { window: windowFor(input.when, 28) } : {}), ...(input.compared_with ? { baseline: windowFor(input.compared_with, 28) } : {}), min_attempts: input.min_attempts, include_snoozed: input.include_snoozed })
         const q = new URLSearchParams({ view: 'rescue', from: result.window.from, to: result.window.to, baseline_from: result.baseline.from, baseline_to: result.baseline.to })
         if (input.include_snoozed) q.set('include_snoozed', 'true')
         if (input.min_attempts) q.set('min_attempts', String(input.min_attempts))
@@ -193,11 +192,11 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         const status = ready(), r = await resolve(input)
         if (r.reply) return r.reply
         const window = windowFor(input.when, 28)
-        const p: TaskMapParams = { window, baseline: input.compared_with ? windowFor(input.compared_with, 28) : previous(window), client: r.client, task: r.task }
+        const p: TaskMapParams = { window, compare:input.compare,compare_with:input.compare_with,baseline: input.compared_with ? windowFor(input.compared_with, 28) : previous(window), client: r.client, task: r.task }
         const result = await d.taskMap(p)
         // Same rule as the page: "new" (a task a client just started) is not a problem to look at.
         const needs = (row: (typeof result.rows)[number]) => row.flags.some(f => f !== 'new')
-        const rows = result.rows.filter(row => !input.only_flagged || needs(row))
+        const rows = result.rows.filter(row => !result.coverage.complete || !input.only_flagged || needs(row))
         const attention = new Set(result.rows.filter(needs).map(row => row.client)).size
         const clients = result.clients.filter(c => rows.some(row => row.client === c.client)).map(c => ({
             ...c,
@@ -205,7 +204,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         }))
         return json({
             headline: result.coverage?.complete === false ? result.coverage.text : `${attention} client${attention === 1 ? '' : 's'} need${attention === 1 ? 's' : ''} attention.`, clients,
-            data_through: result.data_through, note: result.note, history_days_not_backfilled: status.behind_days, // of the kept history (older days still being filled in), not how stale the latest data is: see data_through
+            coverage:result.coverage,data_through: result.data_through, note: result.note, history_days_not_backfilled: status.behind_days, // of the kept history (older days still being filled in), not how stale the latest data is: see data_through
             open: open('task_map', p, input.only_flagged),
         })
     }))
@@ -226,7 +225,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         const trend = points.length < 3 ? 'not enough history' : last > first * 1.1 ? 'slower' : last < first * .9 ? 'faster' : 'steady'
         return json({
             ...(result.coverage?.complete === false ? { not_processed_yet: result.coverage.text } : {}),
-            task: result.task, summary: result.summary, all_clients: result.all_clients, trend,
+            coverage:result.coverage,task: result.task, summary: result.summary, all_clients: result.all_clients, trend,
             paths: result.paths, slowest: result.slowest.slice(0, 3), top_errors: result.top_errors,
             data_through: result.data_through, note: result.note, open: open('flow_time', p),
         })

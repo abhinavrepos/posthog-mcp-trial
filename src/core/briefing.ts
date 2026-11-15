@@ -1,3 +1,4 @@
+import { privacyKey, withPrivacy } from './anonymise.ts'
 import { newClientValues } from './newclients.ts'
 // A saved, deterministic daily briefing. No raw events or individual identities.
 import { rescuePrivacy } from './rescueprivacy.ts'
@@ -25,6 +26,7 @@ export function briefHeadline(c: { queue?: number; urgent?: number; new_or_worse
 }
 export interface BriefGridRow { client: string; client_name: string; score: number; level?: 'urgent' | 'watch'; open: string; cells: { column: string; mark: string; label: string }[] }
 export interface MondayBrief {
+    privacy_key?: string
     version?: number
     grid?: BriefGridRow[]
     generated_at: string; period: { from: string; to: string }; headline: string
@@ -34,13 +36,16 @@ export interface MondayBrief {
 const link = (client: string, extra: Record<string, string> = {}) => '/replays/dashboards?' + new URLSearchParams({ view: 'rescue', client, ...extra })
 // Coalesce simultaneous visits as well as sequential reloads.
 const pending = new Map<string, Promise<MondayBrief>>()
-export function mondayBrief({ by, now = new Date() }: { by: string; now?: Date }): Promise<MondayBrief> {
+export function mondayBrief(p: { by: string; now?: Date }): Promise<MondayBrief> {
+    return withPrivacy(() => mondayBriefFrozen(p))
+}
+function mondayBriefFrozen({ by, now = new Date() }: { by: string; now?: Date }): Promise<MondayBrief> {
     by = by.trim().toLowerCase()
-    const day = now.toISOString().slice(0, 10), key = `${by}:${day}`
+    const day = now.toISOString().slice(0, 10), key = `${privacyKey()}:${by}:${day}`
     const saved = one<{ payload: string }>('SELECT payload FROM briefing_snapshots WHERE "by"=? AND substr(created_at,1,10)=?', by, day)
     if (saved) {
         const value = JSON.parse(saved.payload) as MondayBrief
-        if (value.version === BRIEF_VERSION && value.grid) return Promise.resolve(value)
+        if (value.version === BRIEF_VERSION && value.grid && value.privacy_key === privacyKey()) return Promise.resolve(value)
         if (pending.has(key)) return pending.get(key)!
         // Older saved briefings are rebuilt against the previous saved one, keeping the personal diff.
         const rebuild = build(by, now, true).finally(() => pending.delete(key))
@@ -105,7 +110,7 @@ async function build(by: string, now: Date, replaceToday = false): Promise<Monda
     const new_clients = (await newClientValues(period.to)).slice(0,5).map(c => ({ ...item(c.client,c.text),open:link(c.client,{view:'story'}) }))
     const grid = await portfolio(period.to, quiet_review)
     const counts = { urgent: grid.filter(r => r.level === 'urgent').length, new_clients: new_clients.length, new_or_worse: changed.length, close_soon: close_soon.length, overdue: overdue.length, recovered: recovered.length, quiet_review: quiet_review ? 1 : 0, queue: grid.filter(r => r.level).length }
-    const result: MondayBrief = { version: BRIEF_VERSION, grid, generated_at: now.toISOString(), period, headline: queue.coverage.complete ? briefHeadline(counts) : 'History is incomplete; review overdue actions while evidence is being processed.', sections: { new_clients, new_or_worse, close_soon, overdue, recovered, quiet_review }, counts, verified_recoveries: recoveries.map(c => c.client), queue_scores: Object.fromEntries(queue.clients.map(c => [c.client,c.score])) }
+    const result: MondayBrief = { privacy_key: privacyKey(), version: BRIEF_VERSION, grid, generated_at: now.toISOString(), period, headline: queue.coverage.complete ? briefHeadline(counts) : 'History is incomplete; review overdue actions while evidence is being processed.', sections: { new_clients, new_or_worse, close_soon, overdue, recovered, quiet_review }, counts, verified_recoveries: recoveries.map(c => c.client), queue_scores: Object.fromEntries(queue.clients.map(c => [c.client,c.score])) }
     const sanitized = await rescuePrivacy(result)
     return tx(() => {
         if (replaceToday) run('DELETE FROM briefing_snapshots WHERE "by"=? AND substr(created_at,1,10)=?', by, day)

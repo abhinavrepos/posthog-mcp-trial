@@ -163,7 +163,7 @@ test('client counts and disappeared-user counts are exact while identities are b
 
 // Every direct HogQL call is audited, including calls inside Promise.all (not only `await hogql`).
 test('all remaining core HogQL calls have a timestamp scope or the replay-metadata exception', () => {
-    const inherited: Record<string, string> = { 'impact.ts': 'base has timestamp; failure-rate query has its own bound', 'usage.ts': 'scope has timestamp' }
+    const inherited: Record<string, string> = { 'impact.ts': 'base has timestamp; failure-rate query has its own bound', 'usage.ts': 'scope has timestamp', 'aggregate.ts': 'scope has timestamp' }
     for (const file of readdirSync('src/core').filter((f) => f.endsWith('.ts'))) {
         const source = readFileSync(`src/core/${file}`, 'utf8')
         for (const m of source.matchAll(/(?:await\s+)?(?:deps\.)?hogql\(\s*`([\s\S]*?)`/g)) {

@@ -1,8 +1,10 @@
+import { analyticalWindow } from './timewindow.ts'
 // "How many clients use this screen, and when?" Usage of one screen over a period.
 import { hogql } from './posthog.ts'
 import { P } from './props.ts'
 
 export interface ScreenUsage {
+    window?:{from:string;to:string}
     pathname: string
     days: number
     clients_using: number
@@ -20,8 +22,9 @@ const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Satur
 
 export async function screenUsage(pathname: string, opts: { days?: number; clientId?: string } = {}): Promise<ScreenUsage> {
     const days = opts.days ?? 30
-    const values = { path: pathname, days }
-    const scope = `event = '$pageview' AND timestamp > now() - toIntervalDay({days}) AND notEmpty(toString(${P.client}))`
+    const window=analyticalWindow(`last ${days} days`)!
+    const values = { path: pathname, days, from:window.from.toISOString(),to:window.to.toISOString() }
+    const scope = `event = '$pageview' AND timestamp >= {from} AND timestamp < {to} AND notEmpty(toString(${P.client}))`
 
     const [totals, everyone, weekday, busiest, top] = await Promise.all([
         hogql(
@@ -64,6 +67,7 @@ export async function screenUsage(pathname: string, opts: { days?: number; clien
     const mine = opts.clientId ? ranked.find((r) => r.client_id === opts.clientId) : undefined
     const dow = new Map(weekday.map((r) => [Number(r.dow), Number(r.pageviews)]))
     return {
+        window:{from:window.from.toISOString(),to:window.to.toISOString()},
         pathname,
         days,
         clients_using: Number(t.clients || 0),

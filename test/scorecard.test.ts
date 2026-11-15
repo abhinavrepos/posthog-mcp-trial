@@ -77,7 +77,7 @@ test('weekly scorecard counts hits, misses, false alarms and first-observed lead
     assert.equal((await scorecard({weeks:8})).outcome_clients,3)
     tasksDb.prepare("DELETE FROM task_ingest WHERE day='2026-03-15'").run();forgetAnswers()
     const gap=await scorecard({weeks:8});assert.ok(gap.coverage.skipped_weeks.includes('2026-03-29'));assert.ok(gap.coverage.processed_weeks<8)
-    for(const weeks of [0,53,1.1,NaN])await assert.rejects(scorecard({weeks}),/Weeks/)
+    for(const weeks of [0,210,1.1,NaN])await assert.rejects(scorecard({weeks}),/Weeks/)
 })
 test('scorecard replays captured signal flags, respects missing captures, and excludes outcome notes',async()=>{
     reset()
@@ -175,7 +175,7 @@ test('scorecard page computes through read API for view role; none denied; scrip
     for(const role of ['view','share'] as const){const page=await request(handleDashboards,'/replays/dashboards?view=scorecard','GET',undefined,viewer('none',role));assert.equal(page.status,200);assert.match(page.html,/Computing scorecard/);scriptsParse(page.html)}
     const api=await request(handleDashboards,'/replays/dashboards/api/scorecard?weeks=2','GET',undefined,viewer('none','view'));assert.equal(api.status,200);assert.equal(JSON.parse(api.html).weeks,2)
     for(const path of ['?view=scorecard','/api/scorecard'])assert.equal((await request(handleDashboards,'/replays/dashboards'+path,'GET',undefined,viewer('none','none'))).status,403)
-    assert.equal((await request(handleDashboards,'/replays/dashboards/api/scorecard?weeks=53')).status,400)
+    assert.equal((await request(handleDashboards,'/replays/dashboards/api/scorecard?weeks=210')).status,400)
 })
 test('cold synthetic year replay for 50 clients is below five seconds, and repeated reads reuse replay',async()=>{
     reset('2025-01-01','2025-12-31')

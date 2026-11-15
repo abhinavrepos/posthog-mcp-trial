@@ -51,6 +51,8 @@ export interface Window {
 
 // ------------------------------------------------------------------ Dashboard A: client task map
 export interface TaskMapParams {
+    compare?: 'previous' | 'none'
+    compare_with?: Window
     window: Window // the recent period
     baseline?: Window // compared with; default: the same length right before window
     client?: string // one client id; none: every client
@@ -83,6 +85,7 @@ export interface TaskMapClient {
 /** Which days of a period the history has fully processed. Flags are only given when both periods
  * are complete: a day not processed yet would otherwise look like work that stopped. */
 export interface Coverage {
+    requested?: unknown; answered?: unknown; status?: string; datasets?: unknown; covered_days?: number; missing_days?: number; comparison?: { status: string; reason: string }; freshness?: unknown; days?: import('./historycoverage.ts').DayObservation[]
     complete: boolean
     unprocessed: string[] // days of the window or baseline not (fully) processed yet, at most 400
     text?: string // for people, when not complete

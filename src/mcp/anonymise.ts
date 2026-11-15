@@ -1,3 +1,4 @@
+import { aiSafety, aiMetadataSafety } from '../core/aisafety.ts'
 // The one place every MCP message passes when client anonymisation is on (src/core/anonymise.ts): Lens's
 // own server over HTTP and stdio (guardTransport), and the PostHog proxy (guardRequest/guardResponse).
 //   in:  codenames in client arguments become the client's code; a client name or code anywhere in the
@@ -8,7 +9,7 @@
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 
-import { anonFor, anonSettings, roundValue, clientOfCodename, countBlock, hideClientsDeep, isClientCode, namesClient, outsideEmail, refusalText, type BlockKind } from '../core/anonymise.ts'
+import { privacyCurrent, PRIVACY_CHANGED, withPrivacy, anonFor, anonSettings, roundValue, revealCodenames, clientOfCodename, countBlock, hideClientsDeep, isClientCode, namesClient, outsideEmail, refusalText, type BlockKind } from '../core/anonymise.ts'
 
 type Rpc = Record<string, any>
 const isObj = (v: unknown): v is Rpc => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -38,7 +39,7 @@ export function revealArgs(tool: string, args: unknown): unknown {
             }
             // A client's user's email names the company by its domain.
             if (namesClient(v) || outsideEmail(v)) throw new Refused()
-            return v
+            return revealCodenames(v)
         }
         if (Array.isArray(v)) return v.map((x) => walk(x, key))
         if (isObj(v)) {
@@ -109,6 +110,7 @@ export function guardRequest(msg: unknown, kind: BlockKind = 'lens_refused', reg
 
 /** A message on its way out, with every client name and code replaced by its codename. */
 export function guardResponse<T>(msg: T, kind: BlockKind = 'lens_cleaned'): T {
+    if (!privacyCurrent()) return (isObj(msg) && 'jsonrpc' in msg ? { jsonrpc: '2.0', id: msg.id ?? null, error: { code: -32603, message: PRIVACY_CHANGED } } : { isError: true, content: [{ type: 'text', text: PRIVACY_CHANGED }] }) as T
     if (!anonFor(kind.startsWith('posthog') ? 'posthog' : 'lens')) return msg
     const { value, n } = hideClientsDeep(anonSettings().round ? roundValue(withoutMedia(msg)) as T : withoutMedia(msg) as T)
     if (n) countBlock(kind)
@@ -127,12 +129,19 @@ function withoutMedia(v: unknown): unknown {
 /** Wraps a connected transport (HTTP or stdio): both directions go through the guard. */
 export function guardTransport(t: Transport, registry?: Registry): void {
     const send = t.send.bind(t)
-    t.send = (message, options) => send(guardResponse(message), options)
+    t.send = async (message, options) => {
+        const safe = { ...message } as Rpc
+        for (const key of ['result', 'error', 'params']) if (key in safe) {
+            const metadata = key === 'result' && (Array.isArray(safe[key]?.tools) || Array.isArray(safe[key]?.prompts))
+            safe[key] = await (metadata ? aiMetadataSafety(safe[key]) : aiSafety(safe[key]))
+        }
+        return send(guardResponse(safe as JSONRPCMessage), options)
+    }
     const onmessage = t.onmessage
     if (!onmessage) throw new Error('guardTransport: connect the server first')
-    t.onmessage = (message, extra) => {
+    t.onmessage = (message, extra) => withPrivacy(() => {
         const g = guardRequest(message, 'lens_refused', registry)
         if (g.answer) { void send(g.answer as JSONRPCMessage); return }
         onmessage(g.msg as JSONRPCMessage, extra)
-    }
+    })
 }

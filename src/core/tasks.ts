@@ -1,3 +1,6 @@
+import { privacyKey } from './anonymise.ts'
+import { analyticalWindow, setWindowDataThrough } from './timewindow.ts'
+import { historyCoverage, type DayObservation } from './historycoverage.ts'
 import { storeAnalysisDay } from './analysishistory.ts'
 // Task history has its own database: ingest and long scans must not lock the web service's tables.
 import { mkdirSync } from 'node:fs'
@@ -19,6 +22,7 @@ export const TASKS_DB_FILE = isAbsolute(config.tasks.db) ? config.tasks.db : joi
 mkdirSync(dirname(TASKS_DB_FILE), { recursive: true, mode: 0o700 })
 // Exported for maintenance and bulk fixtures; application queries use the functions below.
 export const tasksDb = new DatabaseSync(TASKS_DB_FILE)
+setWindowDataThrough(() => dataThrough())
 // busy_timeout first: switching to WAL needs a lock, and without it a second process opening the file at
 // the same moment fails at once ("database is locked") instead of waiting.
 tasksDb.exec('PRAGMA busy_timeout = 5000; PRAGMA auto_vacuum = INCREMENTAL; PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -32768;')
@@ -344,7 +348,7 @@ function rangeOf(v: unknown): [string, string] | undefined {
     return [shift(ws.map((w) => w.from).sort()[0], -7), ws.map((w) => w.to).sort().at(-1)!]
 }
 export function cached<T>(kind: string, p: object, compute: () => Promise<T>, lookbackDays = 0): Promise<T> {
-    const key = kind + JSON.stringify(p), hit = answers.get(key)
+    const key = privacyKey() + kind + JSON.stringify(p), hit = answers.get(key)
     if (hit && Date.now() - hit.at < 600_000) return hit.value as Promise<T>
     const value = compute()
     const entry: { at: number; value: Promise<unknown>; range?: [string, string] } = { at: Date.now(), value }
@@ -450,13 +454,13 @@ export function validWindow(w: Window): number {
     if (!w) throw new Error('A window with from and to is required')
     validDay(w.from); validDay(w.to)
     const days = (Date.parse(w.to) - Date.parse(w.from)) / DAY + 1
-    if (days < 1 || days > 400) throw new Error('Window must have from <= to and at most 400 days')
+    analyticalWindow(`${w.from} to ${w.to}`)
     return days
 }
 function filters(task?: string, client?: string) {
     if (task !== undefined && !/^t_[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(task)) throw new Error('Invalid task id; expected t_ followed by a dialog code')
     if (client !== undefined && (typeof client !== 'string' || client.length > 256)) throw new Error('Client must be a string of at most 256 characters')
-    return { sql: `${task === undefined ? '' : ' AND task_id = ?'}${client === undefined ? '' : ' AND client = ?'}`, args: [task, client].filter((v): v is string => v !== undefined) }
+    return { sql: ` AND day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= 'analysis_unavailable:' AND key < 'analysis_unavailable;')${task === undefined ? '' : ' AND task_id = ?'}${client === undefined ? '' : ' AND client = ?'}`, args: [task, client].filter((v): v is string => v !== undefined) }
 }
 interface Aggregate { client: string; task_id: string; attempts: number; done: number; failed: number; abandoned: number; hist: string }
 export function aggregates(w: Window, task?: string, client?: string): Aggregate[] {
@@ -501,16 +505,33 @@ export function dataThrough(): string | null {
     // Today is mutable; only a complete, nontruncated day can be called fully processed.
     return one<{ day: string }>('SELECT max(day) AS day FROM task_ingest WHERE day < ? AND truncated = 0 AND finalized = 1', today())?.day || null
 }
+const MISSING_LABEL: Record<string, string> = { pending: 'Not processed yet', truncated: 'Hit a safety cap', source_expired: 'No longer in PostHog (kept history used where Lens had it)', before_tracking: 'Before tracking started', query_failed: 'PostHog query failed (retried later)' }
+/** "Not processed yet: 2 days (from 2026-03-01); Before tracking started: 30 days (from 2022-01-01)". */
+function missingText(days: DayObservation[]): string {
+    const by = new Map<string, string[]>()
+    for (const d of days) if (d.status !== 'complete') by.set(d.status, [...(by.get(d.status) || []), d.day])
+    return [...by].map(([status, ds]) => `${MISSING_LABEL[status] || status}: ${ds.length} day${ds.length === 1 ? '' : 's'} (${ds.length === 1 ? ds[0] : `${ds[0]} to ${ds.at(-1)}`})`).join('; ')
+}
 /** The days of these periods not fully processed yet (today never counts as complete). */
 export function coverage(...windows: Window[]): Coverage {
-    const done = new Set(all<{ day: string }>('SELECT day FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0 AND finalized = 1 AND day < ?',
-        windows.map((w) => w.from).sort()[0], windows.map((w) => w.to).sort().at(-1)!, today()).map((r) => r.day))
-    const unprocessed = new Set<string>()
-    for (const w of windows) for (let d = w.from; d <= w.to && unprocessed.size < 400; d = shift(d, 1)) if (!done.has(d)) unprocessed.add(d)
-    const list = [...unprocessed].sort()
-    if (!list.length) return { complete: true, unprocessed: [] }
-    const span = list.length === 1 ? list[0] : `${list.length} days (${list[0]} to ${list.at(-1)})`
-    return { complete: false, unprocessed: list, text: `Not processed yet: ${span}. Lens gives no flags until both periods are fully processed, so a day still missing is never shown as work that stopped. Choose dates up to ${dataThrough() ?? 'the last processed day'}, or wait for the history to catch up.` }
+    const lo = windows.map(w=>w.from).sort()[0], hi = windows.map(w=>w.to).sort().at(-1)!
+    const ingested = new Map(all<{day:string;truncated:number;finalized:number}>('SELECT day,truncated,finalized FROM task_ingest WHERE day BETWEEN ? AND ?',lo,hi).map(r=>[r.day,r]))
+    // Only the states these days can have (the table also holds a row per day for other purposes).
+    const states = new Map(all<{key:string;value:string}>(`SELECT key,value FROM task_state WHERE key = 'tracking_first_day'
+        OR key BETWEEN 'analysis_unavailable:' || ? AND 'analysis_unavailable:' || ? OR key BETWEEN 'query_failed:' || ? AND 'query_failed:' || ?`, lo, hi, lo, hi).map(r=>[r.key,r.value]))
+    const days: DayObservation[] = []
+    for (let d=lo; d<=hi; d=shift(d,1)) {
+        if (!windows.some(w=>d>=w.from && d<=w.to)) continue
+        const r=ingested.get(d), first=states.get('tracking_first_day')
+        const status = states.has('analysis_unavailable:'+d) ? 'source_expired' : states.has('query_failed:'+d) ? 'query_failed' : r?.truncated ? 'truncated' : r?.finalized && d<today() ? 'complete' : first && d<first ? 'before_tracking' : 'pending'
+        days.push({day:d,status})
+    }
+    const unprocessed = days.filter(d=>d.status!=='complete').map(d=>d.day)
+    const block = historyCoverage(lo,hi,days,dataThrough())
+    const answer:Coverage={ ...block, complete:!unprocessed.length, unprocessed,
+        ...(unprocessed.length ? {text:`Answered from ${block.covered_days} covered day${block.covered_days === 1 ? '' : 's'}; missing: ${missingText(days)}. Missing days are not zero activity. Comparisons and flags require complete periods. missing_ranges has every date and reason.`} : {}) }
+    Object.defineProperty(answer,'days',{value:days,enumerable:false})
+    return answer
 }
 function note(w: Window): string {
     const complete = one<{ n: number }>('SELECT count(*) AS n FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0 AND finalized = 1', w.from, w.to)!.n
@@ -524,9 +545,10 @@ function pathRows(w: Window, task?: string, client?: string, withHist = true) {
         FROM task_paths_daily WHERE day BETWEEN ? AND ?${f.sql} GROUP BY client, task_id, path_key`, w.from, w.to, ...f.args)
 }
 async function computeTaskMap(p: TaskMapParams): Promise<TaskMap> {
-    const days = validWindow(p.window), baseline = p.baseline || { from: shift(p.window.from, -days), to: shift(p.window.from, -1) }
+    const days = validWindow(p.window), baseline = p.compare_with || p.baseline || { from: shift(p.window.from, -days), to: shift(p.window.from, -1) }
     validWindow(baseline); filters(p.task, p.client)
-    const cover = coverage(p.window, baseline)
+    const current=coverage(p.window), previous=coverage(baseline)
+    const cover={...current,complete:current.complete && previous.complete && p.compare!=='none',comparison:{requested:baseline,status:p.compare==='none'?'none':current.complete && previous.complete?'complete':'unavailable',reason:p.compare==='none'?'Comparison disabled':current.complete && previous.complete?'Both periods complete':'Comparisons require complete current and baseline periods; omitted'},baseline:previous}
     const min = p.min_attempts ?? 5
     if (!Number.isInteger(min) || min < 1) throw new Error('min_attempts must be a positive integer')
     const now = new Map(aggregates(p.window, p.task, p.client).map((r) => [key(r), r])), before = new Map(aggregates(baseline, p.task, p.client).map((r) => [key(r), r]))
@@ -745,6 +767,7 @@ export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits
         state('analysis_unavailable:' + day, JSON.stringify({ sessions_before: prior.sessions, sessions_now: ids.length }))
         return
     }
+    run('DELETE FROM task_state WHERE key IN (?,?)', 'query_failed:'+day, 'analysis_unavailable:'+day)
     storeAttempts(day, attempts, { finalized: scanStarted >= Date.parse(shift(day, 2)), sessions: ids.length, events, truncated, seconds: (performance.now() - started) / 1000, clientNames, dialogNames, finishes, analysisSessions: sessions, summary: summariseSteps(sessions, day, reg) })
     run('DELETE FROM task_attempts WHERE day < ?', shift(today(), -29))
 }
@@ -753,15 +776,27 @@ function state(key: string, value: string) { run('INSERT OR REPLACE INTO task_st
 function failure(day: string, e: unknown) {
     const error = e instanceof Error ? e.message : String(e)
     state('last_error', `${day}: ${error}`)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(day)) state('query_failed:'+day,error)
     console.error(JSON.stringify({ at: new Date().toISOString(), event: 'tasks.ingest_error', day, error }))
 }
 export async function runIngest(opts: { days?: string[]; maxBackfill?: number } = {}): Promise<void> {
     if (opts.days) opts.days.forEach(validDay)
-    if (opts.maxBackfill !== undefined && (!Number.isInteger(opts.maxBackfill) || opts.maxBackfill < 0 || opts.maxBackfill > 400)) throw new Error('maxBackfill must be from 0 to 400')
+    if (opts.maxBackfill !== undefined && (!Number.isInteger(opts.maxBackfill) || opts.maxBackfill < 0 || opts.maxBackfill > 1500)) throw new Error('maxBackfill must be from 0 to 1500')
     if (running) return
     running = true
     try {
         state('last_run', new Date().toISOString()); run("DELETE FROM task_state WHERE key = 'last_error'")
+        if (!one('SELECT value FROM task_state WHERE key=?','tracking_first_day')) {
+            try {
+                // Deliberate source boundary query: the minimum across project events is the evidence.
+                const first = await taskQuery('SELECT min(timestamp) AS first_event FROM events WHERE timestamp < now()')
+                const timestamp=String(first[0]?.first_event || '')
+                if (Number.isFinite(Date.parse(timestamp)) && Date.parse(timestamp)>0) {
+                    state('tracking_first_day',date(Date.parse(timestamp)))
+                    state('tracking_first_day_evidence',JSON.stringify({observed_at:new Date().toISOString(),first_event:timestamp,note:'Earliest event currently returned by source; retention may have removed earlier tracking.'}))
+                }
+            } catch (e) { state('tracking_discovery_error',String(e)) }
+        }
         let days = opts.days
         if (!days) {
             days = [today(), shift(today(), -1)]
@@ -769,7 +804,7 @@ export async function runIngest(opts: { days?: string[]; maxBackfill?: number } 
             let remaining = opts.maxBackfill ?? config.tasks.backfillDaysPerRun
             for (let i = 2; i < config.tasks.historyDays && remaining > 0; i++) {
                 const d = shift(today(), -i)
-                if (!processed.has(d)) { days.push(d); remaining-- }
+                if (!processed.has(d) && !(one<{value:string}>('SELECT value FROM task_state WHERE key=?','tracking_first_day')?.value && d < one<{value:string}>('SELECT value FROM task_state WHERE key=?','tracking_first_day')!.value)) { days.push(d); remaining-- }
             }
         }
         for (const day of new Set(days)) try { await ingestDay(day) } catch (e) { failure(day, e) }

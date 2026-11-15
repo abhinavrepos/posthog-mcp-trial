@@ -1,66 +1,65 @@
-// Client anonymisation for AI. Off by default; a Lens admin switches it on (Admin → Client privacy for AI).
-// When on, every client name and client code that would reach an AI is replaced by the client's codename
-// ("Amber Falcon"), and codenames coming back from the AI are turned into the real client inside Lens:
-//   - Lens's MCP server (src/mcp/anonymise.ts wraps both transports: every message in and out)
-//   - the PostHog MCP proxy (src/mcp/posthog-proxy.ts): data commands refused, or filtered (admin's choice)
-//   - Claude's ticket triage (src/core/triage.ts)
-// People see real names only in the Lens web app, where /replays/codenames lists who is who.
-// Codenames are short random words from a list of 10,000 (src/core/codenames.ts), never derived from the
-// name, stable, unique, and editable by admins. Every client Lens sees gets one, also while the setting is
-// off, so people can learn them before it is turned on.
-import { randomInt } from 'node:crypto'
-
-import { CODENAMES } from './codenames.ts'
+// Central privacy policy and persistent numbered client labels.
+import { randomInt, randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { all, getSetting, one, run, setSetting, tx } from './db.ts'
 
-export type PosthogMode = 'block' | 'filter' | 'off'
-/** What an admin chose (Admin → Client privacy for AI). Defaults: everything covered, PostHog's data blocked. */
+export type PrivacyMode = 'open' | 'standard' | 'private'
+export type PosthogMode = 'block' | 'filter'
 export interface AnonSettings {
-    on: boolean          // the main switch
-    lens: boolean        // Lens's tools in Copilot
-    posthog: PosthogMode // PostHog's tools in Copilot: block data commands, filter results, or leave as they are
-    triage: boolean      // Claude's ticket triage
-    codes: boolean       // hide client codes too (names are always hidden)
-    emails: boolean      // hide client users' email addresses
-    message: string      // what the AI is told when it asks with a client name ('' = the default)
-    round: boolean       // round counts in answers (so exact sizes cannot point to a client)
+    mode: PrivacyMode; posthog: PosthogMode; round: boolean
+    // Derived compatibility fields; these are never independently configurable.
+    on: boolean; lens: boolean; triage: boolean; codes: boolean; emails: boolean; message: string
 }
-const DEFAULTS: AnonSettings = { on: false, lens: true, posthog: 'block', triage: true, codes: true, emails: true, message: '', round: false }
-export function anonSettings(): AnonSettings {
-    const s = { ...DEFAULTS, ...getSetting<Partial<AnonSettings>>('anon', {}) }
-    // Earlier separate keys, kept working.
-    if (getSetting<boolean | null>('anon_ai', null) !== null && getSetting<Partial<AnonSettings>>('anon', {}).on === undefined) s.on = getSetting<boolean>('anon_ai', false) === true
-    if (getSetting<string | null>('anon_posthog', null) !== null && getSetting<Partial<AnonSettings>>('anon', {}).posthog === undefined) s.posthog = getSetting<string>('anon_posthog', 'block') === 'filter' ? 'filter' : 'block'
-    return s
+const policy = new AsyncLocalStorage<{ settings: AnonSettings; revision: number }>()
+function liveSettings(): AnonSettings {
+    const old = getSetting<Partial<AnonSettings>>('anon', {})
+    let mode = old.mode
+    if (!['open', 'standard', 'private'].includes(String(mode))) {
+        mode = (old.on ?? getSetting('anon_ai', false)) ? 'private' : 'standard'
+        tx(() => {
+            if (['open', 'standard', 'private'].includes(String(getSetting<Partial<AnonSettings>>('anon', {}).mode))) return
+            setSetting('anon', { mode, posthog: (old.posthog ?? getSetting('anon_posthog', 'block')) === 'filter' ? 'filter' : 'block', round: !!old.round })
+            run('INSERT INTO audit (t,who,action,details) VALUES (?,?,?,?)', new Date().toISOString(), 'lens', 'privacy.mode_migrated', JSON.stringify({ mode, legacy_on: mode === 'private', removed_bypasses: { lens: old.lens, triage: old.triage, codes: old.codes, emails: old.emails, posthog: old.posthog } }))
+        })
+        return liveSettings()
+    }
+    return { mode: mode!, on: mode === 'private', lens: true, triage: true, codes: true, emails: true, message: '', posthog: old.posthog === 'filter' ? 'filter' : 'block', round: mode === 'private' && !!old.round }
 }
-export const anonymiseOn = (): boolean => anonSettings().on
+export const anonSettings = (): AnonSettings => policy.getStore()?.settings ?? liveSettings()
+export const privacyMode = (): PrivacyMode => anonSettings().mode
+export const privacyRevision = (): number => getSetting('codename_revision', 0)
+export const privacyKey = (): string => JSON.stringify([anonSettings(), policy.getStore()?.revision ?? privacyRevision()])
+export const privacyCurrent = (): boolean => !policy.getStore() || (JSON.stringify(liveSettings()) === JSON.stringify(anonSettings()) && policy.getStore()!.revision === privacyRevision())
+export const PRIVACY_CHANGED = 'Privacy settings changed during this request. Please retry.'
+export function withPrivacy<T>(work: () => T): T { return policy.getStore() ? work() : policy.run({ settings: liveSettings(), revision: privacyRevision() }, work) }
+export const anonymiseOn = (): boolean => privacyMode() === 'private'
 export const posthogMode = (): PosthogMode => anonSettings().posthog
-/** Is the layer on for this path? */
-export const anonFor = (path: 'lens' | 'posthog' | 'triage'): boolean => {
-    const s = anonSettings()
-    return s.on && (path === 'posthog' ? s.posthog !== 'off' : s[path])
-}
+export const anonFor = (_path: 'lens' | 'posthog' | 'triage'): boolean => anonymiseOn()
 export function setAnonymise(p: Partial<Record<keyof AnonSettings, unknown>>): AnonSettings {
-    const next = { ...anonSettings() }
-    const bool = (k: 'on' | 'lens' | 'triage' | 'codes' | 'emails' | 'round') => { if (p[k] !== undefined) { if (typeof p[k] !== 'boolean') throw new AnonInputError(`${k} is true or false.`); next[k] = p[k] as boolean } }
-    for (const k of ['on', 'lens', 'triage', 'codes', 'emails', 'round'] as const) bool(k)
+    const previous = liveSettings()
+    const next = { ...previous }
+    if (p.mode !== undefined) {
+        if (!['open', 'standard', 'private'].includes(String(p.mode))) throw new AnonInputError('Mode is open, standard or private.')
+        next.mode = p.mode as PrivacyMode
+    }
     if (p.posthog !== undefined) {
-        if (!['block', 'filter', 'off'].includes(String(p.posthog))) throw new AnonInputError('PostHog is block, filter or off.')
+        if (!['block', 'filter'].includes(String(p.posthog))) throw new AnonInputError('PostHog is block or filter.')
         next.posthog = p.posthog as PosthogMode
     }
-    if (p.message !== undefined) {
-        const m = String(p.message).trim()
-        if (m.length > 500) throw new AnonInputError('The message to the AI is at most 500 characters.')
-        if (m && namesClient(m)) throw new AnonInputError('The message to the AI names a client. Use a codename or no client at all.')
-        next.message = m
+    if (p.round !== undefined) {
+        if (typeof p.round !== 'boolean') throw new AnonInputError('Round is true or false.')
+        next.round = p.round
     }
-    setSetting('anon', next)
+    tx(() => {
+        setSetting('anon', { mode: next.mode, posthog: next.posthog, round: next.round })
+        if (previous.mode !== next.mode || previous.posthog !== next.posthog || previous.round !== next.round) revise()
+        if (previous.mode !== next.mode || previous.posthog !== next.posthog || previous.round !== next.round) run('INSERT INTO audit(t,who,action,details) VALUES (?,?,?,?)', new Date().toISOString(), 'lens', 'privacy.policy_set', JSON.stringify({ before: previous.mode, mode: next.mode, posthog: next.posthog, round: next.round }))
+    })
     bump()
-    return next
+    return liveSettings()
 }
-const DEFAULT_REFUSAL = 'Client names and client codes are hidden from AI here (client anonymisation is on in Lens). Use the client\'s codename, such as "Teal Wren": the person finds it in Lens, on the Codenames page (/replays/codenames). Do not ask the person to type client names or codes in chat.'
-/** The refusal an AI gets for a client name or code: the same for known and unknown names. */
-export const refusalText = (): string => (anonSettings().message ? hideClients(anonSettings().message).text : DEFAULT_REFUSAL)
+const DEFAULT_REFUSAL = 'Private mode hides client names and codes. Use a numbered codename, such as "Client 100", from Lens → Codenames (/replays/codenames). Unknown or retired codenames cannot be used. Do not type real client names or codes in chat.'
+export const refusalText = (): string => DEFAULT_REFUSAL
 export class AnonInputError extends Error {}
 
 // ------------------------------------------------------------------ codenames
@@ -69,25 +68,49 @@ interface Row { client: string; name: string; codename: string; aliases: string;
 const words = (s: string) => s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
 export const slug = (codename: string) => words(codename).join('-')
 
-/** Words a codename must not share with any client name or code (so it never hints at one). */
-function clashes(codename: string, rows: { client: string; name: string; aliases: string[] }[], self?: string): string | undefined {
-    const mine = new Set(words(codename))
-    for (const r of rows) {
-        if (r.client === self) {
-            if ([r.name, r.client, ...r.aliases].some((x) => words(x).some((w) => mine.has(w)))) return 'it shares a word with this client\'s own name or code'
-            continue
-        }
-        if ([r.name, r.client, ...r.aliases].some((x) => words(x).some((w) => mine.has(w)))) return 'it shares a word with another client\'s name or code'
-    }
+/** A codename label nobody has used (retired) and that is not a real client's name or code. */
+function labelFree(label: string): boolean {
+    if (one('SELECT label FROM retired_codenames WHERE label=?', slug(label))) return false
+    return !one('SELECT client FROM client_codenames WHERE lower(name) = lower(?) OR lower(client) = lower(?)', label, label)
 }
-/** A random codename from the 10,000 (src/core/codenames.ts) that no client has and that shares no word with
- * any client. Past 10,000 clients, a number is added ("Teal Wren 2"). */
-function randomCodename(taken: Set<string>, rows: { client: string; name: string; aliases: string[] }[], self: string): string {
-    const free = (c: string) => !taken.has(c.toLowerCase()) && !clashes(c, rows, self)
-    for (let i = 0; i < 200; i++) { const c = CODENAMES[randomInt(CODENAMES.length)]; if (free(c)) return c }
-    const start = randomInt(CODENAMES.length) // mostly taken: walk the whole list once from a random place
-    for (let i = 0; i < CODENAMES.length; i++) { const c = CODENAMES[(start + i) % CODENAMES.length]; if (free(c)) return c }
-    for (let n = 2; ; n++) { const c = `${CODENAMES[randomInt(CODENAMES.length)]} ${n}`; if (free(c)) return c }
+export interface Numbering { prefix: string; start: number }
+export const numbering = (): Numbering => getSetting('codename_numbering', { prefix: 'Client', start: 1 })
+function validateNumbering(p: Numbering): Numbering {
+    const prefix = String(p.prefix).trim().replace(/\s+/g, ' ')
+    if (!prefix || !words(prefix).length || prefix.length > 40 || !/^[\p{L}\p{N} -]+$/u.test(prefix)) throw new AnonInputError('Prefix needs 1–40 letters, digits, spaces or hyphens.')
+    if (!Number.isSafeInteger(p.start) || p.start < 0) throw new AnonInputError('Start must be a non-negative safe integer.')
+    const k = keyOf(prefix)
+    for (const r of listCodenames()) for (const n of [r.client, r.name, ...r.aliases, ...r.auto_aliases, ...acronyms(r.name)]) {
+        if (n && k.includes(keyOf(n))) throw new AnonInputError('Prefix contains a real client name, code or alias.')
+    }
+    return { prefix, start: p.start }
+}
+export function previewNumbering(p: Numbering) {
+    p = validateNumbering(p)
+    const roster = all<Row & { rank: number }>('SELECT * FROM client_codenames ORDER BY rank')
+    const currentSlugs = new Set(roster.map(r => slug(r.codename)))
+    return roster.map(r => {
+        if (!Number.isSafeInteger(p.start + r.rank)) throw new AnonInputError('Number exceeds safe integer range.')
+        const codename = `${p.prefix} ${p.start + r.rank}`
+        if (codename !== r.codename && one('SELECT label FROM retired_codenames WHERE label=?', slug(codename))) throw new AnonInputError('This scheme reuses a retired codename. Choose another prefix or start.')
+        if (codename !== r.codename && currentSlugs.has(slug(codename))) throw new AnonInputError('This scheme reassigns an existing codename. Choose another prefix or start.')
+        return { client: r.client, name: r.name, before: r.codename, codename }
+    })
+}
+export function applyNumbering(p: Numbering, by: string, expectedRevision?: number) {
+    const result = tx(() => {
+        if (expectedRevision !== undefined && expectedRevision !== privacyRevision()) throw new AnonInputError('Mapping changed; preview again before applying.')
+        const rows = previewNumbering(p)
+        for (const r of rows) if (r.before !== r.codename) {
+            run('INSERT OR IGNORE INTO retired_codenames(label) VALUES (?)', slug(r.before))
+            run('UPDATE client_codenames SET codename=?,set_by=?,set_at=? WHERE client=?', r.codename, by, new Date().toISOString(), r.client)
+        }
+        setSetting('codename_numbering', validateNumbering(p))
+        setSetting('codename_revision', getSetting('codename_revision', 0) + 1)
+        run('INSERT INTO audit(t,who,action,details) VALUES (?,?,?,?)', new Date().toISOString(), by, 'privacy.numbering_set', JSON.stringify(p))
+        return rows
+    })
+    bump(); return result
 }
 
 // The legal or industry words a client is often written without: "Northwind Treasury" is also "Northwind".
@@ -104,30 +127,15 @@ export function autoAliases(name: string): string[] {
 }
 const parseAliases = (s: string): string[] => { try { const a = JSON.parse(s); return Array.isArray(a) ? a.map(String) : [] } catch { return [] } }
 const toPublic = (r: Row): ClientCodename => ({ client: r.client, name: r.name, codename: r.codename, aliases: parseAliases(r.aliases), auto_aliases: autoAliases(r.name), set_by: r.set_by, set_at: r.set_at })
-export const listCodenames = (): ClientCodename[] => all<Row>('SELECT * FROM client_codenames ORDER BY lower(name), client').map(toPublic)
+export const listCodenames = (): ClientCodename[] => all<Row>('SELECT * FROM client_codenames ORDER BY rank, client').map(toPublic)
 
 /** Every client Lens knows of gets a codename (once; it then stays). Names are refreshed. */
 export function syncClients(clients: { id: string; name?: string }[], by = 'lens'): number {
     let added = 0
     tx(() => {
-        let rows = all<Row>('SELECT * FROM client_codenames')
-        // Once: codenames Lens gave from its first, longer word list move to the short list of 10,000 (the
-        // setting was never on before it, so nobody knows them yet). Codenames an admin chose stay.
-        if (!getSetting<boolean>('codenames_v2', false)) {
-            const list = new Set(CODENAMES)
-            const roster = rows.map((r) => ({ client: r.client, name: r.name, aliases: parseAliases(r.aliases) }))
-            const taken = new Set(rows.filter((r) => r.set_by !== 'lens' || list.has(r.codename)).map((r) => r.codename.toLowerCase()))
-            for (const r of rows) if (r.set_by === 'lens' && !list.has(r.codename)) {
-                const c = randomCodename(taken, roster, r.client); taken.add(c.toLowerCase())
-                run('UPDATE client_codenames SET codename=? WHERE client=?', c, r.client); added++
-            }
-            setSetting('codenames_v2', true)
-            rows = all<Row>('SELECT * FROM client_codenames')
-        }
+        const rows = all<Row>('SELECT * FROM client_codenames')
         const byId = new Map(rows.map((r) => [r.client, r]))
-        const roster = rows.map((r) => ({ client: r.client, name: r.name, aliases: parseAliases(r.aliases) }))
-        const taken = new Set(rows.map((r) => r.codename.toLowerCase()))
-        for (const c of clients) {
+        for (const c of shuffled(clients)) {
             const id = String(c.id || '').trim(); if (!id || id.length > 256) continue
             const name = String(c.name || '').trim().slice(0, 256)
             const have = byId.get(id)
@@ -141,19 +149,24 @@ export function syncClients(clients: { id: string; name?: string }[], by = 'lens
                 }
                 continue
             }
-            roster.push({ client: id, name, aliases: [] })
-            const codename = randomCodename(taken, roster, id)
-            taken.add(codename.toLowerCase())
-            run('INSERT INTO client_codenames (client,name,codename,aliases,set_by,set_at) VALUES (?,?,?,?,?,?)', id, name === id ? '' : name, codename, '[]', by, new Date().toISOString())
+            const scheme = numbering()
+            // Skip numbers whose label is retired or is a real client's name or code: a new client must always get
+            // a codename (a failed sync would leave its real name unknown to the privacy filter).
+            let rank = getSetting('codename_next_rank', 0)
+            while (Number.isSafeInteger(scheme.start + rank) && !labelFree(`${scheme.prefix} ${scheme.start + rank}`)) rank++
+            if (!Number.isSafeInteger(scheme.start + rank)) throw new AnonInputError('Codename number exceeds safe integer range; update the numbering scheme.')
+            setSetting('codename_next_rank', rank + 1)
+            const codename = `${scheme.prefix} ${scheme.start + rank}`
+            run('INSERT INTO client_codenames (client,name,codename,aliases,set_by,set_at,rank) VALUES (?,?,?,?,?,?,?)', id, name === id ? '' : name, codename, '[]', by, new Date().toISOString(), rank)
             byId.set(id, { client: id, name, codename, aliases: '[]', set_by: by, set_at: '' })
             added++
         }
+        if (added) revise()
     })
-    if (added) bump()
     return added
 }
 
-/** An admin changes a codename (or asks for a new random one) and the names a client also goes by. */
+/** Admins can edit real-name aliases; labels are controlled only by the shared numbering scheme. */
 export function setCodename(client: string, p: { codename?: string; aliases?: string[] | string; regenerate?: boolean }, by: string): ClientCodename {
     const out = tx(() => {
         const rows = all<Row>('SELECT * FROM client_codenames')
@@ -168,18 +181,12 @@ export function setCodename(client: string, p: { codename?: string; aliases?: st
             aliases = [...new Set(list)]
             const mine = roster.find((r) => r.client === client)!; mine.aliases = aliases
         }
-        let codename = me.codename
-        if (p.regenerate) codename = randomCodename(new Set(rows.filter((r) => r.client !== client).map((r) => r.codename.toLowerCase())), roster, client)
-        else if (p.codename !== undefined) {
-            codename = String(p.codename).trim().replace(/\s+/g, ' ')
-            if (!/^[A-Za-z][A-Za-z0-9 -]{2,39}$/.test(codename)) throw new AnonInputError('A codename is 3 to 40 letters, digits, spaces or hyphens, starting with a letter.')
-            if (rows.some((r) => r.client !== client && r.codename.toLowerCase() === codename.toLowerCase())) throw new AnonInputError('Another client has this codename.')
-            const why = clashes(codename, roster, client); if (why) throw new AnonInputError(`Choose another codename: ${why}.`)
-        }
+        const codename = me.codename
+        if (p.regenerate || p.codename !== undefined && p.codename !== me.codename) throw new AnonInputError('Numbered codenames cannot be edited individually; change prefix/start for all clients. Real-name aliases remain editable.')
         run('UPDATE client_codenames SET codename=?, aliases=?, set_by=?, set_at=? WHERE client=?', codename, JSON.stringify(aliases), by, new Date().toISOString(), client)
+        revise()
         return toPublic(one<Row>('SELECT * FROM client_codenames WHERE client=?', client)!)
     })
-    bump()
     return out
 }
 
@@ -191,7 +198,7 @@ export function setCodename(client: string, p: { codename?: string; aliases?: st
 // Before matching, look-alike letters are made plain: full-width (ＡＣＭＥ), zero-width spaces and soft
 // hyphens, and Cyrillic or Greek letters that look Latin. Email addresses of anyone but Lens's own people are
 // hidden too: a domain names its company.
-interface Matcher { names?: RegExp; codesAnyCase?: RegExp; codesExact?: RegExp; byKey: Map<string, Row>; codenames: Map<string, Row>; staff: Set<string>; emails: boolean; fuzzy: Map<string, Row>; deletions: Map<string, string[]> }
+interface Matcher { codenameTokens?: RegExp; names?: RegExp; codesAnyCase?: RegExp; codesExact?: RegExp; byKey: Map<string, Row>; codenames: Map<string, Row>; staff: Set<string>; emails: boolean; fuzzy: Map<string, Row>; deletions: Map<string, string[]> }
 /** Email domains of Lens's own people (admins, PMs): their addresses may show; everyone else's may not. */
 function staffDomains(): Set<string> {
     const out = new Set<string>()
@@ -217,8 +224,9 @@ export const plain = (s: string) => s
     .normalize('NFKC')
 const EMAIL = /[\p{L}\p{N}._%+-]+@([\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+)/giu
 let version = 0
-let cache: { version: number; m: Matcher } | undefined
-function bump() { version++ }
+let cache: { version: number; revision: number; m: Matcher } | undefined
+function bump() { version++; cache = undefined }
+function revise() { setSetting('codename_revision', privacyRevision() + 1); bump() }
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 // Between the words of a name: nothing, separators (also URL-encoded), and the name's own punctuation, written
 // as is or URL-encoded ("O'Brien & Sons" also matches O%27Brien%20%26%20Sons, OBrien and Sons, OBrien-Sons).
@@ -292,7 +300,7 @@ function withinOne(a: string, b: string): boolean {
 }
 
 function matcher(): Matcher {
-    if (cache?.version === version) return cache.m
+    if (cache?.version === version && cache.revision === privacyRevision()) return cache.m
     const rows = all<Row>('SELECT * FROM client_codenames')
     const settings = anonSettings()
     const byKey = new Map<string, Row>(), codenames = new Map<string, Row>(), fuzzy = new Map<string, Row>()
@@ -308,7 +316,7 @@ function matcher(): Matcher {
         for (const a of acronyms(r.name)) { byKey.set('x:' + a, r); exact.push(esc(a)) }
         // Distinctive words of the name, for misspellings ("Nortwind").
         for (const w of distinctive([r.name, ...parseAliases(r.aliases)])) if (!fuzzy.has(w)) fuzzy.set(w, r)
-        if (!settings.codes) continue
+        if (!settings.codes || /^\d+$/.test(r.client)) continue
         if (shortCode(r.client)) {
             // A code that is also a word: as written, or capitalised (Beta), never in lower case.
             const title = r.client[0].toUpperCase() + r.client.slice(1).toLowerCase()
@@ -318,17 +326,33 @@ function matcher(): Matcher {
     }
     const longest = (a: string[]) => [...new Set(a)].sort((x, y) => y.length - x.length).join('|')
     const m: Matcher = {
-        byKey, codenames,
+        byKey, codenames, codenameTokens: codenamePattern(rows),
         names: names.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${longest(names)})(?![\\p{L}\\p{N}])`, 'giu') : undefined,
         codesAnyCase: anyCase.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${longest(anyCase)})(?![\\p{L}\\p{N}])`, 'giu') : undefined,
         codesExact: exact.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${longest(exact)})(?![\\p{L}\\p{N}])`, 'gu') : undefined,
         staff: staffDomains(), emails: settings.emails, fuzzy, deletions: deletionIndex([...fuzzy.keys()]),
     }
-    cache = { version, m }
+    cache = { version, revision: privacyRevision(), m }
     return m
 }
 /** Call after anything outside this module changed client_codenames (tests, imports). */
 export const forgetMatcher = () => bump()
+
+function codenamePattern(rows: Row[]): RegExp | undefined {
+    const prefixes = new Set<string>(), other: string[] = []
+    const sep = '(?:[\\s_-]|%20|%2[dD])+'
+    for (const r of rows) {
+        const numbered = /^(.*) (\d+)$/.exec(r.codename)
+        if (numbered) prefixes.add(numbered[1].split(/[\s-]+/).map(esc).join(sep))
+        else other.push(r.codename.split(/[\s-]+/).map(esc).join(sep))
+    }
+    const parts = [...prefixes].map(p => p + sep + '[0-9]+').concat(other)
+    return parts.length ? new RegExp(`(?<![\\p{L}\\p{N}])(?:${parts.join('|')})(?![\\p{L}\\p{N}])`, 'giu') : undefined
+}
+export function protectCodenameTokens(text: string, keep: (token: string) => string): string {
+    const m = matcher()
+    return m.codenameTokens ? text.replace(m.codenameTokens, token => clientOfCodename(token) ? keep(token) : token) : text
+}
 
 const URLISH = /(?:https?:\/\/|\/replays\/|\/posthog-mcp|\/mcp\b)[^\s"'<>)\]`]*/g
 /** The text with every client name and code replaced by its codename (in links: its slug, which Lens's
@@ -337,7 +361,7 @@ export function hideClients(text: string): { text: string; n: number } {
     if (!text) return { text, n: 0 }
     const m = matcher()
     let n = 0
-    text = plain(text)
+    text = plain(text).replace(/\u0000/g, '')
     // Links that open a clip without signing in become sign-in links.
     text = text.replace(/((?:https?:\/\/[^\s"'<>\/]+)?)\/clips\/([^\s"'<>?#]+)\?([^\s"'<>#]*)/g, (hit, base: string, name: string, query: string) => {
         let q: URLSearchParams
@@ -351,6 +375,8 @@ export function hideClients(text: string): { text: string; n: number } {
     if (m.emails) text = text.replace(EMAIL, (hit, domain: string) => (m.staff.has(domain.toLowerCase()) ? hit : (n++, '[email hidden]')))
     // Session and other UUIDs stay exactly as they are (a part of one can look like a code).
     const kept: string[] = []
+    const protect = (v: string) => `\u0000${kept.push(v) - 1}\u0000`
+    text = protectCodenameTokens(text, protect)
     text = text.replace(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g, (u) => `\u0000${kept.push(u) - 1}\u0000`)
     const swap = (inUrl: boolean) => (s: string) => {
         let out = s
@@ -360,7 +386,7 @@ export function hideClients(text: string): { text: string; n: number } {
                 const r = m.byKey.get(key(hit))
                 if (!r) return hit
                 n++
-                return inUrl ? encodeURIComponent(slug(r.codename)) : r.codename
+                return protect(inUrl ? encodeURIComponent(slug(r.codename)) : r.codename)
             })
         }
         sub(m.names, (x) => { const k = keyOf(x); for (const c of [k, k.replace(/es$/, ''), k.replace(/s$/, '')]) if (m.byKey.has('n:' + c)) return 'n:' + c; return 'n:' + k })
@@ -370,8 +396,8 @@ export function hideClients(text: string): { text: string; n: number } {
         if (m.fuzzy.size) out = out.replace(/(?<![\p{L}\p{N}])\p{L}{5,}(?![\p{L}\p{N}])/gu, (word) => {
             const w = word.toLowerCase()
             if (VOCABULARY.has(w)) return word
-            if (m.fuzzy.has(w)) { n++; const r = m.fuzzy.get(w)!; return inUrl ? encodeURIComponent(slug(r.codename)) : r.codename }
-            for (const k of dels(w)) for (const d of m.deletions.get(k) || []) if (withinOne(w, d)) { const r = m.fuzzy.get(d)!; n++; return inUrl ? encodeURIComponent(slug(r.codename)) : r.codename }
+            if (m.fuzzy.has(w)) { n++; const r = m.fuzzy.get(w)!; return protect(inUrl ? encodeURIComponent(slug(r.codename)) : r.codename) }
+            for (const k of dels(w)) for (const d of m.deletions.get(k) || []) if (withinOne(w, d)) { const r = m.fuzzy.get(d)!; n++; return protect(inUrl ? encodeURIComponent(slug(r.codename)) : r.codename) }
             return word
         })
         return out
@@ -390,6 +416,7 @@ export function hideClientsDeep<T>(value: T): { value: T; n: number } {
     let n = 0
     const walk = (v: unknown, field = false): unknown => {
         if (typeof v === 'string') {
+            if (field && isClientCode(v)) { n++; return codenameOf(v) || '[client]' }
             const h = hideClients(v); n += h.n
             if (field && h.n === 0 && v.trim() && !clientOfCodename(v) && (anonSettings().codes || !isClientCode(v.trim()))) { n++; unknownClientSeen(); return '[client]' }
             return h.text
@@ -435,26 +462,24 @@ export function outsideEmail(text: string): boolean {
 }
 /** A codename (or its slug) → the client's code, or undefined. */
 export function clientOfCodename(s: string): string | undefined {
-    const k = String(s || '').trim().toLowerCase().replace(/\s+/g, ' ')
+    let decoded = String(s || ''); try { decoded = decodeURIComponent(decoded) } catch {}
+    const k = decoded.trim().toLowerCase().replace(/\s+/g, ' ')
     const m = matcher()
-    return (m.codenames.get(k) || m.codenames.get(k.replace(/ /g, '-')))?.client
+    return (m.codenames.get(k) || m.codenames.get(slug(k)))?.client
 }
 /** Every codename in a text replaced by the client's code (what the AI sends back). */
 export function revealCodenames(text: string): string {
     const m = matcher()
-    if (!m.codenames.size) return text
-    const keys = [...m.codenames.keys()].sort((a, b) => b.length - a.length).map((k) => k.split(/[\s-]+/).map(esc).join('[\\s_\\-]+'))
-    return text.replace(new RegExp(`(?<![\\p{L}\\p{N}])(?:${keys.join('|')})(?![\\p{L}\\p{N}])`, 'giu'), (hit) => clientOfCodename(hit.replace(/[\s_\-]+/g, ' ')) || hit)
+    return m.codenameTokens ? text.replace(m.codenameTokens, hit => clientOfCodename(hit) || hit) : text
 }
-/** Every codename in a text replaced by the client's real name (text written for people). */
+/** Every current codename replaced with the real name for human-facing reports. */
 export function namesForCodenames(text: string): string {
     const m = matcher()
-    if (!m.codenames.size) return text
-    const keys = [...m.codenames.keys()].sort((a, b) => b.length - a.length).map((k) => k.split(/[\s-]+/).map(esc).join('[\\s_\\-]+'))
-    return text.replace(new RegExp(`(?<![\\p{L}\\p{N}])(?:${keys.join('|')})(?![\\p{L}\\p{N}])`, 'giu'), (hit) => {
-        const r = m.codenames.get(hit.toLowerCase().replace(/[\s_\-]+/g, ' ')) || m.codenames.get(hit.toLowerCase().replace(/[\s_\-]+/g, '-'))
-        return r ? (r.name || r.client) : hit
-    })
+    return m.codenameTokens ? text.replace(m.codenameTokens, hit => {
+        const client = clientOfCodename(hit)
+        const row = client ? one<Row>('SELECT * FROM client_codenames WHERE client=?', client) : undefined
+        return row ? row.name || row.client : hit
+    }) : text
 }
 /** A client code Lens knows (whatever the case). */
 export const isClientCode = (s: string): boolean => !!s && !!one<{ client: string }>('SELECT client FROM client_codenames WHERE client=? COLLATE NOCASE', s)
@@ -472,3 +497,34 @@ export function blockCounts(days = 30): Record<string, number> {
 
 /** The default refusal (tests and callers that do not need the admin's own wording). */
 export const REFUSAL = DEFAULT_REFUSAL
+
+function shuffled<T>(input: T[]): T[] {
+    const out = [...input]
+    for (let i = out.length - 1; i > 0; i--) { const j = randomInt(i + 1); [out[i], out[j]] = [out[j], out[i]] }
+    return out
+}
+function migrateRanks() {
+    tx(() => {
+        const rows = shuffled(all<Row & { rank: number | null }>('SELECT * FROM client_codenames WHERE rank IS NULL'))
+        let next = getSetting('codename_next_rank', 0)
+        const scheme = numbering()
+        for (const r of rows) {
+            run('INSERT OR IGNORE INTO retired_codenames(label) VALUES (?)', slug(r.codename))
+            run('UPDATE client_codenames SET codename=? WHERE client=?', `tmp-${randomUUID()}`, r.client)
+        }
+        for (const r of rows) {
+            while (!labelFree(`${scheme.prefix} ${scheme.start + next}`)) next++
+            const rank = next++
+            if (!Number.isSafeInteger(scheme.start + rank)) throw new AnonInputError('Codename number exceeds safe integer range.')
+            run('UPDATE client_codenames SET rank=?,codename=? WHERE client=?', rank, `${scheme.prefix} ${scheme.start + rank}`, r.client)
+        }
+        setSetting('codename_next_rank', next)
+        if (rows.length) {
+            setSetting('codename_revision', getSetting('codename_revision', 0) + 1)
+            run('INSERT INTO audit(t,who,action,details) VALUES (?,?,?,?)', new Date().toISOString(), 'lens', 'privacy.ranks_migrated', JSON.stringify({ clients: rows.length }))
+        }
+    })
+}
+migrateRanks()
+
+liveSettings()

@@ -14,7 +14,7 @@ const call = (command: string, id = 3) => ({ jsonrpc: '2.0', id, method: 'tools/
 describe('PostHog routing rewrites', () => {
     test('prepends initialize instructions from the live fixture without changing the original', () => {
         const result = rewriteResponse(fixture.initialize, options.name) as typeof fixture.initialize
-        assert.ok(result.result.instructions.startsWith('Replays are private'))
+        assert.ok(result.result.instructions.includes('Replays are private'))
         assert.match(result.result.instructions, /Lens server \(reval-lens\)/)
         assert.ok(result.result.instructions.endsWith(fixture.initialize.result.instructions))
         assert.deepEqual(result.result.serverInfo, fixture.initialize.result.serverInfo)

@@ -132,15 +132,15 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         {
             title: 'Check a survey before saving it',
             description: `Checks an in-app ${app} survey described in ${app}'s words (dialogs, buttons, messages, clients, colours) and estimates how many sessions would have seen it in the last 14 days. Users are protected from survey fatigue: at least ${config.surveys.gapHours} hours between surveys, at most ${config.surveys.perUser} running at once, and ${config.surveys.quietDaysAfterClose} quiet days after they close one. When this survey's users are already in another running survey, it returns a ⚠ notice (overlap, or queued users who get it later); always pass it on to the person, first and in full. Saves nothing. Use describe_app_events for dialog ids and button names. Then show the person the plan and problems, and save_survey when they agree.`,
-            inputSchema: { ...specShape, estimate: z.boolean().default(true).describe('Count past sessions that went through the steps') },
+            inputSchema: { ...specShape, days:z.number().int().min(1).max(1500).default(14),estimate: z.boolean().default(true).describe('Count past sessions that went through the steps') },
             annotations: { readOnlyHint: true },
         },
         async (args) => {
-            const { estimate, ...spec } = args
+            const { estimate, days, ...spec } = args
             const { ids, unclear } = await clientIds(spec.clients)
             const c = compileSurvey(spec as SurveySpec, { clientIds: ids })
             const errors = c.problems.filter((p) => p.level === 'error')
-            const reach = estimate && !errors.length ? await estimateReach(c.chain).catch((e) => ({ error: (e as Error).message })) : undefined
+            const reach = estimate && !errors.length ? await estimateReach(c.chain,days).catch((e) => ({ error: (e as Error).message })) : undefined
             const conflicts = conflictsFor(c.chain, {}, await listSurveys())
             const q = queueAlert(c.chain, conflicts)
             return json(`${q.level === 'clear' ? '' : q.alert + '\n\n'}${errors.length || unclear.length ? 'This survey cannot be saved yet:' : 'The survey checks out. Show the person this plan (lead with any ⚠ alert above), then save_survey.'}`, {
@@ -151,7 +151,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
                 shows: `${spec.show === 'every_time' ? 'every time' : 'once per user'}, as soon as the last step happens${spec.wait_for_page === false ? '' : ' and the page has loaded'}`,
                 problems: c.problems,
                 surveys_per_user: { ...queueAlert(c.chain, conflicts), already_in: conflicts.map((x) => x.text) },
-                reach_last_14_days: reach,
+                reach: {days,result:reach},
             })
         }
     )
@@ -198,7 +198,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         {
             title: 'Which surveys are there?',
             description: `Every in-app survey (made in Lens or in PostHog): status, the steps that show it, clients, and how many were shown and answered.`,
-            inputSchema: { days: z.number().int().min(1).max(365).default(30).describe('Counts over this many days') },
+            inputSchema: { days: z.number().int().min(1).max(1500).default(30).describe('Counts over this many days') },
             annotations: { readOnlyHint: true },
         },
         async ({ days }) => {
@@ -212,7 +212,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         {
             title: 'What did users answer?',
             description: 'A survey\'s numbers: how often its steps completed, shown, answered and dismissed, each question\'s answers (ratings, NPS, choices, recent written answers), per client and per day.',
-            inputSchema: { survey_id: z.string(), days: z.number().int().min(1).max(365).default(90) },
+            inputSchema: { survey_id: z.string(), days: z.number().int().min(1).max(1500).default(90) },
             annotations: { readOnlyHint: true },
         },
         async ({ survey_id, days }) => {

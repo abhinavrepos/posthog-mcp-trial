@@ -273,7 +273,7 @@ describe('survey results without submission sampling', () => {
         assert.match(ratings[0].query, /argMax\(tuple\(coalesce\(/)
         for (const q of seen) {
             assert.match(q.query, /LIMIT/)
-            assert.match(q.query, /timestamp > now\(\) - toIntervalDay\(\{days\}\)/)
+            assert.match(q.query, /timestamp > now\(\) - toIntervalDay\(\{days\}\)|timestamp >= \{history_from\} AND timestamp < \{history_to\}/)
             assert.doesNotMatch(q.query, /OFFSET/)
         }
     })

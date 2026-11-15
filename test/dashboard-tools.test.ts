@@ -58,8 +58,8 @@ test('registered tools follow none, view and share roles', async () => {
             } else assert.deepEqual((await c.client.listTools()).tools.map(t => t.name).sort(), dashboardToolNames(role, 'launch', false).sort(), 'no replay insights without their own grant')
         } finally { await c.close() }
     }
-    assert.equal(dashboardToolNames('view').length, 12)
-    assert.equal(dashboardToolNames('view', 'launch', false).length, 10)
+    assert.equal(dashboardToolNames('view').length, 14)
+    assert.equal(dashboardToolNames('view', 'launch', false).length, 12)
     assert.equal(dashboardToolNames('share').length, DASHBOARD_TOOLS.length)
 })
 
@@ -188,7 +188,7 @@ test('date windows and defaults use complete UTC days and matching preceding per
     const fixed = new URL(JSON.parse(await call('task_map', { when: '2026-01-01 to 2026-01-28' })).open, 'http://lens')
     assert.equal(fixed.searchParams.get('from'), '2026-01-01')
     assert.equal(fixed.searchParams.get('to'), '2026-01-28')
-    assert.match(await call('task_map', { when: 'not a date' }), /could not read those dates/)
+    assert.match(await call('task_map', { when: 'not a date' }), /Unrecognised time window/)
 })
 
 test('rescue chat shows top three reasons, limits rows and descriptions, links dates, and audits status by local client name', async () => {
@@ -259,7 +259,7 @@ test('signal scorecard is a view-role read and validates bounded weeks', async (
         const result = await c.client.callTool({name:'signal_scorecard',arguments:{weeks:12}})
         assert.match((result.content as {text:string}[])[0].text,/Small sample/)
         assert.deepEqual(seen,[{weeks:12}])
-        const bad = await c.client.callTool({name:'signal_scorecard',arguments:{weeks:53}})
+        const bad = await c.client.callTool({name:'signal_scorecard',arguments:{weeks:210}})
         assert.equal(bad.isError,true)
         assert.equal(seen.length,1)
     } finally { await c.close() }

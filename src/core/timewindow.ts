@@ -79,7 +79,54 @@ function parseClock(text: string): { h: number; min: number } | undefined {
     return { h, min }
 }
 
+let completedThrough: () => string | null | undefined = () => undefined
+export function setWindowDataThrough(read: () => string | null | undefined): void { completedThrough=read }
+
+/** Validated UTC analytical windows. `through` is an inclusive completed day. */
+export function analyticalWindow(text: string, now = new Date(), through: string | null | undefined = completedThrough()): TimeWindow | undefined {
+    const value = text.trim().toLowerCase()
+    const make = (from: Date, to: Date): TimeWindow => {
+        const days = (+to - +from) / DAY
+        if (!Number.isFinite(days) || days <= 0 || days > 1500) throw new Error('Choose an ordered window of at most 1500 days.')
+        return { from, to, label: text, precision: 'range' }
+    }
+    const date = (s: string) => {
+        const d = new Date(s)
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || !Number.isFinite(+d) || d.toISOString().slice(0,10) !== s) throw new Error('Dates must be valid YYYY-MM-DD UTC dates')
+        return d
+    }
+    let m = /^(\d{4}-\d{2}-\d{2})\s+to\s+(\d{4}-\d{2}-\d{2})$/.exec(value)
+    if (m) return make(date(m[1]), new Date(+date(m[2]) + DAY))
+    if (/^\d{4}$/.test(value)) return make(new Date(Date.UTC(+value,0,1)), new Date(Date.UTC(+value+1,0,1)))
+    m = /^q([1-4])\s+(\d{4})$/.exec(value)
+    if (m) return make(new Date(Date.UTC(+m[2],(+m[1]-1)*3,1)),new Date(Date.UTC(+m[2],+m[1]*3,1)))
+    m = /^([a-z]+)\s+(\d{4})$/.exec(value)
+    if (m) {
+        const month = ['january','february','march','april','may','june','july','august','september','october','november','december'].findIndex(v => v === m![1] || v.slice(0,3) === m![1])
+        if (month >= 0) return make(new Date(Date.UTC(+m[2],month,1)),new Date(Date.UTC(+m[2],month+1,1)))
+    }
+    m = /^(?:last|past)\s+(?:(\d+|a|one)\s+)?(days?|weeks?|months?|years?|quarter)$/.exec(value)
+    if (m) {
+        const n = !m[1] || ['a','one'].includes(m[1]) ? 1 : +m[1]
+        if (!Number.isSafeInteger(n) || n < 1 || n > 1500) throw new Error('Invalid relative window')
+        const end = new Date(Math.min(Math.floor(+now / DAY)*DAY, through ? +date(through)+DAY : Infinity))
+        const start = new Date(end)
+        if (/year/.test(m[2])) start.setUTCFullYear(start.getUTCFullYear()-n)
+        else if (/month|quarter/.test(m[2])) {
+            const originalDay = start.getUTCDate()
+            start.setUTCDate(1); start.setUTCMonth(start.getUTCMonth()-n*(m[2] === 'quarter' ? 3 : 1))
+            const last = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth()+1, 0)).getUTCDate()
+            start.setUTCDate(Math.min(originalDay,last))
+        } else start.setUTCDate(start.getUTCDate()-n*(/week/.test(m[2]) ? 7 : 1))
+        return make(start,end)
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return make(date(value),new Date(+date(value)+DAY))
+    return undefined
+}
+
 export function parseTimeWindow(text: string, now: Date = new Date(), tzIn?: string): TimeWindow {
+    const analytical = analyticalWindow(text, now)
+    if (analytical) return analytical
     const tz = validTz(tzIn)
     const t = ` ${text.toLowerCase()} `
     const today = localDate(now, tz)
@@ -170,6 +217,7 @@ export function parseTimeWindow(text: string, now: Date = new Date(), tzIn?: str
         return window(from, new Date(from.getTime() + DAY), `${dayLabel} (${tzLabel})`, 'day')
     }
 
+    if (text.trim()) throw new Error(`Unrecognised time window: ${text}`)
     return window(new Date(now.getTime() - 7 * DAY), now, 'no time given; using the last 7 days', 'none')
 }
 

@@ -1,3 +1,4 @@
+import { analyticalWindow } from './timewindow.ts'
 import { rememberClientSurvey } from './surveylocal.ts'
 // Surveys made from Lens: a PM describes one in the app's own words (which dialog, which button, which
 // message, which clients, which colours) and Lens turns it into a PostHog survey that PostHog's own
@@ -81,6 +82,11 @@ async function cachedSurvey<T>(key: unknown[], load: () => Promise<T>, stale?: (
 let surveyQueryTail: Promise<unknown> = Promise.resolve()
 let surveyQueries = 0
 function surveyQuery(query: string, values: Record<string, unknown> = {}) {
+    if(typeof values.days === 'number') {
+        const window=analyticalWindow(`last ${values.days} days`)!
+        query=query.replaceAll('timestamp > now() - toIntervalDay({days})','timestamp >= {history_from} AND timestamp < {history_to}')
+        values={...values,history_from:window.from.toISOString(),history_to:window.to.toISOString()}
+    }
     if (surveyQueries >= 64) return Promise.reject(new PostHogError('Survey query queue is busy; please retry shortly.', 503))
     surveyQueries++
     const run = surveyQueryTail.then(() => hogql(query, values)).finally(() => { surveyQueries-- })
@@ -1177,7 +1183,7 @@ async function loadSurveyResults(id: string, days: number): Promise<Results> {
         surveyQuery(
             `SELECT toString(toDate(timestamp)) AS day, countIf(event = 'survey shown') AS shown, ${ANSWERED} AS answered
              FROM events WHERE timestamp > now() - toIntervalDay({days}) AND event IN ('survey shown', 'survey sent') AND toString(properties.$survey_id) = {id}
-             GROUP BY day ORDER BY day LIMIT 400`,
+             GROUP BY day ORDER BY day LIMIT 1500`,
             values
         ),
     ])

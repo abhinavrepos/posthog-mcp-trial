@@ -136,7 +136,7 @@ test('MCP recording tools enforce insights and partition cached session stories'
         const insights = !!caller?.admin || caller?.insights === true
         let call!: (args: unknown) => Promise<string>
         const server = { registerTool: (_name: string, _cfg: unknown, cb: typeof call) => { call = cb } }
-        new Function('caller', 'server', 'CACHED_TOOLS', 'cachedToolCall', 'DIRECT_CALL', 'safeResult', stripTypeScriptTypes(wrapper))(caller, server, new Set(['session_story']), cachedToolCall, '', async (r: unknown) => r)
+        new Function('caller', 'server', 'CACHED_TOOLS', 'cachedToolCall', 'DIRECT_CALL', 'safeResult', 'withPrivacy', 'privacyCurrent', 'PRIVACY_CHANGED', 'analyticalResult', stripTypeScriptTypes(wrapper))(caller, server, new Set(['session_story']), cachedToolCall, '', async (r: unknown) => r, (f: () => unknown) => f(), () => true, 'privacy changed', (_name: unknown, _args: unknown, r: unknown) => r)
         server.registerTool('session_story', {}, async () => insights ? 'recording timing' : 'event only')
         assert.equal(await call({ session_id: 's' }), insights ? 'recording timing' : 'event only')
     }

@@ -79,11 +79,10 @@ describe('time windows', () => {
         assert.ok(ago.from < new Date('2026-10-31T13:00:00Z') && ago.to > new Date('2026-10-31T13:00:00Z'))
     })
     test('ticket numbers are not clock times', () => {
-        assert.equal(parseTimeWindow('see ticket 4312 for 12 invoices', NOW).precision, 'none')
+        assert.throws(()=>parseTimeWindow('see ticket 4312 for 12 invoices', NOW), /Unrecognised/)
     })
     test('no time falls back to a week, and widening ends with the week', () => {
-        const w = parseTimeWindow('export broken', NOW)
-        assert.equal(w.precision, 'none')
+        assert.throws(()=>parseTimeWindow('export broken', NOW), /Unrecognised/)
         const steps = widen(parseTimeWindow('this afternoon', NOW), NOW)
         assert.deepEqual(steps.map((s) => s.step.split(' (')[0]), ['the time in the ticket', 'the ticket time ± 12 hours', 'the last 7 days'])
     })

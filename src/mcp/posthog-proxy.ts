@@ -1,5 +1,5 @@
 // Routing text is pure; the HTTP adapter only handles authentication and transport.
-import { safetyWith, staffEmails } from '../core/aisafety.ts'
+import { safetyWith, metadataSafetyWith, staffEmails } from '../core/aisafety.ts'
 import { identityTokens } from '../core/rescueprivacy.ts'
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -7,7 +7,7 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { StringDecoder } from 'node:string_decoder'
 
-import { anonFor, hideClients, namesClient, posthogMode, refusalText, revealCodenames } from '../core/anonymise.ts'
+import { privacyCurrent, PRIVACY_CHANGED, privacyMode, withPrivacy, anonFor, hideClients, namesClient, posthogMode, refusalText, revealCodenames } from '../core/anonymise.ts'
 import { countBlock } from '../core/anonymise.ts'
 import { refreshRoster } from '../core/anonroster.ts'
 import { guardRequest, guardResponse } from './anonymise.ts'
@@ -21,14 +21,15 @@ const DEFAULT_INFO: LensInfo = { app: 'the app', tools: ['get_replay_link'] }
 
 export function routingBlock(name: string, info: LensInfo = DEFAULT_INFO): string {
     const app = info.app
-    return `Replays are private: use ${name}'s get_replay_link and give the person the link; never call session-recording-*, query-session-recordings-list or vision-* tools.
-Messaging (workflows-*, broadcasts-*), person lists (persons-*, query-*-actors, cohort membership changes), session lookups (heatmaps-events, logs-impact), error investigation (query-error-tracking-issue, query-error-tracking-issue-events, query-error-tracking-issues-list) and surveys are refused. Use discover_workflows/workflow_completion for app tasks, resolve_client/client_experience/client_signals for clients, session_story/find_client_incidents/find_silent_issues for sessions, error_blast_radius for errors and Lens survey tools for surveys.
+    const privacy = privacyMode() === 'private' ? 'Private mode: execute-sql is refused. Other PostHog data follows the admin block/filter setting.\n' : privacyMode() === 'open' ? 'Open mode: available identities and amounts are visible; person reads are allowed.\n' : 'Standard mode: client-user identities and amounts are masked; SQL results are masked.\n'
+    return `${privacy}Replays are private: use ${name}'s get_replay_link and give the person the link; never call session-recording-*, query-session-recordings-list or vision-* tools.
+Messaging (workflows-*, broadcasts-*), ${privacyMode() === 'open' ? 'person mutations (person reads are allowed)' : 'person lists (persons-*, query-*-actors, cohort membership changes)'}, session lookups (heatmaps-events, logs-impact), error investigation (query-error-tracking-issue, query-error-tracking-issue-events, query-error-tracking-issues-list) and surveys are refused. Use discover_workflows/workflow_completion for app tasks, resolve_client/client_experience/client_signals for clients, session_story/find_client_incidents/find_silent_issues for sessions, error_blast_radius for errors and Lens survey tools for surveys.
 Use the Lens server (${name}) instead for a named ${app} client or user, trade/link id, ${app} dialog/screen/button, errors ${app} showed users, which clients or users an error hit, one session, Jira ticket, release outcome, "where do clients struggle" or "who is at risk", which clients stopped doing a task, how long a flow takes or which path people take${info.tools.includes('design_survey') ? `, and in-app surveys for ${app} users (making, stopping, answers; launching only on the Lens Surveys page)` : ''}. Call its tools directly with JSON arguments, never through exec.
-Use PostHog exec for generic product analytics and PostHog objects: trends, funnels, retention, insights, dashboards, feature flags, experiments, cohorts, annotations, actions/event definitions, error-tracking administration, data warehouse/batch exports, docs/SDK help and raw SQL.`
+Use PostHog exec for generic product analytics and PostHog objects: trends, funnels, retention, insights, dashboards, feature flags, experiments, cohorts, annotations, actions/event definitions, error-tracking administration, data warehouse/batch exports, docs/SDK help${privacyMode() === 'private' ? '; raw SQL is refused' : ' and raw SQL' }.`
 }
 
 export function execRoutingLine(name: string, info: LensInfo = DEFAULT_INFO): string {
-    return `Replays, session/user lookups, error investigation, person lists, messaging and surveys are refused; use get_replay_link, session_story, find_client_incidents, find_silent_issues, error_blast_radius, resolve_client, client_experience, client_signals, discover_workflows, workflow_completion and Lens survey tools. Not for ${info.app} clients or users, trade ids, ${info.app} screens or the errors it shows users, client task maps, flow times and paths, single sessions, replays, Jira tickets${info.tools.includes('design_survey') ? ', release outcomes or in-app surveys' : ' or release outcomes'}: use the ${name} server's tools (${info.tools.join(', ')}) for those.`
+    return `Replays, session/user lookups, error investigation, ${privacyMode() === 'open' ? 'person mutations' : 'person lists'}, messaging and surveys are refused;${privacyMode() === 'private' ? ' SQL is refused in private mode;' : ''} use get_replay_link, session_story, find_client_incidents, find_silent_issues, error_blast_radius, resolve_client, client_experience, client_signals, discover_workflows, workflow_completion and Lens survey tools. Not for ${info.app} clients or users, trade ids, ${info.app} screens or the errors it shows users, client task maps, flow times and paths, single sessions, replays, Jira tickets${info.tools.includes('design_survey') ? ', release outcomes or in-app surveys' : ' or release outcomes'}: use the ${name} server's tools (${info.tools.join(', ')}) for those.`
 }
 
 type Rpc = Record<string, any>
@@ -75,9 +76,9 @@ export function commandRefusal(value: unknown, name = 'lens'): Rpc | undefined {
             message = 'Session and user lookups go through Lens: session_story, find_client_incidents or find_silent_issues.'
         else if (/^query-error-tracking-(?:issue|issue-events|issues-list)$/.test(tool))
             message = 'Use Lens error_blast_radius (which clients and users an error hit, trend, releases) or find_client_incidents.'
-        else if (/^(?:persons-[\w-]*|query-[\w-]+-actors|cohorts-add-persons-to-static-cohort[\w-]*|cohorts-rm-person-from-static-cohort[\w-]*)$/.test(tool))
-            message = 'Client-user identities and person lists are private. Lens answers per client (resolve_client, client_experience, client_signals) without naming people.'
-        else if (/^(?:workflows-|broadcasts-)[\w-]*$/.test(tool))
+        else if (/^(?:persons-[\w-]*|query-[\w-]+-actors|cohorts-add-persons-to-static-cohort[\w-]*|cohorts-rm-person-from-static-cohort[\w-]*)$/.test(tool)) {
+            if (!(privacyMode() === 'open' && /^(?:persons-(?:list|get|retrieve)|query-[\w-]+-actors)$/.test(tool))) message = 'Client-user identities and person lists are private. Lens answers per client (resolve_client, client_experience, client_signals) without naming people.'
+        } else if (/^(?:workflows-|broadcasts-)[\w-]*$/.test(tool))
             message = "Messaging users is disabled. Lens's discover_workflows and workflow_completion measure app tasks; they never send anything."
         else if (/^survey[\w-]*$/.test(tool))
             message = `In-app surveys are managed only in Lens: use the ${name} server's survey tools (list_surveys, survey_results, design_survey, save_survey, stop_survey), which follow each person's survey role; launching is only on the Lens Surveys page. PostHog survey commands are refused.`
@@ -93,8 +94,12 @@ export const replayRefusal = commandRefusal
 // into client codes, client names and codes in the command refused, and results cleaned (best effort).
 const LOOKUP = new Set(['help', 'tools', 'search', 'info', 'schema'])
 const DOCS_ONLY = new Set(['docs-search'])
-export function anonRefusal(value: unknown, name = 'lens', mode: 'block' | 'filter' | 'off' = posthogMode()): { refusal?: Rpc; value?: unknown } {
-    if (!object(value)) return { value }
+export function anonRefusal(value: unknown, name = 'lens', mode: 'block' | 'filter' = posthogMode()): { refusal?: Rpc; value?: unknown } {
+    if (!anonFor('posthog') || !object(value)) return { value }
+    if (value.method === 'tools/call' && /^(?:posthog:)?execute-sql$/i.test(String(value.params?.name || ''))) {
+        countBlock('posthog_refused')
+        return { refusal: { jsonrpc: '2.0', id: value.id ?? null, result: { isError: true, content: [{ type: 'text', text: 'Raw SQL is refused in private mode. Use Lens tools instead.' }] } } }
+    }
     if (value.method === 'tools/call' && value.params?.name === 'exec') {
         const command = String(value.params.arguments?.command ?? '')
         const refuse = (why: string) => { countBlock('posthog_refused'); return { refusal: { jsonrpc: '2.0', id: value.id ?? null, result: { isError: true, content: [{ type: 'text', text: why }] } } } }
@@ -158,7 +163,10 @@ function send(res: ServerResponse, status: number, value: unknown) {
     res.end(JSON.stringify(value))
 }
 
-export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse, options: ProxyOptions): Promise<void> {
+export function handlePosthogMcp(req: IncomingMessage, res: ServerResponse, options: ProxyOptions): Promise<void> {
+    return withPrivacy(() => handlePosthogMcpFrozen(req, res, options))
+}
+async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse, options: ProxyOptions): Promise<void> {
     if (!(options.authorize ? options.authorize(req) : bearerAuthorized(req, options.token))) return send(res, 401, { error: 'MCP needs Authorization: Bearer <MCP_TOKEN or your personal token>' })
     if (!options.enabled || !options.url || !options.apiKey) return send(res, 503, { error: 'PostHog MCP proxy is off or not configured' })
     if (!['POST', 'GET', 'DELETE'].includes(req.method || '')) {
@@ -170,19 +178,20 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
     const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000)
     const onClose = () => controller.abort()
     res.once('close', onClose)
-    // User identities and amounts are always cleaned; client anonymisation adds its own guard.
-    // Checked again for every message: a stream opened before an admin turned it on is cleaned from then on.
+    // Freeze the policy for the request; stop releasing data if it changes during a stream.
     const anon = anonFor('posthog')
     let tokens: string[] = [], staff = new Set<string>()
-    const cleanText = (v: string) => safetyWith(v, tokens, staff)
+    const cleanText = (v: string) => privacyCurrent() ? safetyWith(v, tokens, staff) : PRIVACY_CHANGED
     const clean = (v: unknown): unknown => {
         if (Array.isArray(v)) return v.map(clean)
         if (!object(v)) return v
         // The safety pass handles answers, not protocol versions or request ids.
+        if (!privacyCurrent()) return { jsonrpc: '2.0', id: v.id ?? null, error: { code: -32603, message: PRIVACY_CHANGED } }
         const safe = { ...v }
         // Notifications (progress, log messages) carry text too: their params are cleaned like answers.
         for (const key of ['result', 'error', 'params']) if (key in safe) {
-            const answer = safetyWith(safe[key], tokens, staff)
+            const metadata = key === 'result' && (Array.isArray(safe[key]?.tools) || Array.isArray(safe[key]?.prompts))
+            const answer = (metadata ? metadataSafetyWith : safetyWith)(safe[key], tokens, staff)
             safe[key] = anonFor('posthog') ? guardResponse(answer, 'posthog_cleaned') : answer
         }
         return safe
@@ -284,7 +293,10 @@ function upstreamRequest(url: string | URL, apiKey: string, init: RequestInit): 
     return fetch(url, { ...init, headers, redirect: 'error' })
 }
 
-export async function posthogExec(command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
+export function posthogExec(command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
+    return withPrivacy(() => posthogExecFrozen(command, options))
+}
+async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
     let call: unknown = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'exec', arguments: { command } } }
     const refused = commandRefusal(call, options.name)
     if (refused) return { isError: true, content: [{ type: 'text', text: refused.error.message }] }
@@ -317,7 +329,8 @@ export async function posthogExec(command: string, options: Pick<ProxyOptions, '
         headers.set('mcp-protocol-version', init.protocolVersion)
         const notified = await request({ jsonrpc: '2.0', method: 'notifications/initialized' })
         await notified.body?.cancel()
-        return await read(await request(call), 2)
+        const result = safetyWith(await read(await request(call), 2), await identityTokens(), staffEmails())
+        return guardResponse(result, 'posthog_cleaned')
     } catch {
         throw new Error(controller.signal.aborted ? 'PostHog MCP timed out' : 'PostHog MCP upstream failed')
     } finally {

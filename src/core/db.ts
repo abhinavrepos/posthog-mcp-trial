@@ -280,6 +280,26 @@ const MIGRATIONS: string[] = [
     // When a personal token's PostHog-admin flag was last confirmed by its owner signing in to Lens.
     // A key cannot ask PostHog itself, so an unconfirmed flag stops counting after a while (access.ts).
     `ALTER TABLE mcp_tokens ADD COLUMN posthog_admin_seen_at TEXT;`,
+    `ALTER TABLE client_codenames ADD COLUMN rank INTEGER;
+     CREATE UNIQUE INDEX client_codename_rank ON client_codenames(rank);
+     CREATE TABLE retired_codenames(label TEXT PRIMARY KEY);`,
+    // A 40-character prefix plus a safe-integer suffix needs up to 57 characters.
+    `CREATE TABLE client_codenames_numbered (
+        client TEXT PRIMARY KEY NOT NULL CHECK(length(client) BETWEEN 1 AND 256),
+        name TEXT NOT NULL DEFAULT '',
+        codename TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK(length(codename) BETWEEN 3 AND 64),
+        aliases TEXT NOT NULL DEFAULT '[]', set_by TEXT NOT NULL, set_at TEXT NOT NULL,
+        rank INTEGER UNIQUE CHECK(rank IS NULL OR rank >= 0)
+     );
+     INSERT INTO client_codenames_numbered SELECT client,name,codename,aliases,set_by,set_at,rank FROM client_codenames;
+     DROP TABLE client_codenames;
+     ALTER TABLE client_codenames_numbered RENAME TO client_codenames;`,
+    `CREATE TABLE client_outcome_episodes (
+        client TEXT NOT NULL, outcome TEXT NOT NULL, decided_on TEXT NOT NULL,
+        note TEXT NOT NULL, recorded_by TEXT NOT NULL, recorded_at TEXT NOT NULL,
+        PRIMARY KEY(client,decided_on)
+    ) WITHOUT ROWID;
+    INSERT INTO client_outcome_episodes SELECT * FROM client_outcomes;`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

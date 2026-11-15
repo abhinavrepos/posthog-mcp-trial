@@ -53,12 +53,12 @@ test('replay URLs never contain identity-bearing session ids', () => {
 })
 test('structured unknown clients fail closed before serialisation; privacy off still scrubs users', async () => {
     assert.equal(anonSettings().posthog, 'block')
-    setAnonymise({ on: true, lens: true })
+    setAnonymise({ mode: 'private', lens: true })
     const safe = await safeResult(jsonResult('Results', { client: 'Unlisted Company', client_id: 'UNLISTED', user: 'new-user', text: 'ben.okafor@brightwater.example has 250000' }))
     const encoded = JSON.stringify(safe)
     assert.ok(!/Unlisted Company|UNLISTED|new-user|ben.okafor|250000|_lensJson/.test(encoded))
     assert.match(encoded, /\[client\]/)
-    setAnonymise({ on: false })
+    setAnonymise({ mode: 'standard' })
     const out = await aiSafety({ client: 'Unlisted Company', user: 'non-email-id', text: 'Ben Okafor owes 250000' })
     assert.equal(out.client, 'Unlisted Company'); assert.equal(out.user, '[person]'); assert.equal(out.text, '[person] owes <amount>')
 })
@@ -102,7 +102,7 @@ test('PostHog JSON text results scrub non-email distinct ids and financial prope
     assert.deepEqual(safetyWith({ distribution: { 'Jane Smith': 2, 'Jane Smith 250000': 3 } }, ['Jane Smith', 'Jane Smith 250000']), { distribution: { '[person]': 5 } })
 })
 
-test('PostHog filter mode scrubs JSON and SSE analytics results even with anonymisation off', async t => {
+test('PostHog private filter and standard modes scrub JSON and SSE analytics results', async t => {
     const { Readable, Writable } = await import('node:stream')
     const { handlePosthogMcp } = await import('../src/mcp/posthog-proxy.ts')
     const payload = { jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: JSON.stringify({ columns: ['distinct_id', 'notional'], results: [['not-in-history', 250000]] }) }] } }
@@ -118,18 +118,18 @@ test('PostHog filter mode scrubs JSON and SSE analytics results even with anonym
         return output
     }
     try {
-        setAnonymise({ on: true, posthog: 'filter' })
+        setAnonymise({ mode: 'private', posthog: 'filter' })
         for (sse of [false, true]) {
             const out = await invoke()
             assert.ok(!/not-in-history|250000/.test(out), out)
             assert.match(out, /\[person\]/)
         }
-        setAnonymise({ on: true, posthog: 'off' })
+        setAnonymise({ mode: 'standard', posthog: 'block' })
         const off = await invoke()
         assert.doesNotMatch(off, /not-in-history|250000/)
         assert.match(off, /\[person\]/)
         assert.match(off, /<amount>/)
-    } finally { setAnonymise({ on: false, posthog: 'block' }) }
+    } finally { setAnonymise({ mode: 'standard', posthog: 'block' }) }
 })
 
 test('raw exception reports keep their wording with amounts and user ids masked before Markdown rendering', async () => {

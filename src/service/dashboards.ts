@@ -1,3 +1,4 @@
+import { analyticalWindow } from '../core/timewindow.ts'
 import { clientExperience, type ClientExperience } from '../core/experience.ts'
 import { scorecard } from '../core/scorecard.ts'
 import { clientStory, handoverPack, type ClientStory } from '../core/story.ts'
@@ -49,11 +50,12 @@ function windowOf(x: unknown, relative = false): Window {
     const w = object(x)
     if ('last_days' in w) {
         if (!relative) bad('Use fixed dates for this request.')
-        const n = integer(w.last_days, 1, 366, 'Last days'), to = shift(new Date().toISOString().slice(0, 10), -1)
-        return { from: shift(to, 1 - n), to }
+        const n = integer(w.last_days, 1, 1500, 'Last days'), to = analyticalWindow(`last ${n} days`)!.to.toISOString().slice(0,10)
+        const end=shift(to,-1)
+        return { from:shift(end,1-n),to:end }
     }
     const out = { from: day(w.from), to: day(w.to) }
-    if (length(out) < 1 || length(out) > 366) bad('Choose a period of 1–366 days, with from before to.')
+    analyticalWindow(`${out.from} to ${out.to}`)
     return out
 }
 function paramsOf(kind: DashboardKind, raw: unknown, relative = false): TaskMapParams | FlowTimeParams {
@@ -73,7 +75,7 @@ function paramsOf(kind: DashboardKind, raw: unknown, relative = false): TaskMapP
 }
 function queryParams(kind: DashboardKind, q: URLSearchParams): TaskMapParams | FlowTimeParams {
     const p: Record<string, unknown> = {}
-    p.window = q.has('from') || q.has('to') ? { from: q.get('from'), to: q.get('to') } : { last_days: integer(q.get('days') ?? '28', 1, 366, 'Days') }
+    p.window = q.has('from') || q.has('to') ? { from: q.get('from'), to: q.get('to') } : { last_days: integer(q.get('days') ?? '28', 1, 1500, 'Days') }
     for (const k of ['client', 'task', 'granularity', 'min_attempts', 'slowest_limit']) if (q.has(k) && q.get(k) !== '') p[k] = q.get(k)
     if (kind === 'task_map') {
         const w = windowOf(p.window, true), compare = q.get('compare') || 'previous'
@@ -90,7 +92,7 @@ function queryParams(kind: DashboardKind, q: URLSearchParams): TaskMapParams | F
 function savedParams(kind: DashboardKind, raw: unknown) {
     const p = object(raw), checked = paramsOf(kind, p, true)
     if ('last_days' in object(p.window)) {
-        const out = { ...checked, window: { last_days: integer(object(p.window).last_days, 1, 366, 'Last days') } }
+        const out = { ...checked, window: { last_days: integer(object(p.window).last_days, 1, 1500, 'Last days') } }
         if (kind === 'task_map' && p.baseline === undefined) delete (out as { baseline?: Window }).baseline
         return out
     }
@@ -119,9 +121,9 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
             if (method === 'GET') {
                 if (path === 'story' || path === 'handover-pack') {
                     const client = text(url.searchParams.get('client'), 'client', 256)
-                    json(res, 200, path === 'story' ? await deps.clientStory({ client, weeks: integer(url.searchParams.get('weeks') ?? '26', 1, 52, 'Weeks') }) : { markdown: await deps.handoverPack(client) }); return true
+                    json(res, 200, path === 'story' ? await deps.clientStory({ client, weeks: integer(url.searchParams.get('weeks') ?? '26', 1, 209, 'Weeks') }) : { markdown: await deps.handoverPack(client) }); return true
                 }
-                if (path === 'scorecard') { json(res,200,await deps.scorecard({weeks:integer(url.searchParams.get('weeks') ?? '52',1,52,'Weeks')})); return true }
+                if (path === 'scorecard') { json(res,200,await deps.scorecard({weeks:integer(url.searchParams.get('weeks') ?? '52',1,209,'Weeks')})); return true }
                 if (path === 'briefing') { json(res, 200, await deps.mondayBrief({ by: v.email })); return true }
                 if (path === 'rescue') { json(res, 200, await deps.rescueQueue(rescueParams(url.searchParams))); return true }
                 if (path === 'task-map') { json(res, 200, await deps.taskMap(queryParams('task_map', url.searchParams) as TaskMapParams)); return true }
@@ -186,13 +188,13 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
         if (pin && !canOpen(pin, v.email, admin)) throw new HttpError(403, 'This dashboard has not been shared with you.')
         const selected = url.searchParams.get('view') || pin?.kind || 'briefing'
         if (selected === 'scorecard' && !pin) {
-            const weeks = integer(url.searchParams.get('weeks') ?? '52',1,52,'Weeks')
+            const weeks = integer(url.searchParams.get('weeks') ?? '52',1,209,'Weeks')
             html(res,200,v,rescueNav('scorecard') + `<h1>Signal scorecard</h1><p>Weekly flags compared with recorded client decisions. Counts are a sanity check; first flags are weekly observations.</p><div id="scorecard" data-weeks="${weeks}" role="status" aria-live="polite">Computing scorecard…</div>`)
             return true
         }
         if (selected === 'story' && !pin) {
             const client = text(url.searchParams.get('client'), 'client', 256)
-            const story = await deps.clientStory({ client, weeks: integer(url.searchParams.get('weeks') ?? '26', 1, 52, 'Weeks') })
+            const story = await deps.clientStory({ client, weeks: integer(url.searchParams.get('weeks') ?? '26', 1, 209, 'Weeks') })
             html(res, 200, v, rescueNav('story', client) + storyHtml(story, await deps.handoverPack(client)).replace('<!--experience-->', canSeeReplayInsights(v) ? experienceHtml(clientExperience(client)) : INSIGHTS_LOCKED))
             return true
         }
@@ -286,7 +288,7 @@ function rescueParams(q: URLSearchParams): RescueParams {
     else if (period) {
         // End at the last fully processed day (today is still being read), as the default view does.
         const to = dataThrough() || shift(new Date().toISOString().slice(0, 10), -1)
-        p.window = { from: shift(to, 1 - integer(q.get('days'), 1, 366, 'Days')), to }
+        p.window = { from: shift(to, 1 - integer(q.get('days'), 1, 1500, 'Days')), to }
     }
     if (!period && (q.has('baseline_from') || q.has('baseline_to'))) p.baseline = windowOf({ from: q.get('baseline_from'), to: q.get('baseline_to') })
     if (q.has('min_attempts')) p.min_attempts = integer(q.get('min_attempts'), 1, 100000, 'Minimum attempts')
@@ -540,7 +542,7 @@ function pinsHtml(pins: Dashboard[], v: Viewer, admin: boolean) {
 }
 function dialogs(pin: Dashboard | undefined, manage: boolean, days: number) {
     const close = '<button class="ghost" type="button" data-close>Cancel</button>'
-    return `<dialog id="pin-dialog" role="dialog" aria-modal="true" aria-labelledby="pin-heading"><form id="pin-form"><h2 id="pin-heading">Pin this view</h2><label>Title<input name="title" aria-label="Dashboard title" maxlength="120" required value="${esc(pin?.title || '')}"></label><label><input type="radio" name="dates" aria-label="Keep the dates fixed" value="fixed" checked>Keep the dates fixed</label><label><input type="radio" name="dates" aria-label="Use a moving period" value="relative">Use a moving period</label><div id="moving-period" hidden><label>Number of days<input name="days" type="number" min="1" max="366" value="${days}" aria-label="Number of days"></label><p class="muted">Compares with the previous period of the same length.</p></div><div class="actions">${close}<button class="primary" type="submit">Pin</button></div></form></dialog>
+    return `<dialog id="pin-dialog" role="dialog" aria-modal="true" aria-labelledby="pin-heading"><form id="pin-form"><h2 id="pin-heading">Pin this view</h2><label>Title<input name="title" aria-label="Dashboard title" maxlength="120" required value="${esc(pin?.title || '')}"></label><label><input type="radio" name="dates" aria-label="Keep the dates fixed" value="fixed" checked>Keep the dates fixed</label><label><input type="radio" name="dates" aria-label="Use a moving period" value="relative">Use a moving period</label><div id="moving-period" hidden><label>Number of days<input name="days" type="number" min="1" max="1500" value="${days}" aria-label="Number of days"></label><p class="muted">Compares with the previous period of the same length.</p></div><div class="actions">${close}<button class="primary" type="submit">Pin</button></div></form></dialog>
 ${manage ? `<dialog id="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-heading"><form id="rename-form"><h2 id="rename-heading">Rename dashboard</h2><label>Title<input name="title" aria-label="Dashboard title" maxlength="120" required value="${esc(pin?.title)}"></label><div class="actions">${close}<button class="primary" type="submit">Save title</button></div></form></dialog>
 <dialog id="share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-heading"><form id="share-form"><h2 id="share-heading">Share dashboard</h2><p class="muted">${num(pin?.shared_with.length || 0)} people have access.</p><label>Find a person<input type="search" id="people-search" aria-label="Find a person"></label><div id="people"></div><div id="people-pager"></div><p id="people-status" role="status" aria-live="polite"></p><details><summary>Add people by email</summary><label>Emails (comma separated)<input name="emails" aria-label="Other emails, separated by commas" placeholder="person@example.com"></label></details><div class="actions">${close}<button class="primary" type="submit">Save sharing</button></div></form></dialog>
 <dialog id="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-heading"><form id="delete-form"><h2 id="delete-heading">Delete this dashboard?</h2><p>The saved view and its shares will be removed.</p><div class="actions">${close}<button class="primary" type="submit">Delete</button></div></form></dialog>` : ''}`

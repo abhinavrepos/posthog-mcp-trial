@@ -1,3 +1,4 @@
+import { clientTimeline, type TimelineOptions } from './clientpatterns.ts'
 import { peerBenchmark, type PeerTask } from './peers.ts'
 // A client account narrative from Lens's own history. Never query PostHog here.
 import { tasksDb, cached, coverage, dataThrough } from './tasks.ts'
@@ -10,7 +11,7 @@ import type { Coverage } from './taskstypes.ts'
 
 const shift = (s: string, n: number) => new Date(Date.parse(s) + n * 86400000).toISOString().slice(0, 10)
 const query = <T>(sql: string, ...args: string[]) => tasksDb.prepare(sql).all(...args) as T[]
-export interface StoryWeek { week_start: string; attempts: number; done: number; users: number; errors: number; unrecovered: number; exports: number; productive_done: number }
+export interface StoryWeek { covered_days?:number; missing_days?:number; week_start: string; attempts: number; done: number; users: number; errors: number; unrecovered: number; exports: number; productive_done: number }
 export interface StoryEvent { date: string; kind: 'reason_seen' | 'reason_cleared' | 'signal_seen' | 'action' | 'survey' | 'note'; text: string }
 export interface ClientStory {
     peers?: PeerTask[]; peer_note?: string
@@ -26,10 +27,11 @@ async function history(client: string, weeks: number, to: string) {
     for (let i = -1; i < weeks; i++) {
         const start = shift(from, i * 7), end = [shift(start, 6), to].sort()[0]
         if (i >= 0) {
-            const sum = (table: string, expr: string) => query<Record<string, number>>(`SELECT ${expr} FROM ${table} WHERE client=? AND day BETWEEN ? AND ?`, client, start, end)[0]
+            const sum = (table: string, expr: string) => query<Record<string, number>>(`SELECT ${expr} FROM ${table} WHERE client=? AND day BETWEEN ? AND ? AND day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= 'analysis_unavailable:' AND key < 'analysis_unavailable;')`, client, start, end)[0]
             const t = sum('task_daily', 'coalesce(sum(attempts),0) AS attempts, coalesce(sum(done),0) AS done')
             const e = sum('errors_daily', 'coalesce(sum(chains),0) AS errors, coalesce(sum(unrecovered),0) AS unrecovered')
-            series.push({ week_start: start, attempts: t.attempts, done: t.done,
+            const observed=coverage({from:start,to:end})
+            series.push({ ...(observed.complete ? {} : {covered_days:observed.covered_days,missing_days:observed.missing_days}),week_start: start, attempts: t.attempts, done: t.done,
                 users: sum('task_users_daily', "count(DISTINCT nullif(user,'')) AS n").n, errors: e.errors, unrecovered: e.unrecovered,
                 exports: sum('ops_daily', "coalesce(sum(CASE WHEN family='export' THEN submits ELSE 0 END),0) AS n").n,
                 productive_done: sum('client_daily', 'coalesce(sum(productive_done),0) AS n').n })
@@ -50,9 +52,16 @@ async function history(client: string, weeks: number, to: string) {
     }
     return { weeks: series, events, coverage: coverage({ from: shift(from, -56), to }), window: { from, to } }
 }
-export async function clientStory({ client, weeks = 26 }: { client: string; weeks?: number }): Promise<ClientStory> {
+export async function clientStory(p: TimelineOptions): Promise<ClientStory & { timeline?: ReturnType<typeof clientTimeline> }> {
+    const {client, weeks=26}=p
+    if (p.from || p.to || p.bucket || p.anchor) {
+        const timeline=clientTimeline(p)
+        const unknown=timeline.note
+        return rescuePrivacy({client,client_name:query<{name:string}>('SELECT name FROM client_names WHERE client=?',client)[0]?.name || client,
+            coverage:timeline.coverage,weeks:[],events:[],surveys:[],summary:`${timeline.buckets.length} ${timeline.bucket} buckets from ${timeline.window.from} to ${timeline.window.to}. ${unknown}`,unknown,timeline})
+    }
     if (typeof client !== 'string' || !client.trim() || client.length > 256) throw new Error('Choose a client id')
-    if (!Number.isInteger(weeks) || weeks < 1 || weeks > 52) throw new Error('Weeks must be an integer from 1 to 52')
+    if (!Number.isInteger(weeks) || weeks < 1 || weeks > 209) throw new Error('Weeks must be an integer from 1 to 209')
     const to = dataThrough() || shift(new Date().toISOString().slice(0, 10), -1)
     const h = await cached('story-history', { client, weeks, to }, () => history(client, weeks, to), weeks * 7 + 186)
     const name = query<{ name: string }>('SELECT name FROM client_names WHERE client=?', client)[0]?.name || client

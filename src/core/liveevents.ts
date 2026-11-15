@@ -9,20 +9,24 @@ export const EVENT_PAGE_SIZE = 10000
 // refuses with a clear way forward instead of failing slowly or answering from part of the data.
 const MAX_LIVE_EVENTS = (() => { const n = Number(process.env.LENS_LIVE_MAX_EVENTS || 1_000_000); return Number.isFinite(n) && n > 0 ? n : 1_000_000 })()
 export class LiveWindowTooLarge extends Error {}
-export async function liveEvents(q: EventWindow, sids?: string[]): Promise<RawEvent[]> {
-    const reg = required(), result: RawEvent[] = []
-    const filters = `event IN {events}
-              AND ({client} = '' OR toString(${P.client}) = {client})
-              AND notEmpty(toString(properties.$session_id))
-              ${sids ? 'AND toString(properties.$session_id) IN {sids}' : ''}`
-    const base = { from: q.from.toISOString(), to: q.to.toISOString(), client: q.clientId || '', events: [reg.events.screen, reg.events.interaction], ...(sids ? { sids } : {}) }
-    // A read of given sessions is bounded by them (callers send batches of 50); a window read is counted first.
-    const [{ n } = { n: 0 }] = sids ? [] : await hogql(`SELECT count() AS n FROM events WHERE timestamp >= {from} AND timestamp < {to} AND ${filters}`, base)
+/** Refuses, with a way forward, a live read of a window with more events than MAX_LIVE_EVENTS. Callers that read
+ * a window session by session (workflows) call it for the whole window first: those batches are not counted. */
+export async function assertLiveWindow(q: EventWindow): Promise<void> {
+    const reg = required()
+    const [{ n } = { n: 0 }] = await hogql(`SELECT count() AS n FROM events WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}
+              AND ({client} = '' OR toString(${P.client}) = {client}) AND notEmpty(toString(properties.$session_id))`,
+        { from: q.from.toISOString(), to: q.to.toISOString(), client: q.clientId || '', events: [reg.events.screen, reg.events.interaction] })
     if (Number(n) > MAX_LIVE_EVENTS) {
         const { dataThrough } = await import('./tasks.ts')
         const through = dataThrough()
         throw new LiveWindowTooLarge(`This window has ${Number(n).toLocaleString('en-US')} events that Lens's processed history does not cover yet${through ? ` (history is complete through ${through})` : ''}, more than a live read handles (${MAX_LIVE_EVENTS.toLocaleString('en-US')}). Ask for a window ending on or before ${through || 'the last processed day'} (relative windows such as "last 28 days" already do), or a shorter recent window.`)
     }
+}
+export async function liveEvents(q: EventWindow, sids?: string[]): Promise<RawEvent[]> {
+    const reg = required(), result: RawEvent[] = []
+    // A read of given sessions is bounded by them (callers send batches of 50, after assertLiveWindow on the
+    // whole window); a window read is counted first.
+    if (!sids) await assertLiveWindow(q)
     let sid = '', ts = q.from.toISOString(), uuid = ''
     while (true) {
         const rows = await hogql(`SELECT ${columns(reg)}, toString(uuid) AS event_uuid FROM events

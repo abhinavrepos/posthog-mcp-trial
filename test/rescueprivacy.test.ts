@@ -36,3 +36,21 @@ test('scrubbing is linear: thousands of users and long text stay fast', () => {
     const t = performance.now(); const out = scrubWith(tokens, rows); const ms = performance.now() - t
     assert.equal(out[0].note, 'Spoke with [person]'); assert.ok(ms < 150, `${ms} ms`)
 })
+
+test('rescue output reads the selected privacy mode', async () => {
+    const { setAnonymise, anonSettings } = await import('../src/core/anonymise.ts')
+    const { tasksDb, forgetAnswers } = await import('../src/core/tasks.ts')
+    const { rescuePrivacy } = await import('../src/core/rescueprivacy.ts')
+    const previous = anonSettings(), user = 'mode-test-person@example.test'
+    tasksDb.prepare('INSERT OR IGNORE INTO known_users VALUES (?)').run(user)
+    forgetAnswers()
+    try {
+        setAnonymise({ mode: 'open' }); assert.equal(await rescuePrivacy(user), user)
+        for (const mode of ['standard', 'private'] as const) {
+            setAnonymise({ mode }); assert.equal(await rescuePrivacy(user), '[person]')
+        }
+    } finally {
+        tasksDb.prepare('DELETE FROM known_users WHERE user=?').run(user)
+        forgetAnswers(); setAnonymise(previous)
+    }
+})

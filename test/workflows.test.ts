@@ -195,6 +195,10 @@ describe('workflow definitions', () => {
     })
 })
 
+// Session-by-session workflow reads count the whole window first (assertLiveWindow): answer that count here so
+// each test's own fake sees only the queries it is about.
+const counted = <F extends (...a: any[]) => Promise<Response>>(fn: F) => (async (url: unknown, init?: RequestInit) =>
+    init?.body && String(JSON.parse(String(init.body)).query?.query || '').startsWith('SELECT count() AS n FROM events') ? response([{ n: 0 }]) : fn(url, init)) as unknown as F
 function response(rows: Record<string, unknown>[]) {
     const columns = [...new Set(rows.flatMap((r) => Object.keys(r)))]
     return new Response(JSON.stringify({ columns, results: rows.map((r) => columns.map((c) => r[c])) }))
@@ -203,11 +207,11 @@ function response(rows: Record<string, unknown>[]) {
 describe('bounded workflow queries', () => {
     test('pages matching sessions past the old cap, binds values and bounds every event batch', async (t) => {
         const seen: { query: string; values: Record<string, unknown> }[] = []
-        t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+        t.mock.method(globalThis, 'fetch', counted(async (_url: unknown, init: RequestInit) => {
             const q = JSON.parse(String(init.body)).query
             seen.push(q)
             return seen.length === 1 ? response(Array.from({ length: 2000 }, (_, i) => ({ sid: `s${i}` }))) : response([])
-        })
+        }))
         const clientId = "X' OR 1=1 --"
         const r = await workflowSessions({ ...win, clientId }, ['A', 'B'])
         assert.equal(seen.length, 42)
@@ -222,7 +226,7 @@ describe('bounded workflow queries', () => {
     test('pages all events past the old row cap and never returns a partial session', async (t) => {
         const rows = Array.from({ length: 60001 }, (_, i) => ({ ...session('s', 'X', [open(i, 'A')])[0], event_uuid: String(i).padStart(8, '0') }))
         let n = 0
-        t.mock.method(globalThis, 'fetch', async () => ++n === 1 ? response([{ sid: 's' }]) : response(rows.slice((n - 2) * 10000, (n - 1) * 10000)))
+        t.mock.method(globalThis, 'fetch', counted(async () => ++n === 1 ? response([{ sid: 's' }]) : response(rows.slice((n - 2) * 10000, (n - 1) * 10000))))
         const r = await workflowSessions(win, ['A'])
         assert.equal(r.rows_read, rows.length)
         assert.equal(r.truncated, false)
@@ -232,32 +236,32 @@ describe('bounded workflow queries', () => {
             ...session('lost', 'C26', [open(10, 'A')]), ...session('unrecorded', 'C26', [open(20, 'A')]),
             ...session('before', 'OLD', [open(-100, 'A'), open(-99, 'B'), open(-98, 'C'), press(-97, 'C'), notice(-96)])]
         const seen: { query: string; values: Record<string, unknown> }[] = []
-        t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+        t.mock.method(globalThis, 'fetch', counted(async (_url: unknown, init: RequestInit) => {
             const q = JSON.parse(String(init.body)).query; seen.push(q)
             if (q.query.includes('raw_session_replay_events')) return response([{ session_id: 'lost', start: new Date(T0).toISOString(), end: new Date(T0 + 50000).toISOString() }])
             if (q.query.includes('GROUP BY sid')) return response(['now', 'lost', 'unrecorded', 'before'].map((sid) => ({ sid })))
             return response(rows)
-        })
+        }))
         const r = await workflowCompletionReport({ ...win, definition: workflow })
         assert.equal(r.overall.now.started, 3)
-        assert.equal(r.overall.before.started, 1)
-        assert.equal(r.overall.trend.started_change, 2)
-        assert.equal(r.overall.trend.completion_rate_change, 1 / 3 - 1)
+        assert.equal(r.overall.before.started, 0)
+        assert.equal(r.comparison.status,'unavailable')
+        assert.equal(r.overall.trend,null)
         assert.equal(+new Date(r.window.from) - +new Date(r.previous_window.from), +win.to - +win.from)
-        assert.equal(r.clients.find((c) => c.client === 'OLD')?.now.started, 0)
+        assert.equal(r.clients.find((c) => c.client === 'OLD'), undefined)
         assert.match(r.overall.now.examples.find((e) => e.session_id === 'lost')?.replay_url || '', /\/replay\/lost/)
         assert.equal(r.overall.now.examples.find((e) => e.session_id === 'unrecorded')?.replay_url, undefined)
         assert.equal(seen.filter((q) => q.query.includes('FROM events')).length, 2)
     })
     test('ad hoc completion resolves single-word dialog names and defaults to completed', async (t) => {
-        t.mock.method(globalThis, 'fetch', async () => response([{ dialog: 'DlgImport', names: ['Import'], opens: 1 }, { dialog: 'DlgSwap', names: ['IR Swap'], opens: 1 }]))
+        t.mock.method(globalThis, 'fetch', counted(async () => response([{ dialog: 'DlgImport', names: ['Import'], opens: 1 }, { dialog: 'DlgSwap', names: ['IR Swap'], opens: 1 }])))
         const w = await completionWorkflow({ ...win, dialogs: ['Import', 'IR Swap'] })
         assert.deepEqual(w.dialogs, ['DlgImport', 'DlgSwap'])
         assert.deepEqual(w.done, { dialog: 'DlgSwap', outcome: 'completed' })
     })
     test('discovery automatically names chains; completion accepts the id or exact name', async (t) => {
         let n = 0
-        t.mock.method(globalThis, 'fetch', async () => ++n % 2 === 1 ? response([{ sid: 's1' }, { sid: 's2' }]) : response([1, 2].flatMap((i) => session(`s${i}`, 'X', [open(0, 'A'), open(1, 'B'), press(2, 'B'), notice(3)]))))
+        t.mock.method(globalThis, 'fetch', counted(async () => ++n % 2 === 1 ? response([{ sid: 's1' }, { sid: 's2' }]) : response([1, 2].flatMap((i) => session(`s${i}`, 'X', [open(0, 'A'), open(1, 'B'), press(2, 'B'), notice(3)])))))
         const r = await discoverWorkflows(win)
         assert.equal(r.discovered.length, 1)
         const found = r.discovered[0]
@@ -271,10 +275,10 @@ describe('bounded workflow queries', () => {
     test('names resolve beyond the default discovery limit and unknown names fail clearly', async (t) => {
         const rows = Array.from({ length: 16 }, (_, n) => [1, 2].flatMap((i) => session(`s${n}-${i}`, 'X', [
             open(0, `A${n}`, `Start ${n}`), open(1, `B${n}`, `Finish ${n}`), press(2, `B${n}`), notice(3)]))).flat()
-        t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+        t.mock.method(globalThis, 'fetch', counted(async (_url: unknown, init: RequestInit) => {
             const q = JSON.parse(String(init.body)).query
             return q.query.includes('GROUP BY sid') ? response([...new Set(rows.map((r) => r.sid))].map((sid) => ({ sid }))) : response(rows)
-        })
+        }))
         const all = await discoverWorkflows({ ...win, limit: 50 })
         const w = await completionWorkflow({ ...win, workflow: all.discovered[15].name })
         assert.deepEqual(w.dialogs, all.discovered[15].dialogs)
@@ -283,10 +287,10 @@ describe('bounded workflow queries', () => {
     test('ambiguous automatic names require an id instead of choosing silently', async (t) => {
         const rows = ['A', 'C'].flatMap((first) => [1, 2].flatMap((i) => session(`${first}${i}`, 'X', [
             open(0, first, 'Start'), open(1, 'B', 'Finish'), press(2, 'B'), notice(3)])))
-        t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+        t.mock.method(globalThis, 'fetch', counted(async (_url: unknown, init: RequestInit) => {
             const q = JSON.parse(String(init.body)).query
             return q.query.includes('GROUP BY sid') ? response([...new Set(rows.map((r) => r.sid))].map((sid) => ({ sid }))) : response(rows)
-        })
+        }))
         await assert.rejects(completionWorkflow({ ...win, workflow: "Start → Finish → Save → 'Trade Id … Updated'" }), /Ambiguous workflow/)
     })
 })

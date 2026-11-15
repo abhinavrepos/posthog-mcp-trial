@@ -93,10 +93,10 @@ describe('deterministic brief routing', () => {
     })
     test('defaults and supplied time phrases use the shared timezone-aware parser', () => {
         const now = new Date(window.to)
-        assert.equal(briefWindow({}, 'general', now).from.toISOString(), window.from)
+        assert.equal(briefWindow({}, 'general', now).from.toISOString(), '2026-10-27T00:00:00.000Z')
         assert.equal(briefWindow({}, 'client', now).label, 'last 14 days')
-        assert.equal((now.getTime() - briefWindow({}, 'trade', now).from.getTime()) / 86400000, 30)
-        assert.equal(briefWindow({ question: 'brief me last week' }, 'general', now).label, 'the last 7 days')
+        assert.equal((+briefWindow({}, 'trade', now).to - +briefWindow({}, 'trade', now).from) / 86400000, 30)
+        assert.equal(briefWindow({ question: 'brief me last week' }, 'general', now).label, 'last week')
         assert.equal(briefWindow({ when: 'yesterday', timezone: 'America/New_York' }, 'dialog', now).from.toISOString(), '2026-11-09T05:00:00.000Z')
     })
 })

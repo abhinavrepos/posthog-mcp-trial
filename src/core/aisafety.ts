@@ -1,8 +1,8 @@
-// Client privacy is optional; user identities and financial values are never optional.
+// Standard/private mask identities and amounts; open preserves available source data.
 // App messages and errors keep their wording (they are what PMs act on: "Invalid date", "Counterparty
 // not found"); amounts, long numbers, emails, distinct ids and known user names inside them are masked.
 import { maskAmounts } from './appevents.ts'
-import { anonFor, hideClientsDeep } from './anonymise.ts'
+import { protectCodenameTokens, anonFor, hideClientsDeep, privacyMode, withPrivacy } from './anonymise.ts'
 import { config } from './config.ts'
 import { all } from './db.ts'
 import { identityTokens, scrubWith } from './rescueprivacy.ts'
@@ -38,6 +38,7 @@ function maskEmailsIn(token: string, staff: Set<string>): string {
 }
 
 export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string>()): T {
+    if (privacyMode() === 'open') return value
     tokens = tokens.filter(t => !staff.has(t.toLowerCase()))
     const sep = config.properties.distinctIdSeparator
     const text = (s: string): string => {
@@ -48,6 +49,9 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
             const parsed = JSON.parse(s)
             if (parsed && typeof parsed === 'object') return JSON.stringify(walk(parsed))
         } catch { /* ordinary text */ }
+        const versions: string[] = []
+        const keep = (id: string) => { versions.push(id); return `\uE000v${versions.length - 1}\uE001` }
+        s = protectCodenameTokens(s, keep)
         // Decode for matching, including links that encode an address more than once.
         s = s.replace(/[^\s<>"'`]+/g, token => {
             let decoded = token
@@ -62,8 +66,6 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
         // Identifiers are not cash values: URLs (replay links, already checked for identities above),
         // UUIDs (session ids such as 019b55aa-...-123456789012) and release versions keep their digits,
         // or the links break and the ids cannot be passed to the next tool.
-        const versions: string[] = []
-        const keep = (id: string) => { versions.push(id); return `\uE000v${versions.length - 1}\uE001` }
         // A link keeps its path, but query values that look like money are masked (?notional=250000);
         // id-like parameters (t, id, session, version...) keep their digits so links still work.
         s = s.replace(/https?:\/\/[^\s<>"'`]+/g, (url) => keep(url.replace(/([?&])([^=&#]+)=([^&#]*)/g, (m, sep, k, v) =>
@@ -79,6 +81,8 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
         // {"amount":{"major":250,"zeros":3}}).
         // "value" alone is too generic ({"property":"browser","value":"Chrome 120"}): only a bare number there.
         const field = key.split('.').at(-1) || ''   // properties.value, person.properties.amount
+        if (/^trade_?ids?$/i.test(field)) return v
+        if (/^(client|client_?code|client_?id)$/i.test(field) && (typeof v === 'string' || typeof v === 'number')) return v
         if (/^value$/i.test(field) && (typeof v === 'number' || typeof v === 'string' && /^[-+]?\d[\d., ]*$/.test(v))) return '<amount>'
         if (/(?:notional|amount|cash|balance|price)/i.test(field)) {
             // Numbers and digit-bearing text are money; anything else still goes through walk(), so identity
@@ -112,6 +116,23 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
     return walk(value) as T
 }
 export async function aiSafety<T>(value: T, path: 'lens' | 'triage' | 'posthog' = 'lens'): Promise<T> {
-    const safe = safetyWith(value, await identityTokens(), staffEmails())
-    return anonFor(path) ? hideClientsDeep(safe).value : safe
+    return withPrivacy(async () => {
+        if (privacyMode() === 'open') return value
+        const safe = safetyWith(value, await identityTokens(), staffEmails())
+        return anonFor(path) ? hideClientsDeep(safe).value : safe
+    })
+}
+
+/** Schemas are protocol metadata: scrub their text without changing field types or numeric limits. */
+export function metadataSafetyWith<T>(value: T, tokens: string[], staff = new Set<string>()): T {
+    const walk = (v: unknown): unknown => typeof v === 'string' ? safetyWith(v, tokens, staff)
+        : Array.isArray(v) ? v.map(walk)
+        : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k,x]) => [k,walk(x)])) : v
+    return walk(value) as T
+}
+export function aiMetadataSafety<T>(value: T): Promise<T> {
+    return withPrivacy(async () => {
+        const safe = metadataSafetyWith(value, await identityTokens(), staffEmails())
+        return anonFor('lens') ? hideClientsDeep(safe).value : safe
+    })
 }

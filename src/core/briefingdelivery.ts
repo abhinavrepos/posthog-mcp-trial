@@ -2,7 +2,7 @@
 import { config } from './config.ts'
 import { getSetting, setSetting, tx } from './db.ts'
 import { mondayBrief, type MondayBrief } from './briefing.ts'
-import { rescuePrivacy } from './rescueprivacy.ts'
+import { aiSafety } from './aisafety.ts'
 
 const LAST = 'briefing_last_sent', CLAIM = 'briefing_delivery_claim'
 const DAYS = ['sun','mon','tue','wed','thu','fri','sat']
@@ -47,7 +47,7 @@ export function createBriefingScheduler(options = config.briefing, injected: Par
             if (!claimed) return
             const b = await d.brief({ by: 'briefing-delivery', now })
             // Keep payloads short, disable mention syntax and sanitize identities even in injected briefs.
-            const message = await rescuePrivacy(briefingMessage(b, config.service.publicUrl))
+            const message = await aiSafety(briefingMessage(b, config.service.publicUrl))
             const body = JSON.stringify(deliveryPayload(options.kind, message.replace(/[<>]/g,'').replace(/@/g,'＠')))
             let sent = false
             for (let attempt=0; attempt<2; attempt++) {

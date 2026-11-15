@@ -86,3 +86,17 @@ describe('instructions for using this server next to PostHog MCP', () => {
         assert.match(client.getInstructions() || '', /It takes a command string/)
     })
 })
+
+test('instructions remain below the limit in every privacy mode', async () => {
+    const { setAnonymise, anonSettings } = await import('../src/core/anonymise.ts')
+    const previous = anonSettings()
+    try {
+        for (const mode of ['open', 'standard', 'private'] as const) {
+            setAnonymise({ mode })
+            const text = serverInstructions(true)
+            assert.ok(text.length < INSTRUCTIONS_LIMIT, `${mode}: ${text.length}`)
+            assert.match(text, new RegExp(mode))
+            if (mode === 'private') assert.match(text, /SQL is refused/)
+        }
+    } finally { setAnonymise(previous) }
+})

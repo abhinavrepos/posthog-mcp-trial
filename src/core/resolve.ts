@@ -26,7 +26,7 @@ export async function knownClients(): Promise<KnownClient[]> {
     await refreshRoster()
     // Event counts from Lens's own daily rollups (no PostHog scan): shown with each candidate.
     const { tasksDb } = await import('./tasks.ts')
-    const since = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10)
+    const since = new Date(Date.now() - 1500 * 86400000).toISOString().slice(0, 10)
     const events = new Map((tasksDb.prepare('SELECT client, sum(events) AS n FROM user_daily WHERE day >= ? GROUP BY client').all(since) as { client: string; n: number }[]).map((r) => [r.client, Number(r.n) || 0]))
     return storedClients().map((c) => ({ id: c.id, name: c.name || c.id, events: events.get(c.id) || 0 })).sort((a, b) => b.events - a.events || a.id.localeCompare(b.id))
 }
@@ -36,7 +36,7 @@ export async function clientsForEmail(email: string): Promise<{ id: string; name
     const rows = await hogql(
         `SELECT toString(${P.client}) AS id, any(toString(${P.clientName})) AS name, count() AS events
          FROM events
-         WHERE timestamp > now() - INTERVAL 90 DAY
+         WHERE timestamp > now() - INTERVAL 1500 DAY
            AND (lower(toString(${P.email})) = {email} OR lower(distinct_id) = {email})
            AND notEmpty(toString(${P.client}))
          GROUP BY id ORDER BY events DESC LIMIT 5`,
@@ -49,7 +49,7 @@ async function clientsForDomain(domain: string): Promise<{ id: string; name: str
     const rows = await hogql(
         `SELECT toString(${P.client}) AS id, any(toString(${P.clientName})) AS name, count() AS events
          FROM events
-         WHERE timestamp > now() - INTERVAL 90 DAY
+         WHERE timestamp > now() - INTERVAL 1500 DAY
            AND endsWith(lower(toString(${P.email})), {domain})
            AND notEmpty(toString(${P.client}))
          GROUP BY id ORDER BY events DESC LIMIT 5`,

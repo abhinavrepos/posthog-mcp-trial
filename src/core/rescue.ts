@@ -21,9 +21,9 @@ export interface RescueAction { owner: string | null; status: RescueStatus; note
 export interface RescueClient { client: string; client_name: string; level: 'urgent' | 'watch'; score: number;
     trend: 'new' | 'worse' | 'same' | 'better'; reasons: RescueReason[]; critical_task?: { task_id: string; task_name: string };
     next_step: string; recovery?: 'recovered' | 'still_failing' | 'awaiting_evidence'; recovery_text?: string; action?: RescueAction }
-export interface RescueParams { window?: Window; baseline?: Window; min_attempts?: number; include_snoozed?: boolean }
+export interface RescueParams { compare?:'previous'|'none'; compare_with?:Window; window?: Window; baseline?: Window; min_attempts?: number; include_snoozed?: boolean }
 export interface RescueQueue { coverage: Coverage; window: Window; baseline: Window; data_through: string | null;
-    clients: RescueClient[]; recovered?: RescueClient[]; hidden_snoozed: number; note: string }
+    observed_usage?: {client:string;attempts:number;done:number}[]; clients: RescueClient[]; recovered?: RescueClient[]; hidden_snoozed: number; note: string }
 const shift = (s: string, n: number) => new Date(Date.parse(s) + n * 86400000).toISOString().slice(0, 10)
 const today = () => new Date().toISOString().slice(0, 10)
 const moved = (w: Window): Window => ({ from: shift(w.from, -7), to: shift(w.to, -7) })
@@ -136,13 +136,14 @@ async function answer(p: RescueParams): Promise<RescueQueue> {
     validWindow(window)
     // Compare like with like: the period of the same length just before the window.
     const length = Math.round((Date.parse(window.to) - Date.parse(window.from)) / 86400000) + 1
-    const baseline = p.baseline || { from: shift(window.from, -length), to: shift(window.from, -1) }
+    const baseline = p.compare_with || p.baseline || { from: shift(window.from, -length), to: shift(window.from, -1) }
     validWindow(baseline)
     const min = p.min_attempts ?? RESCUE.default_min
     if (!Number.isInteger(min) || min < 1 || min > 100000) throw new Error('min_attempts must be an integer from 1 to 100000')
-    const cover = coverage(window, baseline)
+    const current=coverage(window), previousCoverage=coverage(baseline)
+    const cover={...current,complete:current.complete && previousCoverage.complete && p.compare!=='none',comparison:{requested:baseline,status:p.compare==='none'?'none':current.complete && previousCoverage.complete?'complete':'unavailable',reason:p.compare==='none'?'Comparison disabled':current.complete && previousCoverage.complete?'Both periods complete':'Comparisons require complete current and baseline periods; omitted'},baseline:previousCoverage}
     const base = { coverage: cover, window, baseline, data_through: through, hidden_snoozed: 0, note: 'Ranked from processed task history. Review the evidence with the account team.' }
-    if (!cover.complete) return { ...base, clients: [] }
+    if (!cover.complete) return { ...base, clients: [], observed_usage:query<{client:string;attempts:number;done:number}>(`SELECT client,sum(attempts) attempts,sum(done) done FROM task_daily WHERE day BETWEEN ? AND ? AND day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= 'analysis_unavailable:' AND key < 'analysis_unavailable;') GROUP BY client ORDER BY attempts DESC LIMIT 150`,window.from,window.to),note:base.note+' Comparison omitted; observed_usage includes only covered days and has no decline flags.' }
     const clients = await compute(window, baseline, min), pw = moved(window), pb = moved(baseline)
     // An incomplete earlier comparison cannot be evidence of worsening or recovery.
     const previous = coverage(pw, pb).complete ? new Map((await compute(pw, pb, min)).map(c => [c.client, c.score])) : null

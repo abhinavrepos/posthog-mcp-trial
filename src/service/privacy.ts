@@ -2,12 +2,13 @@
 //   /replays/admin/privacy   admins: switch anonymisation on or off, choose what PostHog's MCP may do, and
 //                            edit each client's codename and the other names it goes by
 //   /replays/codenames       everyone who works with clients in Lens: who is who (codename ↔ client)
-// Links the AI gives out carry a codename's slug (?client=amber-falcon); codenameRedirect turns them back
+// Links the AI gives out carry a codename's slug (?client=client-100); codenameRedirect turns them back
 // into the client for signed-in people.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { anonSettings, anonymiseOn, AnonInputError, blockCounts, clientOfCodename, listCodenames, setAnonymise, setCodename } from '../core/anonymise.ts'
+import { privacyRevision, numbering, previewNumbering, applyNumbering, anonSettings, privacyMode, anonymiseOn, AnonInputError, blockCounts, clientOfCodename, listCodenames, setAnonymise, setCodename } from '../core/anonymise.ts'
 import { refreshRoster } from '../core/anonroster.ts'
+import { all } from '../core/db.ts'
 import { config, posthogMcpActive } from '../core/config.ts'
 import { audit, can, canUseDashboards, type Viewer } from './access.ts'
 import { canConnect } from './connect.ts'
@@ -30,7 +31,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 /** Who may see who is who: anyone who works with clients in Lens. */
 export const canSeeCodenames = (v: Viewer) => can(v.role, 'watch') || canUseDashboards(v) || canConnect(v)
 
-/** A link with a codename's slug where a client goes (?client=amber-falcon): the same page for the client. */
+/** A link with a codename's slug where a client goes (?client=client-100): the same page for the client. */
 export function codenameRedirect(req: IncomingMessage, res: ServerResponse, url: URL): boolean {
     if (req.method !== 'GET' || !url.search) return false
     let changed = false
@@ -134,86 +135,32 @@ export function adminTabs(privacy = false): string {
 }
 
 function adminPage(v: Viewer): string {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Client privacy for AI · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}${STYLE}</style></head>
-<body>${headerHtml(v, 'Admin')}<main>
-<div class="page-head"><div><h1>Admin</h1><p>Who can use Lens, and what it keeps.</p></div></div>
-${adminTabs(true)}
-<section class="card"><div class="top"><div><h2 style="margin:0">Client privacy for AI</h2><p class="sub" style="margin:4px 0 0">AI sees codenames instead of client names. People still see real names in Lens.</p></div><label class="set" style="border:0;padding:0" for="s-on"><span id="on-text">Off</span><input type="checkbox" role="switch" class="sw" id="s-on"></label></div>
-<div id="alerts" aria-live="polite"></div>
-<div id="opts" class="cols"><div>
-<p class="grp">Covers</p><div class="rows">
-<div class="set"><label for="s-lens">Lens tools in Copilot</label><input type="checkbox" role="switch" class="sw" id="s-lens"></div>
-<div class="set"><label for="s-posthog">PostHog tools in Copilot</label><select id="s-posthog"><option value="block">Block data</option><option value="filter">Filter results</option><option value="off">Not covered</option></select></div>
-<div class="set"><label for="s-triage">Claude ticket triage</label><input type="checkbox" role="switch" class="sw" id="s-triage"></div>
-</div></div><div>
-<p class="grp">Hides</p><div class="rows">
-<div class="set"><span>Client names</span><span class="small muted">Always</span></div>
-<div class="set"><label for="s-codes">Client codes</label><input type="checkbox" role="switch" class="sw" id="s-codes"></div>
-<div class="set"><label for="s-emails">Client users' emails</label><input type="checkbox" role="switch" class="sw" id="s-emails"></div>
-<div class="set"><label for="s-round">Round counts <span class="muted small">(148 → 150)</span></label><input type="checkbox" role="switch" class="sw" id="s-round"></div>
-</div>
-</div></div><div class="message-settings"><details><summary>Message to the AI</summary><p class="small muted">What the AI is told when it asks with a client name or code. Empty: the default.</p>
-<label class="sr-only" for="s-message">Message to the AI</label><textarea id="s-message" rows="3" maxlength="500"></textarea>
-<p><button type="button" id="msg-save">Save message</button></p></details>
-
-</div>
-<p class="stats" id="stats"></p></section>
-<section class="card"><div class="find"><h2 style="margin:0">Codenames</h2><div><label class="sr-only" for="find">Find a client</label><input id="find" type="search" placeholder="Find a client or codename"></div></div>
-<p class="small muted">Settings save automatically. Save codename edits per row.</p><table class="cn"><caption class="sr-only">Clients and their codenames</caption><colgroup><col style="width:28%"><col style="width:28%"><col style="width:36%"><col style="width:8%"></colgroup>
-<thead><tr><th scope="col">Client</th><th scope="col">Codename</th><th scope="col">Other names</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead><tbody id="rows"><tr><td colspan="4">Loading…</td></tr></tbody></table>
-<div id="pager"></div></section>
-<p id="msg" class="small" role="status" aria-live="polite"></p>
-<details class="access-help"><summary>How it works</summary><ul class="small">
-<li>Every client gets a short random codename when Lens first sees it. It never hints at the name. Change it here any time.</li>
-<li>Copilot's questions that use a codename reach the real client inside Lens; its links open the real client for signed-in people. PMs look codenames up on <a href="/replays/codenames">Codenames</a>.</li>
-<li>A question with a real name or code is refused, the same way for any name.</li>
-<li><i>Block data</i> lets Copilot search PostHog's docs only. <i>Filter results</i> runs PostHog queries and replaces names in the answers.</li>
-<li>Other names: how people also write a client (short or old names). Legal endings, initials of long names (KFH) and one-letter typos are covered already.</li>
-<li><i>Round counts</i> rounds numbers like events and users in answers, so an exact size cannot point to a client.</li>
-<li>Not covered by Lens: what people type into Copilot, chats from before this was on, AI tools connected to PostHog with someone's own PostHog key, and PostHog's own AI features. Keep PostHog API keys to admins.</li></ul></details>
-</main>
-<script>
-${PAGER_JS}
-const $=id=>document.getElementById(id);let S={settings:{},clients:[],counts:{}}
-const api=async(path,opt={})=>{const r=await fetch(path,{...opt,headers:{'content-type':'application/json','x-clip-page':'1'}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Failed');return d}
-const say=(t,error=false)=>{$('msg').textContent=t;$('msg').className='small '+(error?'err':'')}
-function alerts(){const s=S.settings,out=[]
-  if(s.on){out.push('Names entered directly into Copilot are still sent to AI. Use codenames and start a new chat after enabling privacy.')
-    const gaps=[!s.lens&&'Lens tools',s.posthog==='off'&&'PostHog tools',!s.triage&&'Claude triage'].filter(Boolean)
-    if(gaps.length)out.push('<b>Not covered:</b> '+gaps.join(', ')+'. AI sees real client names there.')
-    if(s.posthog==='filter')out.push('<b>PostHog filter is not private.</b> A query can disguise names (reversed, encoded) and the AI can decode them.')
-    if(!s.codes)out.push('<b>Client codes are visible</b> to the AI.')
-    if(S.direct_posthog)out.push('<b>PostHog tools connect directly</b>, not through Lens (POSTHOG_MCP_VIA_LENS is off): Lens cannot hide names there.')
-    if(!s.emails)out.push('<b>Client users’ emails are visible</b>: a domain names its company.')}
-  $('alerts').innerHTML=out.map(t=>'<div class="alert" role="alert">'+t+'</div>').join('')}
-function drawSettings(){const s=S.settings;$('s-on').checked=s.on;$('on-text').textContent=s.on?'On':'Off'
-  $('s-lens').checked=s.lens;$('s-round').checked=!!s.round;$('s-triage').checked=s.triage;$('s-codes').checked=s.codes;$('s-emails').checked=s.emails;$('s-posthog').value=s.posthog
-  if(document.activeElement!==$('s-message'))$('s-message').value=s.message||''
-  $('opts').classList.toggle('off-area',!s.on);alerts()
-  const c=S.counts,n=k=>(c[k]||0).toLocaleString()
-  $('stats').replaceChildren(...['Last 30 days: '+n('lens_refused')+' questions refused',(+(c.lens_cleaned||0)+ +(c.posthog_cleaned||0)+ +(c.triage_cleaned||0)).toLocaleString()+' answers cleaned',n('posthog_refused')+' PostHog commands refused'].map(t=>{const el=document.createElement('span');el.textContent=t;return el}))}
-async function save(body,done){try{S.settings=await api('/replays/admin/privacy/api/settings',{method:'POST',body:JSON.stringify(body)});drawSettings();say(done||'Saved.')}catch(e){say(e.message,true);drawSettings()}}
-$('s-on').onchange=()=>{const on=$('s-on').checked;if(!on&&!confirm('Turn it off? AI will see client names again.')){$('s-on').checked=true;return}save({on},on?'On: AI now sees codenames.':'Off: AI sees client names.')}
-for(const k of ['lens','triage','codes','emails','round'])$('s-'+k).onchange=()=>save({[k]:$('s-'+k).checked})
-$('s-posthog').onchange=()=>save({posthog:$('s-posthog').value})
-$('msg-save').onclick=()=>save({message:$('s-message').value},'Message saved.')
-const pager=makePager({mount:$('pager'),noun:'clients',size:25,draw:slice=>{const body=$('rows');body.replaceChildren()
-  if(!slice.length){const tr=document.createElement('tr');const td=document.createElement('td');td.colSpan=4;td.className='muted';td.textContent=S.clients.length?'No client matches.':'No clients yet.';tr.append(td);body.append(tr);return}
-  for(const c of slice){const tr=document.createElement('tr'),who=c.name||c.client
-    const td=(cls,node)=>{const x=document.createElement('td');x.className=cls;x.append(node);tr.append(x);return x}
-    const cl=document.createElement('div');const b=document.createElement('b');b.textContent=who;cl.append(b);if(c.name){const k=document.createElement('span');k.className='code';k.textContent=c.client;cl.append(k)}td('cl',cl)
-    const cn=document.createElement('input');cn.value=c.codename;cn.setAttribute('aria-label','Codename for '+who);td('cn',cn)
-    const al=document.createElement('input');al.value=c.aliases.join(', ');al.placeholder='Add another name';al.setAttribute('aria-label','Other names for '+who);const aliasCell=td('al',al);if(c.auto_aliases.length){const helper=document.createElement('div');helper.className='small muted';helper.textContent='Detected: '+c.auto_aliases.join(', ');aliasCell.append(helper)}
-    const acts=document.createElement('div');acts.className='acts'
-    const sv=document.createElement('button');sv.type='button';sv.className='save-row';sv.textContent='Save';sv.hidden=true;sv.setAttribute('aria-label','Save '+who)
-    const dirty=()=>{sv.hidden=cn.value===c.codename&&al.value===c.aliases.join(', ')};cn.oninput=dirty;al.oninput=dirty
-    sv.onclick=async()=>{try{Object.assign(c,await api('/replays/admin/privacy/api/codename',{method:'POST',body:JSON.stringify({client:c.client,codename:cn.value,aliases:al.value})}));dirty();say('Saved: '+who+' is '+c.codename+'.')}catch(e){say(e.message,true)}}
-    const re=document.createElement('button');re.type='button';re.className='ghost ic';re.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M19 11a7 7 0 0 0-12-5L4 9m16 6-3 3A7 7 0 0 1 5 13"/></svg>';re.title='New random codename';re.setAttribute('aria-label','New random codename for '+who)
-    re.onclick=async()=>{if(!confirm('New codename for '+who+'? People who know '+c.codename+' need the new one.'))return;try{Object.assign(c,await api('/replays/admin/privacy/api/codename',{method:'POST',body:JSON.stringify({client:c.client,regenerate:true})}));cn.value=c.codename;dirty();say(who+' is now '+c.codename+'.')}catch(e){say(e.message,true)}}
-    acts.append(sv,re);td('ac',acts);body.append(tr)}}})
-const filter=()=>{const q=$('find').value.trim().toLowerCase();pager.set(S.clients.filter(c=>!q||[c.client,c.name,c.codename,...c.aliases].some(x=>String(x).toLowerCase().includes(q))))}
-$('find').oninput=filter
-api('/replays/admin/privacy/api/state').then(d=>{S=d;drawSettings();filter()}).catch(e=>say(e.message,true))
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Client privacy · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}${STYLE}main{min-width:960px}input[type=number]{width:120px}#preview{white-space:pre-wrap;max-height:300px;overflow:auto}</style></head><body>${headerHtml(v, 'Admin')}<main>
+<div class="page-head"><div><h1>Admin</h1><p>Privacy for AI</p></div></div>${adminTabs(true)}
+<section class="card"><h2>Privacy mode: <span id="current"></span></h2><p>One setting covers Lens tools, ticket triage and PostHog results. Replay access stays the same in all modes.</p>
+<table><thead><tr><th>Mode</th><th>Client names/codes</th><th>Client users’ emails/names/IDs</th><th>Cash amounts</th><th>Trade IDs</th><th>PostHog SQL</th></tr></thead><tbody>
+<tr><td><label><input type="radio" name="mode" value="open"> Open</label></td><td>Real</td><td>Visible</td><td>Visible</td><td>Visible</td><td>Allowed</td></tr>
+<tr><td><label><input type="radio" name="mode" value="standard"> Standard (default)</label></td><td>Real</td><td>Masked</td><td>Masked</td><td>Visible</td><td>Allowed; results masked</td></tr>
+<tr><td><label><input type="radio" name="mode" value="private"> Private</label></td><td>Numbered codenames</td><td>Masked</td><td>Masked</td><td>Visible</td><td>Refused</td></tr></tbody></table>
+<p class="small muted">Open shows what the source still retains. Data stored already generalised, such as message templates, stays generalised. Names typed directly into chat are sent to AI; in private mode use codenames.</p>
+<div id="private"><label>Other PostHog data <select id="posthog"><option value="block">Block data</option><option value="filter">Filter results</option></select></label> <label><input type="checkbox" id="round"> Round counts</label><p class="small muted">Filtering is best effort; transformed or encoded client names may evade it. Block data permits docs only.</p></div></section>
+<section class="card"><h2>Numbered codenames</h2><p>Immutable ranks keep labels stable. Initial ranks are shuffled. Individual codename edits are removed; real-name aliases remain editable below.</p>
+<label>Prefix <input id="prefix" maxlength="40"></label> <label>Start <input id="start" type="number" min="0" step="1"></label> <button id="show">Preview mapping</button> <button id="apply" disabled>Apply preview</button><pre id="preview"></pre><p class="small muted">Old codenames stop resolving. A scheme that reassigns a current or retired label is refused.</p>
+<table><thead><tr><th>Client</th><th>Codename</th><th>Real-name aliases</th><th></th></tr></thead><tbody id="clients"></tbody></table></section>
+<section class="card"><h2>Privacy audit</h2><div id="audit"></div></section><p id="msg" role="status"></p></main><script>
+const $=id=>document.getElementById(id);let state,preview;
+async function api(path,body){const r=await fetch('/replays/admin/privacy/api/'+path,{method:body?'POST':'GET',headers:{'content-type':'application/json','x-clip-page':'1'},body:body?JSON.stringify(body):undefined});const d=await r.json();if(!r.ok)throw Error(d.error);return d}
+const attempt=f=>async()=>{try{await f();$('msg').textContent='Saved.'}catch(e){$('msg').textContent=e.message}};
+async function load(){state=await api('state');const s=state.settings;$('current').textContent=s.mode;document.querySelectorAll('[name=mode]').forEach(e=>e.checked=e.value===s.mode);$('private').hidden=s.mode!=='private';$('posthog').value=s.posthog;$('round').checked=s.round;$('prefix').value=state.numbering.prefix;$('start').value=state.numbering.start;
+$('clients').replaceChildren();for(const c of state.clients){const tr=document.createElement('tr');for(const text of [c.name||c.client,c.codename]){const td=document.createElement('td');td.textContent=text;tr.append(td)}const td=document.createElement('td'),input=document.createElement('input');input.value=c.aliases.join(', ');input.setAttribute('aria-label','Real-name aliases for '+(c.name||c.client));td.append(input);tr.append(td);const acts=document.createElement('td'),save=document.createElement('button');save.textContent='Save aliases';save.onclick=attempt(async()=>{await api('codename',{client:c.client,aliases:input.value});await load()});acts.append(save);tr.append(acts);$('clients').append(tr)}
+$('audit').replaceChildren();for(const row of state.audit){const p=document.createElement('p');p.className='small';p.textContent=row.t+' · '+row.who+' · '+row.action+' · '+row.details;$('audit').append(p)}}
+document.querySelectorAll('[name=mode]').forEach(e=>e.onchange=attempt(async()=>{await api('settings',{mode:e.value});await load()}));
+for(const k of ['posthog','round'])$(k).onchange=attempt(async()=>{await api('settings',{[k]:k==='round'?$(k).checked:$(k).value});await load()});
+const scheme=()=>({prefix:$('prefix').value,start:Number($('start').value)});
+for(const k of ['prefix','start'])$(k).oninput=()=>{preview=undefined;$('apply').disabled=true};
+$('show').onclick=attempt(async()=>{const p=scheme(),d=await api('numbering-preview',p);preview={...p,revision:d.revision};$('preview').textContent=d.clients.map(c=>(c.name||c.client)+': '+c.before+' → '+c.codename).join('\\n');$('apply').disabled=false});
+$('apply').onclick=attempt(async()=>{await api('numbering',preview);preview=undefined;$('apply').disabled=true;await load()});
+load().catch(e=>$('msg').textContent=e.message);
 </script></body></html>`
 }
 
@@ -221,8 +168,8 @@ function codenamesPage(v: Viewer): string {
     const on = anonymiseOn()
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Codenames · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}${STYLE}</style></head>
 <body>${headerHtml(v, 'Chat')}<main class="narrow">
-<div class="top"><h1>Codenames</h1><span class="badge ${on ? 'ok' : ''}">${on ? 'Client privacy is on' : 'Client privacy is off'}</span></div>
-<p class="sub">${on ? 'Copilot only knows clients by codename. Ask about a client using its codename.' : 'Each client’s codename, ready for when an admin turns client privacy on.'}</p>
+<div class="top"><h1>Codenames</h1><span class="badge ${on ? 'ok' : ''}">${esc(privacyMode())} mode</span></div>
+<p class="sub">${on ? 'Copilot only knows clients by codename. Ask about a client using its codename.' : 'Numbered client codenames for private mode.'}</p>
 ${on ? '<div class="alert" role="note">Names entered directly into Copilot are still sent to AI. Use codenames and start a new chat after enabling privacy.</div>' : ''}
 <div class="find"><span id="client-count">Loading clients…</span><div><label class="sr-only" for="find">Find a client</label><input id="find" type="search" placeholder="Find a client or codename"></div></div>
 <table class="cn"><caption class="sr-only">Who is who</caption><colgroup><col style="width:34%"><col style="width:46%"><col style="width:20%"></colgroup><thead><tr><th scope="col">Codename</th><th scope="col">Client</th><th scope="col"><span class="sr-only">Copy</span></th></tr></thead><tbody id="rows"><tr><td colspan="3">Loading…</td></tr></tbody></table>
@@ -259,7 +206,7 @@ export async function handlePrivacy(req: IncomingMessage, res: ServerResponse, u
         if (p === '/replays/admin/privacy' && req.method === 'GET') { html(res, adminPage(v)); return true }
         if (p === '/replays/admin/privacy/api/state' && req.method === 'GET') {
             await refreshRoster().catch(() => {})
-            json(res, 200, { settings: anonSettings(), counts: blockCounts(30), clients: listCodenames(), direct_posthog: !config.posthog.mcpViaLens && posthogMcpActive() })
+            json(res, 200, { settings: anonSettings(), numbering: numbering(), revision: privacyRevision(), audit: all('SELECT * FROM audit WHERE action LIKE ? ORDER BY t DESC LIMIT 50', 'privacy.%'), counts: blockCounts(30), clients: listCodenames(), direct_posthog: !config.posthog.mcpViaLens && posthogMcpActive() })
             return true
         }
         if (req.method === 'POST' && req.headers['x-clip-page'] !== '1') { json(res, 403, { error: 'A page request header is required.' }); return true }
@@ -271,6 +218,16 @@ export async function handlePrivacy(req: IncomingMessage, res: ServerResponse, u
             if (Object.keys(changed).length) audit(v.email, 'privacy.anonymise_set', changed)
             if (after.on && !before.on) await refreshRoster(0).catch(() => {})
             json(res, 200, after)
+            return true
+        }
+        if ((p === '/replays/admin/privacy/api/numbering-preview' || p === '/replays/admin/privacy/api/numbering') && req.method === 'POST') {
+            const b = await readJson(req)
+            const scheme = { prefix: String(b.prefix ?? ''), start: Number(b.start) }
+            if (p.endsWith('numbering-preview')) json(res, 200, { clients: previewNumbering(scheme), revision: privacyRevision() })
+            else {
+                if (b.revision !== privacyRevision()) throw new AnonInputError('Mapping changed; preview again before applying.')
+                json(res, 200, applyNumbering(scheme, v.email, Number(b.revision)))
+            }
             return true
         }
         if (p === '/replays/admin/privacy/api/codename' && req.method === 'POST') {

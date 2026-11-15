@@ -37,42 +37,31 @@ A.syncClients(CLIENTS)
 const cn = (id: string) => A.codenameOf(id)!
 
 describe('codenames', () => {
-    test('every client gets a stable, unique two-word codename that shares no word with any client', () => {
+    test('every client gets a stable, unique numbered codename that shares no word with any client', () => {
         const all = A.listCodenames()
         assert.equal(all.length, 4)
         assert.equal(new Set(all.map((c) => c.codename.toLowerCase())).size, 4)
         for (const c of all) {
-            assert.match(c.codename, /^[A-Z][a-z]+ [A-Z][a-z]+$/)
+            assert.match(c.codename, /^Client \d+$/)
             for (const other of CLIENTS) for (const w of `${other.id} ${other.name}`.toLowerCase().split(/\W+/)) assert.ok(!c.codename.toLowerCase().split(' ').includes(w))
         }
         const before = cn('QZX901')
         A.syncClients([{ id: 'QZX901', name: 'Zorblax Treasury' }])
         assert.equal(cn('QZX901'), before, 'stays the same')
     })
-    test('the list: 10,000 short codenames, unique, two words of 3 to 5 letters; new clients get one from it', async () => {
-        const { CODENAMES, CODENAME_ADJECTIVES, CODENAME_ANIMALS } = await import('../src/core/codenames.ts')
-        assert.equal(CODENAMES.length, 10_000)
-        assert.equal(new Set(CODENAMES.map((c) => c.toLowerCase())).size, 10_000)
-        assert.ok(CODENAMES.every((c) => /^[A-Z][a-z]{2,4} [A-Z][a-z]{2,4}$/.test(c) && c.length <= 11))
-        const words = new Set([...CODENAME_ADJECTIVES, ...CODENAME_ANIMALS].map((w) => w.toLowerCase()))
-        assert.equal(words.size, 200, 'no word in both lists')
-        for (const w of ['gold', 'royal', 'bank', 'trust', 'capital', 'north', 'global', 'first', 'union', 'beta', 'delta']) assert.ok(!words.has(w), w)
-        const list = new Set(CODENAMES)
-        for (const c of A.listCodenames()) assert.ok(list.has(c.codename), c.codename)
+    test('new clients get the next never-reused rank', () => {
+        const before = Math.max(...A.listCodenames().map(c => Number(c.codename.split(' ').at(-1))))
         A.syncClients(Array.from({ length: 60 }, (_, i) => ({ id: `BULK${i}`, name: `Bulkco Number ${i}` })))
-        const bulk = A.listCodenames().filter((c) => c.client.startsWith('BULK'))
-        assert.equal(bulk.length, 60); assert.ok(bulk.every((c) => list.has(c.codename)))
+        const bulk = A.listCodenames().filter(c => c.client.startsWith('BULK'))
+        assert.equal(bulk.length, 60)
+        assert.deepEqual(bulk.map(c => Number(c.codename.split(' ').at(-1))).sort((a,b)=>a-b), Array.from({ length:60 },(_,i)=>before+i+1))
     })
-    test('admins rename, add other names, or draw a new codename; clashes and bad names are refused', () => {
-        const r = A.setCodename('KWAMBE', { codename: 'Quiet Otter', aliases: 'KFH, Kwambe FT' }, 'admin@x')
-        assert.equal(r.codename, 'Quiet Otter'); assert.deepEqual(r.aliases, ['KFH', 'Kwambe FT'])
-        assert.throws(() => A.setCodename('QZX901', { codename: 'quiet otter' }, 'a'), /Another client/)
-        assert.throws(() => A.setCodename('QZX901', { codename: 'Zorblax Fox' }, 'a'), /shares a word/)
-        assert.throws(() => A.setCodename('QZX901', { codename: 'Voltrino Fox' }, 'a'), /another client/)
-        assert.throws(() => A.setCodename('QZX901', { codename: '<b>x' }, 'a'), /letters/)
-        assert.throws(() => A.setCodename('nope', { codename: 'Calm Owl' }, 'a'), /Unknown client/)
-        const g = A.setCodename('QZX901', { regenerate: true }, 'a')
-        assert.notEqual(g.codename.toLowerCase(), 'quiet otter')
+    test('admins edit real aliases but cannot edit or regenerate an individual numbered label', () => {
+        const r = A.setCodename('KWAMBE', { aliases: 'KFH, Kwambe FT' }, 'admin@x')
+        assert.equal(r.codename, cn('KWAMBE')); assert.deepEqual(r.aliases, ['KFH', 'Kwambe FT'])
+        assert.throws(() => A.setCodename('QZX901', { codename: 'Other 100' }, 'a'), /cannot be edited/)
+        assert.throws(() => A.setCodename('QZX901', { regenerate: true }, 'a'), /cannot be edited/)
+        assert.throws(() => A.setCodename('nope', { aliases: [] }, 'a'), /Unknown client/)
     })
     test('legal and industry endings give automatic other names', () => {
         assert.deepEqual(A.autoAliases('Kwambe Fintrust Holdings'), ['Kwambe Fintrust'])
@@ -127,9 +116,9 @@ describe('the matcher', () => {
 })
 
 describe('the guard: requests', () => {
-    const on = () => A.setAnonymise({ on: true })
+    const on = () => A.setAnonymise({ mode: 'private' })
     test('off: everything passes as it is', () => {
-        A.setAnonymise({ on: false })
+        A.setAnonymise({ mode: 'standard' })
         const m = { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'client_story', arguments: { client: 'QZX901' } } }
         assert.deepEqual(guardRequest(m).msg, m)
         assert.deepEqual(guardResponse({ text: 'Zorblax' }), { text: 'Zorblax' })
@@ -169,7 +158,7 @@ describe('the guard: requests', () => {
 
 describe('Lens MCP server, end to end through the guard', () => {
     test('tool lists, results, errors and prompts never carry a client; codenames reach the tools as codes', async () => {
-        A.setAnonymise({ on: true })
+        A.setAnonymise({ mode: 'private' })
         const seen: unknown[] = []
         const server = new McpServer({ name: 'lens', version: '1' }, { instructions: 'Clients like Zorblax Treasury (QZX901) are examples.' })
         server.registerTool('client_story', { description: 'Story of a client, e.g. Voltrino Bank', inputSchema: { client: z.string() } }, async ({ client }) => {
@@ -211,14 +200,14 @@ describe('PostHog MCP proxy', () => {
         return res
     }
     test('block mode: only tool lookup and docs search; every data command is refused, however it is written', () => {
-        A.setAnonymise({ on: true, posthog: 'block' })
+        A.setAnonymise({ mode: 'private', posthog: 'block' })
         for (const ok of ['tools', 'help call', 'search insight', 'info execute-sql', 'schema execute-sql query', 'call docs-search {"query":"flags"}', 'call --json docs-search {}'])
             assert.ok(anonRefusal(exec(ok)).value, ok)
         for (const bad of ['call execute-sql {"query":"select 1"}', 'CALL   query-trends {}', 'tools\ncall insights-list {}', 'tools; call persons-list {}', 'tools && call x {}', 'call --json execute-sql {}', 'run execute-sql', 'call docs-search {"q":"Zorblax"}'])
             assert.ok(anonRefusal(exec(bad)).refusal, bad)
     })
     test('filter mode: codenames become codes in the query, names are refused, every answer is cleaned (JSON and SSE)', async (t) => {
-        A.setAnonymise({ on: true, posthog: 'filter' })
+        A.setAnonymise({ mode: 'private', posthog: 'filter' })
         await refreshRoster(0, { knownClients: async () => [] })
         assert.equal((anonRefusal(exec(`call query-trends {"filter":"client='${cn('QZX901')}'"}`)).value as any).params.arguments.command, `call query-trends {"filter":"client='QZX901'"}`)
         assert.ok(anonRefusal(exec(`call query-trends {"filter":"'Zorblax'"}`)).refusal)
@@ -237,7 +226,7 @@ describe('PostHog MCP proxy', () => {
         assert.match(blocked.text, /switched off while client anonymisation is on/)
     })
     test('off: the proxy passes data as before', async (t) => {
-        A.setAnonymise({ on: false })
+        A.setAnonymise({ mode: 'standard' })
         t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: 'Zorblax Treasury' }] } }), { headers: { 'content-type': 'application/json' } }))
         assert.match((await invoke(exec('call execute-sql {}'))).text, /Zorblax Treasury/)
     })
@@ -245,7 +234,7 @@ describe('PostHog MCP proxy', () => {
 
 describe('Claude triage', () => {
     test('the ticket, the client list and the hypothesis input carry codenames; the answer comes back as the client', async (t) => {
-        A.setAnonymise({ on: true })
+        A.setAnonymise({ mode: 'private' })
         // A PostHog that knows the canary clients and has no events.
         t.mock.method(globalThis, 'fetch', async (_u: unknown, init: RequestInit) => {
             const q = String(init?.body || '')
@@ -262,34 +251,26 @@ describe('Claude triage', () => {
         const report = await triage(ticket as never, { ai: ai as never, now: new Date('2026-11-01T00:00:00Z') }).catch((e) => ({ error: String(e) }))
         assert.ok(sent.length >= 2, JSON.stringify(report).slice(0, 300))
         assert.deepEqual(leaks(sent), [], JSON.stringify(sent).slice(0, 600))
-        A.setAnonymise({ on: false })
+        A.setAnonymise({ mode: 'standard' })
     })
 })
 
 describe('an admin\'s own choices', () => {
-    test('each path, codes, emails and the message can be set; bad values are refused', () => {
-        const all = A.setAnonymise({ on: true, lens: true, posthog: 'block', triage: true, codes: true, emails: true, message: '' })
-        assert.deepEqual(A.anonSettings(), all)
+    test('one mode covers all paths; bypass fields cannot weaken private mode', () => {
+        A.setAnonymise({ mode: 'private', posthog: 'block' })
+        A.setAnonymise({ lens: false, triage: false, codes: false, emails: false })
         assert.ok(A.anonFor('lens') && A.anonFor('posthog') && A.anonFor('triage'))
-        A.setAnonymise({ lens: false, posthog: 'off', triage: false })
-        assert.ok(!A.anonFor('lens') && !A.anonFor('posthog') && !A.anonFor('triage'))
-        assert.deepEqual(guardResponse({ t: 'Zorblax Treasury' }), { t: 'Zorblax Treasury' }, 'Lens tools not covered')
-        A.setAnonymise({ lens: true, codes: false })
-        assert.equal(A.hideClients('QZX901 is Zorblax Treasury').text, `QZX901 is ${cn('QZX901')}`, 'codes shown, names hidden')
-        assert.equal(guardRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'client_story', arguments: { client: 'QZX901' } } }).msg!.params.arguments.client, 'QZX901')
-        A.setAnonymise({ codes: true, emails: false })
-        assert.equal(A.hideClients('pat@example-corp.com').text, 'pat@example-corp.com', 'emails shown')
-        assert.equal(A.hideClients('pat@zorblax-tr.com').text, `pat@${cn('QZX901')}-tr.com`, 'a client name inside a domain is still hidden')
-        A.setAnonymise({ emails: true, message: 'Use the codename.' })
-        assert.equal(guardRequest({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'client_story', arguments: { client: 'QZX901' } } }).answer!.result.content[0].text, 'Use the codename.')
-        for (const bad of [{ posthog: 'maybe' }, { lens: 'yes' }, { message: 'x'.repeat(501) }]) assert.throws(() => A.setAnonymise(bad), A.AnonInputError)
-        A.setAnonymise({ message: '', posthog: 'block', triage: true, on: false })
+        assert.equal(A.hideClients('QZX901').text, cn('QZX901'))
+        assert.ok(guardRequest({ jsonrpc:'2.0', id:1, method:'tools/call', params:{name:'client_story',arguments:{client:'QZX901'}} }).answer)
+        for (const bad of [{ mode: 'invalid' }, { posthog: 'off' }, { round: 'yes' }]) assert.throws(() => A.setAnonymise(bad), A.AnonInputError)
+        A.setAnonymise({ mode: 'standard' })
+        assert.deepEqual(guardResponse({ t: 'Zorblax Treasury' }), { t: 'Zorblax Treasury' })
     })
 })
 
 describe('gaps closed', () => {
     test('initials, typos, capitalised word-codes, session ids, signed clip links and rounded counts', () => {
-        A.setAnonymise({ on: true, codes: true, emails: true, round: false })
+        A.setAnonymise({ mode: 'private', codes: true, emails: true, round: false })
         const k = cn('KWAMBE'), z = cn('QZX901'), b = cn('BETA')
         A.syncClients([{ id: 'NQP9', name: 'Nimbus Quarry Partners' }])
         const nq = cn('NQP9')
@@ -306,12 +287,12 @@ describe('gaps closed', () => {
         A.setAnonymise({ round: true })
         const r = guardResponse({ result: { content: [{ type: 'text', text: 'Result\n```json\n{"events":9876}\n```' }] } }) as any
         assert.match(r.result.content[0].text, /"events": 9900/)
-        A.setAnonymise({ round: false, on: false })
+        A.setAnonymise({ round: false, mode: 'standard' })
     })
     test('instructions tell the AI to use codenames only while it is on', async () => {
         const { serverInstructions } = await import('../src/mcp/instructions.ts')
-        A.setAnonymise({ on: true }); assert.match(serverInstructions(false), /known here only by codename/)
-        A.setAnonymise({ on: false }); assert.doesNotMatch(serverInstructions(false), /codename/)
+        A.setAnonymise({ mode: 'private' }); assert.match(serverInstructions(false), /known here only by numbered codename/)
+        A.setAnonymise({ mode: 'standard' }); assert.doesNotMatch(serverInstructions(false), /codename/)
     })
 })
 

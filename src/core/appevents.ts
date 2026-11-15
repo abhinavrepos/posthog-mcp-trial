@@ -1,3 +1,6 @@
+import { privacyMode } from './anonymise.ts'
+import { analyticalWindow } from './timewindow.ts'
+import { comparisonWindow, type ComparisonOptions } from './comparison.ts'
 // The app's own events: Reval's dialogs, fields, buttons and the messages it shows. A JSON file
 // (APP_EVENTS_FILE, see config/app-events.reval.json) says which properties hold what and how to
 // read them; this module turns those events into:
@@ -203,8 +206,8 @@ export function cleanMessage(text: string, reg: Pick<AppEvents, 'redact'>, max =
         .replace(/\\n|\s+/g, ' ')
         .trim()
     // After the whitespace is one space: "USD<tab>1234" and "USD 1 234" are amounts too.
-    s = maskEmails(maskAmounts(s))
-    for (const r of reg.redact) s = s.replace(new RegExp(r, 'i'), (_m, keep = '') => `${keep}…`)
+    if (privacyMode() !== 'open') s = maskEmails(maskAmounts(s))
+    if (privacyMode() !== 'open') for (const r of reg.redact) s = s.replace(new RegExp(r, 'i'), (_m, keep = '') => `${keep}…`)
     return s.length > max ? s.slice(0, max - 1) + '…' : s
 }
 
@@ -218,8 +221,8 @@ export function generalise(text: string, reg: Pick<AppEvents, 'redact'>, max = 2
         .replace(/\\n|\s+/g, ' ')
         .trim()
     // After the whitespace is one space: "USD<tab>1234" and "USD 1 234" are amounts too.
-    s = maskEmails(maskAmounts(s))
-    for (const r of reg.redact) s = s.replace(new RegExp(r, 'i'), (_m, keep = '') => `${keep}…`)
+    if (privacyMode() !== 'open') s = maskEmails(maskAmounts(s))
+    if (privacyMode() !== 'open') for (const r of reg.redact) s = s.replace(new RegExp(r, 'i'), (_m, keep = '') => `${keep}…`)
     s = s
         .replace(/\b\d{4}[-/]\d{2}[-/]\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?/g, '<date>')
         .replace(/\b\d{1,2}[-/ ][A-Za-z]{3}[-/ ]\d{4}( \d{2}:\d{2}(:\d{2})?)?/g, '<date>')
@@ -693,7 +696,7 @@ export async function sessionStory(sessionId: string, opts: { maxLines?: number;
     const reg = required()
     const rows = await hogql(
         `SELECT ${columns(reg)} FROM events
-         WHERE properties.$session_id = {sid} AND event IN {events} AND timestamp > now() - INTERVAL 400 DAY
+         WHERE properties.$session_id = {sid} AND event IN {events} AND timestamp > now() - INTERVAL 1500 DAY
          ORDER BY ts LIMIT 5000`,
         { sid: sessionId, events: [reg.events.screen, reg.events.interaction] }
     )
@@ -900,8 +903,7 @@ export interface Vocabulary {
 /** What the app's events are and hold, from the vocabulary and the last days of data. */
 export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vocabulary> {
     const reg = required()
-    const to = new Date()
-    const from = new Date(to.getTime() - days * 86_400_000)
+    const {from,to}=analyticalWindow(`last ${days} days`)!
     const w = { from: from.toISOString(), to: to.toISOString(), events: [reg.events.screen, reg.events.interaction] }
     const roles = ROLES.filter((r) => reg.properties[r])
     const [events, props, names, msgs, clients, defined] = await Promise.all([
@@ -1042,6 +1044,7 @@ export function clientSignals(rows: { client: string; now: ClientPeriod; before:
 }
 
 export interface ClientSignalsResult {
+    coverage?: unknown; comparison?: unknown; limits?: unknown
     now: { from: string; to: string }
     before: { from: string; to: string }
     clients: ClientSignals[]
@@ -1050,16 +1053,22 @@ export interface ClientSignalsResult {
 }
 
 /** Every client, this window against the one before it of the same length. */
-export async function clientSignalsReport(q: { from: Date; to: Date; clientId?: string; limit?: number }): Promise<ClientSignalsResult> {
-    const { historyClientSignals } = await import('./analysishistory.ts')
+export async function clientSignalsReport(q: { from: Date; to: Date; clientId?: string; limit?: number } & ComparisonOptions): Promise<ClientSignalsResult> {
+    const { historyClientSignals, analysisCoverage } = await import('./analysishistory.ts')
+    const baseline=comparisonWindow(q), currentCoverage=analysisCoverage(q), baselineCoverage=baseline ? analysisCoverage(baseline) : null
+    const comparison={requested:baseline,status:q.compare==='none'?'none':baselineCoverage?.complete && currentCoverage.complete?'complete':'unavailable',reason:q.compare==='none'?'Comparison disabled':'Comparisons require complete current and baseline periods; partial totals are not comparable'}
     const historical = historyClientSignals(q)
-    if (historical) return { now: { from: q.from.toISOString(), to: q.to.toISOString() },
-        before: { from: new Date(+q.from - (+q.to - +q.from)).toISOString(), to: q.from.toISOString() },
+    if (historical) return { coverage:{...currentCoverage,comparison},comparison, limits:{population:'covered_days_only',returned_rows:Math.min(historical.length,q.limit ?? 20),omitted_rows:Math.max(0,historical.length-(q.limit ?? 20)),examples_only:true}, now: { from: q.from.toISOString(), to: q.to.toISOString() },
+        before: { from: (baseline?.from || q.from).toISOString(), to: (baseline?.to || q.from).toISOString() },
         clients: q.clientId ? historical : historical.slice(0, q.limit ?? 20), quiet_clients: historical.filter((c) => !c.now.sessions).length,
-        note: 'Exact client signals from daily raw-event sufficient statistics; user arrays contain at most six disappeared-user examples.' }
+        note: 'Exact client signals from covered daily raw-event sufficient statistics; missing days are unknown. Comparisons and signals omitted unless both periods are complete. User arrays contain at most six disappeared-user examples.' }
+    // Not in history: one date-bounded aggregate inside ClickHouse reads every row of both periods, so it is a
+    // complete source. Up to 180 days for both periods together it is cheap; past that it is not run.
+    const liveSpan = baseline ? +q.to - +baseline.from : 0
+    if (q.compare !== 'none' && baseline && liveSpan <= 180 * 86400000) Object.assign(comparison, { status: 'complete', reason: 'Both periods read completely from PostHog (one aggregate query)' })
+    else if (q.compare !== 'none' && baseline) comparison.reason = 'Both periods together span more than 180 days and are not fully in Lens\'s processed history; the comparison is omitted rather than read live'
     const reg = required()
-    const len = q.to.getTime() - q.from.getTime()
-    const from0 = new Date(q.from.getTime() - len)
+    const from0 = comparison.status==='complete' ? baseline!.from : q.from
     const submit = reg.submitButtons
     const empty = reg.outcomes.filter((o) => o.outcome === 'empty').map((o) => `(${o.match})`)
     const dialog = prop(reg, 'dialog')
@@ -1122,13 +1131,14 @@ export async function clientSignalsReport(q: { from: Date; to: Date; clientId?: 
     const all = clientSignals(rows.map((r) => ({ client: String(r.client), now: p(r, 'n'), before: p(r, 'b'), last_seen: new Date(String(r.last_seen)).toISOString(),
         quiet_user_count: Number(quietByClient.get(String(r.client))?.quiet_count) || 0,
         quiet_users: ((quietByClient.get(String(r.client))?.quiet_users as unknown[]) || []).map(String) })), q.to.getTime())
-    return {
+    if(comparison.status!=='complete')for(const c of all){c.signals=[];c.weight=0;c.quiet_user_count=0;c.quiet_users=[]}
+    return {comparison,coverage:{...currentCoverage,comparison},
         now: { from: q.from.toISOString(), to: q.to.toISOString() },
         before: { from: from0.toISOString(), to: q.from.toISOString() },
         clients: q.clientId ? all : all.slice(0, q.limit ?? 20),
         quiet_clients: all.filter((c) => !c.now.sessions).length,
         note:
-            'Signals compare this window with the one before it of the same length. They show less use, people gone quiet and more failures: ' +
+            `${comparison.status==='complete'?'Signals compare complete periods.':'Comparison and decline flags omitted: baseline or current history incomplete, or comparison disabled. No live baseline read.'} ` +
             'evidence to look at, not a prediction that a client will leave. Counts are exact; user_count and quiet_user_count are totals, users arrays are omitted (empty), and quiet_users contains at most six examples. Small numbers (a few sessions) swing a lot. Use dialog_friction with the client for where they fail.',
     }
 }
@@ -1146,7 +1156,7 @@ export interface Pain {
     attempts: number
     stuck_sessions: number
     retry_loops: number
-    trend: 'new' | 'worse' | 'same' | 'better'
+    trend: 'new' | 'worse' | 'same' | 'better' | 'unavailable'
     before: { clients_hit: number; failed_attempts: number; attempts: number }
     example?: { session_id: string; at: string }
     score: number
@@ -1204,27 +1214,34 @@ export interface PainsReport {
 }
 
 /** The top pains of a period against the one before, plus the clients with warning signs. */
-export async function topPains(q: { from: Date; to: Date; max?: number }): Promise<PainsReport> {
-    const len = q.to.getTime() - q.from.getTime()
-    const prevFrom = new Date(q.from.getTime() - len)
+export async function topPains(q: { from: Date; to: Date; max?: number } & ComparisonOptions): Promise<PainsReport> {
+    const {analysisCoverage}=await import('./analysishistory.ts')
+    const baseline=comparisonWindow(q), beforeCoverage=baseline ? analysisCoverage(baseline) : null, nowCoverage=analysisCoverage(q)
+    const { LiveWindowTooLarge } = await import('./liveevents.ts')
+    // A baseline not in history is read live when small enough (complete pages); a too-large one is refused by
+    // the live guard and the comparison is omitted with that reason, never estimated.
+    let baselineReason = ''
     const [now, before, clients] = await Promise.all([
         dialogFriction({ from: q.from, to: q.to, limit: Number.MAX_SAFE_INTEGER }),
-        dialogFriction({ from: prevFrom, to: q.from, limit: Number.MAX_SAFE_INTEGER }),
-        clientSignalsReport({ from: q.from, to: q.to, limit: 50 }),
+        q.compare === 'none' || !baseline ? Promise.resolve(null) : dialogFriction({ ...baseline, limit: Number.MAX_SAFE_INTEGER })
+            .catch((e) => { baselineReason = e instanceof LiveWindowTooLarge ? e.message : `the baseline could not be read (${(e as Error).message})`; return null }),
+        clientSignalsReport({ ...q, limit: 50 }),
     ])
-    const pains = rankPains(now.dialogs, before.dialogs, q.max ?? 5)
+    const comparable = !!before
+    const pains = rankPains(now.dialogs, before?.dialogs || [], q.max ?? 5)
+    if(!comparable) for(const p of pains) { p.trend='unavailable';p.headline=p.headline.replace(/;.*$/, '') }
     const spans = await recordingSpans(pains.flatMap((p) => (p.example ? [p.example.session_id] : []))).catch(() => new Map())
     return {
         window: now.window,
-        source: now.source === 'history' && before.source === 'history' ? 'history' : 'live',
-        coverage: { now: now.coverage, before: before.coverage }, data_through: now.data_through,
+        source: now.source === 'history' ? 'history' : 'live',
+        coverage: {...nowCoverage, comparison:{requested:baseline,status:q.compare==='none'?'none':comparable?'complete':'unavailable',reason:comparable?`Complete baseline (${before!.source})`:q.compare==='none'?'Comparison disabled':`Baseline not available: ${baselineReason || 'not covered'}`}, baseline:beforeCoverage }, data_through: now.data_through,
         pains: pains.map((p) => {
             const span = p.example && spans.get(p.example.session_id)
             return span ? { ...p, replay_url: replayUrl(p.example!.session_id, Math.max(0, (Date.parse(p.example!.at) - Date.parse(span.start)) / 1000 - 20)) } : p
         }),
         clients_needing_attention: clients.clients.filter((c) => c.signals.length).slice(0, 5).map((c) => ({ client: c.client, signals: c.signals })),
         note:
-            'Ranked by how many clients hit errors, sessions that ended without success, retries and failed attempts; trend compares with the period before. ' +
+            `Ranked by covered client errors, unfinished sessions, retries and failed attempts. ${comparable ? 'Trend compares complete periods.' : 'Comparison omitted: incomplete history or disabled; baseline was not read live.'} ` +
             'Each pain has an example session: session_story tells it, get_replay_link makes a clip for the user. Small numbers: say so.',
     }
 }

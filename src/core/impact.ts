@@ -1,8 +1,10 @@
+import { analyticalWindow } from './timewindow.ts'
 // "Is it just them?" Blast radius of one error: who else hit it, since when, and on which release.
 import { hogql, issueUrl } from './posthog.ts'
 import { P } from './props.ts'
 
 export interface ErrorImpact {
+    window?:{from:string;to:string}
     issue_id?: string
     issue_url?: string
     error_type: string
@@ -34,9 +36,10 @@ export async function errorImpact(
     opts: { days?: number; pathname?: string } = {}
 ): Promise<ErrorImpact> {
     const days = opts.days ?? 30
+    const window=analyticalWindow(`last ${days} days`)!
     const f = errorFilter(e)
-    const values = { ...f.values, days }
-    const base = `event = '$exception' AND timestamp > now() - toIntervalDay({days}) AND ${f.where}`
+    const values = { ...f.values, days, from:window.from.toISOString(),to:window.to.toISOString() }
+    const base = `event = '$exception' AND timestamp >= {from} AND timestamp < {to} AND ${f.where}`
 
     const [summary, clients, versions, daily] = await Promise.all([
         hogql(
@@ -68,6 +71,7 @@ export async function errorImpact(
     const s = summary[0] || {}
     const issueId = e.issue_id || String(s.issue || '') || undefined
     const impact: ErrorImpact = {
+        window:{from:window.from.toISOString(),to:window.to.toISOString()},
         issue_id: issueId,
         issue_url: issueId ? issueUrl(issueId) : undefined,
         error_type: e.error_type || String(s.etype || ''),
@@ -89,7 +93,7 @@ export async function errorImpact(
         by_version: versions.map((r) => ({ app_version: String(r.v), occurrences: Number(r.n), clients: Number(r.clients) })),
         daily: fillDays(
             daily.map((r) => ({ day: String(r.day), occurrences: Number(r.n) })),
-            Math.min(days, 14)
+            days, new Date(+window.to-1)
         ),
     }
 
@@ -99,7 +103,7 @@ export async function errorImpact(
                  SELECT toString(properties.$session_id) AS sid, any(toString(${P.version})) AS v,
                         countIf(event = '$exception' AND ${f.where}) > 0 AS failed
                  FROM events
-                 WHERE timestamp > now() - toIntervalDay({days})
+                 WHERE timestamp >= {from} AND timestamp < {to}
                    AND notEmpty(toString(properties.$session_id))
                    AND (toString(properties.$pathname) = {path} OR event = '$exception')
                  GROUP BY sid
@@ -121,13 +125,14 @@ export async function errorImpact(
 
 /** The most frequent errors on a screen, for risk reviews that name a screen but not an error. */
 export async function topErrorsOnScreen(pathname: string, days = 14, limit = 3): Promise<{ issue_id: string; error_type: string; error_message: string; occurrences: number; clients: number }[]> {
+    const window=analyticalWindow(`last ${days} days`)!
     const rows = await hogql(
         `SELECT toString(properties.$exception_issue_id) AS issue, any(toString(properties.$exception_types[1])) AS etype,
                 any(toString(properties.$exception_values[1])) AS evalue, count() AS n, count(DISTINCT toString(${P.client})) AS clients
          FROM events
-         WHERE event = '$exception' AND timestamp > now() - toIntervalDay({days}) AND toString(properties.$pathname) = {path}
+         WHERE event = '$exception' AND timestamp >= {from} AND timestamp < {to} AND toString(properties.$pathname) = {path}
          GROUP BY issue ORDER BY n DESC LIMIT {limit}`,
-        { path: pathname, days, limit }
+        { path: pathname, days, limit,from:window.from.toISOString(),to:window.to.toISOString() }
     )
     return rows.map((r) => ({ issue_id: String(r.issue), error_type: String(r.etype), error_message: String(r.evalue), occurrences: Number(r.n), clients: Number(r.clients) }))
 }

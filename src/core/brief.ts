@@ -46,9 +46,9 @@ export function detectBriefKind(input: BriefInput, clients: ClientMatch[] = [], 
 }
 
 export function briefWindow(input: BriefInput, kind: BriefKind, now = new Date()) {
-    const parsed = parseTimeWindow(input.when || input.question || '', now, input.timezone)
-    return parsed.precision !== 'none' && parsed.to > parsed.from ? parsed :
-        parseTimeWindow(`last ${kind === 'trade' ? 30 : 14} days`, now, input.timezone)
+    // Free-form business questions are not date expressions. Only `when` requests a date parse.
+    const expression=input.when || /\b(?:last|past)\s+(?:\d+\s+)?(?:days?|weeks?|months?|years?|quarter)\b/i.exec(input.question || '')?.[0] || `last ${kind==='trade'?30:14} days`
+    return parseTimeWindow(expression,now,input.timezone)
 }
 
 export interface Contribution { total: number; largest: number; users: number; blocked_users: number }

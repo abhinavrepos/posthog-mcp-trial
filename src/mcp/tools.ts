@@ -1,3 +1,5 @@
+import { privacyCurrent, PRIVACY_CHANGED, privacyKey, withPrivacy } from '../core/anonymise.ts'
+import { analyticalResult } from './historyresult.ts'
 // MCP tools over the same core as the Jira automation. Each one answers a question a PM or
 // support lead asks that Jira alone cannot.
 import { jsonResult, reportResult, safeResult } from './result.ts'
@@ -84,13 +86,13 @@ const A = appEvents()?.app || 'your app'
 // Every tool name, for PostHog's proxied exec description ("use the lens server's tools (...)").
 export const CORE_TOOLS = ['resolve_client', 'find_client_incidents', 'get_replay_link', 'screen_usage', 'error_blast_radius', 'find_silent_issues', 'triage_ticket']
 export const RELEASE_TOOLS = ['list_releases', 'release_outcomes', 'ticket_evidence', 'client_feedback', 'record_verdict', 'correct_ticket_link', 'refresh_releases']
-export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor']
+export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor', 'aggregate_events']
 export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(config.features.jira ? RELEASE_TOOLS : []), ...(appEvents() ? APP_EVENT_TOOLS : []), ...surveyToolNames(), ...dashboardToolNames()]
 
 // Answers of the read-only analysis tools, shared by every chat session: the same question within two
 // minutes is answered from memory, and identical questions asked at once share one run. Only these
 // tools: answers are separated by insights access where needed. Errors are never kept.
-export const CACHED_TOOLS = new Set(['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor', 'screen_usage', 'find_silent_issues', 'error_blast_radius'])
+export const CACHED_TOOLS = new Set(['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor', 'screen_usage', 'find_silent_issues', 'error_blast_radius', 'aggregate_events'])
 // All of these read PostHog events only. Lens's own writes (record_verdict, correct_ticket_link,
 // refresh_releases, triage_ticket) change releases, verdicts and ticket links, which only uncached tools
 // read (release_outcomes, list_releases, ticket_evidence...), so a write never needs to drop these answers.
@@ -120,7 +122,7 @@ function remember(key: string, value: unknown, ttl: number): void {
 }
 export async function cachedToolCall(name: string, args: unknown, run: () => Promise<unknown>): Promise<unknown> {
     if (!TOOL_TTL_MS) return run()
-    const key = name + '\u0000' + stable(args ?? {})
+    const key = privacyKey() + name + '\u0000' + stable(args ?? {})
     const prewarmTtl = prewarming.getStore() ?? 0
     const hit = toolAnswers.get(key), refreshing = prewarmTtl > 0
     if (hit && !refreshing && Date.now() - hit.at < hit.ttl) { toolAnswers.delete(key); toolAnswers.set(key, hit); return structuredClone(hit.value) }
@@ -157,16 +159,22 @@ export function wrapTools(server: McpServer, insights = false): void {
         const raw = typeof cb !== 'function' ? cb
             : CACHED_TOOLS.has(name) ? (args: unknown, extra: unknown) => cachedToolCall(name, name === 'session_story' || name === 'attempt_timings' ? { args, insights } : args, () => Promise.resolve(call(args, extra)))
             : cb
-        const handler = typeof raw === 'function' ? async (args: unknown, extra: unknown) => {
-            try { return await safeResult(await (raw as (a: unknown, e: unknown) => unknown)(args, extra)) }
+        const handler = typeof raw === 'function' ? (args: unknown, extra: unknown) => withPrivacy(async () => {
+            try {
+                const result = await safeResult(analyticalResult(name, args, await (raw as (a: unknown, e: unknown) => unknown)(args, extra)))
+                return privacyCurrent() ? result : { isError: true, content: [{ type: 'text', text: PRIVACY_CHANGED }] }
+            }
             catch (e) { return { isError: true, content: [{ type: 'text', text: String(await safeResult(String((e as Error)?.message || 'The tool could not complete.'))) }] } }
-        } : raw
+        }) : raw
         return register(name, { ...cfg, description: `${cfg.description ?? ''} ${DIRECT_CALL}`.trim() } as never, handler as never)
     }) as typeof server.registerTool
 }
 
 // Which clients hit errors: the count is exact, the ids are examples. A list of every client per dialog grew
 // with the client base (1,100 characters a dialog at 150 clients) and told the agent nothing more.
+
+const comparisonInputs = () => ({ compare:z.enum(['previous','none']).optional(), compare_with:z.object({from:z.string(),to:z.string()}).optional() })
+const comparisonArgs = (p:{compare?:'previous'|'none';compare_with?:{from:string;to:string}}) => ({compare:p.compare,...(p.compare_with ? {compare_with:{from:parseTimeWindow(p.compare_with.from).from,to:parseTimeWindow(p.compare_with.to).to}} : {})})
 const CLIENT_EXAMPLES = 10
 const fewClients = <T extends { clients_with_errors: string[] }>(d: T) =>
     ({ ...d, clients_with_errors_count: d.clients_with_errors.length, clients_with_errors: d.clients_with_errors.slice(0, CLIENT_EXAMPLES) })
@@ -261,7 +269,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
             inputSchema: {
                 screen: z.string().describe('Screen name or path'),
                 client: z.string().optional(),
-                days: z.number().int().min(1).max(90).default(30),
+                days: z.number().int().min(1).max(1500).default(30),
             },
             annotations: { readOnlyHint: true },
         },
@@ -283,7 +291,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
                 error_type: z.string().optional(),
                 error_message: z.string().optional(),
                 screen: z.string().optional(),
-                days: z.number().int().min(1).max(90).default(30),
+                days: z.number().int().min(1).max(1500).default(30),
             },
             annotations: { readOnlyHint: true },
         },
@@ -551,19 +559,45 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
         }
     )
     server.registerTool(
+        'aggregate_events',
+        {
+            title: 'Count anything in the events',
+            description: `Counts ${app} events, sessions, users or clients over any window up to 4 years, by period and by up to two approved dimensions (app_version, dialog, tab, button, action, event, client), with filters. For questions the other tools do not cover; exact counts computed in PostHog, never raw events or people.`,
+            inputSchema: {
+                when,
+                metrics: z.array(z.enum(['events', 'sessions', 'users', 'clients'])).min(1).max(4).optional(),
+                group_by: z.array(z.enum(['event', 'client', 'app_version', 'dialog', 'dialog_name', 'tab', 'action', 'button'])).max(2).optional(),
+                bucket: z.enum(['none', 'day', 'week', 'month', 'quarter', 'year']).optional(),
+                filters: z.array(z.object({ dimension: z.enum(['event', 'client', 'app_version', 'dialog', 'dialog_name', 'tab', 'action', 'button']), op: z.enum(['eq', 'neq', 'in']), value: z.union([z.string().max(200), z.array(z.string().max(200)).max(50)]) })).max(5).optional(),
+                events: z.array(z.string().max(200)).max(20).optional().describe('Event names; default: the app\'s own screen and interaction events.'),
+                client: z.string().optional(),
+                limit: z.number().int().min(1).max(200).default(50),
+            },
+            annotations: { readOnlyHint: true },
+        },
+        async ({ when: w, client, filters, ...rest }) => {
+            const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 30 days'), w)
+            const best = client ? (await pickClient(client)).best : undefined
+            if (client && !best) return { isError: true, content: [{ type: 'text' as const, text: `No client matches "${client}".` }] }
+            const { aggregateEvents } = await import('../core/aggregate.ts')
+            return json(`${app} event counts (${win.label}):`, await aggregateEvents({ ...rest, from: win.from, to: win.to,
+                filters: [...(filters || []), ...(best ? [{ dimension: 'client', op: 'eq' as const, value: best.id }] : [])] }))
+        }
+    )
+    server.registerTool(
         'workflow_completion',
         {
             title: 'Do clients finish a workflow',
             description: `Which tasks do people do in ${app}, and do they finish them? Measures a discovered workflow id/name or ordered dialogs per client and overall: starts, funnel, done, failures, retries, abandonment, time, dropout errors and example replay links for the person. Compares the previous equal window. Give either workflow or dialogs. Discovered workflows count completed or queued as done and report them separately; dialog lists require completed.`,
-            inputSchema: { workflow: z.string().trim().min(1).max(WORKFLOW_NAME_LIMIT).optional().describe('Discovered workflow id or exact name from discover_workflows.'), dialogs: z.array(z.string().min(1).max(80)).min(1).max(10).optional(), client: z.string().optional(), when },
+            inputSchema: { ...comparisonInputs(), workflow: z.string().trim().min(1).max(WORKFLOW_NAME_LIMIT).optional().describe('Discovered workflow id or exact name from discover_workflows.'), dialogs: z.array(z.string().min(1).max(80)).min(1).max(10).optional(), client: z.string().optional(), when },
             annotations: { readOnlyHint: true },
         },
-        async ({ workflow, dialogs, client, when: w }) => {
+        async ({ workflow, dialogs, client, when: w, ...comparison }) => {
             const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 7 days'), w)
             const best = client ? (await pickClient(client)).best : undefined
             const q = { from: win.from, to: win.to, clientId: best?.id }
             const definition = await completionWorkflow({ ...q, workflow, dialogs })
-            return json(`${app} workflow completion (${win.label}):`, await workflowCompletionReport({ ...q, definition }))
+            return json(`${app} workflow completion (${win.label}):`, await workflowCompletionReport({ ...q, definition, ...comparisonArgs(comparison) }))
         }
     )
     server.registerTool(
@@ -571,7 +605,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
         {
             title: `What ${app}'s events mean`,
             description: `Explains ${app} dialogs, screens, buttons, fields and error messages using the app's event vocabulary. Includes coverage, real example values, common dialogs and messages, clients and HogQL guidance. Use for vocabulary details when drilling into events; reval_brief investigates directly. Use the Lens tool reval_brief to investigate app events and session_story for a session timeline.`,
-            inputSchema: { days: z.number().int().min(1).max(90).default(7).describe('How many days of data to look at.') },
+            inputSchema: { days: z.number().int().min(1).max(1500).default(7).describe('How many days of data to look at.') },
             annotations: { readOnlyHint: true },
         },
         async ({ days }) => json(`${app} events (last ${days} days):`, await describeAppEvents(days, clientSource()))
@@ -665,12 +699,12 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
         {
             title: 'The week\'s top pains',
             description: `Ranks where ${app} clients struggle most: failing dialogs, retries, unfinished attempts, error messages and clients at risk. Gives counts, changes against the previous period and example session links. Start here for a weekly product summary or what to fix first.`,
-            inputSchema: { when: z.string().optional().describe('Default: last 7 days (compared with the 7 days before).'), timezone: tz, max: z.number().int().min(1).max(15).default(5) },
+            inputSchema: { ...comparisonInputs(), when: z.string().optional().describe('Default: last 7 days (compared with the 7 days before).'), timezone: tz, max: z.number().int().min(1).max(15).default(5) },
             annotations: { readOnlyHint: true },
         },
-        async ({ when: w, timezone, max }) => {
+        async ({ when: w, timezone, max, ...comparison }) => {
             const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 7 days', new Date(), timezone), w)
-            const pains = await topPains({ from: win.from, to: win.to, max })
+            const pains = await topPains({ from: win.from, to: win.to, max, ...comparisonArgs(comparison) })
             return json(`${app}: top pains (${win.label}):`, { ...pains, pains: pains.pains.map((p) => ({ ...p, clients_hit_count: p.clients_hit.length, clients_hit: p.clients_hit.slice(0, CLIENT_EXAMPLES) })) })
         }
     )
@@ -698,7 +732,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
         {
             title: 'Which clients need attention',
             description: `Shows which ${app} clients are at risk or using the app less: fewer sessions, active days or dialogs, absent users and more failed attempts. Compares periods with reasons and numbers. These are warning signs, not a churn prediction; say so and follow up with dialog_friction for the client.`,
-            inputSchema: {
+            inputSchema: { ...comparisonInputs(),
                 client: z.string().optional().describe('One client (name, code or a user email). All clients if left out.'),
                 when: z.string().optional().describe('The recent period, in plain words. Default: last 14 days (compared with the 14 days before).'),
                 timezone: tz,
@@ -706,10 +740,10 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             },
             annotations: { readOnlyHint: true },
         },
-        async ({ client, when: w, timezone, limit }) => {
+        async ({ client, when: w, timezone, limit, ...comparison }) => {
             const win = parseTimeWindow(w || 'last 14 days', new Date(), timezone)
             const best = client ? (await pickClient(client)).best : undefined
-            return json(`${app} clients, ${win.label} against the period before${best ? ` (${best.name})` : ''}:`, await clientSignalsReport({ from: win.from, to: win.to, clientId: best?.id, limit }))
+            return json(`${app} clients, ${win.label} against the period before${best ? ` (${best.name})` : ''}:`, await clientSignalsReport({ from: win.from, to: win.to, clientId: best?.id, limit, ...comparisonArgs(comparison) }))
         }
     )
     server.registerPrompt(

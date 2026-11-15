@@ -48,7 +48,7 @@ export function parseTicket(t: Ticket, now: Date = new Date()): ParsedTicket {
                   label: `${occurred.toISOString().slice(0, 16).replace('T', ' ')} UTC (from the ticket field)`,
                   precision: 'exact',
               }
-            : parseTimeWindow(text, now, tz)
+            : (() => { try { return parseTimeWindow(text,now,tz) } catch { return {...parseTimeWindow('',now,tz),label:'No recognised incident date in ticket prose; using the last 7 days as a search window'} } })()
 
     return {
         clientHint: t.fields?.client,

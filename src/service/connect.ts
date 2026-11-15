@@ -3,7 +3,7 @@
 // revoke their own tokens here; admins see and revoke everyone's on the admin page.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { anonymiseOn } from '../core/anonymise.ts'
+import { privacyMode, anonymiseOn } from '../core/anonymise.ts'
 import { config, posthogMcpActive } from '../core/config.ts'
 import { can, canSurvey, canDashboard, chatPolicy, DEFAULT_CHAT_APPS, chatUrl, createMcpToken, listMcpTokens, revokeMcpToken, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
 import { APP_NAME, headerHtml, PAGER_JS, PAGE_CSS } from './replays.ts'
@@ -117,7 +117,7 @@ main h1{font-size:24px}
 </style></head>
 <body>${headerHtml(v, 'Chat')}<main class="narrow">
 <div class="page-head"><h1>Connect GitHub Copilot</h1></div><div class="card">
-<div class="policy" role="note" aria-labelledby="policy-title"><p id="policy-title"><b>Approved apps only.</b></p>${policy.apps.length === 1 && policy.apps[0] === DEFAULT_CHAT_APPS[0] ? '<p>Use GitHub Copilot with your ION Microsoft enterprise account.</p>' : `<p>Connect your key only to:</p><ul>${policy.apps.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`}${policy.note ? `<p>${esc(policy.note)}</p>` : ''}</div>${anonymiseOn() ? '<div class="info" role="note"><p><b>Client names are hidden from AI.</b> Copilot sees each client\'s codename, never its name or code. Ask about a client by its codename, and do not type client names into chat. <a href="/replays/codenames">Look up codenames</a>.</p></div>' : ''}
+<p class="small">Privacy mode: <b>${privacyMode()}</b></p><div class="policy" role="note" aria-labelledby="policy-title"><p id="policy-title"><b>Approved apps only.</b></p>${policy.apps.length === 1 && policy.apps[0] === DEFAULT_CHAT_APPS[0] ? '<p>Use GitHub Copilot with your ION Microsoft enterprise account.</p>' : `<p>Connect your key only to:</p><ul>${policy.apps.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`}${policy.note ? `<p>${esc(policy.note)}</p>` : ''}</div>${anonymiseOn() ? '<div class="info" role="note"><p><b>Client names are hidden from AI.</b> Copilot sees each client\'s codename, never its name or code. Ask about a client by its codename, and do not type client names into chat. <a href="/replays/codenames">Look up codenames</a>.</p></div>' : ''}
 <p class="small muted">Your key is shown once and inherits your Lens access.${ph ? ' PostHog commands are included in this one Lens server.' : ''}${canSurvey(surveyRole, 'edit') ? ' You can create, edit and stop surveys in Copilot; launch them from Surveys.' : role ? ` Survey access: ${esc(role)}.` : ''}</p>
 <ol class="steps">
 <li><div>Make your personal key</div><button type="button" id="make">Connect Copilot</button> <span id="msg" class="small" aria-live="polite"></span></li>

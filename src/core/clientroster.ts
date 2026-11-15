@@ -14,7 +14,7 @@ const OVERLAP_MS = 2 * 86400000
 let running: Promise<void> | undefined, fullRunning: Promise<void> | undefined
 export async function scanClients(full: boolean, now = new Date()): Promise<void> {
     const watermark = state('roster:scanned')
-    const since = full || !watermark ? new Date(+now - 400 * 86400000) : new Date(Date.parse(watermark) - OVERLAP_MS)
+    const since = full || !watermark ? new Date(+now - 1500 * 86400000) : new Date(Date.parse(watermark) - OVERLAP_MS)
     let cursor = ''
     const list: RosterClient[] = []
     for (;;) {

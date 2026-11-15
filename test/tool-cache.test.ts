@@ -97,3 +97,19 @@ test('pre-warm refresh: the flag reaches the tool through the MCP transport; cha
     assert.equal(text(await client.callTool({ name: 'top_pains', arguments: {} })), 'v2', 'then the refreshed answer')
     await client.close(); await server.close()
 })
+
+test('switching privacy mode or numbering cannot reuse prewarmed answers', async () => {
+    const A = await import('../src/core/anonymise.ts')
+    const { withPrewarm } = await import('../src/mcp/tools.ts')
+    const previous = A.anonSettings()
+    try {
+        clearToolAnswers(); let runs = 0
+        const run = async () => ({ mode: A.privacyMode(), n: ++runs })
+        A.setAnonymise({ mode: 'open' })
+        await withPrewarm(600000, () => cachedToolCall('top_pains', { mode_test: true }, run))
+        A.setAnonymise({ mode: 'standard' })
+        assert.deepEqual(await cachedToolCall('top_pains', { mode_test: true }, run), { mode: 'standard', n: 2 })
+        A.setAnonymise({ mode: 'private' })
+        assert.deepEqual(await cachedToolCall('top_pains', { mode_test: true }, run), { mode: 'private', n: 3 })
+    } finally { A.setAnonymise(previous) }
+})

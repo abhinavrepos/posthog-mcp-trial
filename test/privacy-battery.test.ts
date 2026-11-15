@@ -42,10 +42,13 @@ test('counts, rates, durations, ids, links, versions and dates stay readable', (
 
 test('raw SQL is refused while client anonymisation is on, in filter mode as in block mode', async () => {
     const { anonRefusal } = await import('../src/mcp/posthog-proxy.ts')
+    const { setAnonymise } = await import('../src/core/anonymise.ts')
+    setAnonymise({ mode: 'private', posthog: 'filter' })
     const call = (command: string) => ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'exec', arguments: { command } } })
     for (const command of ['call execute-sql {"query":"SELECT 1"}', 'call --json posthog:execute-sql {}'])
         assert.ok(anonRefusal(call(command), 'lens', 'filter').refusal, command)
     assert.equal(anonRefusal(call('call query-trends {}'), 'lens', 'filter').refusal, undefined)
+    setAnonymise({ mode: 'standard' })
 })
 
 test('regressions found in review: count words, leading dots, qualified fields, identities under money', () => {

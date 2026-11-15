@@ -81,7 +81,7 @@ test('missing days do not clear flags, validations bound cost, and no-history pa
     const s=await clientStory({client:'acme',weeks:4})
     assert.equal(s.coverage.complete,false)
     assert.equal(s.events.some(e=>e.kind==='reason_cleared'&&e.date==='2026-06-14'),false)
-    for(const weeks of [0,53,1.2,NaN]) await assert.rejects(clientStory({client:'acme',weeks}),/Weeks/)
+    for(const weeks of [0,210,1.2,NaN]) await assert.rejects(clientStory({client:'acme',weeks}),/Weeks/)
     await assert.rejects(clientStory({client:''}),/client/)
     const empty=await handoverPack('unknown')
     assert.match(empty,/No completed tasks recorded/); assert.match(empty,/No retained attempts/)

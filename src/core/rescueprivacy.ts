@@ -1,3 +1,4 @@
+import { privacyMode, withPrivacy } from './anonymise.ts'
 // Defense in depth for free text copied from task titles and team notes.
 import { cached, tasksDb } from './tasks.ts'
 import { ALL_CLIENTS } from './catalog.ts'
@@ -46,7 +47,7 @@ export async function identityTokens(): Promise<string[]> {
     })
 }
 export async function rescuePrivacy<T>(value: T): Promise<T> {
-    return scrubWith(await identityTokens(), value)
+    return withPrivacy(async () => privacyMode() === 'open' ? value : scrubWith(await identityTokens(), value))
 }
 /** Replaces identity tokens (sorted longest first) anywhere in strings inside value. */
 export function scrubWith<T>(tokens: string[], value: T): T {

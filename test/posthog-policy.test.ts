@@ -190,12 +190,12 @@ test('posthog_exec respects anonymisation block mode before contacting upstream'
     let calls = 0
     t.mock.method(globalThis, 'fetch', async () => { calls++; return Response.json({}) })
     try {
-        setAnonymise({ on: true, posthog: 'block' })
+        setAnonymise({ mode: 'private', posthog: 'block' })
         const result = await posthogExec('call query-trends', options)
         assert.equal(result.isError, true)
         assert.match(result.content[0].text, /switched off while client anonymisation is on/)
         assert.equal(calls, 0)
-    } finally { setAnonymise({ on: false }) }
+    } finally { setAnonymise({ mode: 'standard' }) }
 })
 
 test('posthog_exec times out and cleans up sessions on upstream errors', async t => {

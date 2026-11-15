@@ -204,7 +204,7 @@ test('validation refuses invalid dates, ranges, fields, JSON and pin changes', a
     assert.equal((await request('/api/tasks?q=' + 'x'.repeat(201))).status, 400)
     assert.equal((await request('?view=oops')).status, 400)
     const v = viewer('share'), valid = { kind: 'task_map', title: 'Valid', params: { window } }
-    for (const body of ['{', 'null', '[]', { ...valid, kind: 'unknown' }, { ...valid, title: '' }, { ...valid, params: { window: { last_days: 0 } } }, { ...valid, params: { window: { last_days: 367 } } }, { ...valid, kind: 'flow_time' }, { ...valid, params: null }]) assert.equal((await request('/api/pins', v, 'POST', body)).status, 400, JSON.stringify(body))
+    for (const body of ['{', 'null', '[]', { ...valid, kind: 'unknown' }, { ...valid, title: '' }, { ...valid, params: { window: { last_days: 0 } } }, { ...valid, params: { window: { last_days: 1501 } } }, { ...valid, kind: 'flow_time' }, { ...valid, params: null }]) assert.equal((await request('/api/pins', v, 'POST', body)).status, 400, JSON.stringify(body))
     assert.equal((await request('/api/pins', v, 'POST', valid, deps, '')).status, 403)
     const id = (await request('/api/pins', v, 'POST', valid)).data.id
     for (const body of [{}, { title: 'x'.repeat(121) }, { params: [] }, { params: { window: { from: 'not-date', to: 'x' } } }]) assert.equal((await request('/api/pins/' + id, v, 'PATCH', body)).status, 400)
@@ -389,7 +389,7 @@ test('client story and handover APIs follow dashboard view roles; accessible cha
             }
         }
     }
-    for(const path of ['?view=story','/api/story?client=acme&weeks=53','/api/story?client=acme&weeks=1.5','/api/handover-pack']) assert.equal((await request(path)).status,400)
+    for(const path of ['?view=story','/api/story?client=acme&weeks=210','/api/story?client=acme&weeks=1.5','/api/handover-pack']) assert.equal((await request(path)).status,400)
     assert.match((await request('?view=task_map')).body,/view=story/)
 })
 test('briefing grid renders every warning column, explanatory labels, story links and standard pagination',async()=>{

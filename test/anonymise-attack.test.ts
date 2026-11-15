@@ -36,7 +36,7 @@ const clients = [
  { id: 'SG88', name: 'Société Générale Test' },
 ]
 A.syncClients(clients)
-A.setAnonymise({ on: true })
+A.setAnonymise({ mode: 'private' })
 const cn = (id = 'ZQX') => A.codenameOf(id)!
 const call = (args: unknown, name = 'echo') => ({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } })
 function hidden(input: string, output: unknown, sensitive = input) {
@@ -100,7 +100,7 @@ test('registry unknown names, case, extras and codename variants', () => {
 })
 const exec = (command: string) => call({command},'exec')
 for (const command of ['call execute-sql {}','call\u00a0execute-sql {}','call\u2003execute-sql {}','call\texecute-sql {}','call\r\nexecute-sql {}',' call execute-sql {} ', '"call" execute-sql {}','CALL execute-sql {}','call --json execute-sql {}','tools;call execute-sql {}','tools&call execute-sql {}','tools|call execute-sql {}','tools\ncall execute-sql {}','ca\\ll execute-sql {}','\\u0063all execute-sql {}','call execute-sql '+ ' '.repeat(20000)+'{}']) test(`proxy block ${JSON.stringify(command.slice(0,75))}`, () => {
- A.setAnonymise({on:true,posthog:'block'})
+ A.setAnonymise({mode: 'private',posthog:'block'})
  assert.ok(P.anonRefusal(exec(command)).refusal, `data command refused ${JSON.stringify(command)}`)
 })
 test('empty command cannot itself retrieve data', () => { assert.ok(P.anonRefusal(exec('')).value, 'empty command harmless'); assert.ok(P.anonRefusal(exec('tools')).value, 'lookup allowed') })
@@ -118,7 +118,7 @@ async function invoke() {
  return res.text
 }
 for (const sse of [false,true]) test(`proxy filter ${sse?'tiny-byte SSE':'JSON'}`,async t=>{
- A.setAnonymise({on:true,posthog:'filter'})
+ A.setAnonymise({mode: 'private',posthog:'filter'})
  await refreshRoster(0,{knownClients:async()=>clients})
  const data=JSON.stringify({jsonrpc:'2.0',id:1,result:{content:[{type:'text',text:clients.map(c=>c.name+' '+c.id).join('; ')}]}})
  const body=sse?`event: message\ndata: ${data}\n\ndata: ZX901\n\n`:data
@@ -128,7 +128,7 @@ for (const sse of [false,true]) test(`proxy filter ${sse?'tiny-byte SSE':'JSON'}
  assert.ok(output.includes(cn()),'proxy returned actual filtered upstream response')
 })
 test('triage AI receives anonymised fields and roster',async t=>{
- A.setAnonymise({on:true})
+ A.setAnonymise({mode: 'private'})
  t.mock.method(globalThis,'fetch',async(_u:unknown,init:RequestInit)=>new Response(JSON.stringify({columns:['id','name','events'],results:/GROUP BY id/.test(String(init?.body))?clients.map(c=>[c.id,c.name,10]):[]}),{headers:{'content-type':'application/json'}}))
  let sent:unknown
  const ticket={kind:'rci',key:'ZX901',summary:clients[0].name,description:clients[1].name,reporter:{name:clients[3].name,email:'user@external.example',timeZone:'UTC'},fields:{client:'ZX901',userEmail:'user@external.example',screen:clients[4].name},extra:{ZX901:clients[2].name}}
@@ -145,7 +145,7 @@ test('redirect client parameters and case variants; unrelated params untouched',
  for(const [key,value] of [['q',cn()],['client','unknown-slug'],['screen',cn()]]) assert.equal(codenameRedirect({method:'GET'} as never,{} as never,new URL(`http://x/?${key}=${value}`)),false,`leave ${key}=${value}`)
 })
 test('same transport observes activation; rename and roster invalidation',async()=>{
- A.setAnonymise({on:false})
+ A.setAnonymise({mode: 'standard'})
  const server=new McpServer({name:'attack',version:'1'})
  server.registerTool('echo',{inputSchema:{client:z.string()}},async()=>({content:[{type:'text',text:'ZX901 Vexquill'}]}))
  const client=new Client({name:'attack-client',version:'1'})
@@ -153,7 +153,7 @@ test('same transport observes activation; rename and roster invalidation',async(
  await server.connect(a);G.guardTransport(a,G.registryOf(server));await client.connect(b)
  try {
  assert.ok(JSON.stringify(await client.callTool({name:'echo',arguments:{client:'ZX901'}})).includes('ZX901'),'off baseline')
- A.setAnonymise({on:true})
+ A.setAnonymise({mode: 'private'})
  hidden('ZX901',await client.callTool({name:'echo',arguments:{client:cn('ZX901')}}))
  A.syncClients([{id:'ZX901',name:'Newquill Ltd'}])
  for(const input of ['Vexquill','Newquill Ltd','ZX901']) hidden(input,G.guardResponse(input))
@@ -165,7 +165,7 @@ test('same transport observes activation; rename and roster invalidation',async(
 test('reversed/hex strings are outside best-effort filter guarantees',t=>t.skip('Filter mode explicitly documents arbitrary SQL re-encoding as unsupported; block mode is tested instead.'))
 
 // Round 2: keep each fixture/settings change local; earlier rounds rename ZX901.
-const round2Defaults = { on: true, lens: true, posthog: 'block', triage: true, codes: true, emails: true, message: '', round: false } as const
+const round2Defaults = { mode: 'private', lens: true, posthog: 'block', triage: true, codes: true, emails: true, message: '', round: false } as const
 function round2Test(name: string, run: () => void | Promise<void>) {
  test(`round 2: ${name}`, async () => {
   const before = A.anonSettings()
@@ -207,37 +207,29 @@ round2Test('capital initials and Title-case common codes', () => {
  for (const input of ['KFH', 'BETA', 'Beta']) hidden(input, G.guardResponse(input))
  assert.equal(G.guardResponse('beta release'), 'beta release')
 })
-round2Test('codes off still hides names, initials and typos', () => {
+round2Test('private mode always hides codes, names, initials and typos', () => {
  round2Fixture(); A.setAnonymise({ codes: false })
- assert.equal(G.guardResponse('RTK91'), 'RTK91')
- assert.equal(G.guardRequest(call({ client: 'RTK91' })).msg?.params.arguments.client, 'RTK91')
+ hidden('RTK91', G.guardResponse('RTK91'))
+ assert.ok(G.guardRequest(call({ client: 'RTK91' })).answer)
  for (const input of ['Kwambe Fintrust Holdings', 'KFH', 'Northwnid']) hidden(input, G.guardResponse(input))
 })
-round2Test('emails off preserves email and re-enabling invalidates cached matcher', () => {
+round2Test('private mode always hides outside emails', () => {
  const input = 'person@outside-example.test'
- A.setAnonymise({ emails: false }); assert.equal(G.guardResponse(input), input)
- assert.ok(G.guardRequest(call({ note: input })).msg)
- A.setAnonymise({ emails: true }); hidden(input, G.guardResponse(input))
+ A.setAnonymise({ emails: false }); hidden(input, G.guardResponse(input))
  assert.ok(G.guardRequest(call({ note: input })).answer)
 })
-round2Test('lens off leaves PostHog block and triage active', () => {
+round2Test('private mode covers all paths regardless of old bypass fields', () => {
  A.setAnonymise({ lens: false, posthog: 'block' })
- assert.deepEqual(['lens','posthog','triage'].map(p => A.anonFor(p as 'lens' | 'posthog' | 'triage')), [false,true,true])
- assert.equal(G.guardResponse('ZX901'), 'ZX901')
+ assert.deepEqual(['lens','posthog','triage'].map(p => A.anonFor(p as 'lens' | 'posthog' | 'triage')), [true,true,true])
+ hidden('ZX901', G.guardResponse('ZX901'))
  assert.ok(P.anonRefusal(exec('call execute-sql {}')).refusal)
- hidden('ZX901', G.guardResponse('ZX901', 'posthog_cleaned'))
 })
-for (const method of ['tools/call', 'prompts/get']) round2Test(`custom refusal does not leak names through ${method}`, () => {
+for (const method of ['tools/call', 'prompts/get']) round2Test(`legacy custom refusal cannot leak names through ${method}`, () => {
  const input = 'Contact Quenlark Acme Holdings Ltd for access.'
- // Saving a message that names a client is refused; one stored before that rule is cleaned when sent.
- assert.throws(() => A.setAnonymise({ message: input }), /names a client/)
- const { setSetting } = DB
- setSetting('anon', { ...A.anonSettings(), message: input }); A.forgetMatcher()
- const request = { ...call({ client: 'ZQX' }), method }
- const output = G.guardRequest(request).answer
- assert.ok(output, 'refusal path reached')
+ DB.setSetting('anon', { ...A.anonSettings(), message: input }); A.forgetMatcher()
+ const output = G.guardRequest({ ...call({ client: 'ZQX' }), method }).answer
+ assert.ok(output)
  hidden(input, output, 'Quenlark Acme Holdings Ltd')
- setSetting('anon', { ...A.anonSettings(), message: '' }); A.forgetMatcher()
 })
 round2Test('UUID parts remain unchanged, standalone hex client code is hidden', () => {
  A.syncClients([{ id: 'deadbeef', name: 'Hexquartz Treasury' }])
@@ -306,11 +298,11 @@ round2Test('unknown-client hook masks nested client fields even if callback thro
   assert.equal(calls,1)
  } finally { A.whenUnknownClient(() => {}) }
 })
-round2Test('MCP instructions put privacy first only when Lens coverage is on', async () => {
+round2Test('MCP instructions put privacy first in private mode', async () => {
  const { serverInstructions } = await import('../src/mcp/instructions.ts')
- assert.ok(serverInstructions(false).startsWith('Clients are known here only by codename'))
- A.setAnonymise({ lens:false })
- assert.ok(!serverInstructions(false).includes('Clients are known here only by codename'))
+ assert.ok(serverInstructions(false).startsWith('Clients are known here only by numbered codename'))
+ A.setAnonymise({ mode:'standard' })
+ assert.ok(!serverInstructions(false).includes('Clients are known here only by numbered codename'))
 })
 round2Test('false-positive observations (notes, not failures)', () => {
  round2Fixture()

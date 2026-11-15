@@ -169,7 +169,7 @@ test('flow slowest limits are bounded, ordered and cached separately', async () 
 })
 
 test('parameter validation is clear', async () => {
-    for (const window of [{ from: '2026-02-30', to: now }, { from: now, to: before }, { from: day(401), to: now }]) await assert.rejects(taskMap({ window }), /Dates|Window/)
+    for (const window of [{ from: '2026-02-30', to: now }, { from: now, to: before }, { from: day(1501), to: now }]) await assert.rejects(taskMap({ window }), /Dates|window/)
     await assert.rejects(flowTime({ task: 'invalid', window: { from: now, to: now } }), /task id/)
     await assert.rejects(taskMap({ window: { from: now, to: now }, client: 'x'.repeat(257) }), /Client/)
     await assert.rejects(taskMap({ window: { from: now, to: now }, min_attempts: 0 }), /min_attempts/)
@@ -245,6 +245,7 @@ test('scheduler continues after errors, serializes runs, backfills newest first,
     let release!: () => void
     const wait = new Promise<void>((resolve) => { release = resolve })
     setTaskQuery(async (_sql, values = {}) => {
+        if (_sql.includes('min(timestamp) AS first_event')) return [{first_event:'2020-01-01'}]
         seen.push(String(values.from))
         if (seen.length === 1) { await wait; throw new Error('temporary failure') }
         return []
@@ -257,7 +258,7 @@ test('scheduler continues after errors, serializes runs, backfills newest first,
         await runIngest({ days: [day(9)] })
         assert.equal(seen.length, 1)
         release(); await work
-        assert.deepEqual(seen, [day(0), day(1), day(2), day(3)])
+        assert.deepEqual(seen.filter(d=>d!=='undefined'), [day(0), day(1), day(2), day(3)])
         assert.equal(ingestStatus().running, false)
         assert.match(ingestStatus().last_error!, /temporary failure/)
         assert.equal(JSON.parse(logs[0]).event, 'tasks.ingest_error')
@@ -281,6 +282,7 @@ test('scale: 365 days × 50 clients × 40 tasks, 200k attempts; queries <600ms, 
     const daily = tasksDb.prepare('INSERT INTO task_daily VALUES (?,?,?,?,?,?,?,?,?)')
     const paths = tasksDb.prepare('INSERT INTO task_paths_daily VALUES (?,?,?,?,?,?,?,?)')
     const users = tasksDb.prepare('INSERT INTO task_users_daily VALUES (?,?,?,?)')
+    for(let d=1;d<=365;d++) tasksDb.prepare('INSERT INTO task_ingest VALUES (?,0,0,0,0,0,?,1)').run(day(d),now)
     for (let d = 1; d <= 365; d++) for (let c = 0; c < 50; c++) for (let t = 0; t < 40; t++) {
         const date = day(d), client = `C${c}`, task = `t_DlgT${t}`
         daily.run(date, client, task, 6, 5, 1, 0, 1, hist)

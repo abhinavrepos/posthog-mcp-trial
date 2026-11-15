@@ -1,3 +1,6 @@
+import { comparisonWindow, type ComparisonOptions } from './comparison.ts'
+import { historyCoverage } from './historycoverage.ts'
+import { analyticalWindow } from './timewindow.ts'
 // Daily sufficient statistics for friction/discovery; compact episodes support arbitrary ad hoc funnels.
 // These tables share task_ingest's transaction, finalization and session ownership.
 import { brotliCompressSync, brotliDecompressSync, constants } from 'node:zlib'
@@ -175,16 +178,17 @@ export function analysisCoverage(q: EventWindow, margin = false) {
     const missing = new Set(c.unprocessed)
     for (let t = Date.parse(from); t < +q.to; t += DAY) if (!processed.has(day(t))) missing.add(day(t))
     const aligned = +q.from % DAY === 0 && +q.to % DAY === 0
-    return { complete: c.complete && !missing.size && aligned, unprocessed: [...missing].sort(), aligned }
+    const days = (c.days || []).map(d => d.status === 'complete' && !processed.has(d.day) ? { ...d, status: 'pending' as const, detail: 'Analysis rollups not processed yet' } : d)
+    return { ...historyCoverage(from,to,days,dataThrough(),'analysis_history'), complete: c.complete && !missing.size && aligned, unprocessed: [...missing].sort(), aligned }
 }
 export function analysisMeta(q: EventWindow, margin = false) {
     const coverage = analysisCoverage(q, margin)
-    return { source: coverage.complete ? 'history' as const : 'live' as const, coverage, data_through: dataThrough(), sample_rate: 1 }
+    return { source: coverage.aligned && (coverage.covered_days>0 || +q.to-+q.from>7*DAY) ? 'history' as const : 'live' as const, coverage, data_through: dataThrough(), sample_rate: 1 }
 }
 export function historyFriction(q: EventWindow) {
-    if (!analysisCoverage(q).complete) return undefined
+    if (!analysisCoverage(q).aligned || (!analysisCoverage(q).covered_days && +q.to-+q.from<=7*DAY)) return undefined
     const by = new Map<string, FrictionCandidate>()
-    const rows = tasksDb.prepare(`SELECT value FROM friction_daily WHERE day >= ? AND day < ? ORDER BY day, client`)
+    const rows = tasksDb.prepare(`SELECT value FROM friction_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= 'analysis_unavailable:' AND key < 'analysis_unavailable;') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND day >= ? AND day < ? ORDER BY day, client`)
         .iterate(day(q.from), day(q.to))
     for (const row of rows) {
         for (const [client, fs] of decodeFriction(row.value)) {
@@ -199,7 +203,7 @@ export function historyFriction(q: EventWindow) {
 }
 /** Complete observed name counts, usable for name resolution without another PostHog scan. */
 export function historyDialogNames(q: EventWindow) {
-    if (!analysisCoverage(q, true).complete) return undefined
+    if (!analysisCoverage(q, true).aligned || (!analysisCoverage(q).covered_days && +q.to-+q.from<=7*DAY)) return undefined
     const names = new Map<string, { name?: string }>()
     for (const row of tasksDb.prepare(`SELECT coalesce(d.value,a.dialog) AS dialog,coalesce(n.value,a.name) AS name,sum(a.n) AS total FROM analysis_names_daily a
         LEFT JOIN analysis_dictionary d ON d.id = a.dialog LEFT JOIN analysis_dictionary n ON n.id = a.name
@@ -210,7 +214,7 @@ export function historyDialogNames(q: EventWindow) {
     return names
 }
 export function historyDiscovery(q: EventWindow, limit?: number) {
-    if (!analysisCoverage(q, true).complete) return undefined
+    if (!analysisCoverage(q, true).aligned || (!analysisCoverage(q).covered_days && +q.to-+q.from<=7*DAY)) return undefined
     const dict = analysisDictionary()
     const lo = day(q.from), hi = day(q.to)
     // Four 12-bit dictionary codes plus a length tag fit exactly in a JS number.
@@ -218,18 +222,21 @@ export function historyDiscovery(q: EventWindow, limit?: number) {
     const numeric = [...dict.keys()].every((id) => id < 4096)
     const keyOf = (a: number[]): string | number => numeric ? a.length * 281474976710656 + a[0] + a[1] * 4096 + (a[2] || 0) * 16777216 + (a[3] || 0) * 68719476736 : a.join(',')
     const supports = new Map<string | number, { dialogs: number[]; n: number; client: number; others?: Set<number>; boundary?: Set<string> }>()
-    const count = Number(tasksDb.prepare('SELECT count(*) n FROM workflow_support_daily WHERE start_day >= ? AND start_day < ? AND length = 2').get(lo, hi)!.n)
-    const original = Number(tasksDb.prepare('SELECT count(*) n FROM workflow_daily WHERE start_day >= ? AND start_day < ?').get(lo, hi)!.n)
+    const count = Number(tasksDb.prepare('SELECT count(*) n FROM workflow_support_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= \'analysis_unavailable:\' AND key < \'analysis_unavailable;\') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND start_day >= ? AND start_day < ? AND length = 2').get(lo, hi)!.n)
+    const original = Number(tasksDb.prepare('SELECT count(*) n FROM workflow_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= \'analysis_unavailable:\' AND key < \'analysis_unavailable;\') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND start_day >= ? AND start_day < ?').get(lo, hi)!.n)
     const global = !q.clientId && count === original
     let wanted: Set<string | number> | undefined, lengths: Set<number> | undefined
     if (global) {
-        const load = (length: number) => {
-        for (const row of tasksDb.prepare('SELECT value FROM workflow_support_daily WHERE start_day >= ? AND start_day < ? AND length = ?').iterate(lo,hi,length)) {
+        const supportRows = (length: number) => tasksDb.prepare('SELECT value FROM workflow_support_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= \'analysis_unavailable:\' AND key < \'analysis_unavailable;\') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND start_day >= ? AND start_day < ? AND length = ?').iterate(lo,hi,length)
+        // only: accumulate just these chains (the exact second pass of the long-window pruning below).
+        const load = (length: number, only?: Set<string | number>) => {
+        for (const row of supportRows(length)) {
             const reader = supportReader(row.value)
             while (!reader.done()) {
                 const length = reader.next(), dialogs = []
                 for (let i=0;i<length;i++) dialogs.push(reader.next())
                 const n = reader.next(), key = keyOf(dialogs)
+                if (only && !only.has(key)) { const b = reader.next(); for (let i=0;i<b;i++) reader.next(); const k = reader.next(); for (let i=0;i<k;i++) reader.next(); continue }
                 let c = supports.get(key)
                 if (!c) supports.set(key, c = { dialogs, n: 0, client: 0 })
                 c.n += n
@@ -258,33 +265,75 @@ export function historyDiscovery(q: EventWindow, limit?: number) {
         const threshold = two[Math.min(two.length,size)-1]
         const score = threshold ? threshold.n * breadth(threshold) : 0
         const minSupport = two.reduce((n,c) => c.n*breadth(c) >= score ? Math.min(n,c.n) : n, Infinity)
-        const bounds = tasksDb.prepare('SELECT length,sum(max_sessions) sessions,sum(max_clients) clients FROM workflow_support_daily WHERE start_day >= ? AND start_day < ? AND length > 2 GROUP BY length').all(lo,hi)
+        const bounds = tasksDb.prepare('SELECT length,sum(max_sessions) sessions,sum(max_clients) clients FROM workflow_support_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= \'analysis_unavailable:\' AND key < \'analysis_unavailable;\') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND start_day >= ? AND start_day < ? AND length > 2 GROUP BY length').all(lo,hi)
         // If every longer chain is below the current score threshold AND cannot contain
         // any candidate above it, none can affect the result. Otherwise inspect all lengths.
         const skipLong = Number.isFinite(size) && size > 0 && two.length >= size && bounds.every((r) => Number(r.sessions)*Number(r.clients) < score && Number(r.sessions) < .8*minSupport)
-        if (!skipLong) { load(3); load(4) }
-        const contained = new Set<string | number>()
-        for (const c of supports.values()) if (c.n >= 2) for (let n=2;n<c.dialogs.length;n++) for (let i=0;i+n<=c.dialogs.length;i++) {
-            const key = keyOf(c.dialogs.slice(i,i+n)), short = supports.get(key)
-            if (short && c.n >= .8 * short.n) contained.add(key)
-        }
         const clients = (c: {client: number; others?: Set<number>}) => Number(!!c.client) + (c.others?.size || 0)
         const rank = (a: typeof supports extends Map<string | number,infer V> ? V : never,b: typeof a) => b.n*clients(b)-a.n*clients(a) || b.n-a.n || b.dialogs.length-a.dialogs.length
-        const ranked = [...supports.entries()].filter(([k,c]) => c.n >= 2 && !contained.has(k)).sort((a,b) => rank(a[1],b[1]))
-        const rankThreshold = ranked[Math.min(ranked.length,size)-1]?.[1]
-        wanted = new Set(ranked.filter(([,c],i) => i < size || (!!rankThreshold && rank(c,rankThreshold) === 0)).map(([key]) => key))
+        const finish = () => {
+            const contained = new Set<string | number>()
+            for (const c of supports.values()) if (c.n >= 2) for (let n=2;n<c.dialogs.length;n++) for (let i=0;i+n<=c.dialogs.length;i++) {
+                const key = keyOf(c.dialogs.slice(i,i+n)), short = supports.get(key)
+                if (short && c.n >= .8 * short.n) contained.add(key)
+            }
+            const ranked = [...supports.entries()].filter(([k,c]) => c.n >= 2 && !contained.has(k)).sort((a,b) => rank(a[1],b[1]))
+            const rankThreshold = ranked[Math.min(ranked.length,size)-1]?.[1]
+            const chosen = ranked.filter(([,c],i) => i < size || (!!rankThreshold && rank(c,rankThreshold) === 0))
+            return { chosen, score: rankThreshold ? rankThreshold.n * clients(rankThreshold) : 0, minN: chosen.reduce((m,[,c]) => Math.min(m,c.n), Infinity), full: ranked.length < size }
+        }
+        // Long windows: summing every distinct 3- and 4-dialog chain does not scale (millions of chains over
+        // months; 224 days took 29 s and 800 MB). Exact pruning instead: a longer chain can change the answer only
+        // by ranking (n x clients >= the last chosen score) or by removing a chosen chain (n >= 80% of its n). With
+        // B = every client in the window (a chain's clients are a subset of its final pair's), any chain that
+        // matters has a window total n >= T = min(score / B, 0.8 x smallest chosen n), so on at least one of the
+        // D days it had n_day >= T / D. Pass 1 keeps only such chains; pass 2 counts them exactly. If the
+        // resulting answer lowers the bar, T is lowered and the passes repeat (at worst: everything, as before).
+        let result = finish()
+        if (!skipLong) {
+            const everyClient = new Set<number>()
+            for (const c of supports.values()) { if (c.client) everyClient.add(c.client); for (const o of c.others || []) everyClient.add(o) }
+            const B = Math.max(1, everyClient.size)
+            const D = Math.max(1, Number(tasksDb.prepare('SELECT count(DISTINCT start_day) n FROM workflow_support_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= \'analysis_unavailable:\' AND key < \'analysis_unavailable;\') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND start_day >= ? AND start_day < ? AND length > 2').get(lo, hi)!.n))
+            let T = result.full ? 0 : Math.min(result.score / B, .8 * result.minN)
+            for (;;) {
+                for (const [k, c] of supports) if (c.dialogs.length > 2) supports.delete(k)
+                const perDay = T / D
+                let only: Set<string | number> | undefined
+                if (perDay > 1) {
+                    only = new Set()
+                    for (const length of [3, 4]) for (const row of supportRows(length)) {
+                        const reader = supportReader(row.value)
+                        while (!reader.done()) {
+                            const len = reader.next(), dialogs = []
+                            for (let i=0;i<len;i++) dialogs.push(reader.next())
+                            const n = reader.next(), b = reader.next()
+                            for (let i=0;i<b;i++) reader.next()
+                            const k = reader.next(); for (let i=0;i<k;i++) reader.next()
+                            if (n >= perDay) only.add(keyOf(dialogs))
+                        }
+                    }
+                }
+                load(3, only); load(4, only)
+                result = finish()
+                const need = result.full ? 0 : Math.min(result.score / B, .8 * result.minN)
+                if (!only || T <= need) break
+                T = need
+            }
+        }
+        wanted = new Set(result.chosen.map(([key]) => key))
         lengths = new Set([...wanted].map((k) => supports.get(k)!.dialogs.length))
     }
     function* rows(): Generator<[string, Packed[]]> {
         if (global) {
-            for (const length of lengths!) for (const row of tasksDb.prepare('SELECT value FROM workflow_global_daily WHERE start_day >= ? AND start_day < ? AND length = ? ORDER BY day').iterate(lo,hi,length)) {
+            for (const length of lengths!) for (const row of tasksDb.prepare('SELECT value FROM workflow_global_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= \'analysis_unavailable:\' AND key < \'analysis_unavailable;\') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND start_day >= ? AND start_day < ? AND length = ? ORDER BY day').iterate(lo,hi,length)) {
                 for (const [client,cs] of decodePlain<[string,Packed[]][]>(row.value)) yield [client,cs.filter((c) => wanted!.has(keyOf(c[0])))]
             }
         } else {
-            for (const row of tasksDb.prepare('SELECT value FROM workflow_daily WHERE start_day >= ? AND start_day < ? ORDER BY day').iterate(lo, hi)) {
+            for (const row of tasksDb.prepare('SELECT value FROM workflow_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= \'analysis_unavailable:\' AND key < \'analysis_unavailable;\') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND start_day >= ? AND start_day < ? ORDER BY day').iterate(lo, hi)) {
                 for (const group of decodePlain<[string, Packed[]][]>(row.value)) if (!q.clientId || group[0] === q.clientId) yield group
             }
-            for (const row of tasksDb.prepare('SELECT value FROM workflow_global_daily WHERE start_day >= ? AND start_day < ? ORDER BY day').iterate(lo,hi)) {
+            for (const row of tasksDb.prepare('SELECT value FROM workflow_global_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= \'analysis_unavailable:\' AND key < \'analysis_unavailable;\') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND start_day >= ? AND start_day < ? ORDER BY day').iterate(lo,hi)) {
                 for (const [,cs] of decodePlain<[string,Packed[]][]>(row.value)) yield [q.clientId || '', cs.filter((c) => c[11] && (!q.clientId || dict.get(c[11]) === q.clientId))]
             }
         }
@@ -300,13 +349,13 @@ export function historyDiscovery(q: EventWindow, limit?: number) {
 }
 
 export function historyCompletion(q: EventWindow, definition: Workflow) {
-    if (!analysisCoverage(q, true).complete) return undefined
+    if (!analysisCoverage(q, true).aligned || (!analysisCoverage(q).covered_days && +q.to-+q.from<=7*DAY)) return undefined
     const attempts: ReturnType<typeof completionAttempts> = []
     const dict = analysisDictionary(), reg = required()
     const excluded = new Set([...reg.dialogs.menu, ...reg.dialogs.messages, ...reg.dialogs.notices])
     const codes = new Set([...dict].filter(([,value]) => definition.dialogs.includes(value)).map(([id]) => id))
     const startCode = [...dict].find(([,value]) => value === definition.dialogs[0])?.[0]
-    for (const row of tasksDb.prepare('SELECT value FROM workflow_episodes_daily WHERE day >= ? AND day < ? ORDER BY day').iterate(day(+q.from - DAY), day(q.to))) {
+    for (const row of tasksDb.prepare('SELECT value FROM workflow_episodes_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= \'analysis_unavailable:\' AND key < \'analysis_unavailable;\') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND day >= ? AND day < ? ORDER BY day').iterate(day(+q.from - DAY), day(q.to))) {
         const batch = []
         for (const [client, episodes] of decodePlain<[string, [string, number, EncodedEpisode][]][]>(row.value)) {
             if (q.clientId && client !== q.clientId) continue
@@ -325,13 +374,11 @@ export function historyCompletion(q: EventWindow, definition: Workflow) {
 
 /** Only relative last/past N day/week/month windows are shifted; explicit dates and today stay literal. */
 export function completeDayWindow<T extends { from: Date; to: Date }>(q: T, input?: string, now = new Date()): T {
-    const value = (input?.trim() || 'last 7 days').replace(/^(last|past) (?:a |one )?(week|month)$/i, '$1 1 $2')
-    const m = /^(?:last|past)\s+(\d+)\s+(days?|weeks?|months?)$/i.exec(value)
-    if (!m) return q
-    const count = Number(m[1]) * (/week/i.test(m[2]) ? 7 : /month/i.test(m[2]) ? 30 : 1)
-    if (!Number.isInteger(count) || count < 1 || count > 366) throw new Error('Choose a relative window of 1–366 days.')
-    const through = dataThrough(), end = Math.min(Date.parse(day(now)) - DAY, through ? Date.parse(through) : Infinity) + DAY
-    return { ...q, from: new Date(end - count * DAY), to: new Date(end) }
+    const value = input?.trim() || 'last 7 days'
+    if (!/^(last|past)\b/i.test(value)) return q
+    const parsed = analyticalWindow(value, now, dataThrough())
+    if (!parsed) throw new Error(`Unrecognised time window: ${value}`)
+    return { ...q, ...parsed }
 }
 
 // Raw-event client signals have a different definition from attributed submit outcomes.
@@ -359,30 +406,35 @@ function storeClientMetrics(owner: string, sessions: Step[][], reg: AppEvents, i
     const rows: ClientMetrics[] = [...groups.values()].map((g) => [g.day, g.client, g.sessions.size, [...g.boundary], [...g.users], [...g.dialogs], g.attempts, g.errors, g.last])
     tasksDb.prepare('INSERT INTO analysis_client_daily VALUES (?,?)').run(owner, encode(rows))
 }
-export function historyClientSignals(q: EventWindow) {
-    if (!analysisCoverage(q, true).complete) return undefined
-    const len = +q.to - +q.from, start = day(+q.from - len)
-    if (!analysisCoverage({ ...q, from: new Date(start) }, true).complete) return undefined
+export function historyClientSignals(q: EventWindow & ComparisonOptions) {
+    if (!analysisCoverage(q, true).aligned || (!analysisCoverage(q).covered_days && +q.to-+q.from<=7*DAY)) return undefined
+    const baseline = comparisonWindow(q)
+    const baselineComplete = !!baseline && analysisCoverage(baseline).complete
+    const currentComplete = analysisCoverage(q).complete
     const groups = new Map<string, { now: Acc; before: Acc; last: string }>()
     type Acc = { sessions: Support; users: Set<number>; dialogs: Set<number>; days: Set<string>; attempts: number; errors: number }
     const acc = (): Acc => ({ sessions: new Support(0), users: new Set(), dialogs: new Set(), days: new Set(), attempts: 0, errors: 0 })
-    for (const row of tasksDb.prepare('SELECT value FROM analysis_client_daily WHERE day >= ? AND day < ? ORDER BY day').iterate(day(Date.parse(start) - DAY), day(q.to))) {
-        for (const [date, client, sessions, boundary, users, dialogs, attempts, errors, last] of decodePlain<ClientMetrics[]>(row.value)) {
-            if (date < start || date >= day(q.to) || (q.clientId && client !== q.clientId)) continue
-            let g = groups.get(client)
-            if (!g) groups.set(client, g = { now: acc(), before: acc(), last })
-            const a = date >= day(q.from) ? g.now : g.before
-            union(a.sessions, new Support(sessions, new Set(boundary))); union(a.users, new Set(users)); union(a.dialogs, new Set(dialogs))
-            a.days.add(date); a.attempts += attempts; a.errors += errors
-            if (last > g.last) g.last = last
+    for (const [window,which] of [[q,'now'],...(baselineComplete ? [[baseline!,'before']] : [])] as [{from:Date;to:Date},'now'|'before'][]) {
+        for (const row of tasksDb.prepare(`SELECT value FROM analysis_client_daily WHERE day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= 'analysis_unavailable:' AND key < 'analysis_unavailable;') AND day NOT IN (SELECT day FROM task_ingest WHERE day NOT IN (SELECT day FROM analysis_days)) AND day >= ? AND day < ? ORDER BY day`).iterate(day(+window.from-DAY),day(window.to))) {
+            for (const [date, client, sessions, boundary, users, dialogs, attempts, errors, last] of decodePlain<ClientMetrics[]>(row.value)) {
+                if (date < day(window.from) || date >= day(window.to) || (q.clientId && client !== q.clientId)) continue
+                let g=groups.get(client)
+                if(!g) groups.set(client,g={now:acc(),before:acc(),last})
+                const a=g[which]
+                union(a.sessions,new Support(sessions,new Set(boundary)));union(a.users,new Set(users));union(a.dialogs,new Set(dialogs))
+                a.days.add(date);a.attempts+=attempts;a.errors+=errors
+                if(last>g.last)g.last=last
+            }
         }
     }
     const dict = new Map((tasksDb.prepare('SELECT id,value FROM analysis_dictionary').all() as {id: number; value: string}[]).map((r) => [r.id, r.value]))
     const period = (a: Acc): ClientPeriod => ({ sessions: a.sessions.size, users: [], user_count: a.users.size, dialogs: a.dialogs.size, days: a.days.size, attempts: a.attempts, errors: a.errors })
-    return clientSignals([...groups].map(([client, g]) => {
+    const result = clientSignals([...groups].map(([client, g]) => {
         const quiet = [...g.before.users].filter((u) => !g.now.users.has(u))
         return { client, now: period(g.now), before: period(g.before), last_seen: g.last, quiet_user_count: quiet.length, quiet_users: quiet.slice(0, 6).map((u) => dict.get(u)!) }
     }), +q.to)
+    if (!baselineComplete || !currentComplete) for (const c of result) { c.signals = []; c.weight = 0 }
+    return result
 }
 
 type Packed = [number[], [number, string[]], number[], number, number, number, [number, number][], [number, number, number][], number[], [number, number][], (number[] | 0)?, number?]
