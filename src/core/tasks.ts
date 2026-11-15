@@ -849,7 +849,9 @@ export async function runIngest(opts: { days?: string[]; maxBackfill?: number } 
             for (const table of ['task_errors_daily', 'task_attempts', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily', 'friction_daily', 'workflow_daily', 'workflow_global_daily', 'workflow_support_daily', 'workflow_episodes_daily', 'analysis_names_daily', 'analysis_client_daily', 'analysis_days', 'aggregate_dimension_daily', 'aggregate_dimension_skipped', 'workflow_episode_index_days', 'task_active_users_daily', 'task_active_users_days'])
                 run(`DELETE FROM ${table} WHERE day < ?`, shift(today(), 1 - config.tasks.historyDays))
         })
-        await backfillPerformanceHistory(Math.min(2, config.tasks.backfillDaysPerRun), taskQuery)
+        // Upgrading kept history to the fast rollups: one aggregate query and local work per day (~3 s), so it
+        // shares the normal backfill budget (20 days a run: four years in about 12 hours, not 5 days at 2 a run).
+        await backfillPerformanceHistory(config.tasks.backfillDaysPerRun, taskQuery)
         forgetAnswers(true) // old attempts only: weekly observations stay
         tasksDb.exec('PRAGMA incremental_vacuum(1000)')
     } finally { running = false }
