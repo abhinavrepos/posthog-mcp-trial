@@ -2,7 +2,7 @@ import { newClientValues } from './newclients.ts'
 // A saved, deterministic daily briefing. No raw events or individual identities.
 import { rescuePrivacy } from './rescueprivacy.ts'
 import { all, one, run, tx } from './db.ts'
-import { aggregates, coverage, tasksDb } from './tasks.ts'
+import { aggregates, coverage, dataThrough, tasksDb } from './tasks.ts'
 import { rescueQueue, type RescueAction } from './rescue.ts'
 import { clientSignals } from './signals.ts'
 
@@ -66,7 +66,10 @@ async function portfolio(to: string, quiet: BriefItem | null): Promise<BriefGrid
         }) }))
 }
 async function build(by: string, now: Date, replaceToday = false): Promise<MondayBrief> {
-    const day = now.toISOString().slice(0, 10), period = { from: shift(day, -7), to: shift(day, -1) }
+    // The week ends on the last fully processed day: yesterday is never complete yet, and a period that
+    // includes it gives no flags (the grid came out empty).
+    const day = now.toISOString().slice(0, 10), through = dataThrough()
+    const end = through && through < shift(day, -1) ? through : shift(day, -1), period = { from: shift(end, -6), to: end }
     const previous = one<{ payload: string }>('SELECT payload FROM briefing_snapshots WHERE "by"=? AND substr(created_at,1,10)<? ORDER BY created_at DESC,id DESC LIMIT 1', by, day)
         ?? (replaceToday ? undefined : one<{ payload: string }>('SELECT payload FROM briefing_snapshots WHERE "by"=? ORDER BY created_at DESC,id DESC LIMIT 1', by))
     const old: MondayBrief | undefined = previous ? JSON.parse(previous.payload) : undefined

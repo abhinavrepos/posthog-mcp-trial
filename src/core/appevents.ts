@@ -130,19 +130,48 @@ const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"'
 const decode = (s: string) => s.replace(/&(#39|[a-z]+);/gi, (m, e) => ENTITIES[e.toLowerCase()] ?? m)
 
 // Scan numeric runs once: retrying a separator regex at every digit can be quadratic.
+// Digits in other scripts (full-width ２５０, Arabic-Indic ٢٥٠, Devanagari...) read as amounts too: each block
+// below runs 0-9 from the code point given.
+const DIGIT_ZEROS = [0x660, 0x6f0, 0x966, 0x9e6, 0xa66, 0xae6, 0xb66, 0xbe6, 0xc66, 0xce6, 0xd66, 0xe50, 0xed0, 0xff10]
+const asciiDigits = (s: string) => s.replace(/\p{Nd}/gu, (d) => {
+    const cp = d.codePointAt(0)!
+    const zero = DIGIT_ZEROS.find((z) => cp >= z && cp <= z + 9)
+    return zero === undefined ? d : String(cp - zero)
+})
+const CODES = 'USD|EUR|GBP|CAD|CHF|JPY|AUD|INR|CNY|HKD|SGD|SEK|NOK|DKK|ZAR|MXN|BRL'
+// What a count or a measure is followed by: kept, so "1,358 attempts", "87.5%" and "12.5 s" stay readable.
+const MEASURE = /^\s?(?:%|percent\b|(?:ms|s|secs?|seconds?|mins?|minutes?|h|hrs?|hours?|days?|weeks?|months?|years?|x)\b|(?:attempts?|users?|sessions?|clients?|events?|times|errors?|people|persons?|tasks?|rows?|occurrences?|records?|replays?|clips?|calls?|screens?|dialogs?|steps?|messages?|signals?|completions?|items?|pages?|clicks?|visits?|views?|accounts?|days?|releases?|issues?|tickets?|surveys?|answers?|responses?)\b)/i
+// A number never starts or ends inside a word: USD-LIBOR3M is a name, not 3 million, and a hex id such as
+// 12e45fa0 is not 12e45; neither are the seconds of 09.123Z. A space groups digits only in
+// thousands form (250 000), so "250000 42 users" is two numbers: the cash, then a count.
+const AMOUNT = new RegExp(String.raw`(?<![\p{L}\p{N}_])(?:\( ?)?[-−]?(?:(?:${CODES}) ?|\p{Sc} ?)?[-−]?(?:[0-9]{1,3}(?: [0-9]{3})+(?:[.,][0-9]+)?|[0-9][0-9.,']*)(?:e[+-]?[0-9]+)?(?: ?(?:k|m|mn|bn|million|thousand|billion)\b)?(?: ?(?:${CODES})(?![A-Za-z])| ?\p{Sc})?(?: ?\))?(?![\p{L}\p{N}_])`, 'giu')
+
 export function maskAmounts(text: string): string {
-    const currency = /^(?:USD|EUR|GBP|CAD|CHF|JPY|AUD|INR|CNY|HKD|SGD|SEK|NOK|DKK|ZAR|MXN|BRL)$/i
-    return text.replace(/(?:\( ?)?[-−]?(?:(?:USD|EUR|GBP|CAD|CHF|JPY|AUD|INR|CNY|HKD|SGD|SEK|NOK|DKK|ZAR|MXN|BRL) ?|\p{Sc} ?)?[-−]?[0-9][0-9., ]*(?: ?(?:USD|EUR|GBP|CAD|CHF|JPY|AUD|INR|CNY|HKD|SGD|SEK|NOK|DKK|ZAR|MXN|BRL)(?![A-Za-z])| ?\p{Sc})?(?: ?\))?/giu, (token, offset) => {
+    // Thin, narrow and non-breaking spaces separate thousands in many locales.
+    // Placeholder characters (private use) are dropped from input so they cannot be forged.
+    text = asciiDigits(text).replace(/[\uE002\uE003]/g, '').replace(/[\u00a0\u2007\u2009\u202f]/g, ' ')
+    // Clock times keep their digits (12:30:45.123 is not an amount).
+    const times: string[] = []
+    text = text.replace(/\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?\b/g, (t) => { times.push(t); return `\uE002${times.length - 1}\uE003` })
+    return restoreTimes(text.replace(AMOUNT, (token, offset) => {
         const trimmed = token.trimEnd()
-        const codes = trimmed.match(/[A-Za-z]{3}/g) || []
-        if (/\p{Sc}/u.test(trimmed) || codes.some(c => currency.test(c)) || /[0-9][.,][0-9]|[0-9] [0-9]{3}(?:[^0-9]|$)/.test(trimmed)) return '<amount>' + token.slice(trimmed.length)
+        const after = text.slice(offset + trimmed.length)
+        const money = /\p{Sc}/u.test(trimmed) || new RegExp(String.raw`(?:^|[^A-Za-z])(?:${CODES})(?:$|[^A-Za-z])`, 'i').test(trimmed)
+        // Only a count as Lens writes counts (1,358 attempts; 42 users; 87.5%) is kept: a bare run of 5+ digits
+        // or a k/m/bn amount stays masked whatever word follows it ("notional 250000 attempts").
+        const suffixed = /[0-9](?:e[+-]?[0-9]+| ?(?:k|m|mn|bn|million|thousand|billion)\b)/i.test(trimmed)
+        const bareLong = /(?:^|[^0-9.,'])[0-9]{5,}(?:$|[^0-9.,'])/.test(` ${trimmed} `)
+        if (!money && !suffixed && !bareLong && MEASURE.test(after)) return token
+        if (money || /[0-9](?:e[+-]?[0-9]+| ?(?:k|m|mn|bn|million|thousand|billion)\b)/i.test(trimmed)
+            || /[0-9][.,'][0-9]|[0-9] [0-9]{3}(?:[^0-9]|$)/.test(trimmed)) return '<amount>' + token.slice(trimmed.length)
         return token.replace(/\d{5,}/g, (digits, at) => {
             const start = offset + at, end = start + digits.length
             if (/[\p{L}\p{N}_]/u.test(text[start - 1] || '') || /[\p{L}\p{N}_]/u.test(text[end] || '')) return digits
             return /(?:\b(?:id|no|number|ref|trade)|#)\s*[:#-]?\s*$/i.test(text.slice(Math.max(0, start - 64), start)) ? digits : '<amount>'
         })
-    })
+    }), times)
 }
+const restoreTimes = (s: string, times: string[]) => s.replace(/\uE002(\d+)\uE003/g, (_, i) => times[Number(i)] ?? '')
 
 // Unknown exception text has no reviewed vocabulary; only explicit trade references are useful safely.
 export function errorTemplate(text: string): string {
@@ -478,7 +507,7 @@ export interface DialogFriction {
 }
 
 /** Friction per dialog from many sessions' steps. `opens` comes from a separate count. */
-export function frictionByDialog(sessions: Step[][], reg: AppEvents, opens: Map<string, { opens: number; name?: string }>, names?: DialogNames): DialogFriction[] {
+export function frictionCandidates(sessions: Step[][], reg: AppEvents, opens: Map<string, { opens: number; name?: string }>, names?: DialogNames) {
     const by = new Map<string, DialogFriction & { _s: Set<string>; _c: Set<string>; _es: Set<string>; _ec: Set<string>; _err: Map<string, { count: number; s: Set<string>; c: Set<string>; m: Set<string>; ex: { session_id: string; ts: string; message: string } }> }>()
     const get = (d: string, seen?: string) => {
         let f = by.get(d)
@@ -547,6 +576,12 @@ export function frictionByDialog(sessions: Step[][], reg: AppEvents, opens: Map<
         for (const [d, i] of lastError) if ((lastGood.get(d) ?? -1) < i && by.has(d)) by.get(d)!.stuck_sessions++
     }
     return [...by.values()]
+}
+
+export type FrictionCandidate = ReturnType<typeof frictionCandidates>[number]
+export function finishFriction(candidates: FrictionCandidate[]): DialogFriction[] {
+    return candidates
+
         .map(({ _s, _c, _es, _ec, _err, ...f }) => ({
             ...f,
             sessions: _s.size,
@@ -560,6 +595,10 @@ export function frictionByDialog(sessions: Step[][], reg: AppEvents, opens: Map<
                 .slice(0, 8),
         }))
         .sort((a, b) => b.clients_with_errors.length - a.clients_with_errors.length || b.sessions_with_errors - a.sessions_with_errors || b.attempts - a.attempts)
+}
+
+export function frictionByDialog(sessions: Step[][], reg: AppEvents, opens: Map<string, { opens: number; name?: string }>, names?: DialogNames): DialogFriction[] {
+    return finishFriction(frictionCandidates(sessions, reg, opens, names))
 }
 
 // ------------------------------------------------------------------ queries
@@ -598,16 +637,27 @@ export const toRaw = (r: Record<string, unknown>): RawEvent => ({
 /** The name seen most for each dialog in a window (UNKNOWN left out). */
 export async function dialogNames(from: Date, to: Date, clientId = ''): Promise<Map<string, { opens: number; name?: string; sessions: number; clients: number }>> {
     const reg = required()
-    const rows = await hogql(
-        `SELECT ${prop(reg, 'dialog')} AS dialog, topK(3)(${prop(reg, 'dialogName')}) AS names,
-                countIf(event = {screen} AND ${prop(reg, 'action')} IN {open}) AS opens,
-                uniq(properties.$session_id) AS sessions, uniq(toString(${P.client})) AS clients
-         FROM events
-         WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND notEmpty(${prop(reg, 'dialog')})
-           AND ({client} = '' OR toString(${P.client}) = {client})
-         GROUP BY dialog ORDER BY opens DESC LIMIT 5000`,
-        { from: from.toISOString(), to: to.toISOString(), client: clientId, screen: reg.events.screen, open: reg.screenActions.open, events: [reg.events.screen, reg.events.interaction] }
-    )
+    const rows: Record<string, unknown>[] = []
+    let cursor = ''
+    while (true) {
+        const page = await hogql(
+            `SELECT ${prop(reg, 'dialog')} AS dialog, topK(3)(${prop(reg, 'dialogName')}) AS names,
+                    countIf(event = {screen} AND ${prop(reg, 'action')} IN {open}) AS opens,
+                    uniqExact(properties.$session_id) AS sessions, uniqExact(toString(${P.client})) AS clients
+             FROM events
+             WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND notEmpty(${prop(reg, 'dialog')})
+               AND ({client} = '' OR toString(${P.client}) = {client})
+             AND ${prop(reg, 'dialog')} > {cursor}
+             GROUP BY dialog ORDER BY dialog LIMIT 5000`,
+            { cursor, from: from.toISOString(), to: to.toISOString(), client: clientId, screen: reg.events.screen, open: reg.screenActions.open, events: [reg.events.screen, reg.events.interaction] }
+        )
+        rows.push(...page)
+        if (page.length < 5000) break
+        const next = String(page.at(-1)!.dialog)
+        if (next <= cursor) throw new Error('Dialog pagination did not advance')
+        cursor = next
+    }
+    rows.sort((a, b) => Number(b.opens) - Number(a.opens))
     return new Map(
         rows.map((r) => [
             String(r.dialog),
@@ -727,10 +777,11 @@ export async function slowAttempts(q: { from: Date; to: Date; clientId?: string;
     let without = 0
     for (const sid of sids) {
         const ev = (
-            await hogql(`SELECT ${columns(reg)} FROM events WHERE properties.$session_id = {sid} AND event IN {events} AND timestamp >= {from} - INTERVAL 1 DAY ORDER BY ts LIMIT 5000`, {
+            await hogql(`SELECT ${columns(reg)} FROM events WHERE properties.$session_id = {sid} AND event IN {events} AND timestamp >= {from} - INTERVAL 1 DAY AND timestamp < {to} + INTERVAL 1 DAY ORDER BY ts LIMIT 5000`, {
                 sid,
                 events: [reg.events.screen, reg.events.interaction],
                 from: q.from.toISOString(),
+                to: q.to.toISOString(),
             })
         ).map(toRaw)
         const steps = toSteps(ev, reg)
@@ -796,41 +847,25 @@ export interface FrictionResult {
     rows_read: number
     truncated: boolean
     note: string
+    source?: 'history' | 'live'
+    coverage?: { complete: boolean; unprocessed: string[] }
+    data_through?: string | null
+    sample_rate?: number
 }
-
-const ROW_LIMIT = 50_000
 
 /** Where people fail: per dialog, attempts and outcomes, errors, retries, who was hit. */
 export async function dialogFriction(q: { from: Date; to: Date; clientId?: string; dialog?: string; limit?: number }): Promise<FrictionResult> {
     const reg = required()
-    const values = {
-        from: q.from.toISOString(),
-        to: q.to.toISOString(),
-        client: q.clientId || '',
-        events: [reg.events.screen, reg.events.interaction],
-        special: [...reg.dialogs.messages, ...reg.dialogs.notices],
-        screen: reg.events.screen,
+    const { historyFriction, analysisMeta } = await import('./analysishistory.ts')
+    const historical = historyFriction(q), meta = analysisMeta(q)
+    const { liveEvents, eventSessions } = await import('./liveevents.ts')
+    const rows = historical ? [] : await liveEvents(q)
+    const opens = new Map<string, { opens: number; name?: string }>()
+    for (const e of rows) if (e.event === reg.events.screen && reg.screenActions.open.includes(e.action || '')) {
+        const o = opens.get(e.dialog) || { opens: 0, name: e.dialogName }; o.opens++; opens.set(e.dialog, o)
     }
-    // What friction needs: dialogs opened, buttons, searches, the menu and messages. Fields are left
-    // out (most of the events), so a message right after a field is tied to the dialog then open.
-    const [rows, opens] = await Promise.all([
-        hogql(
-            `SELECT ${columns(reg)} FROM events
-             WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}
-               AND (event = {screen} OR ${prop(reg, 'dialog')} IN {special} OR notEmpty(${prop(reg, 'button')}) OR upper(${prop(reg, 'control')}) IN ('SEARCH', 'SEARCHTYPE', 'MENU'))
-               AND ({client} = '' OR toString(${P.client}) = {client})
-             ORDER BY sid, ts LIMIT ${ROW_LIMIT}`,
-            values
-        ),
-        dialogNames(q.from, q.to, q.clientId),
-    ])
-    const bySession = new Map<string, RawEvent[]>()
-    for (const r of rows) {
-        const e = toRaw(r)
-        if (!bySession.has(e.sid)) bySession.set(e.sid, [])
-        bySession.get(e.sid)!.push(e)
-    }
-    const all = frictionByDialog([...bySession.values()].map((ev) => toSteps(ev, reg)), reg, opens, nameLookup(opens))
+    const all = historical ?? frictionByDialog(eventSessions(rows), reg, opens, nameLookup(opens))
+    const values = { from: q.from.toISOString(), to: q.to.toISOString() }
     const wanted = q.dialog?.toLowerCase()
     const dialogs = (wanted ? all.filter((d) => d.dialog.toLowerCase() === wanted || d.name.toLowerCase().includes(wanted)) : all).slice(0, q.limit ?? 15)
     return {
@@ -838,10 +873,12 @@ export async function dialogFriction(q: { from: Date; to: Date; clientId?: strin
         client: q.clientId,
         dialogs,
         rows_read: rows.length,
-        truncated: rows.length >= ROW_LIMIT,
+        truncated: false,
+        ...meta,
         note:
             'attempts = presses of Save, Run, Export and the like; outcomes come from the message or notice that followed within ' +
             `${reg.outcomeSeconds} s ("none" = no message, which is not always a problem). stuck_sessions = an error here and no success here later in the session. ` +
+            (historical ? 'Complete session cohorts by session-start UTC day; includes next-day finishes. ' : 'Complete keyset-paged live window; sessions at window edges may be partial. ') +
             'Use session_story on an example session to see what happened.',
     }
 }
@@ -943,6 +980,7 @@ async function eventPropertyNames(): Promise<string[] | undefined> {
 export interface ClientPeriod {
     sessions: number
     users: string[]
+    user_count?: number
     days: number
     dialogs: number
     attempts: number
@@ -954,6 +992,7 @@ export interface ClientSignals {
     now: ClientPeriod & { failure_rate: number }
     before: ClientPeriod & { failure_rate: number }
     last_seen: string
+    quiet_user_count?: number
     quiet_users: string[] // active before, not now
     signals: string[] // why this client is listed, worst first
     weight: number
@@ -966,7 +1005,7 @@ const rate = (p: ClientPeriod) => (p.attempts ? Math.round((100 * p.errors) / p.
  * Plain, explainable signals per client: less use, people gone quiet, more failures, fewer dialogs,
  * not seen lately. Evidence for a person to judge, not a churn prediction.
  */
-export function clientSignals(rows: { client: string; now: ClientPeriod; before: ClientPeriod; last_seen: string }[], at = Date.now()): ClientSignals[] {
+export function clientSignals(rows: { client: string; now: ClientPeriod; before: ClientPeriod; last_seen: string; quiet_users?: string[]; quiet_user_count?: number }[], at = Date.now()): ClientSignals[] {
     const out: ClientSignals[] = []
     for (const r of rows) {
         const now = { ...r.now, failure_rate: rate(r.now) }
@@ -976,9 +1015,10 @@ export function clientSignals(rows: { client: string; now: ClientPeriod; before:
         const pct = (x: number) => `${Math.round(100 * x)}%`
         if (before.sessions >= 5 && drop(now.sessions, before.sessions) >= 0.3)
             signals.push([3 * drop(now.sessions, before.sessions), `sessions down ${pct(drop(now.sessions, before.sessions))} (${before.sessions} → ${now.sessions})`])
-        const quiet = before.users.filter((u) => !now.users.includes(u))
-        if (quiet.length && before.users.length >= 2)
-            signals.push([(2 * quiet.length) / before.users.length, `${quiet.length} of ${before.users.length} users not seen this period: ${quiet.map(userOf).slice(0, 6).join(', ')}`])
+        const quiet = r.quiet_users ?? before.users.filter((u) => !now.users.includes(u))
+        const quietCount = r.quiet_user_count ?? quiet.length, beforeUsers = before.user_count ?? before.users.length
+        if (quietCount && beforeUsers >= 2)
+            signals.push([(2 * quietCount) / beforeUsers, `${quietCount} of ${beforeUsers} users not seen this period: ${quiet.map(userOf).slice(0, 6).join(', ')}`])
         if (before.days >= 3 && drop(now.days, before.days) >= 0.3) signals.push([drop(now.days, before.days), `active on ${now.days} days (was ${before.days})`])
         if (now.attempts >= 5 && now.failure_rate >= 0.2 && now.failure_rate >= 1.5 * before.failure_rate)
             signals.push([2 * now.failure_rate, `${pct(now.failure_rate)} of attempts failed (was ${pct(before.failure_rate)}; ${now.errors} errors in ${now.attempts} attempts)`])
@@ -992,7 +1032,8 @@ export function clientSignals(rows: { client: string; now: ClientPeriod; before:
             now,
             before,
             last_seen: r.last_seen,
-            quiet_users: quiet.map(userOf),
+            quiet_users: quiet.map(userOf).slice(0, 6),
+            quiet_user_count: quietCount,
             signals: signals.map((s) => s[1]),
             weight: Math.round(100 * signals.reduce((t, s) => t + s[0], 0)) / 100,
         })
@@ -1010,6 +1051,12 @@ export interface ClientSignalsResult {
 
 /** Every client, this window against the one before it of the same length. */
 export async function clientSignalsReport(q: { from: Date; to: Date; clientId?: string; limit?: number }): Promise<ClientSignalsResult> {
+    const { historyClientSignals } = await import('./analysishistory.ts')
+    const historical = historyClientSignals(q)
+    if (historical) return { now: { from: q.from.toISOString(), to: q.to.toISOString() },
+        before: { from: new Date(+q.from - (+q.to - +q.from)).toISOString(), to: q.from.toISOString() },
+        clients: q.clientId ? historical : historical.slice(0, q.limit ?? 20), quiet_clients: historical.filter((c) => !c.now.sessions).length,
+        note: 'Exact client signals from daily raw-event sufficient statistics; user arrays contain at most six disappeared-user examples.' }
     const reg = required()
     const len = q.to.getTime() - q.from.getTime()
     const from0 = new Date(q.from.getTime() - len)
@@ -1019,37 +1066,62 @@ export async function clientSignalsReport(q: { from: Date; to: Date; clientId?: 
     const button = prop(reg, 'button')
     const isError = `${dialog} IN {messages}${empty.length ? ` AND NOT match(${button}, {empty})` : ''}`
     const period = (name: string, cond: string) => `
-        uniqIf(properties.$session_id, ${cond}) AS ${name}_sessions, groupUniqArrayIf(500)(toString(distinct_id), ${cond}) AS ${name}_users,
-        uniqIf(toDate(timestamp), ${cond}) AS ${name}_days, uniqIf(${dialog}, ${cond} AND event = {screen}) AS ${name}_dialogs,
+        uniqExactIf(properties.$session_id, ${cond}) AS ${name}_sessions, uniqExactIf(toString(distinct_id), ${cond}) AS ${name}_user_count,
+        uniqExactIf(toDate(timestamp), ${cond}) AS ${name}_days, uniqExactIf(${dialog}, ${cond} AND event = {screen}) AS ${name}_dialogs,
         countIf(${cond} AND ${button} IN {submit}) AS ${name}_attempts, countIf(${cond} AND ${isError}) AS ${name}_errors`
-    const rows = await hogql(
-        `SELECT toString(${P.client}) AS client, max(timestamp) AS last_seen,
-                ${period('n', 'timestamp >= {from}')}, ${period('b', 'timestamp < {from}')}
-         FROM events
-         WHERE timestamp >= {from0} AND timestamp < {to} AND event IN {events} AND notEmpty(toString(${P.client}))
-           AND ({client} = '' OR toString(${P.client}) = {client})
-         GROUP BY client ORDER BY client LIMIT 5000`,
-        {
-            from0: from0.toISOString(),
-            from: q.from.toISOString(),
-            to: q.to.toISOString(),
-            events: [reg.events.screen, reg.events.interaction],
-            screen: reg.events.screen,
-            submit,
-            messages: reg.dialogs.messages,
-            empty: `(?i)${empty.join('|') || 'x^'}`,
-            client: q.clientId || '',
-        }
-    )
+    const rows: Record<string, unknown>[] = []
+    let cursor = ''
+    while (true) {
+        const page = await hogql(
+            `SELECT toString(${P.client}) AS client, max(timestamp) AS last_seen,
+                    ${period('n', 'timestamp >= {from}')}, ${period('b', 'timestamp < {from}')}
+             FROM events
+             WHERE timestamp >= {from0} AND timestamp < {to} AND event IN {events} AND notEmpty(toString(${P.client}))
+               AND ({client} = '' OR toString(${P.client}) = {client}) AND toString(${P.client}) > {cursor}
+             GROUP BY client ORDER BY client LIMIT 5000`,
+            {
+                cursor,
+                from0: from0.toISOString(),
+                from: q.from.toISOString(),
+                to: q.to.toISOString(),
+                events: [reg.events.screen, reg.events.interaction],
+                screen: reg.events.screen,
+                submit,
+                messages: reg.dialogs.messages,
+                empty: `(?i)${empty.join('|') || 'x^'}`,
+                client: q.clientId || '',
+            }
+        )
+        rows.push(...page)
+        if (page.length < 5000) break
+        const next = String(page.at(-1)!.client)
+        if (next <= cursor) throw new Error('Client pagination did not advance')
+        cursor = next
+    }
+    // Compute disappeared users in ClickHouse; never infer disappearance from capped identity arrays.
+    const quietRows = await hogql(`SELECT client, countIf(seen_before > 0 AND seen_now = 0) AS quiet_count,
+            groupUniqArrayIf(6)(user, seen_before > 0 AND seen_now = 0) AS quiet_users FROM (
+        SELECT toString(${P.client}) AS client, toString(distinct_id) AS user,
+            countIf(timestamp < {from}) AS seen_before, countIf(timestamp >= {from}) AS seen_now
+        FROM events WHERE timestamp >= {from0} AND timestamp < {to} AND event IN {events}
+          AND notEmpty(toString(${P.client})) AND ({client} = '' OR toString(${P.client}) = {client})
+          AND toString(${P.client}) IN {known_clients}
+        GROUP BY client, user) GROUP BY client LIMIT ${Math.max(1, rows.length + 1)}`,
+        { from0: from0.toISOString(), from: q.from.toISOString(), to: q.to.toISOString(),
+            events: [reg.events.screen, reg.events.interaction], client: q.clientId || '', known_clients: rows.map((r) => String(r.client)) })
+    const quietByClient = new Map(quietRows.map((r) => [String(r.client), r]))
     const p = (r: Record<string, unknown>, k: string): ClientPeriod => ({
         sessions: Number(r[`${k}_sessions`]) || 0,
-        users: ((r[`${k}_users`] as unknown[]) || []).map(String),
+        users: [],
+        user_count: Number(r[`${k}_user_count`]) || 0,
         days: Number(r[`${k}_days`]) || 0,
         dialogs: Number(r[`${k}_dialogs`]) || 0,
         attempts: Number(r[`${k}_attempts`]) || 0,
         errors: Number(r[`${k}_errors`]) || 0,
     })
-    const all = clientSignals(rows.map((r) => ({ client: String(r.client), now: p(r, 'n'), before: p(r, 'b'), last_seen: new Date(String(r.last_seen)).toISOString() })), q.to.getTime())
+    const all = clientSignals(rows.map((r) => ({ client: String(r.client), now: p(r, 'n'), before: p(r, 'b'), last_seen: new Date(String(r.last_seen)).toISOString(),
+        quiet_user_count: Number(quietByClient.get(String(r.client))?.quiet_count) || 0,
+        quiet_users: ((quietByClient.get(String(r.client))?.quiet_users as unknown[]) || []).map(String) })), q.to.getTime())
     return {
         now: { from: q.from.toISOString(), to: q.to.toISOString() },
         before: { from: from0.toISOString(), to: q.from.toISOString() },
@@ -1057,7 +1129,7 @@ export async function clientSignalsReport(q: { from: Date; to: Date; clientId?: 
         quiet_clients: all.filter((c) => !c.now.sessions).length,
         note:
             'Signals compare this window with the one before it of the same length. They show less use, people gone quiet and more failures: ' +
-            'evidence to look at, not a prediction that a client will leave. Small numbers (a few sessions) swing a lot. Use dialog_friction with the client for where they fail.',
+            'evidence to look at, not a prediction that a client will leave. Counts are exact; user_count and quiet_user_count are totals, users arrays are omitted (empty), and quiet_users contains at most six examples. Small numbers (a few sessions) swing a lot. Use dialog_friction with the client for where they fail.',
     }
 }
 
@@ -1122,6 +1194,9 @@ export function rankPains(now: DialogFriction[], before: DialogFriction[], max =
 }
 
 export interface PainsReport {
+    source?: string
+    coverage?: unknown
+    data_through?: string | null
     window: { from: string; to: string }
     pains: (Pain & { replay_url?: string })[]
     clients_needing_attention: { client: string; signals: string[] }[]
@@ -1133,14 +1208,16 @@ export async function topPains(q: { from: Date; to: Date; max?: number }): Promi
     const len = q.to.getTime() - q.from.getTime()
     const prevFrom = new Date(q.from.getTime() - len)
     const [now, before, clients] = await Promise.all([
-        dialogFriction({ from: q.from, to: q.to, limit: 200 }),
-        dialogFriction({ from: prevFrom, to: q.from, limit: 200 }),
+        dialogFriction({ from: q.from, to: q.to, limit: Number.MAX_SAFE_INTEGER }),
+        dialogFriction({ from: prevFrom, to: q.from, limit: Number.MAX_SAFE_INTEGER }),
         clientSignalsReport({ from: q.from, to: q.to, limit: 50 }),
     ])
     const pains = rankPains(now.dialogs, before.dialogs, q.max ?? 5)
     const spans = await recordingSpans(pains.flatMap((p) => (p.example ? [p.example.session_id] : []))).catch(() => new Map())
     return {
         window: now.window,
+        source: now.source === 'history' && before.source === 'history' ? 'history' : 'live',
+        coverage: { now: now.coverage, before: before.coverage }, data_through: now.data_through,
         pains: pains.map((p) => {
             const span = p.example && spans.get(p.example.session_id)
             return span ? { ...p, replay_url: replayUrl(p.example!.session_id, Math.max(0, (Date.parse(p.example!.at) - Date.parse(span.start)) / 1000 - 20)) } : p
@@ -1198,10 +1275,11 @@ export async function findTrade(q: { id: string; from: Date; to: Date; clientId?
     for (const h of hits) {
         const sid = String(h.sid)
         const ev = (
-            await hogql(`SELECT ${columns(reg)} FROM events WHERE properties.$session_id = {sid} AND event IN {events} AND timestamp >= {from} - INTERVAL 1 DAY ORDER BY ts LIMIT 5000`, {
+            await hogql(`SELECT ${columns(reg)} FROM events WHERE properties.$session_id = {sid} AND event IN {events} AND timestamp >= {from} - INTERVAL 1 DAY AND timestamp < {to} + INTERVAL 1 DAY ORDER BY ts LIMIT 5000`, {
                 sid,
                 events: values.events,
                 from: values.from,
+                to: values.to,
             })
         ).map(toRaw)
         const steps = toSteps(ev, reg)

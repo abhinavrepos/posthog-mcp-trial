@@ -65,12 +65,13 @@ export async function struggleSessions(q: { clientId: string; pathname?: string;
     const repeated = new Map<string, { event: string; count: number }>()
     if (rows.length) {
         const counts = await hogql(
-            `SELECT toString(properties.$session_id) AS sid, event, count() AS n
+            `SELECT sid, argMax(event, n) AS event, max(n) AS n FROM (
+             SELECT toString(properties.$session_id) AS sid, event, count() AS n
              FROM events
              WHERE toString(properties.$session_id) IN {ids} AND NOT startsWith(event, '$')
                AND timestamp >= {from} AND timestamp < {to}
-             GROUP BY sid, event
-             LIMIT 50000`,
+             GROUP BY sid, event) GROUP BY sid
+             LIMIT 200`,
             { ids: rows.map((r) => String(r.sid)), from: q.from.toISOString(), to: q.to.toISOString() }
         )
         for (const c of counts) {

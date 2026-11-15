@@ -251,25 +251,25 @@ describe('bounded message-doctor queries', () => {
         assert.equal(r.sessions_read, 1)
         assert.equal(r.truncated, false)
         assert.equal(seen[0].values.client, client)
-        assert.equal(seen[1].values.history, ts(-58))
-        assert.ok(Date.parse(String(seen[1].values.observed)) > Date.parse(ts(41)))
-        assert.deepEqual(seen[1].values.ids, ['s'])
+        assert.equal(seen[1].values.from, ts(-58))
+        assert.ok(Date.parse(String(seen[1].values.to)) > Date.parse(ts(41)))
+        assert.deepEqual(seen[1].values.sids, ['s'])
         assert.match(seen[0].query, /CASE WHEN match/)
         assert.match(seen[0].query, /JSONExtractString/)
     })
-    test('session selection cap, fixed batch size, empty result and unavailable recordings', async (t) => {
+    test('complete paged session selection, fixed batch size, empty result and unavailable recordings', async (t) => {
         const batches: number[] = []
         let empty = false
         t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
             const q = JSON.parse(String(init.body)).query as Query
-            if (q.query.includes('GROUP BY sid')) return response(empty ? [] : Array.from({ length: 1000 }, (_, i) => ({ sid: `s${i}`, last: ts(1) })))
+            if (q.query.includes('GROUP BY sid')) return response(empty || q.values.cursor ? [] : Array.from({ length: 1000 }, (_, i) => ({ sid: `s${i}`, last: ts(1) })))
             if (q.query.includes('raw_session_replay_events')) throw new Error('No replay access')
-            const ids = q.values.ids as string[]
+            const ids = q.values.sids as string[]
             batches.push(ids.length)
             return response(ids.flatMap((sid) => session(sid, [press(0), message(1)])))
         })
         const r = await messageDoctor({ from: new Date(ts(0)), to: new Date(ts(3)) })
-        assert.equal(r.truncated, true)
+        assert.equal(r.truncated, false)
         assert.equal(r.sessions_read, 1000)
         assert.equal(batches.length, 40)
         assert.ok(batches.every((n) => n === 25))
@@ -279,27 +279,14 @@ describe('bounded message-doctor queries', () => {
         assert.deepEqual(none.messages, [])
         assert.equal(none.rows_read, 0)
     })
-    test('splits capped batches and omits an oversized session instead of inventing give-ups', async (t) => {
-        const huge = session('huge', [press(0), message(1)])[0]
-        const healthy = session('small', [press(0), message(1), press(3), notice(4)])
-        const seen: string[][] = []
+    test('rejects broken pagination instead of classifying a partial oversized session', async (t) => {
+        const huge = { ...session('huge', [press(0), message(1)])[0], event_uuid: 'fixed' }
         t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
             const q = JSON.parse(String(init.body)).query as Query
-            if (q.query.includes('GROUP BY sid')) return response([{ sid: 'huge', last: ts(1) }, { sid: 'small', last: ts(1) }])
-            if (q.query.includes('raw_session_replay_events')) return response([])
-            const ids = q.values.ids as string[]
-            seen.push(ids)
-            return response(ids.includes('huge') ? Array.from({ length: 50_000 }, () => huge) : healthy)
+            if (q.query.includes('GROUP BY sid')) return response([{ sid: 'huge' }])
+            return response(Array.from({ length: 10000 }, () => huge))
         })
-        const r = await messageDoctor({ from: new Date(ts(0)), to: new Date(ts(3)) })
-        assert.deepEqual(seen, [['huge', 'small'], ['huge'], ['small']])
-        assert.equal(r.rows_read, 100_006)
-        assert.equal(r.query_rows.capped_event_batches, 2)
-        assert.deepEqual(r.omitted_sessions, ['huge'])
-        assert.equal(r.sessions_read, 1)
-        assert.equal(r.messages[0].gave_up, 0)
-        assert.equal(r.messages[0].recovered, 1)
-        assert.equal(r.truncated, true)
+        await assert.rejects(messageDoctor({ from: new Date(ts(0)), to: new Date(ts(3)) }), /pagination did not advance/)
     })
 })
 

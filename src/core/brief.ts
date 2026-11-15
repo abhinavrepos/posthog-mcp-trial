@@ -1,12 +1,11 @@
 // One deterministic PM entry point. Queries stay here; composeBrief only reads supplied results.
 import {
-    appEvents, clientSignalsReport, columns, dialogFriction, dialogNames, findTrade,
+    appEvents, clientSignalsReport, dialogFriction, dialogNames, findTrade,
     sessionStory, slowAttempts, toRaw, toSteps, topPains,
     type ClientSignalsResult, type FrictionResult, type PainsReport, type SessionStoryResult, type Step,
 } from './appevents.ts'
-import { hogql, replayUrl } from './posthog.ts'
+import { replayUrl } from './posthog.ts'
 import { recordingSpans } from './incidents.ts'
-import { P } from './props.ts'
 import { resolveClient, type ClientMatch } from './resolve.ts'
 import { emailsIn } from './text.ts'
 import { parseTimeWindow } from './timewindow.ts'
@@ -167,7 +166,7 @@ export function briefFindings(r: BriefResults): BriefFinding[] {
                 f.numbers[`${i}_sampled_sessions`] = users.total
             }
             const concentrated = oneUserDominates(users) ? ` One user accounts for ${users!.largest} of ${users!.total} sampled sessions.` :
-                c.now.users.length === 1 && c.now.sessions ? ` One user accounts for all ${c.now.sessions} current sessions.` : ''
+                (c.now.user_count ?? c.now.users.length) === 1 && c.now.sessions ? ` One user accounts for all ${c.now.sessions} current sessions.` : ''
             const reason = c.signals[0]?.includes('attempt') ? 'Error messages per attempt crossed a warning threshold' : c.signals[0] || 'No warning threshold crossed'
             return `${short(plain(c.client), 40)}: ${c.now.sessions} sessions against ${c.before.sessions} in ${period}; ${c.now.errors} error messages in ${c.now.attempts} attempts, against ${c.before.errors} in ${c.before.attempts}. ${short(plain(reason), 95)}.${concentrated}`
         }).join(' ')
@@ -263,16 +262,11 @@ export function composeBrief(r: BriefResults): string {
 /** Bounded event-only read for concentration. Uses exactly the event vocabulary's safe columns. */
 async function contributions(from: Date, to: Date, clientId?: string) {
     const reg = appEvents()!
-    const rows = await hogql(`SELECT ${columns(reg)} FROM events
-        WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}
-        AND ({client} = '' OR toString(${P.client}) = {client})
-        AND notEmpty(toString(properties.$session_id))
-        ORDER BY sid, ts LIMIT 50000`, {
-        from: from.toISOString(), to: to.toISOString(), events: [reg.events.screen, reg.events.interaction], client: clientId || '',
-    })
+    const { liveEvents } = await import('./liveevents.ts')
+    const rows = await liveEvents({ from, to, clientId })
     const sessions = new Map<string, ReturnType<typeof toRaw>[]>()
     for (const row of rows) {
-        const raw = toRaw(row)
+        const raw = row
         if (!sessions.has(raw.sid)) sessions.set(raw.sid, [])
         sessions.get(raw.sid)!.push(raw)
     }
@@ -291,7 +285,7 @@ async function contributions(from: Date, to: Date, clientId?: string) {
         largest: Math.max(0, ...[...users].filter(([user]) => !!user).map(([, sids]) => sids.size)),
         users: [...users.keys()].filter(Boolean).length, blocked_users: 0,
     }]))
-    return { counts: briefContributions([...sessions.values()].map((s) => toSteps(s, reg))), clientCounts, truncated: rows.length >= 50000 }
+    return { counts: briefContributions([...sessions.values()].map((s) => toSteps(s, reg))), clientCounts, truncated: false }
 }
 
 // Injectable data functions let orchestration be tested without a PostHog or a recording.
@@ -302,7 +296,9 @@ export async function revalBrief(input: BriefInput, sources = briefSources, now 
         try { return await work() } catch { limits.push(`${label} unavailable.`); return undefined }
     }
     const provisional = detectBriefKind(input)
-    const win = briefWindow(input, provisional.kind, now)
+    const parsedWindow = briefWindow(input, provisional.kind, now)
+    const win = provisional.kind === 'trade' ? parsedWindow :
+        (await import('./analysishistory.ts')).completeDayWindow(parsedWindow, input.when || parsedWindow.label.replace(/^the /, ''), now)
     const matches = input.client || input.question ? await optional('Client resolution', () => sources.resolveClient({ text: input.client || input.question || '', clientHint: input.client, emails: emailsIn(input.client || input.question || '') })) : []
     // An explicit client must never silently become an all-client query.
     if (input.client && !confidentClient(matches || [])) throw new Error(`No unambiguous client matches “${input.client}”. Use its full name or id.`)
@@ -327,7 +323,7 @@ export async function revalBrief(input: BriefInput, sources = briefSources, now 
         const [pains, signals, friction, previous, users, timings] = reports
         Object.assign(r, { pains, signals, friction, previous, contributions: users?.counts, clientContributions: users?.clientCounts, timings })
         if (users?.truncated) limits.push('Per-user event read reached 50,000 rows; concentration and counts may be incomplete.')
-        if (route.kind === 'general') limits.push('Top-pain event reads are capped at 50,000 rows per period; completeness is not exposed by top_pains.')
+        if (pains?.source === 'live') limits.push('Top pains used complete live event reads; sessions at the window edges may be partial.')
     }
     const findings = briefFindings(r)
     const evidence = findings.flatMap((f) => f.evidence)

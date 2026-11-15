@@ -906,36 +906,21 @@ kept unchanged.
 
 ### Connecting GitHub Copilot (for PMs)
 
-On the **Chat** page, **Connect Copilot** makes the person's key and shows the fields for each server
-(Lens, and PostHog through Lens) with Copy buttons, for the Copilot app's MCP Servers → Add Custom
-server. One key serves both, with that person's access. Admins set the address Copilot uses on the
-Admin page (Chat tokens → Lens address for Copilot; default `PUBLIC_URL`). On Copilot Business or
-Enterprise, the organisation must allow the "MCP servers in Copilot" policy.
+On the **Chat** page, **Connect Copilot** makes a personal key and shows one Lens server.
+When `POSTHOG_MCP_VIA_LENS=on` and PostHog MCP is configured, PostHog commands are included
+as `posthog_exec`. Generated `.mcp.json` also uses just Lens in this mode.
 
-### Using PostHog's MCP server next to this one
+### Using PostHog's MCP through Lens
 
-Claude Code and GitHub Copilot can connect both servers at once. Routing rules lead the Lens
-instructions and each tool description starts with the business question it answers.
+Use Lens tools directly for clients, users, sessions, errors, replays, app tasks and surveys.
+`posthog_exec` accepts a command string for generic analytics and PostHog objects (trends,
+funnels, retention, dashboards, flags, experiments, annotations, error-tracking administration,
+docs and SQL). Replay access, person lists, session lookups, error investigation, messaging and
+surveys are refused. All answers pass through Lens AI safety; optional client anonymisation
+adds its own restrictions. Commands are forwarded with `POSTHOG_MCP_API_KEY`, never the PM's key.
 
-Use `lens` for a named Reval client, trade or link id, dialog, screen, button, error message,
-one session, Jira ticket, release outcome, where clients struggle or who is at risk. Use
-`posthog` for generic product analytics and PostHog objects: trends, funnels, retention,
-insights, dashboards, flags, experiments, surveys, cohorts, annotations, actions and event
-definitions, error issue management, warehouse and batch exports, docs, SDK help and raw SQL.
-Lens tools take JSON arguments directly. PostHog has one tool, `exec`, taking a command string.
-
-`POSTHOG_MCP_VIA_LENS=on` is the default. When the Lens service runs (`LENS_CONTAINER=1` or
-`MCP_TOKEN` set), `pnpm mcp:config` points `posthog` at
-`http://127.0.0.1:<SERVICE_PORT>/posthog-mcp` with `Bearer MCP_TOKEN`. The service forwards to
-`POSTHOG_MCP_URL` using `POSTHOG_MCP_API_KEY`; the client does not receive PostHog's key.
-The proxy prepends Lens routing rules to PostHog's instructions and `exec` description, and
-refuses `exec` commands that would open replays (`session-recording-*`, `vision-*`). It
-supports JSON, SSE, batches and MCP sessions, limits bodies to 5 MB and times out after 30 seconds.
-It refuses replay and Vision commands. Replay links always come from Lens's `get_replay_link`;
-the agent never sees replay content. `pnpm doctor` checks that the proxy answers with these rules.
-
-With `POSTHOG_MCP_VIA_LENS=off`, or with local stdio and no HTTP token, the client connects to
-PostHog directly with its key. PostHog then has no Lens routing additions or proxy refusal.
+Existing `/posthog-mcp` clients keep working with the same policy, JSON/SSE and batch support.
+With `POSTHOG_MCP_VIA_LENS=off`, PostHog is a separate direct connection without Lens policy.
 Give PostHog its own personal key without `session_recording` scopes (`POSTHOG_MCP_API_KEY`);
 `pnpm doctor` fails if that key can read replays. Keep that restriction in either mode.
 

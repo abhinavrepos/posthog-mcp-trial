@@ -400,7 +400,7 @@ test('version 1 database upgrades in place preserving task history', async () =>
     old.close()
     child(`const {tasksDb: db} = await import(${JSON.stringify(url)});
         const assert = (await import('node:assert/strict')).default;
-        assert.equal(db.prepare('PRAGMA user_version').get().user_version, 6);
+        assert.equal(db.prepare('PRAGMA user_version').get().user_version, 8);
         assert.equal(db.prepare('SELECT finalized FROM task_ingest').get().finalized, 0);
         assert.deepEqual(db.prepare('SELECT user FROM known_users').all().map((r) => r.user), ['C1PRD|01|OLD|USER7']);
         assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE name='daily_client_day'").get());

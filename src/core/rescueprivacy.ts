@@ -54,7 +54,9 @@ export function scrubWith<T>(tokens: string[], value: T): T {
     const safe = (v: unknown): unknown => {
         if (typeof v === 'string') {
             if (m.exact.has(v)) return '[person]'
-            v = v.replace(/[^\s<>"']+@[^\s<>"']+/g, match => containsToken(match, m) || m.short.some(t => match.includes(t)) ? '[person]' : match)
+            // Whole tokens holding an @, found without a regex that retries at every position (quadratic on a long
+            // run with no @: 200,000 digits took minutes).
+            v = v.replace(/[^\s<>"']+/g, match => match.includes('@') && (containsToken(match, m) || m.short.some(t => match.includes(t))) ? '[person]' : match)
             return replaceTokens(v as string, m)
         }
         if (Array.isArray(v)) return v.map(safe)

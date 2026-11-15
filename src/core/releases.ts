@@ -263,12 +263,21 @@ export interface SurveyAnswer {
 
 /** PostHog survey answers ("survey sent" events): what users told you in the product. */
 async function loadSurveys(since: string, cp: string): Promise<SurveyAnswer[]> {
-    const rows = await hogql(
-        `SELECT timestamp AS at, toString(properties.$pathname) AS path, toString(properties.$survey_response) AS r0,
-                toString(properties.$survey_response_1) AS r1, toString(${cp}) AS client
-         FROM events WHERE event = 'survey sent' AND timestamp > toDateTime({since}) ORDER BY timestamp LIMIT 20000`,
-        { since }
-    )
+    const rows: Record<string, unknown>[] = []
+    let at = since, uuid = ''
+    while (true) {
+        const page = await hogql(
+            `SELECT timestamp AS at, toString(uuid) AS event_uuid, toString(properties.$pathname) AS path, toString(properties.$survey_response) AS r0,
+                    toString(properties.$survey_response_1) AS r1, toString(${cp}) AS client
+             FROM events WHERE event = 'survey sent' AND timestamp > toDateTime({since}) AND (timestamp, toString(uuid)) > (toDateTime({at}), {uuid}) ORDER BY timestamp, toString(uuid) LIMIT 20000`,
+            { since, at, uuid }
+        )
+        rows.push(...page)
+        if (page.length < 20000) break
+        const end = page.at(-1)!, nextAt = String(end.at), nextUuid = String(end.event_uuid)
+        if (nextAt === at && nextUuid === uuid) throw new Error('Survey pagination did not advance')
+        at = nextAt; uuid = nextUuid
+    }
     return rows.map((r) => {
         const rating = Number(r.r0)
         const isRating = String(r.r0 ?? '').trim() !== '' && Number.isFinite(rating) && rating >= 1 && rating <= 10

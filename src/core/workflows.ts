@@ -53,12 +53,12 @@ export function workflowEpisodes(sessions: Step[][], reg: AppEvents): Episode[] 
 }
 
 export interface WorkflowError { text: string; template: string; count: number }
-function topError(steps: Step[]): WorkflowError | undefined {
+function topError(steps: (Step & { count?: number })[]): WorkflowError | undefined {
     const counts = new Map<string, WorkflowError>()
     for (const s of steps) if ((s.kind === 'message' || s.kind === 'notice') && s.outcome === 'error') {
         const key = s.template || s.text || '(no text)'
         const entry = counts.get(key) || { text: s.text || key, template: key, count: 0 }
-        entry.count++
+        entry.count += s.count ?? 1
         counts.set(key, entry)
     }
     return [...counts.values()].sort((a, b) => b.count - a.count || a.template.localeCompare(b.template))[0]
@@ -68,6 +68,13 @@ function timing(values: number[]) {
     const a = [...values].sort((x, y) => x - y)
     return { median_time_s: a.length ? (a[Math.floor((a.length - 1) / 2)] + a[Math.floor(a.length / 2)]) / 2 : null,
         p90_time_s: a.length ? a[Math.ceil(a.length * 0.9) - 1] : null }
+}
+// Lossless frequency distribution: unlike daily medians this combines exactly across days.
+export function distributionTiming(values: Map<number, number>) {
+    const a = [...values].sort((x, y) => x[0] - y[0]), n = a.reduce((s, x) => s + x[1], 0)
+    const at = (rank: number) => { let seen = 0; for (const [t, count] of a) { seen += count; if (seen > rank) return t }; return 0 }
+    return { median_time_s: n ? (at(Math.floor((n - 1) / 2)) + at(Math.floor(n / 2))) / 2 : null,
+        p90_time_s: n ? at(Math.ceil(n * .9) - 1) : null }
 }
 // A submit only counts when its answering message is inside this episode/attempt slice.
 function reply(steps: Step[], submit: Step): Step | undefined {
@@ -82,9 +89,10 @@ export interface DiscoveredWorkflow {
 }
 
 /** Frequent contiguous chains, support = distinct sessions; completion = occurrences. */
-export function discoverWorkflowChains(sessions: Step[][], reg: AppEvents, opts: { names?: DialogNames; limit?: number; window?: { from: Date; to: Date } } = {}): DiscoveredWorkflow[] {
-    type Candidate = { dialogs: string[]; sessions: Set<string>; clients: Set<string>; users: Set<string>; occurrences: number; completed: number; accepted: number; times: number[]; errors: Step[]; seen: string[]; finishes: Map<string, number> }
-    const candidates = new Map<string, Candidate>()
+export type WorkflowCandidate = { dialogs: string[]; sessions: Set<string>; clients: Set<string>; users: Set<string>; occurrences: number; completed: number; accepted: number; times: Map<number, number>; errors: (Step & { count?: number })[]; seen: string[]; finishes: Map<string, number> }
+
+export function discoveryCandidates(sessions: Step[][], reg: AppEvents, opts: { names?: DialogNames; limit?: number; window?: { from: Date; to: Date } } = {}): WorkflowCandidate[] {
+    const candidates = new Map<string, WorkflowCandidate>()
     for (const ep of workflowEpisodes(sessions, reg)) {
         const opens = ep.opens.filter((s, i, all) => !i || s.dialog !== all[i - 1].dialog)
         for (let i = 0; i < opens.length; i++) for (let n = 2; n <= 4 && i + n <= opens.length; n++) {
@@ -96,7 +104,7 @@ export function discoverWorkflowChains(sessions: Step[][], reg: AppEvents, opts:
             if (!attempts.length) continue
             const dialogs = path.map((s) => s.dialog), key = JSON.stringify(dialogs)
             let c = candidates.get(key)
-            if (!c) candidates.set(key, c = { dialogs, sessions: new Set(), clients: new Set(), users: new Set(), occurrences: 0, completed: 0, accepted: 0, times: [], errors: [], seen: path.map((s) => s.name || ''), finishes: new Map() })
+            if (!c) candidates.set(key, c = { dialogs, sessions: new Set(), clients: new Set(), users: new Set(), occurrences: 0, completed: 0, accepted: 0, times: new Map(), errors: [], seen: path.map((s) => s.name || ''), finishes: new Map() })
             c.sessions.add(first.raw.sid)
             if (first.raw.client) c.clients.add(first.raw.client)
             if (first.raw.user) c.users.add(first.raw.user)
@@ -109,21 +117,46 @@ export function discoverWorkflowChains(sessions: Step[][], reg: AppEvents, opts:
             }
             c.completed += Number(replies.some((s) => s.outcome === 'completed'))
             c.accepted += Number(replies.some((s) => s.outcome === 'accepted'))
-            if (replies.length) c.times.push((Date.parse(replies[0].ts) - Date.parse(first.ts)) / 1000)
+            if (replies.length) { const t = (Date.parse(replies[0].ts) - Date.parse(first.ts)) / 1000; c.times.set(t, (c.times.get(t) || 0) + 1) }
             c.errors.push(...steps.filter((s) => !replies.length || s.i <= replies[0].i))
         }
     }
-    const frequent = [...candidates.values()].filter((c) => c.sessions.size >= 2)
-    return frequent.filter((c) => !frequent.some((long) => long.dialogs.length > c.dialogs.length && long.sessions.size >= 0.8 * c.sessions.size &&
-        long.dialogs.some((_, i) => c.dialogs.every((d, j) => long.dialogs[i + j] === d))))
-        .map((c) => {
+    return [...candidates.values()]
+}
+
+export function finishDiscovery(candidates: WorkflowCandidate[], reg: AppEvents, opts: { names?: DialogNames; limit?: number } = {}): DiscoveredWorkflow[] {
+    const frequent = candidates.filter((c) => c.sessions.size >= 2)
+    // Chains are at most four dialogs: index every proper contiguous sub-chain once.
+    const contained = new Set<string>()
+    const support = new Map(frequent.map((c) => [JSON.stringify(c.dialogs), c.sessions.size]))
+    for (const long of frequent) for (let n = 2; n < long.dialogs.length; n++) for (let i = 0; i + n <= long.dialogs.length; i++) {
+        const key = JSON.stringify(long.dialogs.slice(i, i + n)), shorter = support.get(key)
+        if (shorter !== undefined && long.sessions.size >= .8 * shorter) contained.add(key)
+    }
+    const names = new Map<WorkflowCandidate, string>()
+    const nameOf = (c: WorkflowCandidate) => {
+        let name = names.get(c)
+        if (name === undefined) {
             const finish = [...c.finishes].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0]
-            const name = [...c.dialogs.map((d, i) => dialogLabel(d, reg, opts.names, c.seen[i])), ...(finish ? [finish] : [])].join(' → ')
-            return { id: workflowId(c.dialogs), name: name.length > WORKFLOW_NAME_LIMIT ? `${name.slice(0, WORKFLOW_NAME_LIMIT - 1)}…` : name, dialogs: c.dialogs,
+            name = [...c.dialogs.map((d, i) => dialogLabel(d, reg, opts.names, c.seen[i])), ...(finish ? [finish] : [])].join(' → ')
+            name = name.length > WORKFLOW_NAME_LIMIT ? `${name.slice(0, WORKFLOW_NAME_LIMIT - 1)}…` : name
+            names.set(c, name)
+        }
+        return name
+    }
+    return frequent.filter((c) => !contained.has(JSON.stringify(c.dialogs)))
+        .sort((a,b) => b.sessions.size * b.clients.size - a.sessions.size * a.clients.size || b.sessions.size - a.sessions.size || b.dialogs.length - a.dialogs.length || nameOf(a).localeCompare(nameOf(b)))
+        .slice(0, opts.limit ?? 15)
+        .map((c) => {
+            return { id: workflowId(c.dialogs), name: nameOf(c), dialogs: c.dialogs,
                 sessions: c.sessions.size, clients: c.clients.size, users: c.users.size, occurrences: c.occurrences,
-                done: c.times.length, completed: c.completed, accepted: c.accepted, ...timing(c.times), top_error: topError(c.errors), score: c.sessions.size * c.clients.size }
+                done: [...c.times.values()].reduce((n, x) => n + x, 0), completed: c.completed, accepted: c.accepted, ...distributionTiming(c.times), top_error: topError(c.errors), score: c.sessions.size * c.clients.size }
         })
-        .sort((a, b) => b.score - a.score || b.sessions - a.sessions || b.dialogs.length - a.dialogs.length || a.name.localeCompare(b.name)).slice(0, opts.limit ?? 15)
+
+}
+
+export function discoverWorkflowChains(sessions: Step[][], reg: AppEvents, opts: { names?: DialogNames; limit?: number; window?: { from: Date; to: Date } } = {}): DiscoveredWorkflow[] {
+    return finishDiscovery(discoveryCandidates(sessions, reg, opts), reg, opts)
 }
 
 export interface Abandonment { session_id: string; at: string; replay_url?: string }
@@ -134,12 +167,12 @@ export interface CompletionMetrics {
     biggest_drop?: { dialog: string; name: string; abandoned: number; top_error?: WorkflowError }
     examples: Abandonment[]
 }
-interface Attempt { dropoutSteps: Step[]; start: Step; reached: number; done?: Step; completed: boolean; accepted: boolean; failed: number; retries: number }
+export interface WorkflowAttempt { dropoutSteps: Step[]; start: Step; reached: number; done?: Step; completed: boolean; accepted: boolean; failed: number; retries: number }
 
-export function workflowCompletion(sessions: Step[][], definition: Workflow, reg: AppEvents, window?: { from: Date; to: Date }, names?: DialogNames): { overall: CompletionMetrics; clients: (CompletionMetrics & { client: string })[] } {
+export function completionAttempts(sessions: Step[][], definition: Workflow, reg: AppEvents, window?: { from: Date; to: Date }, episodes?: Episode[]): WorkflowAttempt[] {
     const w = validateWorkflow(definition)
-    const attempts: Attempt[] = []
-    for (const ep of workflowEpisodes(sessions, reg)) {
+    const attempts: WorkflowAttempt[] = []
+    for (const ep of episodes ?? workflowEpisodes(sessions, reg)) {
         const start = ep.opens.find((s) => s.dialog === w.dialogs[0])
         if (!start || !inWindow(start, window)) continue
         let reached = 0, finalOpen = start
@@ -155,7 +188,12 @@ export function workflowCompletion(sessions: Step[][], definition: Workflow, reg
         const retries = failed.filter((s) => submits.some((n) => n.i > s.i && n.dialog === s.dialog && n.label.toLowerCase() === s.label.toLowerCase() && Date.parse(n.ts) - Date.parse(s.ts) <= 300_000)).length
         attempts.push({ start, dropoutSteps: onWay.filter((s) => s.i >= finalOpen.i), reached, done, completed: finishes.some((s) => s.outcome === 'completed'), accepted: finishes.some((s) => s.outcome === 'accepted'), failed: failed.length, retries })
     }
-    const metrics = (all: Attempt[]): CompletionMetrics => {
+    return attempts
+}
+
+export function finishCompletion(attempts: WorkflowAttempt[], definition: Workflow, reg: AppEvents, names?: DialogNames): { overall: CompletionMetrics; clients: (CompletionMetrics & { client: string })[] } {
+    const w = validateWorkflow(definition)
+    const metrics = (all: WorkflowAttempt[]): CompletionMetrics => {
         const abandoned = all.filter((a) => !a.done)
         const drops = w.dialogs.map((_, i) => abandoned.filter((a) => a.reached === i + 1))
         const biggest = drops.map((a, i) => ({ a, i })).sort((a, b) => b.a.length - a.a.length || a.i - b.i)[0]
@@ -170,6 +208,15 @@ export function workflowCompletion(sessions: Step[][], definition: Workflow, reg
                 top_error: topError(biggest.a.flatMap((a) => a.dropoutSteps.filter((s) => s.dialog === w.dialogs[biggest.i])))} : undefined,
             examples: [...examples.values()] }
     }
-    const clients = [...new Set(attempts.map((a) => a.start.raw.client || ''))].sort()
-    return { overall: metrics(attempts), clients: clients.map((client) => ({ client, ...metrics(attempts.filter((a) => (a.start.raw.client || '') === client)) })) }
+    const groups = new Map<string, WorkflowAttempt[]>()
+    for (const a of attempts) {
+        const client = a.start.raw.client || ''
+        if (!groups.has(client)) groups.set(client, [])
+        groups.get(client)!.push(a)
+    }
+    return { overall: metrics(attempts), clients: [...groups.keys()].sort().map((client) => ({ client, ...metrics(groups.get(client)!) })) }
+}
+
+export function workflowCompletion(sessions: Step[][], definition: Workflow, reg: AppEvents, window?: { from: Date; to: Date }, names?: DialogNames) {
+    return finishCompletion(completionAttempts(sessions, definition, reg, window), definition, reg, names)
 }

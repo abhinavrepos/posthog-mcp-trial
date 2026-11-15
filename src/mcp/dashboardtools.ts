@@ -14,7 +14,7 @@ import { saveSurvey } from '../core/surveys.ts'
 import { surveysActive } from '../core/config.ts'
 import { canSurvey, type SurveyRole } from '../service/access.ts'
 import { rescueQueue, setRescueAction, rescueClients, RESCUE_STATUSES } from '../core/rescue.ts'
-import { taskMap, flowTime, findTasks, ingestStatus } from '../core/tasks.ts'
+import { taskMap, flowTime, findTasks, ingestStatus, dataThrough } from '../core/tasks.ts'
 import { createDashboard, shareDashboard, listDashboards, getDashboard, canManage } from '../core/dashboards.ts'
 import { resolveClient } from '../core/resolve.ts'
 import { parseTimeWindow } from '../core/timewindow.ts'
@@ -48,7 +48,10 @@ function windowFor(input: string | undefined, fallback: number): Window {
     const parsed = parseTimeWindow(count ? `last ${Math.min(count, 99)} days` : value, new Date(), 'UTC')
     if (parsed.precision === 'none' || count === 0 || (count !== undefined && count > 366)) throw new Error('I could not read those dates. Try "last 4 weeks", "yesterday", or "2026-10-01".')
     if (count) {
-        const end = new Date(Date.parse(day(parsed.to)) - DAY)
+        // "Last N days" ends on the last fully processed day (as the rescue queue does): yesterday is never
+        // complete yet, and a window that includes it gives no flags at all.
+        const yesterday = Date.parse(day(parsed.to)) - DAY, through = dataThrough()
+        const end = new Date(through ? Math.min(yesterday, Date.parse(through)) : yesterday)
         return { from: day(new Date(end.getTime() - (count - 1) * DAY)), to: day(end) }
     }
     return { from: day(parsed.from), to: day(new Date(Math.max(parsed.from.getTime(), parsed.to.getTime() - 1))) }
@@ -202,7 +205,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         }))
         return json({
             headline: result.coverage?.complete === false ? result.coverage.text : `${attention} client${attention === 1 ? '' : 's'} need${attention === 1 ? 's' : ''} attention.`, clients,
-            data_through: result.data_through, note: result.note, history_behind_days: status.behind_days,
+            data_through: result.data_through, note: result.note, history_days_not_backfilled: status.behind_days, // of the kept history (older days still being filled in), not how stale the latest data is: see data_through
             open: open('task_map', p, input.only_flagged),
         })
     }))

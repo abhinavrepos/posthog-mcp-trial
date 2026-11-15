@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { Readable, Writable } from 'node:stream'
 import { describe, test } from 'node:test'
+import { safetyWith, staffEmails } from '../src/core/aisafety.ts'
+import { identityTokens } from '../src/core/rescueprivacy.ts'
 import { handlePosthogMcp, replayRefusal, rewriteResponse, rewriteSseLine, type ProxyOptions } from '../src/mcp/posthog-proxy.ts'
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/posthog-mcp.json', import.meta.url), 'utf8'))
@@ -45,7 +47,7 @@ describe('PostHog routing rewrites', () => {
             const refusal = replayRefusal(call(`call insight-get {}\ncall ${tool} {}`), options.name)!
             assert.equal(refusal.id, 3)
             assert.equal(refusal.error.code, -32602)
-            assert.match(refusal.error.message, /reval-lens server's get_replay_link/)
+            assert.match(refusal.error.message, /Use Lens get_replay_link/)
         }
         for (const command of ['call query-trends {}', 'call execute-sql {"query":"select 1"}', 'call error-tracking-issues-list {}']) assert.equal(replayRefusal(call(command)), undefined)
         assert.equal(replayRefusal({ ...call('call vision-query {}'), params: { name: 'other' } }), undefined)
@@ -117,7 +119,14 @@ describe('PostHog proxy adapter', () => {
             controller.close()
         } }), { headers: { 'content-type': 'text/event-stream' } }))
         const res = await invoke({ method: 'initialize' })
-        assert.equal(res.text, data.split('\n').map((line) => rewriteSseLine(line, options.name)).join('\n'))
+        const tokens = await identityTokens(), staff = staffEmails()
+        assert.equal(res.text, data.split('\n').map((line) => {
+            const rewritten = rewriteSseLine(line, options.name)
+            if (!rewritten.startsWith('data:')) return rewritten
+            const value = JSON.parse(rewritten.slice(5))
+            value.result = safetyWith(value.result, tokens, staff)
+            return `data: ${JSON.stringify(value)}${line.endsWith('\r') ? '\r' : ''}`
+        }).join('\n'))
     })
     test('mixed batches refuse replays locally and forward only permitted requests', async (t) => {
         t.mock.method(globalThis, 'fetch', async (_url: URL, init: RequestInit) => {

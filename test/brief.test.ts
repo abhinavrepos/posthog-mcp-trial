@@ -7,6 +7,7 @@ import { after, describe, test } from 'node:test'
 
 const dir = mkdtempSync(join(tmpdir(), 'lens-brief-'))
 process.env.TRIAGE_DB = join(dir, 'test.db')
+process.env.TASKS_DB = join(dir, 'tasks.db')
 process.env.APP_EVENTS_FILE = 'config/app-events.reval.json'
 const { db } = await import('../src/core/db.ts')
 const { toSteps, appEvents } = await import('../src/core/appevents.ts')
@@ -218,8 +219,8 @@ describe('brief investigation with stubbed sources', () => {
         }), new Date(window.to))
         assert.equal(data(output).kind, 'client')
         assert.equal(queries.length, 2)
-        assert.equal(queries[1].from.toISOString(), before.from)
-        assert.equal(queries[1].to.toISOString(), before.to)
+        assert.equal(queries[1].from.toISOString(), '2026-10-13T00:00:00.000Z')
+        assert.equal(queries[1].to.toISOString(), '2026-10-27T00:00:00.000Z')
         assert.ok(queries.every((q) => q.clientId === 'ACME'))
         assert.equal(stories, 1)
         await assert.rejects(revalBrief({ client: 'unknown' }, sources()), /No unambiguous client/)

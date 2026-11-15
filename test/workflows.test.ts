@@ -7,6 +7,7 @@ import { after, describe, test } from 'node:test'
 
 const dir = mkdtempSync(join(tmpdir(), 'lens-workflows-'))
 process.env.TRIAGE_DB = join(dir, 'test.db')
+process.env.TASKS_DB = join(dir, 'tasks.db')
 process.env.APP_EVENTS_FILE = 'config/app-events.reval.json'
 process.env.POSTHOG_PROJECT_ID = 'test-project'
 process.env.POSTHOG_PERSONAL_API_KEY = 'test-key'
@@ -200,7 +201,7 @@ function response(rows: Record<string, unknown>[]) {
 }
 
 describe('bounded workflow queries', () => {
-    test('selects only sessions opening workflow dialogs, binds values, batches ids and flags the session cap', async (t) => {
+    test('pages matching sessions past the old cap, binds values and bounds every event batch', async (t) => {
         const seen: { query: string; values: Record<string, unknown> }[] = []
         t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
             const q = JSON.parse(String(init.body)).query
@@ -209,22 +210,22 @@ describe('bounded workflow queries', () => {
         })
         const clientId = "X' OR 1=1 --"
         const r = await workflowSessions({ ...win, clientId }, ['A', 'B'])
-        assert.equal(seen.length, 41)
+        assert.equal(seen.length, 42)
         assert.match(seen[0].query, /event = \{screen\}.*IN \{open\}/s)
         assert.match(seen[0].query, /LIMIT 2000/)
         assert.deepEqual(seen[0].values.dialogs, ['A', 'B'])
         assert.equal(seen[0].values.client, clientId)
         assert.ok(seen.every((q) => !q.query.includes(clientId)))
-        for (const q of seen.slice(1)) { assert.equal((q.values.sids as string[]).length, 50); assert.match(q.query, /IN \{sids\}.*LIMIT 50000/s) }
-        assert.equal(r.truncated, true)
+        for (const q of seen.slice(2)) { assert.equal((q.values.sids as string[]).length, 50); assert.match(q.query, /IN \{sids\}.*LIMIT 10000/s); assert.match(q.query, /timestamp >= \{from\} AND timestamp < \{to\}/) }
+        assert.equal(r.truncated, false)
     })
-    test('event row cap is disclosed', async (t) => {
+    test('pages all events past the old row cap and never returns a partial session', async (t) => {
+        const rows = Array.from({ length: 60001 }, (_, i) => ({ ...session('s', 'X', [open(i, 'A')])[0], event_uuid: String(i).padStart(8, '0') }))
         let n = 0
-        const row = session('s', 'X', [open(0, 'A')])[0]
-        t.mock.method(globalThis, 'fetch', async () => ++n === 1 ? response([{ sid: 's' }]) : response(Array(50000).fill(row)))
+        t.mock.method(globalThis, 'fetch', async () => ++n === 1 ? response([{ sid: 's' }]) : response(rows.slice((n - 2) * 10000, (n - 1) * 10000)))
         const r = await workflowSessions(win, ['A'])
-        assert.equal(r.rows_read, 50000)
-        assert.equal(r.truncated, true)
+        assert.equal(r.rows_read, rows.length)
+        assert.equal(r.truncated, false)
     })
     test('report compares equal windows, keeps previous-only clients and attaches only recorded replay links', async (t) => {
         const rows = [...session('now', 'RQA', [open(0, 'A'), open(1, 'B'), open(2, 'C'), press(3, 'C'), notice(4)]),

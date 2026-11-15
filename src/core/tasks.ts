@@ -1,3 +1,4 @@
+import { storeAnalysisDay } from './analysishistory.ts'
 // Task history has its own database: ingest and long scans must not lock the web service's tables.
 import { mkdirSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
@@ -106,6 +107,53 @@ transaction(() => {
         UPDATE task_ingest SET finalized = 1 WHERE truncated = 0 AND done_at >= date(day, '+2 days');
         PRAGMA user_version = 6;
     `)
+    if (version < 7) tasksDb.exec(`
+        CREATE TABLE friction_daily(day TEXT NOT NULL, client TEXT NOT NULL, dialog TEXT NOT NULL, value TEXT NOT NULL,
+            PRIMARY KEY(day,client,dialog)) WITHOUT ROWID;
+        CREATE TABLE workflow_daily(day TEXT NOT NULL, start_day TEXT NOT NULL, client TEXT NOT NULL, chain TEXT NOT NULL, value TEXT NOT NULL,
+            PRIMARY KEY(day,start_day,client,chain)) WITHOUT ROWID;
+        CREATE INDEX workflow_start_day ON workflow_daily(start_day,client);
+        CREATE TABLE workflow_episodes_daily(day TEXT NOT NULL, client TEXT NOT NULL, session_id TEXT NOT NULL, episode INTEGER NOT NULL, value TEXT NOT NULL,
+            PRIMARY KEY(day,client,session_id,episode)) WITHOUT ROWID;
+        CREATE TABLE analysis_names_daily(day TEXT NOT NULL, start_day TEXT NOT NULL, client TEXT NOT NULL, dialog INTEGER NOT NULL, name INTEGER NOT NULL, n INTEGER NOT NULL,
+            PRIMARY KEY(day,start_day,client,dialog,name)) WITHOUT ROWID;
+        CREATE TABLE analysis_days(day TEXT PRIMARY KEY) WITHOUT ROWID;
+        PRAGMA user_version = 7;
+    `)
+
+
+    if (version < 8) tasksDb.exec(`
+        DROP TABLE IF EXISTS friction_daily;
+        DROP TABLE IF EXISTS workflow_daily;
+        DROP TABLE IF EXISTS workflow_episodes_daily;
+        DROP TABLE IF EXISTS analysis_days;
+        DROP TABLE IF EXISTS analysis_names_daily;
+        CREATE TABLE analysis_days(day TEXT PRIMARY KEY) WITHOUT ROWID;
+        CREATE TABLE analysis_names_daily(day TEXT NOT NULL, start_day TEXT NOT NULL, client TEXT NOT NULL, dialog INTEGER NOT NULL, name INTEGER NOT NULL, n INTEGER NOT NULL,
+            PRIMARY KEY(day,start_day,client,dialog,name)) WITHOUT ROWID;
+        CREATE TABLE friction_daily(day TEXT NOT NULL, client TEXT NOT NULL, value BLOB NOT NULL,
+            PRIMARY KEY(day,client)) WITHOUT ROWID;
+        CREATE TABLE workflow_daily(day TEXT NOT NULL, start_day TEXT NOT NULL, client TEXT NOT NULL, value BLOB NOT NULL,
+            PRIMARY KEY(day,start_day,client)) WITHOUT ROWID;
+        CREATE TABLE workflow_episodes_daily(day TEXT NOT NULL, client TEXT NOT NULL, value BLOB NOT NULL,
+            PRIMARY KEY(day,client)) WITHOUT ROWID;
+        CREATE TABLE workflow_global_daily(day TEXT NOT NULL, start_day TEXT NOT NULL, length INTEGER NOT NULL, value BLOB NOT NULL, PRIMARY KEY(day,start_day,length)) WITHOUT ROWID;
+        CREATE TABLE workflow_support_daily(day TEXT NOT NULL, start_day TEXT NOT NULL, length INTEGER NOT NULL, max_sessions INTEGER NOT NULL, max_clients INTEGER NOT NULL, value BLOB NOT NULL, PRIMARY KEY(day,start_day,length)) WITHOUT ROWID;
+        CREATE TABLE analysis_client_daily(day TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID;
+        CREATE TABLE analysis_dictionary(id INTEGER PRIMARY KEY, value TEXT NOT NULL UNIQUE);
+        CREATE TABLE client_roster(id TEXT PRIMARY KEY, name TEXT NOT NULL, last_seen TEXT NOT NULL) WITHOUT ROWID;
+        CREATE TABLE task_errors_daily(day TEXT NOT NULL, client TEXT NOT NULL, task_id TEXT NOT NULL, template INTEGER NOT NULL, n INTEGER NOT NULL,
+            PRIMARY KEY(day,client,task_id,template)) WITHOUT ROWID;
+        INSERT OR IGNORE INTO analysis_dictionary(value) SELECT DISTINCT first_error FROM task_attempts WHERE first_error IS NOT NULL AND first_error != '';
+        INSERT INTO task_errors_daily SELECT a.day,a.client,a.task_id,d.id,count(*) FROM task_attempts a JOIN analysis_dictionary d ON d.value = a.first_error
+            WHERE first_error IS NOT NULL AND first_error != '' GROUP BY a.day,a.client,a.task_id,d.id;
+        DROP INDEX users_task_day;
+        DROP INDEX paths_task_day;
+        DROP INDEX daily_task_day;
+        CREATE INDEX daily_task_day ON task_daily(task_id,day);
+        PRAGMA user_version = 8;
+    `)
+
 })
 type Row = Record<string, unknown>
 const all = <T = Row>(sql: string, ...args: SQLInputValue[]) => tasksDb.prepare(sql).all(...args) as T[]
@@ -259,6 +307,7 @@ export function summariseSteps(sessions: Step[][], day: string, _reg: AppEvents)
 
 export interface StoreInfo {
     finalized?: boolean
+    analysisSessions?: Step[][]
     summary?: StepSummary
     sessions?: number; events?: number; truncated?: boolean; seconds?: number
     dialogNames?: Map<string, string>; clientNames?: Map<string, string>
@@ -317,6 +366,7 @@ export const historyGeneration = (): number => generation
 /** Drops every kept answer, including stored weekly observations (tests, maintenance). keepWeekly: the daily
  * attempt clean-up keeps them, since weekly observations never read raw attempts. */
 export function forgetAnswers(keepWeekly = false): void {
+    // Analysis history readers stream SQLite directly and keep no independent cached answers.
     answers.clear(); catalogMemo = undefined
     if (!keepWeekly) tasksDb.exec('DELETE FROM week_obs; DELETE FROM week_done')
 }
@@ -341,7 +391,8 @@ export function storeAttempts(day: string, attempts: TaskAttempt[], info: StoreI
     }
     transaction(() => {
         const affected = new Set([...all<{ task_id: string }>('SELECT DISTINCT task_id FROM task_daily WHERE day = ?', day).map((r) => r.task_id), ...attempts.map((a) => a.task_id)])
-        for (const table of ['task_attempts', 'task_daily', 'task_paths_daily', 'task_users_daily', 'task_finishes_daily', 'task_ingest', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily']) run(`DELETE FROM ${table} WHERE day = ?`, day)
+        for (const table of ['task_errors_daily', 'task_attempts', 'task_daily', 'task_paths_daily', 'task_users_daily', 'task_finishes_daily', 'task_ingest', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily', 'friction_daily', 'workflow_daily', 'workflow_global_daily', 'workflow_support_daily', 'workflow_episodes_daily', 'analysis_names_daily', 'analysis_client_daily', 'analysis_days']) run(`DELETE FROM ${table} WHERE day = ?`, day)
+        if (info.analysisSessions) storeAnalysisDay(day, info.analysisSessions, required())
         if (info.summary) {
             run('DELETE FROM task_state WHERE key = ?', 'signals_missing:' + day)
             const tables = { ops: 'ops_daily', errors: 'errors_daily', users: 'user_daily', clients: 'client_daily' } as const
@@ -356,6 +407,16 @@ export function storeAttempts(day: string, attempts: TaskAttempt[], info: StoreI
                 }
             }
         }
+        const errorIns = tasksDb.prepare('INSERT INTO task_errors_daily VALUES (?,?,?,?,?)')
+        const errors = new Map<string, {client: string; task: string; template: string; n: number}>()
+        for (const a of attempts) if (a.first_error) {
+            const key = JSON.stringify([a.client, a.task_id, a.first_error])
+            const e = errors.get(key) || {client: a.client, task: a.task_id, template: a.first_error, n: 0}
+            e.n++; errors.set(key, e)
+        }
+        const addError = tasksDb.prepare('INSERT OR IGNORE INTO analysis_dictionary(value) VALUES (?)')
+        const errorId = tasksDb.prepare('SELECT id FROM analysis_dictionary WHERE value = ?')
+        for (const e of errors.values()) { addError.run(e.template); errorIns.run(day, e.client, e.task, Number(errorId.get(e.template)!.id), e.n) }
         const ins = tasksDb.prepare('INSERT INTO task_attempts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
         for (const a of attempts) ins.run(day, a.client, a.user, a.session_id, a.task_id, JSON.stringify(a.path), JSON.stringify(a.path),
             a.started_at, a.ended_at, a.duration_s, a.outcome, a.errors, a.first_error ?? null, a.offset_s)
@@ -455,7 +516,7 @@ function note(w: Window): string {
     const complete = one<{ n: number }>('SELECT count(*) AS n FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated = 0 AND finalized = 1', w.from, w.to)!.n
     const missing = Math.max(0, (Date.parse(w.to) - Date.parse(w.from)) / DAY + 1 - complete)
     const partial = one<{ n: number }>('SELECT count(*) AS n FROM task_ingest WHERE day BETWEEN ? AND ? AND truncated != 0', w.from, w.to)!.n
-    return `Done includes completed and accepted replies. Durations use interpolated buckets; the open final bucket is estimated as 7200–14400 seconds. Daily rollups and distinct user identities survive attempt retention. Slow attempts and top errors cover only the retained ${config.tasks.historyDays} days. Session scans cover the previous day through the following day; longer sessions may be partial.${missing ? ` ${missing} day(s) in this window are not fully processed.` : ''}${partial ? ` ${partial} day(s) hit a safety cap; results are truncated.` : ''}`
+    return `Done includes completed and accepted replies. Durations use interpolated buckets; the open final bucket is estimated as 7200–14400 seconds. Daily rollups and distinct user identities survive attempt retention. Slow attempt examples cover only the retained 30 days. Top error counts and daily rollups cover the full retained history. Session scans cover the previous day through the following day; longer sessions may be partial.${missing ? ` ${missing} day(s) in this window are not fully processed.` : ''}${partial ? ` ${partial} day(s) hit a safety cap; results are truncated.` : ''}`
 }
 function pathRows(w: Window, task?: string, client?: string, withHist = true) {
     const f = filters(task, client)
@@ -550,7 +611,7 @@ async function computeFlowTime(p: FlowTimeParams): Promise<FlowTime> {
         }),
         slowest: slow.map((a) => ({ client: a.client, user: a.user, session_id: a.session_id, started_at: a.started_at, duration_s: a.duration_s,
             outcome: a.outcome, path: JSON.parse(a.path) as string[], labels: (JSON.parse(a.path) as string[]).map((d) => (d === '…' ? d : label(d))), first_error: a.first_error || undefined, replay_url: replayUrl(a.session_id, a.offset_s) })),
-        top_errors: all<{ template: string; count: number }>(`SELECT first_error AS template, count(*) AS count FROM task_attempts WHERE day BETWEEN ? AND ?${f.sql} AND first_error IS NOT NULL AND first_error != '' GROUP BY first_error ORDER BY count DESC, first_error LIMIT 5`, p.window.from, p.window.to, ...f.args).map((r) => ({ template: r.template, count: r.count })),
+        top_errors: all<{ template: string; count: number }>(`SELECT coalesce(d.value,e.template) AS template, sum(n) AS count FROM task_errors_daily e LEFT JOIN analysis_dictionary d ON d.id = e.template WHERE day BETWEEN ? AND ?${f.sql} GROUP BY e.template ORDER BY count DESC, template LIMIT 5`, p.window.from, p.window.to, ...f.args).map((r) => ({ template: r.template, count: r.count })),
         data_through: dataThrough(), note: note(p.window) }
 }
 // The catalog with 90-day use, computed once per history change (and day): every task search used to
@@ -571,7 +632,7 @@ export function findTasks(query: string, limit = 10): Task[] {
     if (typeof query !== 'string' || query.length > 1024) throw new Error('Task search must be a string of at most 1024 characters')
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('limit must be from 1 to 100')
     const words = query.toLowerCase().trim().split(/\s+/).filter(Boolean)
-    return taskCatalog().filter((r) => words.every((w) => `${r.name} ${r.dialog} ${r.title}`.toLowerCase().includes(w))).slice(0, limit)
+    return taskCatalog().filter((r) => words.every((w) => `${r.task_id} ${r.name} ${r.dialog} ${r.title}`.toLowerCase().includes(w))).slice(0, limit)
         .map(({ task_id, dialog, name, attempts_90d, clients_90d }) => ({ task_id, dialog, name, attempts_90d, clients_90d }))
 }
 
@@ -676,7 +737,16 @@ export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits
     }
     const dialogNames = new Map([...dialogCounts].map(([d, c]) => [d, [...c].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0]]))
     // Tasks can finish the following day, so that entire scan window must have elapsed at the start.
-    storeAttempts(day, attempts, { finalized: scanStarted >= Date.parse(shift(day, 2)), sessions: ids.length, events, truncated, seconds: (performance.now() - started) / 1000, clientNames, dialogNames, finishes, summary: summariseSteps(sessions, day, reg) })
+    // A day processed before can be read again (the friction/workflow backfill re-reads every kept day). If
+    // PostHog now has fewer sessions for it (its retention or a deletion), keep what Lens already has: storing
+    // the smaller read would wipe good history. The day is left out of the new analyses, which say so.
+    const prior = one<{ sessions: number; finalized: number }>('SELECT sessions, finalized FROM task_ingest WHERE day = ?', day)
+    if (prior?.finalized && ids.length < prior.sessions) {
+        state('analysis_unavailable:' + day, JSON.stringify({ sessions_before: prior.sessions, sessions_now: ids.length }))
+        return
+    }
+    storeAttempts(day, attempts, { finalized: scanStarted >= Date.parse(shift(day, 2)), sessions: ids.length, events, truncated, seconds: (performance.now() - started) / 1000, clientNames, dialogNames, finishes, analysisSessions: sessions, summary: summariseSteps(sessions, day, reg) })
+    run('DELETE FROM task_attempts WHERE day < ?', shift(today(), -29))
 }
 let running = false, scheduled = false
 function state(key: string, value: string) { run('INSERT OR REPLACE INTO task_state VALUES (?,?)', key, value) }
@@ -695,7 +765,7 @@ export async function runIngest(opts: { days?: string[]; maxBackfill?: number } 
         let days = opts.days
         if (!days) {
             days = [today(), shift(today(), -1)]
-            const processed = new Set(all<{ day: string }>('SELECT day FROM task_ingest WHERE truncated = 0 AND finalized = 1').map((r) => r.day))
+            const processed = new Set(all<{ day: string }>("SELECT day FROM task_ingest WHERE truncated = 0 AND finalized = 1 AND (day IN (SELECT day FROM analysis_days) OR 'analysis_unavailable:' || day IN (SELECT key FROM task_state))").map((r) => r.day))
             let remaining = opts.maxBackfill ?? config.tasks.backfillDaysPerRun
             for (let i = 2; i < config.tasks.historyDays && remaining > 0; i++) {
                 const d = shift(today(), -i)
@@ -704,9 +774,10 @@ export async function runIngest(opts: { days?: string[]; maxBackfill?: number } 
         }
         for (const day of new Set(days)) try { await ingestDay(day) } catch (e) { failure(day, e) }
         transaction(() => {
+            run('DELETE FROM task_attempts WHERE day < ?', shift(today(), -29))
             // Task rollups outlive captures. Keep their signal coverage honest after capture retention.
             run(`INSERT OR IGNORE INTO task_state SELECT 'signals_missing:' || day, '1' FROM task_ingest WHERE day < ?`, shift(today(), 1 - config.tasks.historyDays))
-            for (const table of ['task_attempts', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily'])
+            for (const table of ['task_errors_daily', 'task_attempts', 'ops_daily', 'errors_daily', 'user_daily', 'client_daily', 'friction_daily', 'workflow_daily', 'workflow_global_daily', 'workflow_support_daily', 'workflow_episodes_daily', 'analysis_names_daily', 'analysis_client_daily', 'analysis_days'])
                 run(`DELETE FROM ${table} WHERE day < ?`, shift(today(), 1 - config.tasks.historyDays))
         })
         forgetAnswers(true) // old attempts only: weekly observations stay

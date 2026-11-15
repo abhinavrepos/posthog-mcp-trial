@@ -179,3 +179,14 @@ test('upgrading keeps history scanned after its window closed as final', async (
     const source = (await import('node:fs')).readFileSync('src/core/tasks.ts', 'utf8')
     assert.ok(source.includes("UPDATE task_ingest SET finalized = 1 WHERE truncated = 0 AND done_at >= date(day, '+2 days');"))
 })
+
+test('reading a processed day again never replaces its history with a smaller PostHog read', async () => {
+    // The friction/workflow backfill re-reads every kept day; PostHog may have purged old events by then.
+    const day = '2026-02-01', db = T.tasksDb
+    db.prepare('INSERT OR REPLACE INTO task_ingest VALUES (?,?,?,?,0,1,?,1)').run(day, 5, 100, 20, '2026-02-05T00:00:00Z')
+    db.prepare('INSERT OR REPLACE INTO task_daily VALUES (?,?,?,?,?,?,?,?,?)').run(day, 'C01', 't_DlgKeep', 20, 18, 1, 1, 30, '[]')
+    await T.ingestDay(day, async () => [])
+    assert.equal((db.prepare('SELECT attempts FROM task_daily WHERE day = ? AND task_id = ?').get(day, 't_DlgKeep') as { attempts: number }).attempts, 20)
+    assert.equal((db.prepare('SELECT sessions FROM task_ingest WHERE day = ?').get(day) as { sessions: number }).sessions, 5)
+    assert.match(String((db.prepare('SELECT value FROM task_state WHERE key = ?').get('analysis_unavailable:' + day) as { value: string }).value), /"sessions_now":0/)
+})

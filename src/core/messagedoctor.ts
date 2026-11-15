@@ -1,5 +1,5 @@
 // Learn what happens after an error, without exposing field values or search text.
-import { columns, dialogLabel, isGeneratedId, prop, required, toRaw, toSteps, type AppEvents, type DialogNames, type Step } from './appevents.ts'
+import { dialogLabel, isGeneratedId, prop, required, toSteps, type AppEvents, type DialogNames, type Step } from './appevents.ts'
 import { recordingSpans } from './incidents.ts'
 import { hogql, replayUrl } from './posthog.ts'
 import { P } from './props.ts'
@@ -7,8 +7,6 @@ import { tokens } from './text.ts'
 
 const ACTION_MS = 5 * 60_000
 const RECOVERY_MS = 15 * 60_000
-const SESSION_LIMIT = 1000
-const EVENT_LIMIT = 50_000
 const BATCH_SIZE = 25
 
 type Result = 'recovered' | 'failed_again' | 'gave_up'
@@ -216,44 +214,38 @@ export async function messageDoctor(q: { from: Date; to: Date; clientId?: string
         : `if(${prop(reg, 'dialog')} IN {notices}, {noticeOutcome}, {messageOutcome})`
     // Filter dialog/message after attribution/grouping. A messagebox carries neither its originating
     // dialog nor its title, and filtering raw messages would also miss id-free template matches.
-    const candidates = await hogql(
-        `SELECT toString(properties.$session_id) AS sid, max(timestamp) AS last FROM events
-         WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}
-           AND ${prop(reg, 'dialog')} IN {special} AND (${outcome}) = {error}
-           AND notEmpty(toString(properties.$session_id)) AND ({client} = '' OR toString(${P.client}) = {client})
-         GROUP BY sid ORDER BY last DESC, sid LIMIT 1000`, values
-    )
+    const candidates: Record<string, unknown>[] = []
+    let cursor = ''
+    while (true) {
+        const page = await hogql(
+            `SELECT toString(properties.$session_id) AS sid, max(timestamp) AS last FROM events
+             WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}
+               AND ${prop(reg, 'dialog')} IN {special} AND (${outcome}) = {error}
+               AND notEmpty(toString(properties.$session_id)) AND ({client} = '' OR toString(${P.client}) = {client})
+             AND toString(properties.$session_id) > {cursor}
+             GROUP BY sid ORDER BY sid LIMIT 1000`, { ...values, cursor }
+        )
+        candidates.push(...page)
+        if (page.length < 1000) break
+        const next = String(page.at(-1)!.sid)
+        if (next <= cursor) throw new Error('Error session pagination did not advance')
+        cursor = next
+    }
     // Read through now, not just the requested window: a retry just after the window still counts.
     // One minute of history covers toSteps' attribution window for an error at the left edge.
     const observed = new Date()
-    const eventValues = { events: values.events, history: new Date(q.from.getTime() - 60_000).toISOString(), observed: observed.toISOString() }
     let eventRows = 0
-    let cappedBatches = 0
+    const cappedBatches = 0
     const omitted: string[] = []
     const sessions: Step[][] = []
     let sessionsRead = 0
+    const { liveEvents } = await import('./liveevents.ts')
     const read = async (ids: string[]): Promise<void> => {
-        const rows = await hogql(
-            `SELECT ${columns(reg)} FROM events
-             WHERE toString(properties.$session_id) IN {ids} AND event IN {events}
-               AND timestamp >= {history} AND timestamp < {observed}
-             ORDER BY sid, ts LIMIT 50000`, { ...eventValues, ids }
-        )
+        const rows = await liveEvents({ ...q, from: new Date(+q.from - 60_000), to: observed }, ids)
         eventRows += rows.length
-        if (rows.length >= EVENT_LIMIT) {
-            cappedBatches++
-            if (ids.length === 1) omitted.push(ids[0])
-            else {
-                const mid = Math.floor(ids.length / 2)
-                await read(ids.slice(0, mid))
-                await read(ids.slice(mid))
-            }
-            return // never classify a partial session as giving up
-        }
-        const byPerson = new Map<string, ReturnType<typeof toRaw>[]>()
+        const byPerson = new Map<string, typeof rows>()
         const seen = new Set<string>()
-        for (const row of rows) {
-            const e = toRaw(row)
+        for (const e of rows) {
             const key = JSON.stringify([e.sid, e.client, e.user])
             if (!byPerson.has(key)) byPerson.set(key, [])
             byPerson.get(key)!.push(e)
@@ -278,9 +270,8 @@ export async function messageDoctor(q: { from: Date; to: Date; clientId?: string
         window: { from: q.from.toISOString(), to: q.to.toISOString() }, observed_through: observed.toISOString(), messages,
         rows_read: candidates.length + eventRows,
         query_rows: { sessions: candidates.length, events: eventRows, capped_event_batches: cappedBatches },
-        sessions_read: sessionsRead, omitted_sessions: omitted, truncated: candidates.length >= SESSION_LIMIT || omitted.length > 0, replay_links: replayLinks,
-        note: 'At most 1,000 newest error sessions; client is filtered before selection, dialog and message after attribution. A full session selection may omit older matching errors. ' +
-            'Event batches have LIMIT 50,000; capped batches are split and re-read (rows_read includes re-reads); single sessions still at the cap are omitted. ' +
+        sessions_read: sessionsRead, omitted_sessions: omitted, truncated: false, replay_links: replayLinks,
+        note: 'All error sessions and their events are keyset paged; client is filtered before selection, dialog and message after attribution. No population cap. ' +
             'Only errors inside the window count; following events are read through observed_through. Gave up means no later submit in the observed session, which may still be active. ' +
             'Actions stop at the next submit (on any dialog) or 5 min. Fixed fields are labels touched, not proof of a correction. ' +
             'Recovery requires a later same-dialog, same-button submit ending completed or accepted within 15 min of the error; accepted means queued, not finished. ' +

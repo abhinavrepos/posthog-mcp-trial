@@ -109,6 +109,8 @@ export interface RecordingSpan {
     end: string
 }
 
+// Query audit exception: replay metadata keyed by explicit session ids, not an events scan.
+// No event timestamp column/window applies; replay start/end are what this lookup discovers.
 export async function recordingSpans(sessionIds: string[]): Promise<Map<string, RecordingSpan>> {
     const ids = [...new Set(sessionIds.filter(Boolean))]
     if (!ids.length) return new Map()

@@ -3,7 +3,7 @@
 //                        Lens runs as a container (LENS_CONTAINER=1, deploy/lens), its /mcp address over
 //                        HTTP with MCP_TOKEN, since there is no node outside the container
 //   FEATURE_POSTHOG_MCP  PostHog's own MCP server (HTTP), on by default, used only when POSTHOG_MCP_URL
-//                        and POSTHOG_MCP_API_KEY are set; proxied when POSTHOG_MCP_VIA_LENS is on
+//                        and POSTHOG_MCP_API_KEY are set; included in Lens when POSTHOG_MCP_VIA_LENS is on
 // scripts/mcp-config.ts writes the result; scripts/doctor.ts compares it with .mcp.json.
 import { config } from '../core/config.ts'
 
@@ -34,6 +34,7 @@ export function mcpClientConfig(
     } else notes.push(`${LENS_SERVER}: off (FEATURE_LENS_MCP=off)`)
     if (!features.posthogMcp) notes.push(`${POSTHOG_SERVER}: off (FEATURE_POSTHOG_MCP=off)`)
     else if (!ph.mcpUrl || !ph.mcpApiKey) notes.push(`${POSTHOG_SERVER}: off (set POSTHOG_MCP_URL and POSTHOG_MCP_API_KEY to add it)`)
+    else if ((ph.mcpViaLens ?? config.posthog.mcpViaLens) && servers[LENS_SERVER]) notes.push(`${POSTHOG_SERVER}: included in ${LENS_SERVER} as posthog_exec`)
     else {
         const viaLens = (ph.mcpViaLens ?? config.posthog.mcpViaLens) && (lens.container || !!lens.token)
         if (viaLens && !lens.token) notes.push(`${POSTHOG_SERVER}: off (set MCP_TOKEN for /posthog-mcp)`)

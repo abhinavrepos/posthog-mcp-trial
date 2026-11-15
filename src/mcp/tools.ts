@@ -14,7 +14,8 @@ import { pendingRenders, renderClip } from '../core/clip.ts'
 import { errorImpact } from '../core/impact.ts'
 import { bestPerSession, findIncidents } from '../core/incidents.ts'
 import { messageDoctor } from '../core/messagedoctor.ts'
-import { config } from '../core/config.ts'
+import { config, posthogMcpActive } from '../core/config.ts'
+import { posthogExec, execRoutingLine } from './posthog-proxy.ts'
 import { replayUrl } from '../core/posthog.ts'
 import {
     evidenceMarkdown,
@@ -164,9 +165,19 @@ export function wrapTools(server: McpServer, insights = false): void {
     }) as typeof server.registerTool
 }
 
+// Which clients hit errors: the count is exact, the ids are examples. A list of every client per dialog grew
+// with the client base (1,100 characters a dialog at 150 clients) and told the agent nothing more.
+const CLIENT_EXAMPLES = 10
+const fewClients = <T extends { clients_with_errors: string[] }>(d: T) =>
+    ({ ...d, clients_with_errors_count: d.clients_with_errors.length, clients_with_errors: d.clients_with_errors.slice(0, CLIENT_EXAMPLES) })
+
 export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'dashboardRole' | 'admin' | 'insights'>>): void {
     const insights = !!caller?.admin || caller?.insights === true
     wrapTools(server, insights)
+    if (config.posthog.mcpViaLens && posthogMcpActive()) server.registerTool('posthog_exec', {
+        description: `Runs PostHog commands for generic analytics and objects: trends, funnels, retention, insights, dashboards, flags, experiments, annotations, error-tracking administration, docs and SQL. ${execRoutingLine(config.mcp.name)}`,
+        inputSchema: { command: z.string() },
+    }, async ({ command }) => posthogExec(command, { url: config.posthog.mcpUrl, apiKey: config.posthog.mcpApiKey, name: config.mcp.name }))
     server.registerTool(
         'resolve_client',
         {
@@ -183,7 +194,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
         {
             title: 'When did this client hit a problem?',
             description:
-                `Finds the sessions where a ${A} client, or one of its users, hit errors, rage clicks or dead clicks, with screens, releases and replay links. Use PostHog's exec instead for generic session recording lists via metadata SQL; never retrieve replay content there.`,
+                `Finds the sessions where a ${A} client, or one of its users, hit errors, rage clicks or dead clicks, with screens, releases and replay links. Use the Lens tool session_story for the event timeline and get_replay_link for a replay link.`,
             inputSchema: {
                 client: z.string().describe('Client name, id or a user email'),
                 when,
@@ -266,7 +277,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
         {
             title: 'Is it just them?',
             description:
-                `Shows which ${A} clients and users hit an error message, how often, since when and on which releases. With a screen, includes failure rates per release. Use PostHog's exec instead for error tracking issue management, such as listing, assigning or resolving issues.`,
+                `Shows which ${A} clients and users hit an error message, how often, since when and on which releases. With a screen, includes failure rates per release. Use the Lens tool find_client_incidents for related sessions; error investigation stays in Lens.`,
             inputSchema: {
                 issue_id: z.string().optional().describe('PostHog error tracking issue id, from find_client_incidents'),
                 error_type: z.string().optional(),
@@ -534,7 +545,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             annotations: { readOnlyHint: true },
         },
         async ({ when: w, client, limit }) => {
-            const win = parseTimeWindow(w || 'last 7 days')
+            const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 7 days'), w)
             const best = client ? (await pickClient(client)).best : undefined
             return json(`${app} workflows (${win.label}):`, await discoverWorkflows({ from: win.from, to: win.to, clientId: best?.id, limit }))
         }
@@ -548,7 +559,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             annotations: { readOnlyHint: true },
         },
         async ({ workflow, dialogs, client, when: w }) => {
-            const win = parseTimeWindow(w || 'last 7 days')
+            const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 7 days'), w)
             const best = client ? (await pickClient(client)).best : undefined
             const q = { from: win.from, to: win.to, clientId: best?.id }
             const definition = await completionWorkflow({ ...q, workflow, dialogs })
@@ -559,7 +570,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
         'describe_app_events',
         {
             title: `What ${app}'s events mean`,
-            description: `Explains ${app} dialogs, screens, buttons, fields and error messages using the app's event vocabulary. Includes coverage, real example values, common dialogs and messages, clients and HogQL guidance. Use for vocabulary details when drilling into events; reval_brief investigates directly. Use PostHog's exec instead for managing event definitions or ad-hoc SQL.`,
+            description: `Explains ${app} dialogs, screens, buttons, fields and error messages using the app's event vocabulary. Includes coverage, real example values, common dialogs and messages, clients and HogQL guidance. Use for vocabulary details when drilling into events; reval_brief investigates directly. Use the Lens tool reval_brief to investigate app events and session_story for a session timeline.`,
             inputSchema: { days: z.number().int().min(1).max(90).default(7).describe('How many days of data to look at.') },
             annotations: { readOnlyHint: true },
         },
@@ -603,10 +614,10 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             annotations: { readOnlyHint: true },
         },
         async ({ client, dialog, when: w, timezone, limit }) => {
-            const win = parseTimeWindow(w || 'last 7 days', new Date(), timezone)
+            const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 7 days', new Date(), timezone), w)
             const best = client ? (await pickClient(client)).best : undefined
             const r = await dialogFriction({ from: win.from, to: win.to, clientId: best?.id, dialog, limit })
-            return json(`${app} friction${best ? ` for ${best.name}` : ''}${dialog ? `, dialog "${dialog}"` : ''} (${win.label}):`, r)
+            return json(`${app} friction${best ? ` for ${best.name}` : ''}${dialog ? `, dialog "${dialog}"` : ''} (${win.label}):`, { ...r, dialogs: r.dialogs.map(fewClients) })
         }
     )
     server.registerTool(
@@ -658,8 +669,9 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             annotations: { readOnlyHint: true },
         },
         async ({ when: w, timezone, max }) => {
-            const win = parseTimeWindow(w || 'last 7 days', new Date(), timezone)
-            return json(`${app}: top pains (${win.label}):`, await topPains({ from: win.from, to: win.to, max }))
+            const win = (await import('../core/analysishistory.ts')).completeDayWindow(parseTimeWindow(w || 'last 7 days', new Date(), timezone), w)
+            const pains = await topPains({ from: win.from, to: win.to, max })
+            return json(`${app}: top pains (${win.label}):`, { ...pains, pains: pains.pains.map((p) => ({ ...p, clients_hit_count: p.clients_hit.length, clients_hit: p.clients_hit.slice(0, CLIENT_EXAMPLES) })) })
         }
     )
     server.registerTool(

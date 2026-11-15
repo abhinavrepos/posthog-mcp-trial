@@ -1,8 +1,8 @@
 // Claude Code cuts instructions at 2,048 characters. Keep privacy first.
+import { P } from '../core/props.ts'
 import { appEvents } from '../core/appevents.ts'
 import { anonFor } from '../core/anonymise.ts'
 import { config, posthogMcpActive } from '../core/config.ts'
-import { P } from '../core/props.ts'
 import { surveyToolNames } from './surveytools.ts'
 import { dashboardToolNames } from './dashboardtools.ts'
 import type { SurveyRole, DashboardRole } from '../service/access.ts'
@@ -20,10 +20,9 @@ export function serverInstructions(withPosthog = posthogMcpActive(), surveyRole:
     return `${privacy}Replays are private: never call PostHog's session-recording-*, query-session-recordings-list or vision-* tools. Use get_replay_link; give the person the link, never view replay content.
 
 Lens (${config.mcp.name}) = ${app} clients/users, tasks and flows, trades, dialogs/buttons, sessions, Jira tickets, releases, client risk and app errors.
-${withPosthog ? `Use PostHog's server (posthog) for generic analytics, trends, funnels, retention, insights, PostHog dashboards, flags, experiments, cohorts, annotations, actions, error issues, exports, SDK docs and raw SQL (execute-sql).
-PostHog's one tool, exec, takes a command string; call Lens tools directly with JSON, never via exec.
-In PostHog SQL the client is ${P.client}.
-` : 'Call Lens tools directly with JSON arguments. For other questions, say this server does not cover them.\n'}
+${withPosthog ? `Use ${config.posthog.mcpViaLens && posthogMcpActive() ? 'posthog_exec in Lens' : "PostHog's server"} for trends, funnels, retention, insights, PostHog dashboards, flags, experiments, annotations, error-tracking admin, docs and SQL (execute-sql). It takes a command string. Person lists, session lookups, error investigation, messaging and surveys are refused; use Lens tools below. In PostHog SQL the client is ${P.client}.
+` : ''}Call Lens tools directly with JSON arguments.
+
 A client is ${client}, not a person or cohort.
 Lens tools:
 - client name/id/email: resolve_client; recent problems: find_client_incidents

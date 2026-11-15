@@ -102,7 +102,7 @@ test('PostHog JSON text results scrub non-email distinct ids and financial prope
     assert.deepEqual(safetyWith({ distribution: { 'Jane Smith': 2, 'Jane Smith 250000': 3 } }, ['Jane Smith', 'Jane Smith 250000']), { distribution: { '[person]': 5 } })
 })
 
-test('PostHog filter mode scrubs JSON and SSE analytics results while off mode stays explicit', async t => {
+test('PostHog filter mode scrubs JSON and SSE analytics results even with anonymisation off', async t => {
     const { Readable, Writable } = await import('node:stream')
     const { handlePosthogMcp } = await import('../src/mcp/posthog-proxy.ts')
     const payload = { jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: JSON.stringify({ columns: ['distinct_id', 'notional'], results: [['not-in-history', 250000]] }) }] } }
@@ -111,7 +111,7 @@ test('PostHog filter mode scrubs JSON and SSE analytics results while off mode s
         ? new Response(sse ? `data: ${JSON.stringify(payload)}\n\n` : JSON.stringify(payload), { headers: { 'content-type': sse ? 'text/event-stream' : 'application/json' } })
         : Response.json({ columns: ['id', 'name'], results: [] }))
     const invoke = async () => {
-        const req = Object.assign(Readable.from([JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'exec', arguments: { command: 'call execute-sql {}' } } })]), { method: 'POST', url: '/', headers: { authorization: 'Bearer test' } })
+        const req = Object.assign(Readable.from([JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'exec', arguments: { command: 'call query-trends {}' } } })]), { method: 'POST', url: '/', headers: { authorization: 'Bearer test' } })
         let output = ''
         const res = Object.assign(new Writable({ write(chunk, _encoding, cb) { output += chunk.toString(); cb() } }), { writeHead() {}, setHeader() {} })
         await handlePosthogMcp(req as never, res as never, { url: 'https://hog.example/mcp', apiKey: 'test', token: 'test', name: 'lens', enabled: true })
@@ -125,7 +125,10 @@ test('PostHog filter mode scrubs JSON and SSE analytics results while off mode s
             assert.match(out, /\[person\]/)
         }
         setAnonymise({ on: true, posthog: 'off' })
-        assert.match(await invoke(), /not-in-history/)
+        const off = await invoke()
+        assert.doesNotMatch(off, /not-in-history|250000/)
+        assert.match(off, /\[person\]/)
+        assert.match(off, /<amount>/)
     } finally { setAnonymise({ on: false, posthog: 'block' }) }
 })
 

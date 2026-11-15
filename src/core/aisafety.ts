@@ -14,10 +14,36 @@ export function staffEmails(): Set<string> {
     }
     return emails
 }
+const LOCAL = /[\p{L}\p{N}._%+-]/u
+// local@domain.tld inside one token: the local part is the run of address characters before each @ (found by
+// walking back, never a regex anchored at the end), the domain must hold a dot. Staff addresses stay.
+function maskEmailsIn(token: string, staff: Set<string>): string {
+    const parts = token.split('@'), out = [parts[0]!]
+    for (let i = 1; i < parts.length; i++) {
+        const prev = out[out.length - 1]!
+        // Walk back by whole characters: a letter outside the BMP (𐐀) is two UTF-16 units.
+        let j = prev.length
+        while (j > 0) {
+            const k = j >= 2 && /[\uDC00-\uDFFF]/.test(prev[j - 1]!) && /[\uD800-\uDBFF]/.test(prev[j - 2]!) ? j - 2 : j - 1
+            if (!LOCAL.test(prev.slice(k, j))) break
+            j = k
+        }
+        const domain = /^[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/u.exec(parts[i]!)
+        if (j < prev.length && domain) {
+            const email = `${prev.slice(j)}@${domain[0]}`
+            out[out.length - 1] = prev.slice(0, j) + (staff.has(email.toLowerCase()) ? email : '[person]') + parts[i]!.slice(domain[0].length)
+        } else out.push(parts[i]!)
+    }
+    return out.join('@')
+}
+
 export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string>()): T {
     tokens = tokens.filter(t => !staff.has(t.toLowerCase()))
     const sep = config.properties.distinctIdSeparator
     const text = (s: string): string => {
+        // The private-use characters this pass uses as placeholders mean nothing in real text: drop them,
+        // so input cannot forge a placeholder.
+        s = s.replace(/[\uE000-\uE003]/g, '')
         try {
             const parsed = JSON.parse(s)
             if (parsed && typeof parsed === 'object') return JSON.stringify(walk(parsed))
@@ -30,13 +56,18 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
         })
         s = s.replace(/https?:\/\/[^\s<>"'`]+/g, url => /\/replay\//.test(url) && (url.includes('@') || !!sep && url.includes(sep) || scrubWith(tokens, url) !== url) ? `${config.service.publicUrl}/replays` : url)
         s = s.replace(/[^\s<>"'`]+/g, t => sep && t.includes(sep) && t.split(sep).length >= 2 && t.split(sep).every(Boolean) ? '[person]' : t)
-        s = s.replace(/[\p{L}\p{N}._%+-]+@[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+/gu, e => staff.has(e.toLowerCase()) ? e : '[person]')
+        // Emails in linear time: one regex over the text retries from every position of a long run without an
+        // @ (quadratic: 200,000 digits took minutes). Only tokens with an @ are scanned, split at each @.
+        s = s.replace(/[^\s<>"'`]+/g, (t) => (t.includes('@') ? maskEmailsIn(t, staff) : t))
         // Identifiers are not cash values: URLs (replay links, already checked for identities above),
         // UUIDs (session ids such as 019b55aa-...-123456789012) and release versions keep their digits,
         // or the links break and the ids cannot be passed to the next tool.
         const versions: string[] = []
         const keep = (id: string) => { versions.push(id); return `\uE000v${versions.length - 1}\uE001` }
-        s = s.replace(/https?:\/\/[^\s<>"'`]+/g, keep)
+        // A link keeps its path, but query values that look like money are masked (?notional=250000);
+        // id-like parameters (t, id, session, version...) keep their digits so links still work.
+        s = s.replace(/https?:\/\/[^\s<>"'`]+/g, (url) => keep(url.replace(/([?&])([^=&#]+)=([^&#]*)/g, (m, sep, k, v) =>
+            /(?:^|_)(?:id|uuid|t|ts|time|session|sid|page|p|v|ver|version)$/i.test(k) || maskAmounts(v) === v ? m : `${sep}${k}=<amount>`)))
         s = s.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, keep)
         s = s.replace(/\b\d{1,2}(?:\.\d{1,2}){2}\b/g, keep)
         return maskAmounts(s.split(/(\[person\]|<amount>|\[withheld\]|\[client\])/g).map((part, i) => i % 2 ? part : scrubWith(tokens, part)).join('')).replace(/\uE000v(\d+)\uE001/g, (_, index) => versions[Number(index)] || '')
@@ -44,9 +75,21 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
     const walk = (v: unknown, key = ''): unknown => {
         if (/^(user|user_?id|distinct_?id|user_?email|person_?id)$/i.test(key.split('.').at(-1) || '') && v != null) return '[person]'
         if (key === 'owner' && typeof v === 'string' && staff.has(v.toLowerCase())) return v
-        if (typeof v === 'string' && /(?:notional|amount|cash|balance|price|value)/i.test(key) && /^[-+]?\d[\d., ]*$/.test(v)) return '<amount>'
+        // Under a money-like field everything with a digit is money, nested values included ({"amount":"250k"},
+        // {"amount":{"major":250,"zeros":3}}).
+        // "value" alone is too generic ({"property":"browser","value":"Chrome 120"}): only a bare number there.
+        const field = key.split('.').at(-1) || ''   // properties.value, person.properties.amount
+        if (/^value$/i.test(field) && (typeof v === 'number' || typeof v === 'string' && /^[-+]?\d[\d., ]*$/.test(v))) return '<amount>'
+        if (/(?:notional|amount|cash|balance|price)/i.test(field)) {
+            // Numbers and digit-bearing text are money; anything else still goes through walk(), so identity
+            // fields nested under a money field ({"amount":{"user_id":...}}) are masked as people.
+            const money = (x: unknown, k = key): unknown => typeof x === 'number' ? '<amount>' : typeof x === 'string' ? (/\d/.test(x) ? '<amount>' : walk(x, k))
+                : Array.isArray(x) ? x.map((y) => money(y, k)) : x && typeof x === 'object'
+                    ? Object.fromEntries(Object.entries(x).map(([n, y]) => [text(n), /^(user|user_?id|distinct_?id|user_?email|person_?id|users)$/i.test(n) ? walk(y, n) : money(y, n)])) : x
+            if (typeof v === 'string' || typeof v === 'number' || (v && typeof v === 'object')) return money(v)
+        }
         if (typeof v === 'string') return text(v)
-        if (typeof v === 'number' && /(?:notional|amount|cash|balance|price|value)/i.test(key)) return '<amount>'
+        if (typeof v === 'number' && /(?:notional|amount|cash|balance|price|value)/i.test(field)) return '<amount>'
         if (/^users$/i.test(key) && Array.isArray(v)) return v.map(x => typeof x === 'string' || typeof x === 'number' ? '[person]' : walk(x))
         if (Array.isArray(v)) return v.map(x => walk(x, key))
         if (v && typeof v === 'object') {

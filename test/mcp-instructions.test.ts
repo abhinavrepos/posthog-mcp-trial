@@ -77,11 +77,12 @@ describe('instructions for using this server next to PostHog MCP', () => {
     test('the overlapping tools say which PostHog tools not to use instead', async () => {
         const tools = Object.fromEntries((await client.listTools()).tools.map((t) => [t.name, t.description || '']))
         assert.match(tools.get_replay_link, /never use PostHog's session recording or Replay Vision tools/)
-        for (const name of ['find_client_incidents', 'error_blast_radius', 'screen_usage', 'client_feedback', 'describe_app_events'])
-            assert.match(tools[name], /Use PostHog's exec instead for/, name)
+        for (const name of ['find_client_incidents', 'error_blast_radius', 'describe_app_events'])
+            assert.match(tools[name], /Use the Lens tool/, name)
+        for (const name of ['screen_usage', 'client_feedback']) assert.match(tools[name], /Use PostHog's exec instead for generic/, name)
     })
     test("every tool says it is called directly, not through PostHog's exec tool", async () => {
         for (const t of (await client.listTools()).tools) assert.match(t.description || '', /never through PostHog's exec tool/, t.name)
-        assert.match(client.getInstructions() || '', /PostHog's one tool, exec, takes a command string/)
+        assert.match(client.getInstructions() || '', /It takes a command string/)
     })
 })

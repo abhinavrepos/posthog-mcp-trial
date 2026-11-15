@@ -28,7 +28,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 /** Anyone with some use of Lens: a clip, survey or dashboard role. */
 export const canConnect = (v: Viewer) => can(v.role, 'watch') || canSurvey(v.surveys, 'view') || canDashboard(v.dashboards, 'view')
 
-/** PostHog's MCP server is reachable through Lens (/posthog-mcp), with the same personal token. */
+/** PostHog commands are included in the Lens server when its upstream is configured. */
 const posthogOn = () => config.posthog.mcpViaLens && posthogMcpActive()
 
 export async function handleConnect(req: IncomingMessage, res: ServerResponse, url: URL, v: Viewer): Promise<boolean> {
@@ -45,7 +45,7 @@ export async function handleConnect(req: IncomingMessage, res: ServerResponse, u
         const body = await readJson(req)
         try {
             const t = createMcpToken(v, String(body.label || ''))
-            return (json(res, 200, { ...t, url: `${chatUrl()}/mcp`, posthog_url: posthogOn() ? `${chatUrl()}/posthog-mcp` : null, name: config.mcp.name }), true)
+            return (json(res, 200, { ...t, url: `${chatUrl()}/mcp`, posthog_url: null, name: config.mcp.name }), true)
         } catch (e) {
             return (json(res, 400, { error: (e as Error).message }), true)
         }
@@ -118,10 +118,10 @@ main h1{font-size:24px}
 <body>${headerHtml(v, 'Chat')}<main class="narrow">
 <div class="page-head"><h1>Connect GitHub Copilot</h1></div><div class="card">
 <div class="policy" role="note" aria-labelledby="policy-title"><p id="policy-title"><b>Approved apps only.</b></p>${policy.apps.length === 1 && policy.apps[0] === DEFAULT_CHAT_APPS[0] ? '<p>Use GitHub Copilot with your ION Microsoft enterprise account.</p>' : `<p>Connect your key only to:</p><ul>${policy.apps.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`}${policy.note ? `<p>${esc(policy.note)}</p>` : ''}</div>${anonymiseOn() ? '<div class="info" role="note"><p><b>Client names are hidden from AI.</b> Copilot sees each client\'s codename, never its name or code. Ask about a client by its codename, and do not type client names into chat. <a href="/replays/codenames">Look up codenames</a>.</p></div>' : ''}
-<p class="small muted">Your key is shown once and inherits your Lens access.${canSurvey(surveyRole, 'edit') ? ' You can create, edit and stop surveys in Copilot; launch them from Surveys.' : role ? ` Survey access: ${esc(role)}.` : ''}</p>
+<p class="small muted">Your key is shown once and inherits your Lens access.${ph ? ' PostHog commands are included in this one Lens server.' : ''}${canSurvey(surveyRole, 'edit') ? ' You can create, edit and stop surveys in Copilot; launch them from Surveys.' : role ? ` Survey access: ${esc(role)}.` : ''}</p>
 <ol class="steps">
 <li><div>Make your personal key</div><button type="button" id="make">Connect Copilot</button> <span id="msg" class="small" aria-live="polite"></span></li>
-<li>Open Copilot settings.<div>MCP Servers → Add Server → + Add Custom server</div><div id="add"><span class="small muted">Create your key above to see the fields to copy${ph ? ", once per server" : ""}.</span></div></li>
+<li>Open Copilot settings.<div>MCP Servers → Add Server → + Add Custom server</div><div id="add"><span class="small muted">Create your key above to see the fields to copy.</span></div></li>
 <li>Start a new chat: <span>“Which clients need attention this month?”</span></li>
 </ol>
 </div>
@@ -142,7 +142,7 @@ const keysPg=makePager({mount:$('keys-pager'),noun:'keys',size:25,draw:slice=>{c
     if(!t.revoked_at){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Revoke';b.setAttribute('aria-label','Revoke '+t.label+' key made '+when(t.created_at));b.onclick=async()=>{if(!confirm('Revoke "'+t.label+'"? Chat with it stops at once.'))return;b.disabled=true;try{await api('/replays/connect/api/tokens/'+t.id,{method:'DELETE'});await load();message('keys-msg','Key revoked.')}catch(e){message('keys-msg',e.message+' Try revoking again.',true)}finally{b.disabled=false;if(!b.isConnected)($('keys-pager').querySelector('button:not(:disabled)')||$('make')).focus()}};cell(tr,b)}else cell(tr,'');tb.appendChild(tr)})}})
 async function load(){try{const d=await api('/replays/connect/api/tokens');const gone=d.tokens.filter(t=>t.revoked_at);keysPg.set(d.tokens.filter(t=>!t.revoked_at),true);$('revoked-box').hidden=!gone.length;$('revoked-sum').textContent='Revoked keys ('+gone.length+')';$('revoked').innerHTML='';gone.slice(0,50).forEach(t=>$('revoked').appendChild(el('li',null,t.label+' · made '+when(t.created_at)+' · revoked '+when(t.revoked_at))))}catch(e){message('keys-msg',e.message+' Reload the page to try again.',true)}}
 $('make').onclick=async()=>{$('make').disabled=true;message('msg','Making your key…');try{const t=await api('/replays/connect/api/tokens',{method:'POST',body:JSON.stringify({label:'GitHub Copilot'})})
-  const list=[[t.name,t.url,'Server 1: ${APP_NAME}']];if(t.posthog_url)list.push(['posthog',t.posthog_url,'Server 2: PostHog'])
+  const list=[[t.name,t.url,'${APP_NAME}']]
   const copyBtn=val=>{const b=el('button',{className:'ghost',type:'button'},'Copy');b.onclick=async()=>{b.disabled=true;try{await navigator.clipboard.writeText(val);b.textContent='Copied';message('msg','Copied.')}catch{b.textContent='Select and copy';message('msg','Copy failed. Select the value and copy it.',true)}finally{b.disabled=false};setTimeout(()=>b.textContent='Copy',1500)};return b}
   const field=(box,label,val)=>{const r=el('div',{className:'f'});r.appendChild(el('span',null,label));r.appendChild(el('code',null,val));const copy=copyBtn(val);copy.setAttribute('aria-label','Copy '+label+' for '+box.querySelector('h3').textContent);r.appendChild(copy);box.appendChild(r)}
   const add=$('add');add.innerHTML='';add.className=''

@@ -11,7 +11,7 @@ const { serverInstructions, INSTRUCTIONS_LIMIT } = await import('../src/mcp/inst
 const { mcpClientConfig, LENS_SERVER, POSTHOG_SERVER } = await import('../src/mcp/client-config.ts')
 after(() => rmSync(dir, { recursive: true, force: true }))
 
-const posthog = { mcpUrl: 'https://mcp.example.com/mcp', mcpApiKey: 'phx_test' }
+const posthog = { mcpViaLens: false, mcpUrl: 'https://mcp.example.com/mcp', mcpApiKey: 'phx_test' }
 // Lens on this machine with node (stdio); the container case has its own test.
 const host = { container: false, port: 8080, token: '' }
 
@@ -43,7 +43,7 @@ describe('the two MCP switches', () => {
             const file = mcpClientConfig({ lensMcp: true, posthogMcp: true }, { ...posthog, mcpViaLens: true }, { container, port: 8099, token: 'lens-token' }).file
             // Lens itself: stdio with node on this machine, HTTP only in the container (no node outside it).
             assert.deepEqual(file.mcpServers[LENS_SERVER], container ? { type: 'http', url: 'http://127.0.0.1:8099/mcp', headers: { Authorization: 'Bearer lens-token' } } : { command: 'node', args: ['--disable-warning=ExperimentalWarning', '--import', 'tsx', 'src/mcp/stdio.ts'] })
-            assert.deepEqual(file.mcpServers[POSTHOG_SERVER], { type: 'http', url: 'http://127.0.0.1:8099/posthog-mcp', headers: { Authorization: 'Bearer lens-token' } })
+            assert.deepEqual(Object.keys(file.mcpServers), [LENS_SERVER])
             assert.ok(!JSON.stringify(file).includes(posthog.mcpApiKey))
         }
     })

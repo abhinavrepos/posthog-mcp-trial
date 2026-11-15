@@ -22,12 +22,13 @@ const DEFAULT_INFO: LensInfo = { app: 'the app', tools: ['get_replay_link'] }
 export function routingBlock(name: string, info: LensInfo = DEFAULT_INFO): string {
     const app = info.app
     return `Replays are private: use ${name}'s get_replay_link and give the person the link; never call session-recording-*, query-session-recordings-list or vision-* tools.
+Messaging (workflows-*, broadcasts-*), person lists (persons-*, query-*-actors, cohort membership changes), session lookups (heatmaps-events, logs-impact), error investigation (query-error-tracking-issue, query-error-tracking-issue-events, query-error-tracking-issues-list) and surveys are refused. Use discover_workflows/workflow_completion for app tasks, resolve_client/client_experience/client_signals for clients, session_story/find_client_incidents/find_silent_issues for sessions, error_blast_radius for errors and Lens survey tools for surveys.
 Use the Lens server (${name}) instead for a named ${app} client or user, trade/link id, ${app} dialog/screen/button, errors ${app} showed users, which clients or users an error hit, one session, Jira ticket, release outcome, "where do clients struggle" or "who is at risk", which clients stopped doing a task, how long a flow takes or which path people take${info.tools.includes('design_survey') ? `, and in-app surveys for ${app} users (making, stopping, answers; launching only on the Lens Surveys page)` : ''}. Call its tools directly with JSON arguments, never through exec.
-Use PostHog exec for generic product analytics and PostHog objects: trends, funnels, retention, insights, dashboards, feature flags, experiments, ${info.tools.includes('design_survey') ? '' : 'surveys, '}cohorts, annotations, actions/event definitions, error-tracking issue management, data warehouse/batch exports, docs/SDK help and raw SQL.`
+Use PostHog exec for generic product analytics and PostHog objects: trends, funnels, retention, insights, dashboards, feature flags, experiments, cohorts, annotations, actions/event definitions, error-tracking administration, data warehouse/batch exports, docs/SDK help and raw SQL.`
 }
 
 export function execRoutingLine(name: string, info: LensInfo = DEFAULT_INFO): string {
-    return `Not for ${info.app} clients or users, trade ids, ${info.app} screens or the errors it shows users, client task maps, flow times and paths, single sessions, replays, Jira tickets${info.tools.includes('design_survey') ? ', release outcomes or in-app surveys' : ' or release outcomes'}: use the ${name} server's tools (${info.tools.join(', ')}) for those.`
+    return `Replays, session/user lookups, error investigation, person lists, messaging and surveys are refused; use get_replay_link, session_story, find_client_incidents, find_silent_issues, error_blast_radius, resolve_client, client_experience, client_signals, discover_workflows, workflow_completion and Lens survey tools. Not for ${info.app} clients or users, trade ids, ${info.app} screens or the errors it shows users, client task maps, flow times and paths, single sessions, replays, Jira tickets${info.tools.includes('design_survey') ? ', release outcomes or in-app surveys' : ' or release outcomes'}: use the ${name} server's tools (${info.tools.join(', ')}) for those.`
 }
 
 type Rpc = Record<string, any>
@@ -57,17 +58,33 @@ export function rewriteSseLine(line: string, name = 'lens', info: LensInfo = DEF
     return `${match[1]}${JSON.stringify(rewriteResponse(value, name, info))}${match[3]}`
 }
 
-/** exec's command language uses `call <tool> ...`; reject all replay tool references conservatively. */
-export function replayRefusal(value: unknown, name = 'lens'): Rpc | undefined {
+/** Check each call separately so lookups remain available and chained calls cannot bypass policy. */
+export function commandRefusal(value: unknown, name = 'lens'): Rpc | undefined {
     if (!object(value) || value.method !== 'tools/call' || value.params?.name !== 'exec') return
     const command = value.params.arguments?.command
     if (typeof command !== 'string') return
-    if (/\b(?:session-recording[\w-]*|query-session-recordings-list|vision-[\w-]+)\b/i.test(command))
-        return { jsonrpc: '2.0', id: value.id ?? null, error: { code: -32602, message: `Replays are private. Use the ${name} server's get_replay_link and give the person the link. PostHog replay and vision commands are refused.` } }
-    // In-app surveys are made, launched and read only in Lens, under its survey roles.
-    if (/\bsurvey[\w-]*/i.test(command) && /\bcall\b/i.test(command))
-        return { jsonrpc: '2.0', id: value.id ?? null, error: { code: -32602, message: `In-app surveys are managed only in Lens: use the ${name} server's survey tools (list_surveys, survey_results, design_survey, save_survey, stop_survey), which follow each person's survey role; launching is only on the Lens Surveys page. PostHog survey commands are refused.` } }
+    for (const part of command.split(/[\n;&|]+/)) {
+        const match = /^\s*call\s+(?:--[\w-]+\s+)*([^\s]+)(?:\s|$)/i.exec(part)
+        if (!match) continue
+        // exec also accepts namespaced names (posthog:persons-list); a quoted name is the same command.
+        const tool = match[1].replace(/^["'`]|["'`]$/g, '').replace(/^posthog:/i, '').toLowerCase()
+        let message: string | undefined
+        if (/^(?:session-recording[\w-]*|query-session-recordings-list|vision-[\w-]+)$/.test(tool))
+            message = 'Replays are private. Use Lens get_replay_link for a link or session_story for the event timeline.'
+        else if (/^(?:heatmaps-events|logs-impact)$/.test(tool))
+            message = 'Session and user lookups go through Lens: session_story, find_client_incidents or find_silent_issues.'
+        else if (/^query-error-tracking-(?:issue|issue-events|issues-list)$/.test(tool))
+            message = 'Use Lens error_blast_radius (which clients and users an error hit, trend, releases) or find_client_incidents.'
+        else if (/^(?:persons-[\w-]*|query-[\w-]+-actors|cohorts-add-persons-to-static-cohort[\w-]*|cohorts-rm-person-from-static-cohort[\w-]*)$/.test(tool))
+            message = 'Client-user identities and person lists are private. Lens answers per client (resolve_client, client_experience, client_signals) without naming people.'
+        else if (/^(?:workflows-|broadcasts-)[\w-]*$/.test(tool))
+            message = "Messaging users is disabled. Lens's discover_workflows and workflow_completion measure app tasks; they never send anything."
+        else if (/^survey[\w-]*$/.test(tool))
+            message = `In-app surveys are managed only in Lens: use the ${name} server's survey tools (list_surveys, survey_results, design_survey, save_survey, stop_survey), which follow each person's survey role; launching is only on the Lens Surveys page. PostHog survey commands are refused.`
+        if (message) return { jsonrpc: '2.0', id: value.id ?? null, error: { code: -32602, message: 'PostHog command refused. ' + message } }
+    }
 }
+export const replayRefusal = commandRefusal
 
 // ------------------------------------------------------------------ client anonymisation (src/core/anonymise.ts)
 // block (the default): exec may look up tools (help, tools, search, info, schema) and search PostHog's docs;
@@ -94,6 +111,10 @@ export function anonRefusal(value: unknown, name = 'lens', mode: 'block' | 'filt
             return { value }
         }
         if (namesClient(command)) return refuse(refusalText())
+        // Raw SQL can return client names in forms no filter recognises (renamed columns, encodings), so while
+        // client anonymisation is on it is refused in filter mode too, as in block mode (owner's decision).
+        if (/(?:^|[\n;&|])\s*call\s+(?:--[\w-]+\s+)*["'`]?(?:posthog:)?execute-sql\b/i.test(command))
+            return refuse(`Raw SQL is switched off while client anonymisation is on in Lens. Use PostHog's aggregate queries (trends, funnels, retention) or the ${name} server's tools.`)
         return { value: { ...value, params: { ...value.params, arguments: { ...value.params.arguments, command: revealCodenames(command) } } } }
     }
     const g = guardRequest(value, 'posthog_refused')
@@ -149,18 +170,28 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
     const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000)
     const onClose = () => controller.abort()
     res.once('close', onClose)
-    // Client anonymisation (Admin → Client privacy for AI): requests checked, every answer cleaned.
+    // User identities and amounts are always cleaned; client anonymisation adds its own guard.
     // Checked again for every message: a stream opened before an admin turned it on is cleaned from then on.
     const anon = anonFor('posthog')
     let tokens: string[] = [], staff = new Set<string>()
     const cleanText = (v: string) => safetyWith(v, tokens, staff)
-    const clean = (v: unknown) => (anonFor('posthog') ? guardResponse(safetyWith(v, tokens, staff), 'posthog_cleaned') : v)
+    const clean = (v: unknown): unknown => {
+        if (Array.isArray(v)) return v.map(clean)
+        if (!object(v)) return v
+        // The safety pass handles answers, not protocol versions or request ids.
+        const safe = { ...v }
+        // Notifications (progress, log messages) carry text too: their params are cleaned like answers.
+        for (const key of ['result', 'error', 'params']) if (key in safe) {
+            const answer = safetyWith(safe[key], tokens, staff)
+            safe[key] = anonFor('posthog') ? guardResponse(answer, 'posthog_cleaned') : answer
+        }
+        return safe
+    }
     const out = (v: unknown) => clean(rewriteResponse(v, options.name, options.info))
     const sseLine = (line: string) => {
-        if (!anonFor('posthog')) return rewriteSseLine(line, options.name, options.info)
-        if (!line.startsWith('data:')) return cleanText(hideClients(line).text)
+        if (!line.startsWith('data:')) return cleanText(anonFor('posthog') ? hideClients(line).text : line)
         const m = /^(data: *)(.*?)(\r?)$/.exec(line)!
-        try { return `${m[1]}${JSON.stringify(out(JSON.parse(m[2])))}${m[3]}` } catch { return cleanText(hideClients(line).text) }
+        try { return `${m[1]}${JSON.stringify(out(JSON.parse(m[2])))}${m[3]}` } catch { return cleanText(anonFor('posthog') ? hideClients(line).text : line) }
     }
     try {
         tokens = await identityTokens(); staff = staffEmails()
@@ -174,7 +205,7 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
             try { value = JSON.parse(raw) } catch { return send(res, 400, { error: 'invalid JSON' }) }
             batch = Array.isArray(value)
             const allowed = (batch ? value as unknown[] : [value]).flatMap((item) => {
-                const refusal = replayRefusal(item, options.name)
+                const refusal = commandRefusal(item, options.name)
                 if (refusal) { refusals.push(refusal); return [] }
                 if (!anon) return [item]
                 const a = anonRefusal(item, options.name)
@@ -192,7 +223,7 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
         const url = new URL(options.url)
         // Preserve resume/query parameters without changing the configured upstream path.
         for (const [key, value] of new URL(req.url || '/', 'http://localhost').searchParams) url.searchParams.append(key, value)
-        const upstream = await fetch(url, { method: req.method, headers, body, signal: controller.signal, redirect: 'error' })
+        const upstream = await upstreamRequest(url, options.apiKey, { method: req.method, headers, body, signal: controller.signal })
         for (const name of headersToPass) {
             const value = upstream.headers.get(name)
             if (value) res.setHeader(name, value)
@@ -231,7 +262,7 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
                 output = JSON.stringify(refusals.length ? [...(Array.isArray(value) ? value : [value]), ...refusals] : value)
             } else if (refusals.length) {
                 return send(res, 200, refusals)
-            } else if (anonFor('posthog')) output = cleanText(hideClients(raw).text)
+            } else output = cleanText(anonFor('posthog') ? hideClients(raw).text : raw)
             res.writeHead(upstream.status)
             res.end(output)
         }
@@ -243,5 +274,57 @@ export async function handlePosthogMcp(req: IncomingMessage, res: ServerResponse
     } finally {
         clearTimeout(timer)
         res.off('close', onClose)
+    }
+}
+
+// Both entry points use the same credentials, redirect policy and transport.
+function upstreamRequest(url: string | URL, apiKey: string, init: RequestInit): Promise<Response> {
+    const headers = new Headers(init.headers)
+    headers.set('authorization', `Bearer ${apiKey}`)
+    return fetch(url, { ...init, headers, redirect: 'error' })
+}
+
+export async function posthogExec(command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
+    let call: unknown = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'exec', arguments: { command } } }
+    const refused = commandRefusal(call, options.name)
+    if (refused) return { isError: true, content: [{ type: 'text', text: refused.error.message }] }
+    if (anonFor('posthog')) {
+        await refreshRoster()
+        const a = anonRefusal(call, options.name)
+        if (a.refusal) return a.refusal.result
+        call = a.value
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000)
+    const headers = new Headers({ 'content-type': 'application/json', accept: 'application/json, text/event-stream' })
+    let session: string | null = null
+    const request = (body: unknown, method = 'POST', signal = controller.signal) => upstreamRequest(options.url, options.apiKey, { method, headers, body: method === 'POST' ? JSON.stringify(body) : undefined, signal })
+    const read = async (res: Response, id: number): Promise<Rpc> => {
+        if (!res.ok) throw new Error('PostHog MCP upstream failed')
+        const raw = res.body ? await readBody(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), 5_000_000) : ''
+        const values = res.headers.get('content-type')?.includes('text/event-stream')
+            ? raw.split('\n').filter(l => l.startsWith('data:')).flatMap(l => { try { return [JSON.parse(l.slice(5))] } catch { return [] } })
+            : [JSON.parse(raw)]
+        const reply = values.flat().find(v => v?.id === id)
+        if (!reply || reply.error) throw new Error('PostHog MCP upstream failed')
+        return reply.result
+    }
+    try {
+        const initialized = await request({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: options.name, version: '1' } } })
+        session = initialized.headers.get('mcp-session-id')
+        if (session) headers.set('mcp-session-id', session)
+        const init = await read(initialized, 1)
+        headers.set('mcp-protocol-version', init.protocolVersion)
+        const notified = await request({ jsonrpc: '2.0', method: 'notifications/initialized' })
+        await notified.body?.cancel()
+        return await read(await request(call), 2)
+    } catch {
+        throw new Error(controller.signal.aborted ? 'PostHog MCP timed out' : 'PostHog MCP upstream failed')
+    } finally {
+        clearTimeout(timer)
+        // Sessions belong to this call only, including failed calls.
+        if (session) {
+            try { const res = await request(undefined, 'DELETE', AbortSignal.timeout(2_000)); await res.body?.cancel() } catch { /* upstream may not support session deletion */ }
+        }
     }
 }

@@ -252,6 +252,22 @@ function acronyms(name: string): string[] {
     const a = words.map((w) => w[0].toUpperCase()).join('')
     return a.length >= 3 && /^[A-Z]+$/.test(a) && !COMMON.has(a.toLowerCase()) ? [a] : []
 }
+// Words Lens's own answers and people's questions use all the time ("clients", "payment", "export"). Written
+// exactly, such a word is left alone even when a client's name contains it ("Summit Payments", "Client 100"):
+// otherwise every "payments" in an answer became a codename and "Which clients are at risk?" was refused.
+// The client is still found by its full name, aliases and initials, and a misspelling of the word ("Northrn"
+// for "Northern Trust") is still hidden.
+const VOCABULARY = new Set(['client', 'clients', 'customer', 'customers', 'account', 'accounts', 'payment', 'payments', 'settlement', 'settlements',
+    'pension', 'pensions', 'treasury', 'hedge', 'hedging', 'accounting', 'export', 'exports', 'import', 'imports', 'report', 'reports', 'reporting',
+    'dialog', 'dialogs', 'dialogue', 'screen', 'screens', 'action', 'actions', 'session', 'sessions', 'replay', 'replays', 'workflow', 'workflows',
+    'signal', 'signals', 'health', 'healthy', 'warning', 'warnings', 'attention', 'friction', 'failure', 'failures', 'errors', 'change', 'changes',
+    'people', 'person', 'users', 'usage', 'leaving', 'renewal', 'renewed', 'stayed', 'contracted', 'outcome', 'outcomes', 'portfolio', 'summary',
+    'version', 'release', 'releases', 'update', 'updated', 'deleted', 'created', 'search', 'filter', 'limits', 'limit', 'counterparty', 'counterparties',
+    'instrument', 'instruments', 'position', 'positions', 'market', 'valuation', 'journal', 'journals', 'ledger', 'entries', 'approval', 'approvals',
+    'workbench', 'security', 'transfer', 'transfers', 'balance', 'balances', 'forecast', 'forecasts', 'liquidity', 'currency', 'currencies', 'rates',
+    'interest', 'derivative', 'derivatives', 'compliance', 'invoice', 'invoices', 'vendor', 'vendors', 'banking', 'statement', 'statements',
+    'reconciliation', 'business', 'service', 'services', 'support', 'success', 'growth', 'network', 'digital', 'advisors', 'advisory', 'consulting',
+    'pacific', 'atlantic', 'northern', 'southern', 'eastern', 'western', 'central', 'united', 'standard', 'premier', 'royal', 'first', 'second'])
 /** Words of 6 letters or more that point to one company (not "Treasury"): matched with one typo too. */
 function distinctive(names: string[]): string[] {
     const out = new Set<string>()
@@ -353,6 +369,7 @@ export function hideClients(text: string): { text: string; n: number } {
         // Misspelt distinctive words, one letter off ("Nortwind", "Northwnid").
         if (m.fuzzy.size) out = out.replace(/(?<![\p{L}\p{N}])\p{L}{5,}(?![\p{L}\p{N}])/gu, (word) => {
             const w = word.toLowerCase()
+            if (VOCABULARY.has(w)) return word
             if (m.fuzzy.has(w)) { n++; const r = m.fuzzy.get(w)!; return inUrl ? encodeURIComponent(slug(r.codename)) : r.codename }
             for (const k of dels(w)) for (const d of m.deletions.get(k) || []) if (withinOne(w, d)) { const r = m.fuzzy.get(d)!; n++; return inUrl ? encodeURIComponent(slug(r.codename)) : r.codename }
             return word

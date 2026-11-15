@@ -220,17 +220,18 @@ describe('PostHog MCP proxy', () => {
     test('filter mode: codenames become codes in the query, names are refused, every answer is cleaned (JSON and SSE)', async (t) => {
         A.setAnonymise({ on: true, posthog: 'filter' })
         await refreshRoster(0, { knownClients: async () => [] })
-        assert.equal((anonRefusal(exec(`call execute-sql {"query":"select * from events where client='${cn('QZX901')}'"}`)).value as any).params.arguments.command, `call execute-sql {"query":"select * from events where client='QZX901'"}`)
-        assert.ok(anonRefusal(exec(`call execute-sql {"query":"select 'Zorblax'"}`)).refusal)
+        assert.equal((anonRefusal(exec(`call query-trends {"filter":"client='${cn('QZX901')}'"}`)).value as any).params.arguments.command, `call query-trends {"filter":"client='QZX901'"}`)
+        assert.ok(anonRefusal(exec(`call query-trends {"filter":"'Zorblax'"}`)).refusal)
+        assert.ok(anonRefusal(exec('call execute-sql {"query":"select 1"}')).refusal)   // raw SQL refused while anonymisation is on
         const rows = { jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: JSON.stringify({ results: [['QZX901', 'Zorblax Treasury', 12], ['VLT', 'VOLTRINO BANK', 3]], columns: ['client_id', 'client_name', 'n'] }) }] } }
         const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify(rows), { headers: { 'content-type': 'application/json' } }))
-        const res = await invoke(exec('call execute-sql {"query":"select 1"}'))
+        const res = await invoke(exec('call query-trends {}'))
         assert.deepEqual(leaks(res.text), [], res.text)
         fetchMock.mock.mockImplementation(async () => new Response(`event: message\ndata: ${JSON.stringify(rows)}\n\ndata: not json Kwambe Fintrust\n\n`, { headers: { 'content-type': 'text/event-stream' } }))
-        const sse = await invoke(exec('call execute-sql {"query":"select 1"}'))
+        const sse = await invoke(exec('call query-trends {}'))
         assert.deepEqual(leaks(sse.text), [], sse.text)
         fetchMock.mock.mockImplementation(async () => new Response('upstream error for Zorblax Treasury', { status: 500, headers: { 'content-type': 'text/plain' } }))
-        assert.deepEqual(leaks((await invoke(exec('call execute-sql {}'))).text), [])
+        assert.deepEqual(leaks((await invoke(exec('call query-trends {}'))).text), [])
         A.setAnonymise({ posthog: 'block' })
         const blocked = await invoke(exec('call execute-sql {}'))
         assert.match(blocked.text, /switched off while client anonymisation is on/)

@@ -112,7 +112,7 @@ class Capture extends Writable {
  get text() { return Buffer.concat(this.chunks).toString('utf8') }
 }
 async function invoke() {
- const req=Object.assign(Readable.from([JSON.stringify(exec('call execute-sql {}'))]),{method:'POST',url:'/posthog-mcp',headers:{authorization:'Bearer t','content-type':'application/json'}})
+ const req=Object.assign(Readable.from([JSON.stringify(exec('call query-trends {}'))]),{method:'POST',url:'/posthog-mcp',headers:{authorization:'Bearer t','content-type':'application/json'}})
  const res=new Capture()
  await P.handlePosthogMcp(req as never,res as never,{url:'http://localhost/mcp',apiKey:'k',token:'t',name:'lens',enabled:true})
  return res.text
@@ -186,6 +186,22 @@ for (const [input, reason] of [
  ['K.F.H.', 'Automatic initials are documented as contiguous capitals (KFH); dotted aliases require configuration.'],
  ['K F H', 'Automatic initials are documented as contiguous capitals (KFH); spaced aliases require configuration.'],
 ] as const) test(`round 2 known limit: ${input}`, t => t.skip(reason))
+round2Test('a client named with an everyday word does not swallow that word', () => {
+ // Found at scale: clients named "Client 100" or "Summit Payments" made every "clients"/"payments" in an answer a
+ // codename (breaking JSON keys) and refused "Which clients are at risk?". Their full names stay hidden.
+ A.syncClients([{ id: 'RCL1', name: 'Client 100' }, { id: 'RSP2', name: 'Summit Payments' }])
+ const text = '{"client": "C06", "clients": 9, "payment": "Save", "headline": "9 clients need attention; payments slower"}'
+ assert.equal(G.guardResponse(text), text)
+ assert.equal(G.guardRequest(call({ question: 'Which clients are at risk of leaving?' })).answer, undefined)
+ hidden('Summit Payments', G.guardResponse('Summit Payments is slower'))
+ hidden('Client 100', G.guardResponse('Client 100 is slower'))
+ hidden('Summitt', G.guardResponse('Summitt is slower'))
+ // A misspelt name whose words are everyday words is still hidden.
+ A.syncClients([{ id: 'RNT3', name: 'Northern Trust' }])
+ hidden('Northrn Trust', G.guardResponse('Northrn Trust is leaving'), 'Northrn')
+ assert.ok(G.guardRequest(call({ note: 'Northrn Trust is leaving' })).answer)
+ assert.equal(G.guardResponse('northern region, 9 clients'), 'northern region, 9 clients')
+})
 round2Test('capital initials and Title-case common codes', () => {
  round2Fixture()
  for (const input of ['KFH', 'BETA', 'Beta']) hidden(input, G.guardResponse(input))
