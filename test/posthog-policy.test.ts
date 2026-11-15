@@ -207,7 +207,7 @@ test('posthog_exec times out and cleans up sessions on upstream errors', async t
         if (body.method === 'notifications/initialized') return new Response(null, { status: 202 })
         return new Promise<Response>((_resolve, reject) => { init.signal!.addEventListener('abort', () => reject(new Error('secret upstream detail')), { once: true }) })
     })
-    await assert.rejects(posthogExec('call query-trends', { ...options, timeoutMs: 25 }), { message: 'PostHog MCP timed out' })
+    await assert.rejects(posthogExec('call query-trends', { ...options, timeoutMs: 25 }), /PostHog query timed out:.*aggregate_events.*continues as a job/)
     assert.equal(deletes, 1)
 })
 

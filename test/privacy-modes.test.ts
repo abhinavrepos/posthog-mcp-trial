@@ -92,6 +92,11 @@ test('PostHog JSON, SSE and errors honor every mode; SQL is private-only refused
         A.setAnonymise({mode,posthog:'filter'})
         for(sse of [false,true]) for(error of [false,true]) {
             const text=await proxy('call query-trends {}')
+            if(error) {
+                assert.match(text,/PostHog is unavailable.*Correlation id/)
+                assert.doesNotMatch(text,/123456789|person@example.com|250000|opaque-person|ACME0|Zorblax/)
+                continue
+            }
             assert.match(text,/123456789/)
             if(mode==='open') assert.match(text,/person@example.com/)
             else assert.doesNotMatch(text,/person@example.com|250000|opaque-person/)

@@ -83,3 +83,15 @@ The rate limiter keeps its buckets in process memory. That is correct for Lens's
 process per installation, like the task-history ingester and the background jobs). Running more than one Lens
 process behind a load balancer would need the buckets in a shared store (SQLite with a short write transaction,
 or Redis/Valkey where available); until then each process would enforce the limits separately.
+
+## PostHog analytics jobs
+
+`posthog_exec` runs `call query-*` (every query tool), `call execute-sql`, and insight/dashboard calls with refresh/compute/query/run/calculate operations or enabled refresh/force_refresh/forceRefresh/compute flags as jobs inside `wrapTools`. `tools`, `help`, `search`, `info`, `schema`, `call docs-search`, definitions, and object list/get calls without refresh remain synchronous. Job-backed invocations cost five limiter units; cheap commands and `get_job_result` cost one. Single-flight binds the user, full command, and privacy/access revision. Private SQL and overlapping-command refusals are unchanged; results still pass the masking boundary, including polling.
+
+The ordinary job race returns a result or `{status:"running",job_id}` within 20 seconds. Poll with `get_job_result`; request disconnects do not cancel the job. `LENS_POSTHOG_QUERY_TIMEOUT_SECONDS=600` controls the upstream execution limit, starting after queue admission; synchronous calls keep 30 seconds. Cancellation and expiry abort queued or active HTTP work, with best-effort upstream session deletion. This stops Lens waiting; PostHog's own query engine determines whether already-submitted database work stops immediately.
+
+A process-wide FIFO gate admits `LENS_POSTHOG_MAX_CONCURRENT_QUERIES=3` analytics jobs independently of the general worker-thread limit. At most `LENS_POSTHOG_MAX_QUEUED_QUERIES=30` wait; overflow says PostHog is busy and to retry later. Existing per-user outstanding-job limits and expiry still apply. As with other process-local admission controls, use one Lens service process for these limits.
+
+Upstream HTTP failures, JSON-RPC errors and MCP `isError` answers use fixed public messages with correlation ids. Memory/data-capacity failures suggest narrowing dates/filters or Lens `aggregate_events`; timeouts add job retry guidance; 429 responses include a valid Retry-After delay; 401/403 explain the key's access; unavailable servers suggest retrying later. Raw diagnostics stay in server logs.
+
+The `/posthog-mcp` streaming proxy keeps its existing streaming and 30-second timeout behavior and cannot return job handles. It applies the same failure mapping, including SSE error frames. Agents should use `posthog_exec` for long queries; this is the default PostHog tool when `POSTHOG_MCP_VIA_LENS=on`.

@@ -1,3 +1,4 @@
+import { isPosthogQuery, posthogQueryWork } from './posthog-query.ts'
 import { Worker } from 'node:worker_threads'
 import { DatabaseSync } from 'node:sqlite'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -49,9 +50,9 @@ export function createJobDispatch(caller?: Caller, options: JobOptions = {}) {
     }
     return {
         read,
-        async execute(name: string, args: Record<string, unknown>, window: TimeWindow | undefined, extra: unknown, execute: () => Promise<unknown>) {
+        async execute(name: string, args: Record<string, unknown>, window: TimeWindow | undefined, extra: unknown, execute: (context?: {signal: AbortSignal; timeoutMs: number}) => Promise<unknown>) {
             const runner = getRunner(), startedRevision = revision(), context = { name, args, window }
-            const job = runner.start(owner, name, args, startedRevision, () => work(name, args, window, execute), runner.ttlMs, context)
+            const job = runner.start(owner, name, args, startedRevision, () => name === 'posthog_exec' && isPosthogQuery(args.command) ? posthogQueryWork(execute) : work(name, args, window, execute), runner.ttlMs, context, name === 'posthog_exec')
             await waitForJob(job, extra as never, options.budgetMs)
             if (revision() !== startedRevision) throw new Error('Privacy or access settings changed. Submit the tool again.')
             return read(job.id)

@@ -35,12 +35,15 @@ describe('PostHog routing rewrites', () => {
             assert.equal(rewriteSseLine(input, options.name), `data: ${JSON.stringify(rewriteResponse(response, options.name))}\r`)
         }
     })
-    test('rewrites batches and leaves errors, notifications and call results intact', () => {
+    test('rewrites batches and maps upstream errors while preserving call results', () => {
         const error = { jsonrpc: '2.0', id: 9, error: { code: -1, message: 'failed' } }
         const result = { jsonrpc: '2.0', id: 10, result: { content: [{ type: 'text', text: 'hi' }] } }
         const batch = [fixture.initialize, fixture.tools_list, error, result, null]
-        assert.deepEqual(rewriteResponse(batch), [rewriteResponse(fixture.initialize), rewriteResponse(fixture.tools_list), error, result, null])
-        assert.equal(rewriteSseLine(`data: ${JSON.stringify(batch)}`), `data: ${JSON.stringify(rewriteResponse(batch))}`)
+        const rewritten = rewriteResponse(batch) as any[]
+        assert.deepEqual(rewritten.slice(0, 2), [rewriteResponse(fixture.initialize), rewriteResponse(fixture.tools_list)])
+        assert.match(rewritten[2].error.message, /PostHog is unavailable.*Correlation id:/)
+        assert.deepEqual(rewritten.slice(3), [result, null])
+        assert.match(rewriteSseLine(`data: ${JSON.stringify(batch)}`), /Correlation id:/)
     })
     test('refuses replay commands, including multiple calls, never ordinary PostHog commands', () => {
         for (const tool of ['session-recording-get', 'session-recordings-list', 'query-session-recordings-list', 'vision-query', 'vision-analyze']) {
@@ -150,6 +153,26 @@ describe('PostHog proxy adapter', () => {
         const res = await invoke({})
         assert.equal(res.statusCode, 502)
         assert.ok(!res.text.includes(options.apiKey))
+    })
+    test('maps HTTP and SSE failures without upstream internals and keeps log correlation', async t => {
+        let response = new Response('Code: 241. DB::Exception: Memory limit exceeded SELECT secret', { status: 500 })
+        const logs: unknown[][] = []
+        t.mock.method(console, 'error', (...args: unknown[]) => { logs.push(args) })
+        t.mock.method(globalThis, 'fetch', async () => response)
+        const memory = await invoke({})
+        assert.match(memory.text, /ran out of memory.*aggregate_events.*Correlation id:/)
+        assert.doesNotMatch(memory.text, /Code:|DB::Exception|SELECT|secret/)
+        const id = JSON.parse(memory.text).error.split('Correlation id: ')[1]
+        assert.ok(logs.some(args => (args[1] as any)?.correlation_id === id))
+        response = new Response('secret', { status: 429, headers: { 'retry-after': '19' } })
+        const limited = await invoke({})
+        assert.match(limited.text, /retry after 19 seconds/); assert.equal(limited.headers.get('retry-after'), '19')
+        response = Response.json({ id: 2, error: { code: -32603, message: '429 Too Many Requests; Retry-After: 13; secret SQL' } })
+        assert.match((await invoke({})).text, /retry after 13 seconds/)
+        response = new Response('data: ' + JSON.stringify({ id: 2, result: { isError: true, content: [{ type: 'text', text: 'Code: 241. DB::Exception: Memory limit exceeded SELECT secret' }] } }) + '\n\n', { headers: { 'content-type': 'text/event-stream' } })
+        const streamed = await invoke({})
+        assert.match(streamed.text, /ran out of memory.*Correlation id:/)
+        assert.doesNotMatch(streamed.text, /DB::Exception|SELECT|secret/)
     })
     test('times out upstream calls', async (t) => {
         t.mock.method(globalThis, 'fetch', (_url: URL, init: RequestInit) => new Promise((_resolve, reject) => {

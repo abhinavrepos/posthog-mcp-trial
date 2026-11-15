@@ -1,3 +1,4 @@
+import { posthogPublicMessage, posthogFailure } from './posthog-error.ts'
 import { RescueInputError } from '../core/rescue.ts'
 import { toolCorrelationId } from '../core/toolcontext.ts'
 import { z } from 'zod'
@@ -7,7 +8,9 @@ export class ToolValidationError extends Error {}
 export function toolError(error: unknown, tool: string, id: string = toolCorrelationId(), contract?: {keys:string[];example:unknown}) {
     const raw = error instanceof Error ? error.message : String(error)
     let kind='internal', message='The tool could not complete. Retry later; if it persists, give the correlation id to a Lens administrator.'
-    if(error instanceof RateLimitError) {kind='rate_limit';message=raw}
+    if(posthogPublicMessage(raw)) {kind=/memory|timed out/.test(raw) ? 'capacity' : 'unavailable';message=raw}
+    else if(tool==='posthog_exec' && /memory limit|too much data|code:\s*241|timeout|timed out/i.test(raw)) {kind='capacity';message=posthogFailure(error).message}
+    else if(error instanceof RateLimitError) {kind='rate_limit';message=raw}
     else if(raw === 'Unknown or expired job id.') {kind='not_found';message=raw}
     else if(raw === 'Privacy or access settings changed. Submit the tool again.') {kind='privacy_changed';message=raw}
     else if(error instanceof z.ZodError) {

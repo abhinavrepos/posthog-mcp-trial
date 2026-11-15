@@ -1,3 +1,4 @@
+import { isPosthogQuery, posthogQueryContext } from './posthog-query.ts'
 import { isPublicToolError, publicToolError } from './publicerror.ts'
 import { randomUUID, createHash } from 'node:crypto'
 import { isMainThread } from 'node:worker_threads'
@@ -207,7 +208,7 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
             let release:(()=>void)|undefined, errorKind:string|undefined, result:unknown, window:ReturnType<typeof inclusiveWindow>|undefined
             const keys = input && typeof input === 'object' && !Array.isArray(input) ? Object.keys(input) : []
             try {
-                release=toolLimiter.acquire(caller?.email || caller?.who || 'stdio',caller?.tokenId || caller?.who || 'stdio',name)
+                release=toolLimiter.acquire(caller?.email || caller?.who || 'stdio',caller?.tokenId || caller?.who || 'stdio',name, name==='posthog_exec' && isPosthogQuery((input as {command?:unknown})?.command) ? 5 : undefined)
                 const parsed=schema.parse(input) as Record<string,unknown>
                 const args = z.object(shape).parse(parsed) as Record<string,unknown>
                 if(name==='get_job_result') jobHash=createHash('sha256').update(String(args.job_id)).digest('hex')
@@ -225,8 +226,8 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
                 for(const key of Object.keys(timeShape)) if(!(key in original)) delete args[key]
                 result=await toolContext.run({window:resolved,clients,correlationId:correlation},async()=>{
                     const execute=async()=>{
-                        const result=JOB_TOOLS.has(name)
-                            ? await dispatch.execute(name,args,resolved,extra,AsyncLocalStorage.bind(async()=>call(args,extra)))
+                        const result=(JOB_TOOLS.has(name) || name==='posthog_exec' && isPosthogQuery(args.command))
+                            ? await dispatch.execute(name,args,resolved,extra,AsyncLocalStorage.bind(async(query)=>query ? posthogQueryContext.run(query,async()=>call(args,extra)) : call(args,extra)))
                             : await call(args,extra)
                         return {result,clients:[...clients],isError:!!(result as {isError?:boolean})?.isError}
                     }
@@ -292,7 +293,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
     const insights = !!caller?.admin || caller?.insights === true
     if (!raw) installJobTools(server, wrapTools(server, insights, caller))
     if (config.posthog.mcpViaLens && posthogMcpActive()) server.registerTool('posthog_exec', {
-        description: `Runs PostHog commands for generic analytics and objects: trends, funnels, retention, insights, dashboards, flags, experiments, annotations, error-tracking administration, docs and SQL. ${execRoutingLine(config.mcp.name)}`,
+        description: `Runs PostHog commands for generic analytics and objects: trends, funnels, retention, insights, dashboards, flags, experiments, annotations, error-tracking administration, docs and SQL. Long analytics calls return a result or a job handle within 20 seconds; poll handles with get_job_result. ${execRoutingLine(config.mcp.name)}`,
         inputSchema: { command: z.string() },
     }, async ({ command }) => posthogExec(command, { url: config.posthog.mcpUrl, apiKey: config.posthog.mcpApiKey, name: config.mcp.name }))
     server.registerTool(

@@ -1,3 +1,7 @@
+import { posthogQueryContext } from './posthog-query.ts'
+import { posthogFailure, posthogPublicMessage } from './posthog-error.ts'
+import { toolError } from './toolerror.ts'
+import { randomUUID } from 'node:crypto'
 import { publicToolError } from './publicerror.ts'
 // Routing text is pure; the HTTP adapter only handles authentication and transport.
 import { safetyWith, metadataSafetyWith, staffEmails } from '../core/aisafety.ts'
@@ -39,7 +43,13 @@ const object = (value: unknown): value is Rpc => !!value && typeof value === 'ob
 /** Rewrite by result shape, so GET/SSE responses need no per-session request state. Never mutate input. */
 export function rewriteResponse(value: unknown, name = 'lens', info: LensInfo = DEFAULT_INFO): unknown {
     if (Array.isArray(value)) return value.map((item) => rewriteResponse(item, name, info))
-    if (!object(value) || !object(value.result)) return value
+    if (!object(value)) return value
+    if (value.error || value.result?.isError) {
+        const id = randomUUID()
+        const mapped = toolError(posthogFailure(value.error || value.result, undefined, undefined, id), 'posthog_exec', id).result
+        return value.error ? { ...value, error: { code: -32603, message: mapped.content[0].text } } : { ...value, result: mapped }
+    }
+    if (!object(value.result)) return value
     const result = value.result
     if (result.serverInfo && result.protocolVersion) {
         return { ...value, result: { ...result, instructions: `${routingBlock(name, info)}\n\n${result.instructions || ''}` } }
@@ -234,6 +244,13 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
         // Preserve resume/query parameters without changing the configured upstream path.
         for (const [key, value] of new URL(req.url || '/', 'http://localhost').searchParams) url.searchParams.append(key, value)
         const upstream = await upstreamRequest(url, options.apiKey, { method: req.method, headers, body, signal: controller.signal })
+        if (!upstream.ok) {
+            const detail = upstream.body ? await readBody(Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream), limit) : ''
+            const id = randomUUID()
+            const mapped = toolError(posthogFailure(detail, upstream.status, upstream.headers.get('retry-after'), id), 'posthog_exec', id)
+            if (upstream.headers.get('retry-after')) res.setHeader('retry-after', upstream.headers.get('retry-after')!)
+            return send(res, upstream.status, { error: mapped.result.content[0].text })
+        }
         for (const name of headersToPass) {
             const value = upstream.headers.get(name)
             if (value) res.setHeader(name, value)
@@ -277,10 +294,14 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
             res.end(output)
         }
     } catch (error) {
-        // Upstream errors can include URLs or credentials. Return only fixed messages; never log them.
-        if (!res.headersSent) send(res, error instanceof BodyTooLarge ? 413 : controller.signal.aborted ? 504 : 502,
-            { error: error instanceof BodyTooLarge ? 'MCP body too large' : controller.signal.aborted ? 'PostHog MCP timed out' : 'PostHog MCP upstream failed' })
-        else res.destroy()
+        if (!res.headersSent) {
+            if (error instanceof BodyTooLarge) send(res, 413, { error: 'MCP body too large' })
+            else {
+                const id = randomUUID()
+                const mapped = toolError(posthogFailure(controller.signal.aborted ? 'timeout' : error, undefined, undefined, id), 'posthog_exec', id)
+                send(res, controller.signal.aborted ? 504 : 502, { error: mapped.result.content[0].text })
+            }
+        } else res.destroy()
     } finally {
         clearTimeout(timer)
         res.off('close', onClose)
@@ -308,18 +329,22 @@ async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'u
         call = a.value
     }
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000)
+    const query = posthogQueryContext.getStore()
+    const abort = () => controller.abort()
+    query?.signal.addEventListener('abort', abort, { once: true })
+    if (query?.signal.aborted) controller.abort()
+    const timer = setTimeout(() => controller.abort(), query?.timeoutMs ?? options.timeoutMs ?? 30_000)
     const headers = new Headers({ 'content-type': 'application/json', accept: 'application/json, text/event-stream' })
     let session: string | null = null
     const request = (body: unknown, method = 'POST', signal = controller.signal) => upstreamRequest(options.url, options.apiKey, { method, headers, body: method === 'POST' ? JSON.stringify(body) : undefined, signal })
     const read = async (res: Response, id: number): Promise<Rpc> => {
-        if (!res.ok) throw new Error('PostHog MCP upstream failed')
         const raw = res.body ? await readBody(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), 5_000_000) : ''
+        if (!res.ok) throw posthogFailure(raw, res.status, res.headers.get('retry-after'))
         const values = res.headers.get('content-type')?.includes('text/event-stream')
             ? raw.split('\n').filter(l => l.startsWith('data:')).flatMap(l => { try { return [JSON.parse(l.slice(5))] } catch { return [] } })
             : [JSON.parse(raw)]
         const reply = values.flat().find(v => v?.id === id)
-        if (!reply || reply.error) throw new Error('PostHog MCP upstream failed')
+        if (!reply || reply.error || reply.result?.isError) throw posthogFailure(reply?.error || reply?.result || 'Missing MCP reply')
         return reply.result
     }
     try {
@@ -329,13 +354,16 @@ async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'u
         const init = await read(initialized, 1)
         headers.set('mcp-protocol-version', init.protocolVersion)
         const notified = await request({ jsonrpc: '2.0', method: 'notifications/initialized' })
+        if (!notified.ok) { await read(notified, 0) }
         await notified.body?.cancel()
         const result = safetyWith(await read(await request(call), 2), await identityTokens(), staffEmails())
         return guardResponse(result, 'posthog_cleaned')
-    } catch {
-        throw new Error(controller.signal.aborted ? 'PostHog MCP timed out' : 'PostHog MCP upstream failed')
+    } catch (error) {
+        if (error instanceof Error && posthogPublicMessage(error.message)) throw error
+        throw posthogFailure(controller.signal.aborted ? 'timeout' : error)
     } finally {
         clearTimeout(timer)
+        query?.signal.removeEventListener('abort', abort)
         // Sessions belong to this call only, including failed calls.
         if (session) {
             try { const res = await request(undefined, 'DELETE', AbortSignal.timeout(2_000)); await res.body?.cancel() } catch { /* upstream may not support session deletion */ }

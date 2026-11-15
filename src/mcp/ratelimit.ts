@@ -5,8 +5,8 @@ const positive = (value: string|undefined, fallback: number) => Number.isFinite(
 export class ToolLimiter {
     private buckets = new Map<string, Bucket>()
     constructor(readonly minute = positive(process.env.LENS_MCP_CALLS_PER_MINUTE,60), readonly hour = positive(process.env.LENS_MCP_CALLS_PER_HOUR,600), readonly concurrent = positive(process.env.LENS_MCP_CONCURRENT_CALLS,4), private clock = Date.now) {}
-    acquire(user: string, token: string, tool: string): () => void {
-        const now = this.clock(), weight = HEAVY_TOOLS.has(tool) ? 5 : 1
+    acquire(user: string, token: string, tool: string, cost?: number): () => void {
+        const now = this.clock(), weight = cost ?? (HEAVY_TOOLS.has(tool) ? 5 : 1)
         const keys = [`user:${user.toLowerCase()}`,`token:${token}`]
         const buckets = keys.map(key => {
             let b = this.buckets.get(key)

@@ -9,7 +9,7 @@ export interface JobWork { promise: Promise<unknown>; cancel?: () => void; metad
 const stable = (v: unknown): string => Array.isArray(v) ? `[${v.map(stable)}]` : v && typeof v === 'object'
     ? `{${Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stable((v as Record<string, unknown>)[k])).join(',')}}` : JSON.stringify(v) ?? 'null'
 export class JobRunner {
-    private active = new Map<string, { resolve: (v: unknown) => void; work: () => JobWork; cancel?: () => void; running: boolean }>()
+    private active = new Map<string, { resolve: (v: unknown) => void; work: () => JobWork; cancel?: () => void; running: boolean; independent: boolean }>()
     private timer: NodeJS.Timeout
     readonly ttlMs: number
     readonly concurrency: number
@@ -29,7 +29,8 @@ export class JobRunner {
         this.prune()
     }
     private now: () => number
-    start(owner: string, tool: string, args: unknown, revision: string, work: () => JobWork, ttlMs = this.ttlMs, context: unknown = {}): { id: string; done: Promise<unknown> } {
+    // independent work supplies its own process-wide concurrency/queue admission (PostHog HTTP).
+    start(owner: string, tool: string, args: unknown, revision: string, work: () => JobWork, ttlMs = this.ttlMs, context: unknown = {}, independent = false): { id: string; done: Promise<unknown> } {
         this.prune()
         const serializedContext = JSON.stringify(context)
         const flight = createHash('sha256').update(stable([tool, args, revision, JSON.parse(serializedContext)])).digest('hex')
@@ -42,7 +43,7 @@ export class JobRunner {
         this.db.prepare('INSERT INTO analysis_job_context VALUES (?,?)').run(id, serializedContext)
         let resolve!: (v: unknown) => void
         const done = new Promise<unknown>(r => { resolve = r })
-        this.active.set(id, { resolve, work, running: false })
+        this.active.set(id, { resolve, work, running: false, independent })
         // Always start after the caller has armed its deadline.
         setImmediate(() => this.pump())
         return { id, done }
@@ -59,11 +60,10 @@ export class JobRunner {
         return p
     }
     private pump(): void {
-        let running = [...this.active.values()].filter(x => x.running).length
+        let running = [...this.active.values()].filter(x => x.running && !x.independent).length
         for (const [id, a] of this.active) {
-            if (running >= this.concurrency) break
-            if (a.running) continue
-            a.running = true; running++
+            if (a.running || !a.independent && running >= this.concurrency) continue
+            a.running = true; if (!a.independent) running++
             try {
                 const work = a.work(); a.cancel = work.cancel
                 void work.promise.then(result => this.finish(id, 'completed', result, undefined, work.metadata?.()), error => this.finish(id, 'failed', undefined, String(error?.message || error)))
