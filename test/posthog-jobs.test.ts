@@ -10,7 +10,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 const dir = mkdtempSync(join(tmpdir(), 'posthog-jobs-'))
-Object.assign(process.env, { TRIAGE_DB: join(dir, 'm.db'), TASKS_DB: join(dir, 't.db'), APP_EVENTS_FILE: 'config/app-events.reval.json' })
+Object.assign(process.env, { TRIAGE_DB: join(dir, 'm.db'), TASKS_DB: join(dir, 't.db'), APP_EVENTS_FILE: 'config/app-events.reval.json', LENS_MCP_CALLS_PER_MINUTE: '60' }) // budget mechanics are tested at 60/min
 const { wrapTools } = await import('../src/mcp/tools.ts')
 const { installJobTools } = await import('../src/mcp/jobtools.ts')
 const { JobRunner } = await import('../src/core/jobs.ts')

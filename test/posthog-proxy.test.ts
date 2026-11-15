@@ -235,7 +235,7 @@ test('proxy calls share Lens budgets and audit every member of a refused batch',
  const {toolLimiter}=await import('../src/mcp/ratelimit.ts')
  const {all}=await import('../src/core/db.ts')
  const caller={who:'proxy-budget',email:`proxy-budget-${crypto.randomUUID()}@example.com`,tokenId:crypto.randomUUID()}
- for(let i=0;i<12;i++)toolLimiter.acquire(caller.email,caller.tokenId,'aggregate_events')()
+ for(let i=0;i<toolLimiter.minute/5;i++)toolLimiter.acquire(caller.email,caller.tokenId,'aggregate_events')()
  let fetched=0;t.mock.method(globalThis,'fetch',async()=>{fetched++;return Response.json({})})
  const result=await invoke([call('call query-trends {}',81),call('call execute-sql {}',82)],{},'POST',{...options,caller})
  assert.equal(fetched,0);assert.match(result.text,/Rate limit/)

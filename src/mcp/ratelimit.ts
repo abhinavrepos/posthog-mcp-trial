@@ -4,7 +4,7 @@ type Bucket = { minute: number; hour: number; at: number; active: number }
 const positive = (value: string|undefined, fallback: number) => Number.isFinite(Number(value)) && Number(value)>0 ? Number(value) : fallback
 export class ToolLimiter {
     private buckets = new Map<string, Bucket>()
-    constructor(readonly minute = positive(process.env.LENS_MCP_CALLS_PER_MINUTE,60), readonly hour = positive(process.env.LENS_MCP_CALLS_PER_HOUR,600), readonly concurrent = positive(process.env.LENS_MCP_CONCURRENT_CALLS,4), private clock = Date.now) {}
+    constructor(readonly minute = positive(process.env.LENS_MCP_CALLS_PER_MINUTE,120), readonly hour = positive(process.env.LENS_MCP_CALLS_PER_HOUR,600), readonly concurrent = positive(process.env.LENS_MCP_CONCURRENT_CALLS,4), private clock = Date.now) {}
     acquire(user: string, token: string, tool: string, cost?: number): () => void {
         const now = this.clock(), weight = cost ?? (HEAVY_TOOLS.has(tool) ? 5 : 1)
         const keys = [`user:${user.toLowerCase()}`,`token:${token}`]

@@ -8,7 +8,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 const dir=mkdtempSync(join(tmpdir(),'lens-contract-'))
-Object.assign(process.env,{TRIAGE_DB:join(dir,'main.db'),TASKS_DB:join(dir,'tasks.db'),APP_EVENTS_FILE:'config/app-events.reval.json',POSTHOG_PROJECT_ID:'1',POSTHOG_SURVEY_API_KEY:'test',FEATURE_SURVEYS:'on'})
+Object.assign(process.env,{TRIAGE_DB:join(dir,'main.db'),TASKS_DB:join(dir,'tasks.db'),APP_EVENTS_FILE:'config/app-events.reval.json',POSTHOG_PROJECT_ID:'1',POSTHOG_SURVEY_API_KEY:'test',FEATURE_SURVEYS:'on',LENS_MCP_CALLS_PER_MINUTE:'60'}) // budget mechanics are tested at 60/min
 const {timeInput,PERIODS,resolveTime,inclusiveWindow}=await import('../src/mcp/timeinput.ts')
 const {analyticalWindow,setWindowDataThrough,parseTimeWindow}=await import('../src/core/timewindow.ts')
 const {ToolLimiter}=await import('../src/mcp/ratelimit.ts')
@@ -282,4 +282,12 @@ test('core input checks use safe typed validation messages with contract help', 
   assert.doesNotMatch(mapped.result.content[0].text,/private-/);return true
  })
  assert.equal(toolError(new Error('Give issue_id, or error_type and error_message.'),'example','cid').kind,'internal')
+})
+
+test('per-minute budget defaults to 120 weighted credits; the hour budget stays 600', async () => {
+  const {ToolLimiter}=await import('../src/mcp/ratelimit.ts')
+  const saved=process.env.LENS_MCP_CALLS_PER_MINUTE
+  delete process.env.LENS_MCP_CALLS_PER_MINUTE
+  try { const l=new ToolLimiter(); assert.equal(l.minute,120); assert.equal(l.hour,600) }
+  finally { process.env.LENS_MCP_CALLS_PER_MINUTE=saved }
 })

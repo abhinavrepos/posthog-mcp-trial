@@ -12,7 +12,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { JobRunner } from '../src/core/jobs.ts'
 import type { JobOptions } from '../src/mcp/jobtools.ts'
 const dir = mkdtempSync(join(tmpdir(), 'lens-jobtools-'))
-Object.assign(process.env, { TRIAGE_DB: join(dir, 'm.db'), TASKS_DB: join(dir, 't.db'), APP_EVENTS_FILE: 'config/app-events.reval.json' })
+Object.assign(process.env, { TRIAGE_DB: join(dir, 'm.db'), TASKS_DB: join(dir, 't.db'), APP_EVENTS_FILE: 'config/app-events.reval.json', LENS_MCP_CALLS_PER_MINUTE: '60' }) // budget mechanics are tested at 60/min
 const { tasksDb } = await import('../src/core/tasks.ts')
 const { storeAggregateDaily } = await import('../src/core/aggregatedaily.ts')
 const { registerTools, wrapTools } = await import('../src/mcp/tools.ts')
