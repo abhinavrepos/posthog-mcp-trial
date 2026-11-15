@@ -1,0 +1,30 @@
+q01	Which of our clients are most likely to leave us? Look at everything you can and rank the top 10 with the evidence for each.
+q02	What has our churn rate been over the last 4 years, year by year? And predict next year's churn rate.
+q03	Brightwater Logistics has left us. What pattern did they follow in the months before they churned, compared with clients that stayed? Use the whole history you have.
+q04	Which clients went quiet over the last 4 years, when did it happen, and what did they have in common before going quiet?
+q05	Give me a health table for every single client for the last 12 months: usage trend, failures, slowest tasks and warning signs.
+q06	Over the last 4 years, which dialogs and buttons have caused the most failures, and is it getting better or worse year by year?
+q07	How has usage changed per app version, quarter by quarter, over the last 4 years? Which version had the most errors?
+q08	What are the most common workflows across the last 4 years, how often do people finish them, and which clients struggle most to finish the top 3?
+q09	How long does saving a trade in Task01 take, and how has that changed month by month over the last 2 years? Which clients are slowest?
+q10	Tell me everything that changed for Harbor & Pine Capital month by month over the past 2 years, and what we should do about it.
+q11	Compare Q3 2025 with Q3 2024: usage, failures, top pains and clients at risk.
+q12	Since the very beginning of our data, which dialog has been used the most, and which button press fails most often? Give totals.
+q13	How good have our warning signs been at predicting which clients leave? Use the full history.
+q14	Give me a complete quarterly business review of Reval usage for the last year: active clients, sessions, top workflows, top pains, at-risk clients, and what changed versus the year before.
+q15	How did usage change in Q2 2026 compared with Q2 2025?
+q16	Which clients had the most failed saves last month?
+q17	What errors did users see this week, and which clients did they hit?
+q18	How is Harbor doing?
+q19	Is anything broken right now that I should know about?
+q20	Which tasks are slowest to complete, and which are getting slower?
+q21	Which clients stopped doing Task00 in the last month?
+q22	Count sessions per app version per month for the last 6 months.
+q23	What happened with Trade Id 1003?
+q24	Tell me Cobalt Health's story over the past year, month by month, and what you would do next.
+q25	Which clients look healthiest right now, and why?
+q26	Give me this week's Monday brief.
+q27	Draft a short survey for clients whose saves are failing.
+q28	What are the top 5 pains this quarter, and are any of them new?
+q29	Compare Brightwater Logistics with Nordlicht Energie over the last 90 days.
+q30	Which workflows do people abandon most often in the last 28 days, and at which step?
