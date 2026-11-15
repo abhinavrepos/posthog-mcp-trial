@@ -52,7 +52,10 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
         // A tool answer as sent: a heading, then a fenced JSON block. Walk the JSON by key (only money fields are
         // amounts) instead of masking it as prose, where every long number looks like cash: counts such as
         // "events": 10941928 were coming out as <amount> on this second, transport-level pass.
-        const fenced = /^([\s\S]*?)```json\n([\s\S]*)\n```\s*$/.exec(s)
+        // Linear: one indexOf for the opening fence and one lastIndexOf for the closing one (a regex here rescanned
+        // the rest of the string for every opening fence, which crafted text could make quadratic).
+        const open = s.indexOf('```json\n'), close = s.lastIndexOf('\n```')
+        const fenced = open >= 0 && close > open + 7 && /^\s*$/.test(s.slice(close + 4)) ? [s, s.slice(0, open), s.slice(open + 8, close)] : null
         if (fenced) {
             try {
                 const parsed = JSON.parse(fenced[2])

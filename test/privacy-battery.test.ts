@@ -90,3 +90,9 @@ test('a tool answer as sent (heading + fenced JSON) keeps counts; only money fie
     assert.match(out, /"notional":"<amount>"/); assert.doesNotMatch(out, /250000/); assert.doesNotMatch(out, /jane\.doe/)
     assert.ok(out.startsWith('Reval event counts (last 4 years):'))
 })
+
+test('many opening fences without a closing one stay linear (no regex rescans)', async () => {
+    const { safetyWith } = await import('../src/core/aisafety.ts')
+    const t = performance.now(); safetyWith('```json\n'.repeat(80_000), [])
+    assert.ok(performance.now() - t < 2_000, `took ${Math.round(performance.now() - t)} ms`)
+})
