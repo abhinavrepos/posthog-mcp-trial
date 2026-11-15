@@ -1,0 +1,198 @@
+{
+  "n": 10,
+  "started": "2026-11-15T16:17:01.375Z",
+  "ended": "2026-11-15T16:26:01.128Z",
+  "elapsedSeconds": 539.753,
+  "reason": "duration",
+  "business": 85,
+  "bad": 0,
+  "physicalCalls": 281,
+  "tools": {
+    "resolve_client": {
+      "calls": 9,
+      "firstMs": {
+        "p50": 443,
+        "p95": 1900,
+        "p99": 1900
+      },
+      "finalMs": {
+        "p50": 443,
+        "p95": 1900,
+        "p99": 1900
+      },
+      "handles": 0,
+      "errors": {},
+      "censored": 0
+    },
+    "task_map": {
+      "calls": 12,
+      "firstMs": {
+        "p50": 20044,
+        "p95": 20506,
+        "p99": 20506
+      },
+      "finalMs": {
+        "p50": 46143,
+        "p95": 85518,
+        "p99": 85518
+      },
+      "handles": 10,
+      "errors": {},
+      "censored": 0
+    },
+    "client_story": {
+      "calls": 14,
+      "firstMs": {
+        "p50": 20086,
+        "p95": 20553,
+        "p99": 20553
+      },
+      "finalMs": {
+        "p50": 46159,
+        "p95": 120416,
+        "p99": 120416
+      },
+      "handles": 12,
+      "errors": {},
+      "censored": 0
+    },
+    "top_pains": {
+      "calls": 8,
+      "firstMs": {
+        "p50": 20068,
+        "p95": 20291,
+        "p99": 20291
+      },
+      "finalMs": {
+        "p50": 45910,
+        "p95": 93732,
+        "p99": 93732
+      },
+      "handles": 7,
+      "errors": {},
+      "censored": 0
+    },
+    "dialog_friction": {
+      "calls": 10,
+      "firstMs": {
+        "p50": 20045,
+        "p95": 20158,
+        "p99": 20158
+      },
+      "finalMs": {
+        "p50": 45356,
+        "p95": 105361,
+        "p99": 105361
+      },
+      "handles": 9,
+      "errors": {},
+      "censored": 0
+    },
+    "rescue_queue": {
+      "calls": 11,
+      "firstMs": {
+        "p50": 20052,
+        "p95": 20417,
+        "p99": 20417
+      },
+      "finalMs": {
+        "p50": 49596,
+        "p95": 106217,
+        "p99": 106217
+      },
+      "handles": 10,
+      "errors": {},
+      "censored": 0
+    },
+    "aggregate_events": {
+      "calls": 7,
+      "firstMs": {
+        "p50": 20061,
+        "p95": 20975,
+        "p99": 20975
+      },
+      "finalMs": {
+        "p50": 131365,
+        "p95": 150902,
+        "p99": 150902
+      },
+      "handles": 7,
+      "errors": {},
+      "censored": 0
+    },
+    "discover_workflows": {
+      "calls": 8,
+      "firstMs": {
+        "p50": 20090,
+        "p95": 20357,
+        "p99": 20357
+      },
+      "finalMs": {
+        "p50": 54444,
+        "p95": 129443,
+        "p99": 129443
+      },
+      "handles": 8,
+      "errors": {},
+      "censored": 0
+    },
+    "get_job_result": {
+      "calls": 196,
+      "firstMs": {
+        "p50": 15036,
+        "p95": 15251,
+        "p99": 15689
+      },
+      "finalMs": {
+        "p50": 3228,
+        "p95": 13947,
+        "p99": 15073
+      },
+      "handles": 127,
+      "errors": {},
+      "censored": 127
+    },
+    "workflow_completion": {
+      "calls": 5,
+      "firstMs": {
+        "p50": 20113,
+        "p95": 20272,
+        "p99": 20272
+      },
+      "finalMs": {
+        "p50": 80272,
+        "p95": 114162,
+        "p99": 114162
+      },
+      "handles": 5,
+      "errors": {},
+      "censored": 0
+    },
+    "compare_client_patterns": {
+      "calls": 1,
+      "firstMs": {
+        "p50": 20121,
+        "p95": 20121,
+        "p99": 20121
+      },
+      "finalMs": {
+        "p50": 86995,
+        "p95": 86995,
+        "p99": 86995
+      },
+      "handles": 1,
+      "errors": {},
+      "censored": 0
+    }
+  },
+  "maxRssMiB": null,
+  "responsivenessMs": {
+    "p50": 307,
+    "p95": 965,
+    "p99": 2287
+  },
+  "probeErrors": 0,
+  "sampleCount": 96,
+  "maxWorkingJobs": 10,
+  "maxTestWorkingJobs": 10
+}

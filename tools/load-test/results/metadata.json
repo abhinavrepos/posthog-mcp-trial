@@ -1,0 +1,18 @@
+{
+  "created": "2026-11-15T16:07:58.481Z",
+  "endpoint": "http://127.0.0.1:18331/mcp",
+  "pid": null,
+  "users": [
+    5,
+    10,
+    20
+  ],
+  "minutes": 8,
+  "bounds": {
+    "lo": "2025-11-15",
+    "hi": "2026-11-14"
+  },
+  "clientCount": 150,
+  "relevantEnv": {},
+  "seed": 18331
+}

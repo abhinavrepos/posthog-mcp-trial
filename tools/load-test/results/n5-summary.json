@@ -1,0 +1,214 @@
+{
+  "n": 5,
+  "started": "2026-11-15T16:07:58.873Z",
+  "ended": "2026-11-15T16:16:59.540Z",
+  "elapsedSeconds": 540.667,
+  "reason": "duration",
+  "business": 104,
+  "bad": 0,
+  "physicalCalls": 177,
+  "tools": {
+    "resolve_client": {
+      "calls": 11,
+      "firstMs": {
+        "p50": 185,
+        "p95": 214,
+        "p99": 214
+      },
+      "finalMs": {
+        "p50": 185,
+        "p95": 214,
+        "p99": 214
+      },
+      "handles": 0,
+      "errors": {},
+      "censored": 0
+    },
+    "task_map": {
+      "calls": 12,
+      "firstMs": {
+        "p50": 663,
+        "p95": 20119,
+        "p99": 20119
+      },
+      "finalMs": {
+        "p50": 663,
+        "p95": 65268,
+        "p99": 65268
+      },
+      "handles": 3,
+      "errors": {},
+      "censored": 0
+    },
+    "top_pains": {
+      "calls": 13,
+      "firstMs": {
+        "p50": 268,
+        "p95": 20065,
+        "p99": 20065
+      },
+      "finalMs": {
+        "p50": 269,
+        "p95": 65311,
+        "p99": 65311
+      },
+      "handles": 2,
+      "errors": {},
+      "censored": 0
+    },
+    "dialog_friction": {
+      "calls": 12,
+      "firstMs": {
+        "p50": 2752,
+        "p95": 20853,
+        "p99": 20853
+      },
+      "finalMs": {
+        "p50": 2756,
+        "p95": 75634,
+        "p99": 75634
+      },
+      "handles": 3,
+      "errors": {},
+      "censored": 0
+    },
+    "client_story": {
+      "calls": 17,
+      "firstMs": {
+        "p50": 7607,
+        "p95": 20142,
+        "p99": 20142
+      },
+      "finalMs": {
+        "p50": 7607,
+        "p95": 53260,
+        "p99": 53260
+      },
+      "handles": 5,
+      "errors": {},
+      "censored": 0
+    },
+    "rescue_queue": {
+      "calls": 12,
+      "firstMs": {
+        "p50": 8204,
+        "p95": 20126,
+        "p99": 20126
+      },
+      "finalMs": {
+        "p50": 8205,
+        "p95": 78419,
+        "p99": 78419
+      },
+      "handles": 3,
+      "errors": {},
+      "censored": 0
+    },
+    "aggregate_events": {
+      "calls": 7,
+      "firstMs": {
+        "p50": 20058,
+        "p95": 20157,
+        "p99": 20157
+      },
+      "finalMs": {
+        "p50": 85312,
+        "p95": 137868,
+        "p99": 137868
+      },
+      "handles": 7,
+      "errors": {},
+      "censored": 1
+    },
+    "get_job_result": {
+      "calls": 73,
+      "firstMs": {
+        "p50": 15039,
+        "p95": 15136,
+        "p99": 15156
+      },
+      "finalMs": {
+        "p50": 2084,
+        "p95": 13072,
+        "p99": 14018
+      },
+      "handles": 41,
+      "errors": {},
+      "censored": 41
+    },
+    "discover_workflows": {
+      "calls": 5,
+      "firstMs": {
+        "p50": 20034,
+        "p95": 20599,
+        "p99": 20599
+      },
+      "finalMs": {
+        "p50": 29468,
+        "p95": 37763,
+        "p99": 37763
+      },
+      "handles": 4,
+      "errors": {},
+      "censored": 0
+    },
+    "workflow_completion": {
+      "calls": 5,
+      "firstMs": {
+        "p50": 20060,
+        "p95": 20520,
+        "p99": 20520
+      },
+      "finalMs": {
+        "p50": 57038,
+        "p95": 69068,
+        "p99": 69068
+      },
+      "handles": 5,
+      "errors": {},
+      "censored": 0
+    },
+    "compare_client_patterns": {
+      "calls": 5,
+      "firstMs": {
+        "p50": 11468,
+        "p95": 20042,
+        "p99": 20042
+      },
+      "finalMs": {
+        "p50": 11468,
+        "p95": 25151,
+        "p99": 25151
+      },
+      "handles": 1,
+      "errors": {},
+      "censored": 0
+    },
+    "client_signals": {
+      "calls": 5,
+      "firstMs": {
+        "p50": 423,
+        "p95": 3992,
+        "p99": 3992
+      },
+      "finalMs": {
+        "p50": 424,
+        "p95": 3993,
+        "p99": 3993
+      },
+      "handles": 0,
+      "errors": {},
+      "censored": 0
+    }
+  },
+  "maxRssMiB": null,
+  "responsivenessMs": {
+    "p50": 218,
+    "p95": 870,
+    "p99": 1141
+  },
+  "probeErrors": 0,
+  "sampleCount": 96,
+  "maxWorkingJobs": 5,
+  "maxTestWorkingJobs": 5
+}

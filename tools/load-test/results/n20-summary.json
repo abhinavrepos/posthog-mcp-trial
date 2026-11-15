@@ -1,0 +1,214 @@
+{
+  "n": 20,
+  "started": "2026-11-15T16:26:01.800Z",
+  "ended": "2026-11-15T16:35:19.214Z",
+  "elapsedSeconds": 557.414,
+  "reason": "duration",
+  "business": 136,
+  "bad": 0,
+  "physicalCalls": 577,
+  "tools": {
+    "task_map": {
+      "calls": 17,
+      "firstMs": {
+        "p50": 20040,
+        "p95": 20302,
+        "p99": 20302
+      },
+      "finalMs": {
+        "p50": 65127,
+        "p95": 128156,
+        "p99": 128156
+      },
+      "handles": 15,
+      "errors": {},
+      "censored": 1
+    },
+    "resolve_client": {
+      "calls": 13,
+      "firstMs": {
+        "p50": 192,
+        "p95": 858,
+        "p99": 858
+      },
+      "finalMs": {
+        "p50": 193,
+        "p95": 858,
+        "p99": 858
+      },
+      "handles": 0,
+      "errors": {},
+      "censored": 0
+    },
+    "client_story": {
+      "calls": 22,
+      "firstMs": {
+        "p50": 20042,
+        "p95": 20419,
+        "p99": 20621
+      },
+      "finalMs": {
+        "p50": 66678,
+        "p95": 126145,
+        "p99": 128827
+      },
+      "handles": 20,
+      "errors": {},
+      "censored": 2
+    },
+    "dialog_friction": {
+      "calls": 17,
+      "firstMs": {
+        "p50": 20045,
+        "p95": 20626,
+        "p99": 20626
+      },
+      "finalMs": {
+        "p50": 52487,
+        "p95": 129651,
+        "p99": 129651
+      },
+      "handles": 15,
+      "errors": {},
+      "censored": 1
+    },
+    "top_pains": {
+      "calls": 16,
+      "firstMs": {
+        "p50": 20042,
+        "p95": 20222,
+        "p99": 20222
+      },
+      "finalMs": {
+        "p50": 67102,
+        "p95": 127025,
+        "p99": 127025
+      },
+      "handles": 15,
+      "errors": {},
+      "censored": 2
+    },
+    "client_signals": {
+      "calls": 6,
+      "firstMs": {
+        "p50": 20031,
+        "p95": 20117,
+        "p99": 20117
+      },
+      "finalMs": {
+        "p50": 65224,
+        "p95": 128047,
+        "p99": 128047
+      },
+      "handles": 5,
+      "errors": {},
+      "censored": 1
+    },
+    "rescue_queue": {
+      "calls": 16,
+      "firstMs": {
+        "p50": 20034,
+        "p95": 20688,
+        "p99": 20688
+      },
+      "finalMs": {
+        "p50": 85441,
+        "p95": 125593,
+        "p99": 125593
+      },
+      "handles": 15,
+      "errors": {},
+      "censored": 1
+    },
+    "aggregate_events": {
+      "calls": 9,
+      "firstMs": {
+        "p50": 20064,
+        "p95": 20175,
+        "p99": 20175
+      },
+      "finalMs": {
+        "p50": 125649,
+        "p95": 170202,
+        "p99": 170202
+      },
+      "handles": 9,
+      "errors": {},
+      "censored": 2
+    },
+    "discover_workflows": {
+      "calls": 9,
+      "firstMs": {
+        "p50": 20056,
+        "p95": 20211,
+        "p99": 20211
+      },
+      "finalMs": {
+        "p50": 93575,
+        "p95": 145874,
+        "p99": 145874
+      },
+      "handles": 9,
+      "errors": {},
+      "censored": 2
+    },
+    "compare_client_patterns": {
+      "calls": 6,
+      "firstMs": {
+        "p50": 20038,
+        "p95": 20126,
+        "p99": 20126
+      },
+      "finalMs": {
+        "p50": 75101,
+        "p95": 116240,
+        "p99": 116240
+      },
+      "handles": 6,
+      "errors": {},
+      "censored": 0
+    },
+    "get_job_result": {
+      "calls": 441,
+      "firstMs": {
+        "p50": 15030,
+        "p95": 15137,
+        "p99": 15255
+      },
+      "finalMs": {
+        "p50": 2821,
+        "p95": 13636,
+        "p99": 14040
+      },
+      "handles": 339,
+      "errors": {},
+      "censored": 339
+    },
+    "workflow_completion": {
+      "calls": 5,
+      "firstMs": {
+        "p50": 20043,
+        "p95": 20167,
+        "p99": 20167
+      },
+      "finalMs": {
+        "p50": 125235,
+        "p95": 148222,
+        "p99": 148222
+      },
+      "handles": 5,
+      "errors": {},
+      "censored": 0
+    }
+  },
+  "maxRssMiB": null,
+  "responsivenessMs": {
+    "p50": 229,
+    "p95": 748,
+    "p99": 885
+  },
+  "probeErrors": 0,
+  "sampleCount": 96,
+  "maxWorkingJobs": 20,
+  "maxTestWorkingJobs": 20
+}
