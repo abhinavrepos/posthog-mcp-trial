@@ -22,10 +22,14 @@ export function posthogFailure(detail: unknown, status?: number, retryAfter?: st
         message = `PostHog is busy: ${Number.isFinite(seconds) ? `retry after ${seconds} seconds` : 'retry later'}.`
     }
     else if (/memory limit|out of memory|too much data|code:\s*241/i.test(raw)) message = `PostHog ran out of memory for this query: ${advice}.`
+    // PostHog's own server-side limit: calling again repeats it, so steer to a smaller query or Lens's rollups.
+    else if (/max execution time|max_execution_time|TIMEOUT_EXCEEDED|code:\s*159|\b504\b|gateway time-?out/i.test(raw)) message = POSTHOG_LIMIT
     else if (/timeout|timed out|TimeoutError/i.test(raw)) message = `PostHog query timed out: ${advice}; it continues as a job if you call it again.`
     errorDiagnostic(detail,'posthog_exec','upstream',correlationId,status)
     return new Error(message)
 }
+/** PostHog stopped the query at its own time limit (it scans too much data for one request on this server). */
+export const POSTHOG_LIMIT = 'PostHog stopped this query at its own time limit; repeating it will not help. Query a shorter range (for example one quarter at a time) or add filters. For dialog funnels and completion over long periods use Lens workflow_completion, and for counts by period use Lens aggregate_events: both read daily summaries and answer at any history length.'
 const USAGE_HELP = 'Run "tools" to list PostHog tools, "info <tool>" for one tool\'s input schema, then "call <tool> <json_input>".'
 const TOOL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/
 /** PostHog's own MCP answers a wrongly formed command with a tool error. Those are the agent's mistakes, not
@@ -46,6 +50,6 @@ const usagePublic = (raw: string) =>
 export const posthogUsageError = (raw: string) => usagePublic(raw)
 /** Only fixed server-authored messages survive job persistence; never publish upstream diagnostics. */
 export function posthogPublicMessage(raw: string): string | undefined {
-    if (usagePublic(raw)) return raw
+    if (usagePublic(raw) || raw === POSTHOG_LIMIT) return raw
     if (raw === 'PostHog is busy. Retry later.' || raw === 'PostHog is unavailable. Retry later.' || raw === "PostHog refused access: check the key's access to this project and tool." || /^PostHog is busy: (?:retry after \d+ seconds|retry later)\.$/.test(raw) || raw === `PostHog ran out of memory for this query: ${advice}.` || raw === `PostHog query timed out: ${advice}; it continues as a job if you call it again.`) return raw
 }

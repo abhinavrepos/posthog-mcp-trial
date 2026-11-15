@@ -32,3 +32,12 @@ test('real outages, auth failures and timeouts keep their existing messages', ()
     assert.match(posthogFailure('Code: 241. memory limit exceeded').message, /ran out of memory/)
     assert.equal(posthogUsageMessage('everything is fine'), undefined)
 })
+
+test("PostHog's own max-execution-time limit says so and points to Lens rollup tools, classified as capacity", () => {
+    const e = posthogFailure({ isError: true, content: [{ type: 'text', text: 'Error: [query-funnel]: Request failed: Path: POST /api/environments/2/query/ Status Code: 504 (Gateway Timeout) Error Message: {"type":"server_error","detail":"Query has hit the max execution time before completing."}' }] })
+    assert.match(e.message, /own time limit; repeating it will not help/)
+    assert.match(e.message, /workflow_completion/)
+    assert.doesNotMatch(e.message, /environments\/2|server_error/)
+    assert.equal(posthogPublicMessage(e.message), e.message)
+    assert.equal(toolError(e, 'posthog_exec').kind, 'capacity')
+})
