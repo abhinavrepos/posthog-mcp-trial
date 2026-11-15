@@ -5,6 +5,8 @@ import { maskAmounts } from './appevents.ts'
 import { protectCodenameTokens, anonFor, hideClientsDeep, privacyMode, withPrivacy } from './anonymise.ts'
 import { config } from './config.ts'
 import { all } from './db.ts'
+import { JOB_HANDLE_NOTE } from './jobnote.ts'
+export { JOB_HANDLE_NOTE }
 import { identityTokens, scrubWith } from './rescueprivacy.ts'
 
 export function staffEmails(): Set<string> {
@@ -120,7 +122,9 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
                     out[k] = x.map(row => Array.isArray(row) ? row.map((cell, i) => walk(cell, columns[i] || '')) : walk(row))
                     continue
                 }
-                const key = text(k), safe = (k === 'note' && ('owner' in v || 'status' in v) || k === 'text' && 'kind' in v && v.kind === 'note') && x != null ? '[withheld]' : walk(x, k)
+                // A job handle's note is the fixed server instruction (runningResult in jobs.ts), not a person's free text.
+                const jobNote = k === 'note' && (v as { status?: unknown }).status === 'running' && 'job_id' in v && x === JOB_HANDLE_NOTE
+                const key = text(k), safe = !jobNote && (k === 'note' && ('owner' in v || 'status' in v) || k === 'text' && 'kind' in v && v.kind === 'note') && x != null ? '[withheld]' : walk(x, k)
                 // Masked survey labels can coincide; retain their combined answer count.
                 out[key] = typeof out[key] === 'number' && typeof safe === 'number' ? out[key] + safe : safe
             }

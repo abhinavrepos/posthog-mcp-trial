@@ -1,3 +1,4 @@
+import { JOB_HANDLE_NOTE } from './jobnote.ts'
 // Persisted in-process jobs. Work may run in a worker thread so synchronous SQLite/decoding cannot
 // prevent the MCP event loop from returning its handle on time. No request abort signal owns a job.
 import { ToolInputError } from './toolinputerror.ts'
@@ -182,7 +183,7 @@ export class JobRunner {
         }
     }
 }
-export function runningResult(id: string) { return { status: 'running', job_id: id, poll_after_seconds: 5, note: 'Call get_job_result with this job_id' } }
+export function runningResult(id: string) { return { status: 'running', job_id: id, poll_after_seconds: 5, note: JOB_HANDLE_NOTE } }
 export async function waitForJob(job: { id: string; done: Promise<unknown> }, extra?: { _meta?: { progressToken?: string | number }; sendNotification?: (notification: unknown) => Promise<unknown> }, budgetMs = 20000, progressMs = 10000): Promise<unknown> {
     let deadline: NodeJS.Timeout | undefined, progress: NodeJS.Timeout | undefined, n = 0
     if (extra?._meta?.progressToken !== undefined && extra.sendNotification) {
