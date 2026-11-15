@@ -202,8 +202,7 @@ test('rescue chat shows top three reasons, limits rows and descriptions, links d
         const listed = (await c.client.listTools()).tools
         assert.equal(listed.some(t => t.name === 'set_rescue_status'), false)
         assert.ok(listed.find(t => t.name === 'rescue_queue')!.description!.split(/[.!?](?:\s|$)/)[0].length + 1 <= 200)
-        const forbidden = await c.client.callTool({ name: 'set_rescue_status', arguments: { client: 'rescue-client', status: 'resolved' } })
-        assert.equal(forbidden.isError, true)
+        await assert.rejects(c.client.callTool({ name: 'set_rescue_status', arguments: { client: 'rescue-client', status: 'resolved' } }), /Unknown tool/)
     } finally { await c.close() }
     const queue = { coverage: { complete: true, unprocessed: [] }, window: { from: '2026-01-01', to: '2026-01-28' }, baseline: { from: '2025-12-04', to: '2025-12-31' }, data_through: '2026-01-28', hidden_snoozed: 0, note: '', clients: Array.from({ length: 60 }, (_, i) => ({ client: String(i), client_name: String(i), score: 50, level: 'urgent' as const, trend: 'new' as const, reasons: Array.from({ length: 5 }, (_, n) => ({ kind: 'missing' as const, text: String(n), now: 0, before: 5 })), next_step: 'Call' })) }
     const result = JSON.parse(await call('rescue_queue', {}, { rescueQueue: async () => queue }))

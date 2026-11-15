@@ -10,6 +10,9 @@ type Packed = [string[], [number[], number, number[], number[]][]]
 const DAY = 86400000
 // <= 1.03 GB of payload at 1461 days; reserve space for indexes, user-days and jobs.
 export const MAX_DAILY_BYTES = 700000
+const positive = (name: string, fallback: number) => Number.isFinite(Number(process.env[name])) && Number(process.env[name]) > 0 ? Math.floor(Number(process.env[name])) : fallback
+export class RollupBudgetError extends Error {}
+export const dailyDecodeLimit = () => positive('LENS_AGG_MAX_DAILY_DECOMPRESSED_BYTES', 32 * 1024 * 1024)
 export function initAggregateDaily(db: DatabaseSync) {
     db.exec(`CREATE TABLE IF NOT EXISTS aggregate_dimension_daily(day TEXT PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID;
         CREATE TABLE IF NOT EXISTS aggregate_dimension_skipped(day TEXT PRIMARY KEY, reason TEXT NOT NULL) WITHOUT ROWID;`)
@@ -21,7 +24,7 @@ export function packDaily(rows: DailyRow[]): Buffer {
     return brotliCompressSync(Buffer.from(JSON.stringify([dictionary, packed])), { params: { [constants.BROTLI_PARAM_QUALITY]: 5 } })
 }
 export function unpackDaily(value: Uint8Array): DailyRow[] {
-    const [dict, rows] = JSON.parse(brotliDecompressSync(value).toString()) as Packed
+    const [dict, rows] = JSON.parse(brotliDecompressSync(value, { maxOutputLength: dailyDecodeLimit() }).toString()) as Packed
     return rows.map(([dims, n, users, sessions]) => ({ ...Object.fromEntries(ROLLUP_DIMENSIONS.map((d,i) => [d,dict[dims[i]]])), n, users: users.map(i=>dict[i]), sessions: sessions.map(i=>dict[i]) } as DailyRow))
 }
 export function storeAggregateDaily(db: DatabaseSync, day: string, rows: DailyRow[]): boolean {
@@ -42,6 +45,18 @@ export async function ingestAggregateDaily(db: DatabaseSync, day: string, query:
         { from: day, to: new Date(Date.parse(day)+DAY).toISOString().slice(0,10) })
     if (rows.length > 200000 || rows.some(r => !Array.isArray(r.users) || !Array.isArray(r.sessions))) {
         db.prepare('DELETE FROM aggregate_dimension_daily WHERE day=?').run(day); db.prepare('INSERT OR REPLACE INTO aggregate_dimension_skipped VALUES (?,?)').run(day,'Dimension query exceeds grain cap or lacks exact sets; use live jobs.'); return false
+    }
+    // A finalized task day is evidence of a lower bound, even after upstream retention.
+    const hasIngest = db.prepare("SELECT 1 FROM sqlite_master WHERE name='task_ingest'").get()
+    const prior = hasIngest ? db.prepare('SELECT sessions,events,finalized FROM task_ingest WHERE day=?').get(day) : undefined
+    if (prior?.finalized) {
+        const sessions = new Set(rows.flatMap(r => (r.sessions as string[]).filter(Boolean)))
+        const events = rows.reduce((sum,r) => sum + Number(r.n), 0)
+        if (sessions.size < Number(prior.sessions) || events < Number(prior.events)) {
+            db.prepare('DELETE FROM aggregate_dimension_daily WHERE day=?').run(day)
+            db.prepare('INSERT OR REPLACE INTO aggregate_dimension_skipped VALUES (?,?)').run(day,'source_expired')
+            return false
+        }
     }
     return storeAggregateDaily(db, day, rows.map(r => ({ ...Object.fromEntries(ROLLUP_DIMENSIONS.map(d=>[d,r[d] == null ? null : String(r[d])])), n: Number(r.n), users: r.users as string[], sessions: r.sessions as string[] } as DailyRow)))
 }
@@ -64,15 +79,29 @@ export function dailyAggregate(db: DatabaseSync, q: DailyQuery) {
     type Acc = { dims: Record<string, unknown>; events: number; users: Set<string>; sessions: Set<string>; clients: Set<string> }
     const acc = (dims: Record<string, unknown>): Acc => ({ dims, events:0, users:new Set(), sessions:new Set(), clients:new Set() })
     const total=acc({}), by=new Map<string,Acc>()
-    const add=(a:Acc,r:DailyRow)=>{a.events+=r.n; if(metrics.includes('users'))for(const u of r.users)a.users.add(u); if(metrics.includes('sessions'))for(const s of r.sessions)a.sessions.add(s); if(metrics.includes('clients')&&r.client!==null)a.clients.add(r.client)}
+    const maxGroups=positive('LENS_AGG_MAX_GROUPS',20000), maxDistinct=positive('LENS_AGG_MAX_DISTINCT',5000000)
+    let retained=0
+    const retain=(set:Set<string>,id:string)=>{
+        if(!set.has(id)) {
+            if(retained >= maxDistinct) throw new RollupBudgetError('Exact rollup exceeded LENS_AGG_MAX_DISTINCT; using exact live queries.')
+            retained++; set.add(id)
+        }
+    }
+    const add=(a:Acc,r:DailyRow)=>{a.events+=r.n; if(metrics.includes('users'))for(const u of r.users)retain(a.users,u); if(metrics.includes('sessions'))for(const s of r.sessions)retain(a.sessions,s); if(metrics.includes('clients')&&r.client!==null)retain(a.clients,r.client)}
     for (const row of db.prepare('SELECT day,value FROM aggregate_dimension_daily WHERE day>=? AND day<? ORDER BY day').iterate(lo,hi)) {
-        for(const r of unpackDaily(row.value as Uint8Array)) {
+        let decoded: DailyRow[]
+        try { decoded=unpackDaily(row.value as Uint8Array) }
+        catch { throw new RollupBudgetError('Exact rollup daily blob exceeded the decompressed-size guard or could not be decoded; using exact live queries.') }
+        for(const r of decoded) {
             if (!events.has(r.event)) continue
             if(filters.some(f=>{const v=r[f.dimension as keyof DailyRow];const values=Array.isArray(f.value)?f.value:[f.value];return v===null || (f.op==='neq'?v===values[0]:f.op==='in'?!values.includes(String(v)):v!==values[0])}))continue
             add(total,r)
             if(groups.length || bucket!=='none') {
                 const dims={...(bucket!=='none'?{period:periodOf(String(row.day),bucket)}:{}),...Object.fromEntries(groups.map(g=>[g,r[g as keyof DailyRow]]))}, key=JSON.stringify(dims)
-                let a=by.get(key);if(!a)by.set(key,a=acc(dims));add(a,r)
+                let a=by.get(key);if(!a) {
+                    if(by.size >= maxGroups) throw new RollupBudgetError('Exact rollup exceeded LENS_AGG_MAX_GROUPS; using exact live queries.')
+                    by.set(key,a=acc(dims))
+                };add(a,r)
             }
         }
     }

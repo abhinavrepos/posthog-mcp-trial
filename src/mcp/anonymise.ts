@@ -140,13 +140,26 @@ export function guardTransport(t: Transport, registry?: Registry, onToolRefusal?
     const onmessage = t.onmessage
     if (!onmessage) throw new Error('guardTransport: connect the server first')
     t.onmessage = (message, extra) => withPrivacy(() => {
+        // Lookup failures and malformed names never reach SDK handlers/validation. Account
+        // them here in every mode, preserving a fixed JSON-RPC error without echoing input.
+        const incoming=message as Rpc
+        if(isObj(incoming) && incoming.method==='tools/call' && registry &&
+            (typeof incoming.params?.name!=='string' || !registry.tools().has(incoming.params.name))) {
+            const error={code:-32602,message:'Unknown tool.'}
+            const answer=onToolRefusal ? onToolRefusal('unknown',[],error) : error
+            void send({jsonrpc:'2.0',id:incoming.id ?? null,error:answer} as JSONRPCMessage);return
+        }
         const g = guardRequest(message, 'lens_refused', registry)
         if (g.answer) {
             if((message as Rpc).method==='tools/call' && onToolRefusal) {
                 const params=(message as Rpc).params || {},known=registry?.tools().get(String(params.name))
                 const name=known ? String(params.name) : 'unknown'
                 const keys=isObj(params.arguments) ? Object.keys(params.arguments).filter(k=>known?.includes(k)).sort() : []
-                g.answer.result=onToolRefusal(name,keys,g.answer.result)
+                if(g.answer.error) {
+                    const answer=onToolRefusal(name,keys,g.answer.error) as Rpc
+                    if(answer.code) g.answer.error=answer
+                    else {delete g.answer.error;g.answer.result=answer}
+                } else g.answer.result=onToolRefusal(name,keys,g.answer.result)
             }
             void send(g.answer as JSONRPCMessage); return
         }

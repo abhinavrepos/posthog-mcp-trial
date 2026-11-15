@@ -1,3 +1,4 @@
+import { errorDiagnostic } from '../core/errordiagnostics.ts'
 import { all, run } from '../core/db.ts'
 export interface ToolAudit {
     at: string; user_email: string; token_id: string; tool: string; argument_keys: string[]
@@ -15,4 +16,4 @@ export function readToolAudit(limit=100, offset=0) {
     const bounded=(n:number,fallback:number,max:number)=>Number.isFinite(n)?Math.min(max,Math.max(0,Math.floor(n))):fallback
     return all('SELECT * FROM tool_audit ORDER BY at DESC,id DESC LIMIT ? OFFSET ?',bounded(limit,100,1000),bounded(offset,0,1000000))
 }
-const prune = setInterval(()=>{try {pruneToolAudit()} catch(e) {console.error('Tool audit pruning failed',e)}},3600000);prune.unref()
+const prune = setInterval(()=>{try {pruneToolAudit()} catch(e) {errorDiagnostic(e,'audit_prune','audit')}},3600000);prune.unref()

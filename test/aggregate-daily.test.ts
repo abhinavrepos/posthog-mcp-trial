@@ -68,3 +68,39 @@ test('incremental backfill leaves expired and failed source days unavailable',as
  assert.equal(queries,0)
  assert.equal(dailyAggregate(tasksDb,{from:new Date('2026-04-02'),to:new Date('2026-04-04')}),undefined)
 })
+
+test('rollup budgets abort while accumulating groups and distinct memberships, never return partial counts',()=>{
+ const q={from:new Date('2026-01-30'),to:new Date('2026-02-03'),group_by:['dialog'],metrics:['users','sessions'],limit:1}
+ try {
+  process.env.LENS_AGG_MAX_GROUPS='1'
+  assert.throws(()=>dailyAggregate(tasksDb,q),/LENS_AGG_MAX_GROUPS/)
+  delete process.env.LENS_AGG_MAX_GROUPS
+  process.env.LENS_AGG_MAX_DISTINCT='2'
+  assert.throws(()=>dailyAggregate(tasksDb,q),/LENS_AGG_MAX_DISTINCT/)
+  delete process.env.LENS_AGG_MAX_DISTINCT
+  process.env.LENS_AGG_MAX_DAILY_DECOMPRESSED_BYTES='100'
+  assert.throws(()=>dailyAggregate(tasksDb,q),/decompressed-size guard/)
+ }finally {for(const key of ['LENS_AGG_MAX_GROUPS','LENS_AGG_MAX_DISTINCT','LENS_AGG_MAX_DAILY_DECOMPRESSED_BYTES'])delete process.env[key]}
+ assert.ok(dailyAggregate(tasksDb,q))
+})
+
+test('finalized backfills reject empty and reduced source totals and disclose source_expired',async()=>{
+ const {storeAttempts}=await import('../src/core/tasks.ts')
+ for(const [day,rows] of [
+  ['2026-05-01',[]],
+  ['2026-05-02',[{...Object.fromEntries(ROLLUP_DIMENSIONS.map(d=>[d,d==='event'?reg.events.screen:''])),n:10,users:['u'],sessions:['s1']}]],
+  ['2026-05-03',[{...Object.fromEntries(ROLLUP_DIMENSIONS.map(d=>[d,d==='event'?reg.events.screen:''])),n:1,users:['u'],sessions:['s1','s2']}]],
+ ] as const) {
+  storeAttempts(day,[],{finalized:true,analysisSessions:[]})
+  tasksDb.prepare('UPDATE task_ingest SET sessions=2,events=10 WHERE day=?').run(day)
+  assert.equal(await ingestAggregateDaily(tasksDb,day,async()=>structuredClone(rows) as unknown as Record<string,unknown>[]),false)
+  assert.equal(tasksDb.prepare('SELECT reason FROM aggregate_dimension_skipped WHERE day=?').get(day)?.reason,'source_expired')
+  const result=await aggregateEvents({from:new Date(day),to:new Date(Date.parse(day)+DAY)})
+  assert.equal(result.coverage.status,'unavailable');assert.match(JSON.stringify(result),/source_expired/)
+  assert.deepEqual(result.totals,{})
+  const {analyticalResult}=await import('../src/mcp/historyresult.ts')
+  const {jsonResult}=await import('../src/mcp/result.ts')
+  const disclosed=analyticalResult('aggregate_events',{},jsonResult('Counts',result)) as {_lensJson:{value:{coverage:{status:string;reason:string}}}}
+  assert.equal(disclosed._lensJson.value.coverage.status,'unavailable');assert.equal(disclosed._lensJson.value.coverage.reason,'source_expired')
+ }
+})

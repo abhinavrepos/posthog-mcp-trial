@@ -58,3 +58,21 @@ test('weekly periods split on Mondays so no week is cut in two', async () => {
     for (const c of splitByYear(new Date('2023-01-01'), new Date('2027-01-01'), true).slice(1)) assert.equal(c.from.getUTCDay(), 1)
     assert.equal(splitByYear(new Date('2026-01-01'), new Date('2026-06-01'), false).length, 1)
 })
+
+test('exhausted rollup budgets fall back to exact live counts and explain the reason',async t=>{
+ const {tasksDb}=await import('../src/core/tasks.ts')
+ const {storeAggregateDaily,ROLLUP_DIMENSIONS}=await import('../src/core/aggregatedaily.ts')
+ const {required}=await import('../src/core/appevents.ts')
+ const rows=['A','B'].map(dialog=>({...Object.fromEntries(ROLLUP_DIMENSIONS.map(d=>[d,d==='event'?required().events.screen:''])),dialog,n:1,users:['u'],sessions:['s']})) as import('../src/core/aggregatedaily.ts').DailyRow[]
+ storeAggregateDaily(tasksDb,'2026-06-01',rows)
+ let calls=0
+ t.mock.method(globalThis,'fetch',async(_u:unknown,init:RequestInit)=>{calls++;return JSON.parse(String(init.body)).query.query.includes('GROUP BY') ? response([{dialog:'A',events:1},{dialog:'B',events:1}]) : response([{events:2,sessions:1}])})
+ for(const budget of ['LENS_AGG_MAX_GROUPS','LENS_AGG_MAX_DISTINCT']) {
+  try {
+   process.env[budget]='1'
+   const result=await aggregateEvents({from:new Date('2026-06-01'),to:new Date('2026-06-02'),group_by:['dialog'],metrics:['events','sessions']})
+   assert.equal(result.source,'live');assert.deepEqual(result.totals,{events:2,sessions:1});assert.match(result.note,new RegExp(budget));assert.equal(result.rows.length,2)
+  }finally{delete process.env[budget]}
+ }
+ assert.ok(calls>=4)
+})

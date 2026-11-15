@@ -1,3 +1,4 @@
+import { errorDiagnostic } from './errordiagnostics.ts'
 import { backfillPerformanceHistory } from './performancehistory.ts'
 import { initAggregateDaily, ingestAggregateDaily } from './aggregatedaily.ts'
 import { privacyKey } from './anonymise.ts'
@@ -811,7 +812,7 @@ function failure(day: string, e: unknown) {
     const error = e instanceof Error ? e.message : String(e)
     state('last_error', `${day}: ${error}`)
     if (/^\d{4}-\d{2}-\d{2}$/.test(day)) state('query_failed:'+day,error)
-    console.error(JSON.stringify({ at: new Date().toISOString(), event: 'tasks.ingest_error', day, error }))
+    errorDiagnostic(error,'tasks_ingest','upstream')
 }
 export async function runIngest(opts: { days?: string[]; maxBackfill?: number } = {}): Promise<void> {
     if (opts.days) opts.days.forEach(validDay)

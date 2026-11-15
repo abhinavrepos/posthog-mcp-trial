@@ -133,7 +133,7 @@ describe('PostHog proxy adapter', () => {
     })
     test('mixed batches refuse replays locally and forward only permitted requests', async (t) => {
         t.mock.method(globalThis, 'fetch', async (_url: URL, init: RequestInit) => {
-            assert.deepEqual(JSON.parse(String(init.body)), [call('call query-trends {}', 4)])
+            assert.deepEqual(JSON.parse(String(init.body)), call('call query-trends {}', 4))
             return new Response(JSON.stringify([{ jsonrpc: '2.0', id: 4, result: { content: [] } }]), { headers: { 'content-type': 'application/json' } })
         })
         const res = await invoke([call('call vision-query {}'), call('call query-trends {}', 4)])
@@ -229,4 +229,33 @@ test('HTTP proxy against a real loopback upstream: auth, sessions, status, metho
     const res = await fetch(endpoint, { method: 'POST', headers: { authorization: 'Bearer lens-secret' }, body: JSON.stringify(call('call session-recording-get {}')) })
     assert.match(JSON.stringify(await res.json()), /get_replay_link/)
     assert.equal(seen.length, 3)
+})
+
+test('proxy calls share Lens budgets and audit every member of a refused batch',async t=>{
+ const {toolLimiter}=await import('../src/mcp/ratelimit.ts')
+ const {all}=await import('../src/core/db.ts')
+ const caller={who:'proxy-budget',email:`proxy-budget-${crypto.randomUUID()}@example.com`,tokenId:crypto.randomUUID()}
+ for(let i=0;i<12;i++)toolLimiter.acquire(caller.email,caller.tokenId,'aggregate_events')()
+ let fetched=0;t.mock.method(globalThis,'fetch',async()=>{fetched++;return Response.json({})})
+ const result=await invoke([call('call query-trends {}',81),call('call execute-sql {}',82)],{},'POST',{...options,caller})
+ assert.equal(fetched,0);assert.match(result.text,/Rate limit/)
+ const rows=all<Record<string,unknown>>('SELECT * FROM tool_audit WHERE user_email=?',caller.email)
+ assert.equal(rows.length,2);assert.deepEqual(rows.map(r=>r.tool),['posthog:query-trends','posthog:execute-sql'])
+ assert.ok(rows.every(r=>r.error_kind==='rate_limit' && r.argument_keys==='["command"]'))
+})
+
+test('proxy analytics and batched members share the PostHog concurrency gate through body completion',async t=>{
+ const {posthogQueryGate}=await import('../src/mcp/posthog-query.ts')
+ const controller=new AbortController(),releases:(()=>void)[]=[],entered:Promise<void>[]=[]
+ for(let i=0;i<posthogQueryGate.cap;i++) {
+  let ready!:()=>void;entered.push(new Promise(r=>{ready=r}))
+  void posthogQueryGate.run(controller.signal,()=>new Promise<void>(r=>{releases.push(r);ready()}))
+ }
+ await Promise.all(entered)
+ let fetched=0;t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{fetched++;const item=JSON.parse(String(init.body));return Response.json({jsonrpc:'2.0',id:item.id,result:{content:[]}})})
+ const result=invoke([call('call query-trends {}',91),call('call query-funnels {}',92)],{},'POST',{...options,caller:{who:'proxy-gate',tokenId:'proxy-gate'}})
+ await new Promise(r=>setTimeout(r,20));assert.equal(fetched,0)
+ releases.shift()!()
+ const response=await result;assert.equal(fetched,2);assert.equal(JSON.parse(response.text).length,2)
+ for(const release of releases)release()
 })

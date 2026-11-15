@@ -99,7 +99,7 @@ test('Copilot: client_experience answers in plain words with findings, next step
     const { wrapTools } = await import('../src/mcp/tools.ts')
     const { registerDashboardTools } = await import('../src/mcp/dashboardtools.ts')
     const server = new McpServer({ name: 't', version: '1' })
-    wrapTools(server)
+    wrapTools(server,false,undefined,{work:(_name,_args,_window,execute)=>({promise:execute()})})
     registerDashboardTools(server, { who: 'pm', email: 'pm@x', dashboardRole: 'view', surveyRole: 'none', admin: false, insights: true }, { rescueClients: (t: string) => sessions.filter((s) => s.client_id === t || s.client_name.toLowerCase() === t.toLowerCase()).slice(0, 1).map((s) => ({ id: s.client_id, name: s.client_name })) } as never)
     const client = new Client({ name: 't', version: '0' }); const [a, b] = InMemoryTransport.createLinkedPair()
     await Promise.all([server.connect(a), client.connect(b)])

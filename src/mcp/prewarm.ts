@@ -1,3 +1,4 @@
+import { errorDiagnostic } from '../core/errordiagnostics.ts'
 // Background pre-warm: the heaviest analysis answers chat asks most (with their default arguments) are
 // computed every LENS_PREWARM_MINUTES (default 15; 0 turns it off), one at a time, through a real
 // in-process MCP client, so they take exactly the path a chat question takes. The answers are kept until
@@ -43,7 +44,7 @@ export async function prewarmRound(tools: string[], keepMs: number): Promise<Rec
                     try { job = JSON.parse(String((r.content as {text?:string}[])[0]?.text || '{}')) } catch { job = {} }
                 }
                 out[name] = r.isError ? 'error: ' + JSON.stringify(r.content).slice(0, 120) : Date.now() - t
-            } catch (e) { out[name] = 'error: ' + (e as Error).message.slice(0, 120) }
+            } catch (e) { errorDiagnostic(e,name,'prewarm');out[name] = 'error: operation failed' }
         }
     } finally { await client.close(); await server.close() }
     return out
@@ -56,7 +57,7 @@ export const SURVEY_REFRESH_MS = 4 * 60_000
 let surveyTimer: NodeJS.Timeout | undefined
 function startSurveyRefresh(): void {
     if (surveyTimer || !surveysActive()) return
-    const read = () => surveyOverview(30).catch((e) => log('survey refresh failed', { error: (e as Error).message }))
+    const read = () => surveyOverview(30).catch((e) => errorDiagnostic(e,'survey_refresh','upstream'))
     setTimeout(read, 90_000).unref()
     surveyTimer = setInterval(read, SURVEY_REFRESH_MS)
     surveyTimer.unref()
@@ -75,7 +76,7 @@ export function startPrewarm(): void {
         try {
             log('prewarm round', await prewarmRound(tools, keep))
 
-        } catch (e) { log('prewarm failed', { error: (e as Error).message }) } finally { running = false }
+        } catch (e) { errorDiagnostic(e,'prewarm','upstream') } finally { running = false }
     }
     // First round two minutes after start, so the service and PostHog settle first.
     setTimeout(round, 120_000).unref()

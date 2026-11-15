@@ -39,10 +39,11 @@ class Capture extends Writable {
     _write(chunk: Buffer, _: BufferEncoding, cb: () => void) { this.chunks.push(Buffer.from(chunk)); cb() }
     get text() { return Buffer.concat(this.chunks).toString() }
 }
+let proxyInvocation=0
 async function proxy(value: unknown) {
     const req = Object.assign(Readable.from([JSON.stringify(value)]), { method: 'POST', url: '/', headers: { authorization: 'Bearer token', 'content-type': 'application/json' } })
     const res = new Capture()
-    await handlePosthogMcp(req as unknown as IncomingMessage, res as unknown as ServerResponse, options)
+    await handlePosthogMcp(req as unknown as IncomingMessage, res as unknown as ServerResponse, {...options,caller:{who:`policy-${++proxyInvocation}`}})
     return res.text
 }
 

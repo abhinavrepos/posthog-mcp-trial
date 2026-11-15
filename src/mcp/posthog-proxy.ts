@@ -1,4 +1,8 @@
-import { posthogQueryContext } from './posthog-query.ts'
+import { errorDiagnostic } from '../core/errordiagnostics.ts'
+import { toolLimiter } from './ratelimit.ts'
+import { writeToolAudit } from './toolaudit.ts'
+import type { ChatCaller } from '../service/access.ts'
+import { isPosthogQuery, posthogQueryGate, posthogQueryContext } from './posthog-query.ts'
 import { posthogFailure, posthogPublicMessage } from './posthog-error.ts'
 import { toolError } from './toolerror.ts'
 import { randomUUID } from 'node:crypto'
@@ -150,6 +154,7 @@ export interface ProxyOptions {
     token: string
     name: string
     enabled: boolean
+    caller?: Pick<ChatCaller,'who'|'email'|'tokenId'>
     authorize?: (req: IncomingMessage) => boolean // instead of the shared token alone (personal tokens too)
     info?: LensInfo
     timeoutMs?: number
@@ -207,11 +212,28 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
         }
         return safe
     }
-    const out = (v: unknown) => clean(rewriteResponse(v, options.name, options.info))
+    const out = (v: unknown) => {
+        for(const answer of Array.isArray(v) ? v : [v]) if(object(answer)) {
+            const record=records.find(r=>r.id===answer.id)
+            if(record) { record.chars=JSON.stringify(answer).length;if(answer.error || answer.result?.isError) record.error='upstream' }
+        }
+        return clean(rewriteResponse(v, options.name, options.info))
+    }
     const sseLine = (line: string) => {
         if (!line.startsWith('data:')) return cleanText(anonFor('posthog') ? hideClients(line).text : line)
         const m = /^(data: *)(.*?)(\r?)$/.exec(line)!
         try { return `${m[1]}${JSON.stringify(out(JSON.parse(m[2])))}${m[3]}` } catch { return cleanText(anonFor('posthog') ? hideClients(line).text : line) }
+    }
+    const records: {id:unknown; tool:string; keys:string[]; correlation:string; started:number; release?:()=>void; error?:string; chars:number}[] = []
+    const analytics = (item:Rpc) => isPosthogQuery(item.params?.name === 'exec' ? item.params.arguments?.command : `call ${item.params?.name} ${JSON.stringify(item.params?.arguments || {})}`)
+    let gateRelease: (()=>void)|undefined
+    const enterGate = async () => {
+        let entered!:()=>void
+        const ready=new Promise<void>(resolve=>{entered=resolve})
+        const held=posthogQueryGate.run(controller.signal,()=>new Promise<void>(resolve=>{gateRelease=resolve;entered()}))
+        await Promise.race([ready,held])
+        // Gate refusal must propagate rather than silently executing without a slot.
+        void held.catch(()=>{})
     }
     try {
         tokens = await identityTokens(); staff = staffEmails()
@@ -225,11 +247,22 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
             try { value = JSON.parse(raw) } catch { return send(res, 400, { error: 'invalid JSON' }) }
             batch = Array.isArray(value)
             const allowed = (batch ? value as unknown[] : [value]).flatMap((item) => {
+                let record: typeof records[number] | undefined
+                if(object(item) && item.method==='tools/call') {
+                    const command=item.params?.name==='exec' ? /^\s*(?:call\s+)?(?:posthog:)?([\w-]+)/i.exec(String(item.params.arguments?.command || ''))?.[1] || 'exec' : String(item.params?.name || 'unknown')
+                    record={id:item.id,tool:'posthog:'+(/^[\w-]{1,80}$/.test(command) ? command : 'unknown'),keys:object(item.params?.arguments) ? Object.keys(item.params.arguments).filter(k=>/^[\w-]{1,80}$/.test(k)).sort() : [],correlation:randomUUID(),started:Date.now(),chars:0}
+                    records.push(record)
+                    try {record.release=toolLimiter.acquire(options.caller?.email || options.caller?.who || 'shared',options.caller?.tokenId || options.caller?.who || 'shared',record.tool,analytics(item) ? 5 : 1)}
+                    catch(error) {
+                        const mapped=toolError(error,record.tool,record.correlation);record.error=mapped.kind
+                        refusals.push({jsonrpc:'2.0',id:item.id??null,result:mapped.result});return []
+                    }
+                }
                 const refusal = commandRefusal(item, options.name)
-                if (refusal) { refusals.push(refusal); return [] }
+                if (refusal) { if(record)record.error='privacy_refused'; refusals.push(refusal); return [] }
                 if (!anon) return [item]
                 const a = anonRefusal(item, options.name)
-                if (a.refusal) { refusals.push(a.refusal); return [] }
+                if (a.refusal) { if(record)record.error='privacy_refused'; refusals.push(a.refusal); return [] }
                 return [a.value]
             })
             if (!allowed.length && refusals.length) return send(res, 200, batch ? refusals : refusals[0])
@@ -243,8 +276,31 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
         const url = new URL(options.url)
         // Preserve resume/query parameters without changing the configured upstream path.
         for (const [key, value] of new URL(req.url || '/', 'http://localhost').searchParams) url.searchParams.append(key, value)
-        const upstream = await upstreamRequest(url, options.apiKey, { method: req.method, headers, body, signal: controller.signal })
+        const request = (body: string | undefined) => upstreamRequest(url,options.apiKey,{method:req.method,headers,body,signal:controller.signal})
+        let upstream: Response
+        const items=body ? JSON.parse(body) : undefined
+        if(batch && Array.isArray(items) && items.some(item=>object(item) && item.method==='tools/call' && analytics(item))) {
+            // Dispatch batch members separately so an upstream parallel batch cannot exceed the gate.
+            const replies: unknown[]=[]
+            for(const item of items) {
+                const read=async()=>{
+                    const response=await request(JSON.stringify(item))
+                    const raw=response.body ? await readBody(Readable.fromWeb(response.body as import('node:stream/web').ReadableStream),limit) : ''
+                    if(!response.ok) throw posthogFailure(raw,response.status,response.headers.get('retry-after'))
+                    if(response.headers.get('content-type')?.includes('text/event-stream')) {
+                        for(const line of raw.split('\n'))if(line.startsWith('data:')) {try{replies.push(JSON.parse(line.slice(5)))}catch{}}
+                    } else if(raw) {const reply=JSON.parse(raw);replies.push(...(Array.isArray(reply)?reply:[reply]))}
+                }
+                if(object(item) && item.method==='tools/call' && analytics(item)) await posthogQueryGate.run(controller.signal,read)
+                else await read()
+            }
+            upstream=new Response(JSON.stringify(replies),{headers:{'content-type':'application/json'}})
+        } else {
+            if(object(items) && items.method==='tools/call' && analytics(items)) await enterGate()
+            upstream=await request(body)
+        }
         if (!upstream.ok) {
+            for(const record of records) record.error ||= 'upstream'
             const detail = upstream.body ? await readBody(Readable.fromWeb(upstream.body as import('node:stream/web').ReadableStream), limit) : ''
             const id = randomUUID()
             const mapped = toolError(posthogFailure(detail, upstream.status, upstream.headers.get('retry-after'), id), 'posthog_exec', id)
@@ -294,6 +350,7 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
             res.end(output)
         }
     } catch (error) {
+        for(const record of records) record.error ||= 'upstream'
         if (!res.headersSent) {
             if (error instanceof BodyTooLarge) send(res, 413, { error: 'MCP body too large' })
             else {
@@ -303,6 +360,12 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
             }
         } else res.destroy()
     } finally {
+        gateRelease?.()
+        for(const record of records) {
+            record.release?.()
+            try {writeToolAudit({at:new Date(record.started).toISOString(),user_email:options.caller?.email || options.caller?.who || 'shared',token_id:options.caller?.tokenId || options.caller?.who || 'shared',tool:record.tool,argument_keys:record.keys,client_ids:[],duration_ms:Date.now()-record.started,result_chars:record.chars,is_error:!!record.error,error_kind:record.error,privacy_mode:privacyMode(),correlation_id:record.correlation})}
+            catch(error) {errorDiagnostic(error,record.tool,'audit',record.correlation)}
+        }
         clearTimeout(timer)
         res.off('close', onClose)
     }
@@ -318,16 +381,24 @@ function upstreamRequest(url: string | URL, apiKey: string, init: RequestInit): 
 export function posthogExec(command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
     return withPrivacy(() => posthogExecFrozen(command, options))
 }
-async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
+/** The policy checks of a posthog_exec command (refused commands, private-mode refusals and filtering). Cheap:
+ * the job dispatcher runs them BEFORE creating a job, so a refusal is immediate, never a job handle. */
+export async function posthogExecPolicy(command: string, name = 'lens'): Promise<{ refusal: unknown } | { call: unknown }> {
     let call: unknown = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'exec', arguments: { command } } }
-    const refused = commandRefusal(call, options.name)
-    if (refused) return publicToolError({ isError: true, content: [{ type: 'text', text: refused.error.message }] })
+    const refused = commandRefusal(call, name)
+    if (refused) return { refusal: publicToolError({ isError: true, content: [{ type: 'text', text: refused.error.message }] }) }
     if (anonFor('posthog')) {
         await refreshRoster()
-        const a = anonRefusal(call, options.name)
-        if (a.refusal) return publicToolError(a.refusal.result)
+        const a = anonRefusal(call, name)
+        if (a.refusal) return { refusal: publicToolError(a.refusal.result) }
         call = a.value
     }
+    return { call }
+}
+async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
+    const policy = await posthogExecPolicy(command, options.name)
+    if ('refusal' in policy) return policy.refusal
+    let call = policy.call
     const controller = new AbortController()
     const query = posthogQueryContext.getStore()
     const abort = () => controller.abort()

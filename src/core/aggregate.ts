@@ -1,4 +1,4 @@
-import { dailyAggregate } from './aggregatedaily.ts'
+import { dailyAggregate, RollupBudgetError } from './aggregatedaily.ts'
 import { tasksDb } from './tasks.ts'
 // Aggregate-only event counts for questions the daily history does not hold (by app version, tab, button, a
 // property over years). Lens builds the HogQL from approved dimensions and bound values: no SQL from the
@@ -74,8 +74,13 @@ export async function aggregateEvents(q: AggregateQuery) {
         return f.op === 'in' ? `${d.expr(reg)} IN {f${i}}` : `${d.expr(reg)} ${f.op === 'neq' ? '!=' : '='} {f${i}}`
     })
     if (bucket === 'day' && +q.to - +q.from > 400 * DAY) throw new Error('Daily periods are limited to 400 days; use week, month, quarter or year for longer windows.')
-    const rolled = dailyAggregate(tasksDb, q)
-    if (rolled) return rolled
+    let rollupNote = ''
+    try { const rolled = dailyAggregate(tasksDb, q); if (rolled) return rolled }
+    catch(e) { if (!(e instanceof RollupBudgetError)) throw e; rollupNote = ' ' + e.message }
+    if (tasksDb.prepare("SELECT 1 FROM aggregate_dimension_skipped WHERE day>=? AND day<? AND reason='source_expired' LIMIT 1").get(q.from.toISOString().slice(0,10),q.to.toISOString().slice(0,10))) {
+        // A live query cannot reconstruct expired history either.
+        return {window:{from:q.from.toISOString(),to:q.to.toISOString()},metrics,group_by:groups,bucket,filters,totals:{},rows:[],groups_omitted:0,queries:0,seconds:0,source:'history',coverage:{requested:{from:q.from.toISOString(),to_exclusive:q.to.toISOString(),timezone:'UTC'},answered:[],status:'unavailable',reason:'source_expired',detail:'PostHog source has fewer sessions or events than retained task evidence.'},note:'Exact dimension counts are unavailable because the source expired.'}
+    }
     const keys = [...(bucket !== 'none' ? [`${BUCKETS[bucket]} AS period`] : []), ...groups.map((g) => `${DIMENSIONS[g].expr(reg)} AS ${g}`)]
     const names = [...(bucket !== 'none' ? ['period'] : []), ...groups]
     const select = [...keys, ...metrics.map((m) => `${METRICS[m]} AS ${m}`)].join(', ')
@@ -142,6 +147,6 @@ export async function aggregateEvents(q: AggregateQuery) {
         groups_omitted: omitted, queries: chunked ? chunks.length : 1,
         seconds: Math.round((performance.now() - started) / 100) / 10,
         source: 'live', coverage: { status: 'complete', detail: 'Every matching PostHog event in the window, aggregated in ClickHouse. Events PostHog no longer keeps cannot be counted.' },
-        note: 'Counts are exact (distinct counts use uniqExact). Totals cover every matching event; rows are the largest groups. No raw events or people are returned. Distinct counts per period are not additive across periods.' + totalsNote,
+        note: 'Counts are exact (distinct counts use uniqExact). Totals cover every matching event; rows are the largest groups. No raw events or people are returned. Distinct counts per period are not additive across periods.' + totalsNote + rollupNote,
     }
 }

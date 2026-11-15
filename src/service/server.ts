@@ -271,6 +271,7 @@ const server = createServer((req, res) => {
                 token: config.service.mcpToken, name: config.mcp.name,
                 enabled: config.posthog.mcpViaLens && posthogMcpActive(),
                 authorize: (r) => !!callerOf(r),
+                caller: callerOf(req),
                 info: { app: appEvents()?.app || 'the app', tools: lensToolNames() },
             })
             if (url.pathname === '/mcp') return await handleMcp(req, res)

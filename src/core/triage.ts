@@ -1,3 +1,4 @@
+import { errorDiagnostic } from './errordiagnostics.ts'
 import { privacyMode, withPrivacy } from './anonymise.ts'
 // The triage pipeline both entry points share: Jira webhooks and the MCP tools.
 import { aiSafety } from './aisafety.ts'
@@ -74,7 +75,7 @@ async function clipFor(sessionId: string, offsetS: number, recordingLengthS: num
 /** A short, readable reason for a failed clip. The full error goes to the service log. */
 function clipFailure(e: unknown): string {
     const msg = e instanceof Error ? e.message : String(e)
-    console.error(JSON.stringify({ t: new Date().toISOString(), msg: 'clip render failed', error: msg.slice(0, 2000) }))
+    errorDiagnostic(msg,'clip_render','upstream')
     if (/No usable sandbox|Failed to launch the browser/.test(msg)) return 'The video clip could not be made: the clip renderer is not set up on this server yet. The replay link still works.'
     if (/no stored snapshots/i.test(msg)) return 'The video clip could not be made: the recording is still being saved. Try again in a minute. The replay link works.'
     return `The video clip could not be made (${msg.split('\n')[0].slice(0, 120)}). The replay link still works.`

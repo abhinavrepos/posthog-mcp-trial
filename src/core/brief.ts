@@ -1,3 +1,4 @@
+import { errorDiagnostic } from './errordiagnostics.ts'
 import { auditClient, toolCorrelationId } from './toolcontext.ts'
 // One deterministic PM entry point. Queries stay here; composeBrief only reads supplied results.
 import {
@@ -296,7 +297,7 @@ export async function revalBrief(input: BriefInput, sources = briefSources, now 
     const optional = async <T>(label: string, work: () => Promise<T>): Promise<T | undefined> => {
         try { return await work() } catch(error) {
             const id=toolCorrelationId()
-            console.error('Lens brief source error',{correlation_id:id,source:label,error})
+            errorDiagnostic(error,'reval_brief','upstream',id)
             limits.push(`${label} unavailable. Try a narrower window or retry later. Correlation id: ${id}.`); return undefined
         }
     }

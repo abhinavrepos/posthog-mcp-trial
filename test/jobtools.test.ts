@@ -154,3 +154,39 @@ test('every background analysis uses the heavy limiter weight', async () => {
     const { ToolLimiter } = await import('../src/mcp/ratelimit.ts')
     for (const name of JOB_TOOLS) assert.throws(() => new ToolLimiter(4, 600, 4).acquire('user', 'token', name), /Rate limit/, name)
 })
+
+test('read-only dispatch defaults to jobs, preserves fast/write results, and bounds newly covered tools',async()=>{
+ const {jobBacked}=await import('../src/mcp/jobtools.ts')
+ for(const name of ['reval_brief','session_story','task_map','flow_time','client_experience','new_read_only_tool'])assert.equal(jobBacked(name,true),true)
+ for(const name of ['resolve_client','get_replay_link','find_task','list_dashboards','get_job_result'])assert.equal(jobBacked(name,true),false)
+ assert.equal(jobBacked('save_survey',false),false)
+ const m=memory(),server=new McpServer({name:'default-jobs',version:'1'})
+ let finish!:(value:unknown)=>void,executions=0
+ const dispatch=wrapTools(server,false,{who:'all-readonly'}, {runner:m.runner,budgetMs:5,work:(_n,_a,_w,execute)=>{executions++;return {promise:execute()}}})
+ installJobTools(server,dispatch)
+ server.registerTool('reval_brief',{inputSchema:{},annotations:{readOnlyHint:true}},async()=>new Promise(r=>{finish=r}) as never)
+ server.registerTool('resolve_client',{inputSchema:{},annotations:{readOnlyHint:true}},async()=>({content:[{type:'text',text:'fast result'}]}))
+ server.registerTool('write_test',{inputSchema:{},annotations:{readOnlyHint:false}},async()=>({content:[{type:'text',text:'write result'}]}))
+ const client=new Client({name:'new-tools',version:'1'}),[a,b]=InMemoryTransport.createLinkedPair()
+ await server.connect(a);await client.connect(b)
+ try {
+  assert.match(text(await client.callTool({name:'resolve_client',arguments:{}})),/fast result/)
+  assert.match(text(await client.callTool({name:'write_test',arguments:{}})),/write result/)
+  assert.equal(executions,0)
+  const response=await client.callTool({name:'reval_brief',arguments:{}}),id=handle(response)
+  assert.match(id,/^[0-9a-f]{32}$/);assert.equal(executions,1)
+  finish({content:[{type:'text',text:'completed brief'}]});await turn()
+  assert.match(text(await poll(client,id)),/completed brief/)
+ }finally{await client.close();await server.close();m.close()}
+})
+
+test('worker pool reuses a small number of threads across sequential analytical calls',async()=>{
+ const {AnalysisWorkerPool}=await import('../src/mcp/jobpool.ts')
+ const pool=new AnalysisWorkerPool(1)
+ try {
+  const data={name:'aggregate_events',args:{when:'2026-01-01 to 2026-01-01'},window:{from:new Date('2026-01-01'),to:new Date('2026-01-02'),label:'test',precision:'range'}}
+  const a=await pool.run(data).promise,b=await pool.run(data).promise
+  assert.deepEqual(a,b)
+  assert.equal((pool as unknown as {slots:unknown[]}).slots.length,1)
+ }finally{pool.close()}
+})

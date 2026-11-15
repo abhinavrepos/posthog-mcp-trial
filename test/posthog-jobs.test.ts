@@ -155,8 +155,10 @@ test('four analytics jobs across sessions share the global cap despite general w
     const clients = await Promise.all([0, 1, 2, 3].map(i => setup(`cap-${i}`)))
     try {
         const results = await Promise.all(clients.map(c => call(c.client, 'call query-funnel {}')))
-        assert.ok(results.every(r => handle(r))); assert.equal(calls, 3); assert.equal(peak, 3)
-        release[0](); await tick(); await tick(); assert.equal(calls, 4); assert.equal(peak, 3)
+        // Upstream calls start on later ticks: wait for each state (bounded) instead of assuming timing under load.
+        const until = async (ok: () => boolean) => { const end = Date.now() + 5000; while (!ok() && Date.now() < end) await new Promise(r => setTimeout(r, 5)) }
+        assert.ok(results.every(r => handle(r))); await until(() => calls === 3); assert.equal(calls, 3); assert.equal(peak, 3)
+        release[0](); await until(() => calls === 4); assert.equal(calls, 4); assert.equal(peak, 3)
         release[1](); release[2](); release[3](); await tick(); await tick()
         for (let i = 0; i < clients.length; i++) assert.ok(!(await poll(clients[i].client, handle(results[i]))).isError)
     } finally { for (const c of clients) await c.close() }

@@ -4,13 +4,15 @@ import { randomBytes, createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { gzipSync, gunzipSync } from 'node:zlib'
 export type JobStatus = 'working' | 'completed' | 'failed' | 'cancelled'
-export interface JobRow { id: string; owner: string; revision: string; status: JobStatus; created: number; updated: number; expires: number; result: Uint8Array | null; error: string | null }
+export interface JobRow { id: string; owner: string; revision: string; status: JobStatus; created: number; updated: number; expires: number; result: Uint8Array | null; error: string | null; owner_instance?: string | null; lease_expires?: number | null }
 export interface JobWork { promise: Promise<unknown>; cancel?: () => void; metadata?: () => Record<string, unknown> }
 const stable = (v: unknown): string => Array.isArray(v) ? `[${v.map(stable)}]` : v && typeof v === 'object'
     ? `{${Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stable((v as Record<string, unknown>)[k])).join(',')}}` : JSON.stringify(v) ?? 'null'
 export class JobRunner {
     private active = new Map<string, { resolve: (v: unknown) => void; work: () => JobWork; cancel?: () => void; running: boolean; independent: boolean }>()
     private timer: NodeJS.Timeout
+    private heartbeat: NodeJS.Timeout
+    readonly instanceId = randomBytes(16).toString('hex')
     readonly ttlMs: number
     readonly concurrency: number
     constructor(readonly db: DatabaseSync, options: { ttlMs?: number; concurrency?: number; pruneMs?: number; now?: () => number } = {}) {
@@ -24,11 +26,18 @@ export class JobRunner {
             CREATE INDEX IF NOT EXISTS analysis_jobs_flight ON analysis_jobs(owner,flight,status);
             CREATE INDEX IF NOT EXISTS analysis_jobs_expiry ON analysis_jobs(expires);
             CREATE TABLE IF NOT EXISTS analysis_job_context (id TEXT PRIMARY KEY, context TEXT NOT NULL);`)
-        db.prepare("UPDATE analysis_jobs SET status='failed', error='Server restarted before this job completed. Submit the tool again.', updated=? WHERE status='working'").run(this.now())
+        const columns = new Set(db.prepare('PRAGMA table_info(analysis_jobs)').all().map(r=>r.name))
+        if(!columns.has('owner_instance')) db.exec('ALTER TABLE analysis_jobs ADD COLUMN owner_instance TEXT')
+        if(!columns.has('lease_expires')) db.exec('ALTER TABLE analysis_jobs ADD COLUMN lease_expires INTEGER')
+        db.prepare("UPDATE analysis_jobs SET status='failed', error='Server restarted before this job completed. Submit the tool again.', updated=? WHERE status='working' AND coalesce(lease_expires,0) < ?").run(this.now(), this.now()-60000)
+        this.heartbeat = setInterval(() => this.renewLease(), 15000); this.heartbeat.unref()
         this.timer = setInterval(() => this.prune(), options.pruneMs ?? 60000); this.timer.unref()
         this.prune()
     }
     private now: () => number
+    renewLease(): void {
+        this.db.prepare("UPDATE analysis_jobs SET lease_expires=? WHERE status='working' AND owner_instance=?").run(this.now()+30000,this.instanceId)
+    }
     // independent work supplies its own process-wide concurrency/queue admission (PostHog HTTP).
     start(owner: string, tool: string, args: unknown, revision: string, work: () => JobWork, ttlMs = this.ttlMs, context: unknown = {}, independent = false): { id: string; done: Promise<unknown> } {
         this.prune()
@@ -39,7 +48,7 @@ export class JobRunner {
         const count = Number(this.db.prepare("SELECT count(*) n FROM analysis_jobs WHERE owner=? AND status='working'").get(owner)!.n)
         if (count >= 2) throw new Error('Two analysis jobs are already running for this user. Poll or cancel an existing job first.')
         const id = randomBytes(16).toString('hex'), now = this.now()
-        this.db.prepare("INSERT INTO analysis_jobs VALUES (?,?,?,?,'working',?,?,?,?,NULL)").run(id, owner, revision, flight, now, now, now + Math.max(1, Math.min(this.ttlMs, ttlMs)), null)
+        this.db.prepare("INSERT INTO analysis_jobs (id,owner,revision,flight,status,created,updated,expires,result,error,owner_instance,lease_expires) VALUES (?,?,?,?,'working',?,?,?,?,NULL,?,?)").run(id, owner, revision, flight, now, now, now + Math.max(1, Math.min(this.ttlMs, ttlMs)), null, this.instanceId, now+30000)
         this.db.prepare('INSERT INTO analysis_job_context VALUES (?,?)').run(id, serializedContext)
         let resolve!: (v: unknown) => void
         const done = new Promise<unknown>(r => { resolve = r })
@@ -49,10 +58,23 @@ export class JobRunner {
         return { id, done }
     }
     private waiters = new Map<string, Promise<unknown>>()
+    private foreignPolls = new Map<string,{timer:NodeJS.Timeout; resolve:(value:unknown)=>void}>()
     private wait(id: string): Promise<unknown> {
         let p = this.waiters.get(id)
         if (!p) {
-            const active = this.active.get(id)!
+            const active = this.active.get(id)
+            if (!active) {
+                p = new Promise(resolve => {
+                    const poll = setInterval(() => {
+                        const row = this.db.prepare('SELECT * FROM analysis_jobs WHERE id=?').get(id) as unknown as JobRow | undefined
+                        if (!row || row.status !== 'working') { clearInterval(poll); this.foreignPolls.delete(id); this.waiters.delete(id); resolve(row?.status === 'completed' ? this.result(row) : undefined) }
+                    },100)
+                    this.foreignPolls.set(id,{timer:poll,resolve})
+                    poll.unref()
+                })
+                this.waiters.set(id,p)
+                return p
+            }
             const old = active.resolve
             p = new Promise(r => { active.resolve = value => { old(value); r(value) } })
             this.waiters.set(id, p)
@@ -112,7 +134,14 @@ export class JobRunner {
         this.db.prepare('DELETE FROM analysis_jobs WHERE expires<=?').run(this.now())
         this.db.exec('DELETE FROM analysis_job_context WHERE id NOT IN (SELECT id FROM analysis_jobs)')
     }
-    close(): void { clearInterval(this.timer); for (const [id, a] of this.active) { a.cancel?.(); this.finish(id, 'failed', undefined, 'Server stopped before this job completed. Submit the tool again.') } }
+    close(): void {
+        clearInterval(this.timer); clearInterval(this.heartbeat)
+        for(const {timer,resolve} of this.foreignPolls.values()) { clearInterval(timer); resolve(undefined) }
+        this.foreignPolls.clear(); this.waiters.clear()
+        for (const [id, a] of this.active) {
+            a.cancel?.(); this.finish(id, 'failed', undefined, 'Server stopped before this job completed. Submit the tool again.')
+        }
+    }
 }
 export function runningResult(id: string) { return { status: 'running', job_id: id, poll_after_seconds: 5, note: 'Call get_job_result with this job_id' } }
 export async function waitForJob(job: { id: string; done: Promise<unknown> }, extra?: { _meta?: { progressToken?: string | number }; sendNotification?: (notification: unknown) => Promise<unknown> }, budgetMs = 20000, progressMs = 10000): Promise<unknown> {

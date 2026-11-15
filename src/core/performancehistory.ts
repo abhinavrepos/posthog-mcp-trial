@@ -1,3 +1,4 @@
+import { errorDiagnostic } from './errordiagnostics.ts'
 // Upgrade retained history gradually. Each day is atomic; failures preserve the existing task evidence.
 import { tasksDb } from './tasks.ts'
 import { indexWorkflowDay, backfillGlobalFriction } from './analysishistory.ts'
@@ -22,7 +23,7 @@ export async function backfillPerformanceHistory(limit: number, query: (sql: str
                 } catch(e) { tasksDb.exec('ROLLBACK'); throw e }
             }
             if (!tasksDb.prepare('SELECT 1 FROM aggregate_dimension_daily WHERE day=?').get(day) && !tasksDb.prepare('SELECT 1 FROM aggregate_dimension_skipped WHERE day=?').get(day)) await ingestAggregateDaily(tasksDb,String(day),query)
-        } catch(e) { console.error(JSON.stringify({event:'performance.backfill_error',day,error:String((e as Error).message)})) }
+        } catch(e) { errorDiagnostic(e,'performance_backfill','upstream') }
         await new Promise<void>(resolve=>setImmediate(resolve))
     }
 }

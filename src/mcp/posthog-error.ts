@@ -1,3 +1,4 @@
+import { errorDiagnostic } from '../core/errordiagnostics.ts'
 import { toolCorrelationId } from '../core/toolcontext.ts'
 const advice = 'narrow the date range, filter to fewer events or properties, or use Lens aggregate_events for counts by period and dimension'
 export function posthogFailure(detail: unknown, status?: number, retryAfter?: string | null, correlationId = toolCorrelationId()): Error {
@@ -17,7 +18,7 @@ export function posthogFailure(detail: unknown, status?: number, retryAfter?: st
     }
     else if (/memory limit|out of memory|too much data|code:\s*241/i.test(raw)) message = `PostHog ran out of memory for this query: ${advice}.`
     else if (/timeout|timed out|TimeoutError/i.test(raw)) message = `PostHog query timed out: ${advice}; it continues as a job if you call it again.`
-    console.error('PostHog upstream error', { correlation_id: correlationId, status, detail })
+    errorDiagnostic(detail,'posthog_exec','upstream',correlationId,status)
     return new Error(message)
 }
 /** Only fixed server-authored messages survive job persistence; never publish upstream diagnostics. */

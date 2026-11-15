@@ -33,10 +33,10 @@ export class PosthogQueryGate {
         finally { this.active--; this.queue.shift()?.start() }
     }
 }
-const gate = new PosthogQueryGate()
+export const posthogQueryGate = new PosthogQueryGate()
 export function posthogQueryWork(execute: (context?: { signal: AbortSignal; timeoutMs: number }) => Promise<unknown>): JobWork {
     const controller = new AbortController()
     const timeoutMs = positive(process.env.LENS_POSTHOG_QUERY_TIMEOUT_SECONDS, 600) * 1000
     let publicError = false
-    return { promise: gate.run(controller.signal, async () => { const result = await execute({ signal: controller.signal, timeoutMs }); publicError = isPublicToolError(result); return result }), metadata: () => ({ publicError }), cancel: () => controller.abort() }
+    return { promise: posthogQueryGate.run(controller.signal, async () => { const result = await execute({ signal: controller.signal, timeoutMs }); publicError = isPublicToolError(result); return result }), metadata: () => ({ publicError }), cancel: () => controller.abort() }
 }

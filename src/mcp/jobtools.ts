@@ -1,8 +1,9 @@
 import { isPosthogQuery, posthogQueryWork } from './posthog-query.ts'
-import { Worker } from 'node:worker_threads'
+import { analysisWorkers } from './jobpool.ts'
 import { DatabaseSync } from 'node:sqlite'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
+import { toolCorrelationId } from '../core/toolcontext.ts'
 import { privacyKey } from '../core/anonymise.ts'
 import { JobRunner, runningResult, waitForJob, type JobWork } from '../core/jobs.ts'
 import { db } from '../core/db.ts'
@@ -10,6 +11,11 @@ import type { ChatCaller } from '../service/access.ts'
 import type { TimeWindow } from '../core/timewindow.ts'
 
 export const JOB_TOOLS = new Set(['aggregate_events', 'workflow_completion', 'discover_workflows', 'signal_scorecard', 'describe_app_events', 'message_doctor', 'find_trade', 'top_pains', 'rescue_queue', 'dialog_friction', 'client_signals', 'client_activity_changes', 'compare_client_patterns'])
+export const FAST_TOOLS = new Set(['resolve_client','get_replay_link','find_task','list_dashboards','get_job_result','describe_tools','describe_config'])
+export function jobBacked(name: string, readOnly: boolean, args: {command?:unknown} = {}) {
+    if(name==='posthog_exec') return isPosthogQuery(args.command)
+    return readOnly && !FAST_TOOLS.has(name)
+}
 let runner: JobRunner | undefined
 const jobs = () => runner ??= new JobRunner(process.env.LENS_JOBS_DB ? new DatabaseSync(process.env.LENS_JOBS_DB) : db, {
     ttlMs: Number(process.env.LENS_JOB_TTL_SECONDS || 3600) * 1000,
@@ -30,16 +36,7 @@ export interface JobOptions {
 export function createJobDispatch(caller?: Caller, options: JobOptions = {}) {
     const owner = caller?.who || 'stdio'
     const revision = () => JSON.stringify([privacyKey(), caller?.admin || false, caller?.insights || false, caller?.dashboardRole, caller?.surveyRole])
-    const work = options.work ?? ((name, args, window) => {
-        const worker = new Worker(new URL('./jobworker.ts', import.meta.url), { workerData: { name, args, window, caller } })
-        let metadata: Record<string, unknown> = {}
-        const promise = new Promise<unknown>((resolve, reject) => {
-            worker.once('message', message => { metadata = {clients: message.clients, publicError: message.publicError}; void worker.terminate(); message.error ? reject(new Error(message.error)) : resolve(message.result) })
-            worker.once('error', reject)
-            worker.once('exit', code => reject(new Error(`Analysis worker exited (${code}) before returning a result.`)))
-        })
-        return { promise, metadata: () => metadata, cancel: () => { void worker.terminate() } }
-    })
+    const work = options.work ?? ((name, args, window) => analysisWorkers.run({ name, args, window, caller, correlationId: toolCorrelationId() }))
     const getRunner = () => options.runner ?? jobs()
     const read = (id: string): JobAnswer => {
         const runner = getRunner(), row = runner.get(owner, id, revision())
@@ -51,6 +48,12 @@ export function createJobDispatch(caller?: Caller, options: JobOptions = {}) {
     return {
         read,
         async execute(name: string, args: Record<string, unknown>, window: TimeWindow | undefined, extra: unknown, execute: (context?: {signal: AbortSignal; timeoutMs: number}) => Promise<unknown>) {
+            // Policy refusals are immediate: a refused PostHog command never becomes a job handle.
+            if (name === 'posthog_exec') {
+                const { posthogExecPolicy } = await import('./posthog-proxy.ts')
+                const policy = await posthogExecPolicy(String(args.command ?? ''))
+                if ('refusal' in policy) return policy.refusal
+            }
             const runner = getRunner(), startedRevision = revision(), context = { name, args, window }
             const job = runner.start(owner, name, args, startedRevision, () => name === 'posthog_exec' && isPosthogQuery(args.command) ? posthogQueryWork(execute) : work(name, args, window, execute), runner.ttlMs, context, name === 'posthog_exec')
             await waitForJob(job, extra as never, options.budgetMs)

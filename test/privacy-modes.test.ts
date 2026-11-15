@@ -81,9 +81,10 @@ class Capture extends Writable {
     _write(c:Buffer,_e:BufferEncoding,cb:()=>void){this.text+=c.toString();cb()}
 }
 const proxyOptions={url:'https://upstream.test/mcp',apiKey:'secret',token:'token',name:'lens',enabled:true}
+let proxyInvocation=0
 async function proxy(command:string) {
     const req=Object.assign(Readable.from([JSON.stringify({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'exec',arguments:{command}}})]),{method:'POST',url:'/',headers:{authorization:'Bearer token'}})
-    const res=new Capture();await handlePosthogMcp(req as never,res as never,proxyOptions);return res.text
+    const res=new Capture();await handlePosthogMcp(req as never,res as never,{...proxyOptions,caller:{who:`privacy-${++proxyInvocation}`}});return res.text
 }
 test('PostHog JSON, SSE and errors honor every mode; SQL is private-only refused', async t => {
     let sse=false,error=false,calls=0

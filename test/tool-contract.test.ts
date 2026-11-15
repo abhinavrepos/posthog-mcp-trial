@@ -209,3 +209,45 @@ test('non-job cache hits still consume budget and produce separate audit rows', 
         for(const row of rows) assert.equal(row.client_ids,'["cached-client"]')
     } finally {await c.close()}
 })
+
+test('error diagnostics are safe in every privacy mode; raw details use only a private credential-redacted file',async t=>{
+ const {setAnonymise}=await import('../src/core/anonymise.ts')
+ const {posthogFailure}=await import('../src/mcp/posthog-error.ts')
+ const {readFileSync,statSync}=await import('node:fs')
+ const logs:unknown[][]=[];t.mock.method(console,'error',(...args:unknown[])=>{logs.push(args)})
+ const raw='SELECT email, amount FROM private_table; alice@example.com 999999 /root/secret/query.sql Bearer credential-secret token=token-secret'
+ try {
+  for(const mode of ['open','standard','private'] as const) {
+   setAnonymise({mode});toolError(Error(raw),'test','diagnostic-'+mode);posthogFailure(raw,500,undefined,'upstream-'+mode)
+  }
+  assert.doesNotMatch(JSON.stringify(logs),/SELECT|alice|999999|\/root|credential-secret|token-secret/)
+  assert.ok(logs.every(args=>(args[1] as any).correlation_id && (args[1] as any).tool && (args[1] as any).error_kind && 'http_status' in (args[1] as any)))
+  process.env.LENS_DEBUG_ERRORS_FILE=join(dir,'errors.log')
+  process.env.LENS_TEST_SECRET='bare-upstream-credential'
+  toolError(Error(raw+' bare-upstream-credential'),'test','private-file')
+  const text=readFileSync(process.env.LENS_DEBUG_ERRORS_FILE,'utf8')
+  assert.match(text,/private-file.*SELECT/);assert.doesNotMatch(text,/credential-secret|token-secret|bare-upstream-credential/)
+  assert.equal(statSync(process.env.LENS_DEBUG_ERRORS_FILE).mode & 0o777,0o600)
+ }finally{delete process.env.LENS_DEBUG_ERRORS_FILE;delete process.env.LENS_TEST_SECRET;setAnonymise({mode:'standard'})}
+})
+
+test('unknown tool calls are accounted and audited in all privacy modes, with normal RPC errors',async()=>{
+ const {setAnonymise}=await import('../src/core/anonymise.ts')
+ const {guardTransport,registryOf}=await import('../src/mcp/anonymise.ts')
+ try {
+  for(const mode of ['open','standard','private'] as const) {
+   setAnonymise({mode})
+   const who='unknown-'+mode,server=new McpServer({name:who,version:'1'})
+   const caller={who,tokenId:who};wrapTools(server,false,caller)
+   server.registerTool('known',{inputSchema:{}},async()=>({content:[]}))
+   const client=new Client({name:who,version:'1'}),[a,b]=InMemoryTransport.createLinkedPair()
+   await server.connect(a);guardTransport(a,registryOf(server),(name,keys,result)=>auditToolRefusal(name,keys,result,caller));await client.connect(b)
+   try {
+    for(const name of ['unknown-private-value',42,null,'']) await assert.rejects(client.callTool({name:name as never,arguments:{secret:'do not audit'}}),/Unknown tool/)
+    const rows=all<Record<string,unknown>>('SELECT * FROM tool_audit WHERE user_email=?',who)
+    assert.equal(rows.length,4);assert.ok(rows.every(row=>row.error_kind==='unknown_tool' && row.argument_keys==='[]'))
+    assert.doesNotMatch(JSON.stringify(rows),/unknown-private-value|do not audit/)
+   }finally{await client.close();await server.close()}
+  }
+ }finally{setAnonymise({mode:'standard'})}
+})

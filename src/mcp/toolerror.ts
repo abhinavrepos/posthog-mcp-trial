@@ -1,3 +1,4 @@
+import { errorDiagnostic } from '../core/errordiagnostics.ts'
 import { posthogPublicMessage, posthogFailure } from './posthog-error.ts'
 import { RescueInputError } from '../core/rescue.ts'
 import { toolCorrelationId } from '../core/toolcontext.ts'
@@ -37,7 +38,7 @@ export function toolError(error: unknown, tool: string, id: string = toolCorrela
     else if(/not found|no (?:unambiguous )?client matches|no screen matches|unknown (client|task|survey|workflow)/i.test(raw)) {kind='not_found';message='The requested item was not found. Call resolve_client for client ids, find_task for task ids, discover_workflows for workflows, or list_surveys for survey ids, then retry.'}
     else if(/posthog|fetch failed|econn|unavailable|503|502|429|queue is busy/i.test(raw)) {kind='unavailable';message='PostHog is unavailable or busy. Retry later.'}
     else if(/history is still being built/i.test(raw)) {kind='unavailable';message='Task history is still being built. Retry shortly; the Dashboards page shows progress.'}
-    console.error('Lens tool error', {correlation_id:id,tool,error})
+    errorDiagnostic(error,tool,kind,id)
     return {kind,id,result:{isError:true,content:[{type:'text' as const,text:`${message} Correlation id: ${id}`}]}}
 }
 

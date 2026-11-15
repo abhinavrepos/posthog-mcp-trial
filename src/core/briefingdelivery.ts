@@ -1,3 +1,4 @@
+import { errorDiagnostic } from './errordiagnostics.ts'
 // Opt-in delivery. The persisted slot also acts as a cross-process claim.
 import { config } from './config.ts'
 import { getSetting, setSetting, tx } from './db.ts'
@@ -24,7 +25,7 @@ export function briefingMessage(b: MondayBrief, publicUrl: string): string {
 export function deliveryPayload(kind: string, text: string) {
     return kind === 'slack' ? { text } : { '@type': 'MessageCard', '@context': 'http://schema.org/extensions', summary: 'Client briefing', text }
 }
-const defaults = { brief: mondayBrief, fetch: globalThis.fetch, log: (message: string) => console.error(message) }
+const defaults = { brief: mondayBrief, fetch: globalThis.fetch, log: (message: string) => errorDiagnostic(message,'brief_delivery','upstream') }
 export function createBriefingScheduler(options = config.briefing, injected: Partial<typeof defaults> = {}) {
     const d = { ...defaults, ...injected }
     let busy = false

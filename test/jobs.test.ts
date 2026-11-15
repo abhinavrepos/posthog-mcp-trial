@@ -27,17 +27,17 @@ test('jobs race, complete, compress exact results, share flights, and bind owner
 // Background work starts on a later tick: wait for the condition (bounded), not a fixed few milliseconds.
 const until=async(ok:()=>boolean,ms=2000)=>{const end=Date.now()+ms;while(!ok()&&Date.now()<end)await delay(5)}
 test('global concurrency, two per user, cancellation, failure, expiry and restart',async()=>{
- let now=1000;const db=new DatabaseSync(':memory:'),runner=new JobRunner(db,{concurrency:1,ttlMs:100,now:()=>now});let starts=0,cancelled=0
+ let now=100000;const db=new DatabaseSync(':memory:'),runner=new JobRunner(db,{concurrency:1,ttlMs:100,now:()=>now});let starts=0,cancelled=0
  const work=()=>{starts++;return {promise:new Promise(()=>{}),cancel:()=>{cancelled++}}}
  const a=runner.start('alice','a',{},'r',work),b=runner.start('alice','b',{},'r',work),c=runner.start('bob','c',{},'r',work)
  assert.throws(()=>runner.start('alice','d',{},'r',work),/Two analysis/)
  await until(()=>starts>=1);await delay(20);assert.equal(starts,1)
  assert.equal(runner.cancel('alice',a.id,'r').status,'cancelled');await until(()=>starts>=2);assert.equal(starts,2);assert.equal(cancelled,1)
- now=1101;runner.prune();assert.throws(()=>runner.get('alice',b.id,'r'),/expired/);assert.throws(()=>runner.get('bob',c.id,'r'),/expired/)
+ now=100101;runner.prune();assert.throws(()=>runner.get('alice',b.id,'r'),/expired/);assert.throws(()=>runner.get('bob',c.id,'r'),/expired/)
  const fail=runner.start('alice','fail',{},'r',()=>({promise:Promise.reject(new Error('clear failure'))}));await fail.done
  assert.equal(runner.get('alice',fail.id,'r').error,'clear failure')
  // Simulate persisted state left by a process dying, without graceful close.
- db.prepare("INSERT INTO analysis_jobs VALUES ('dead','alice','r','old','working',?,?,?,NULL,NULL)").run(now,now,now+100)
+ db.prepare("INSERT INTO analysis_jobs (id,owner,revision,flight,status,created,updated,expires,result,error) VALUES ('dead','alice','r','old','working',?,?,?,NULL,NULL)").run(now,now,now+100)
  runner.close();const restarted=new JobRunner(db,{now:()=>now});assert.equal(restarted.get('alice','dead','r').status,'failed');assert.match(restarted.get('alice','dead','r').error!,/restarted/);restarted.close();db.close()
 })
 test('progress tokens send periodic notifications only while the call is waiting',async()=>{
@@ -46,4 +46,25 @@ test('progress tokens send periodic notifications only while the call is waiting
  await delay(25);p.resolve({content:[]});await answer
  assert.ok(seen.length>=1);assert.deepEqual((seen[0] as {params:{progressToken:unknown}}).params.progressToken,0)
  const count=seen.length;await delay(25);assert.equal(seen.length,count)
+})
+
+test('two runners preserve live ownership, renew leases and only recover abandoned jobs',async()=>{
+ let now=100000
+ const db=new DatabaseSync(':memory:'),a=new JobRunner(db,{now:()=>now}),p=pending()
+ const job=a.start('alice','slow',{},'r',()=>p)
+ await new Promise<void>(r=>setImmediate(r))
+ const b=new JobRunner(db,{now:()=>now})
+ try {
+  assert.notEqual(a.instanceId,b.instanceId)
+  assert.equal(a.get('alice',job.id,'r').status,'working')
+  const lease=Number(db.prepare('SELECT lease_expires FROM analysis_jobs WHERE id=?').get(job.id)!.lease_expires)
+  now+=15000;a.renewLease()
+  assert.ok(Number(db.prepare('SELECT lease_expires FROM analysis_jobs WHERE id=?').get(job.id)!.lease_expires)>lease)
+  const joined=b.start('alice','slow',{},'r',()=>{throw Error('duplicate')})
+  assert.equal(joined.id,job.id)
+  p.resolve({answer:42});await job.done
+  assert.equal(a.get('alice',job.id,'r').status,'completed');assert.deepEqual(await joined.done,{answer:42})
+  db.prepare("INSERT INTO analysis_jobs (id,owner,revision,flight,status,created,updated,expires,owner_instance,lease_expires) VALUES ('abandoned','alice','r','old','working',?,?,?,'gone',?)").run(now,now,now+1000000,now-60001)
+  const c=new JobRunner(db,{now:()=>now});assert.equal(c.get('alice','abandoned','r').status,'failed');c.close()
+ } finally {a.close();b.close();db.close()}
 })

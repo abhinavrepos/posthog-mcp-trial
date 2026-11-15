@@ -241,7 +241,7 @@ test('scheduler continues after errors, serializes runs, backfills newest first,
     reset()
     const { config } = await import('../src/core/config.ts')
     const seen: string[] = [], logs: string[] = [], oldError = console.error
-    console.error = (line: string) => { logs.push(line) }
+    console.error = (_line: string, detail: unknown) => { logs.push(JSON.stringify(detail)) }
     let release!: () => void
     const wait = new Promise<void>((resolve) => { release = resolve })
     setTaskQuery(async (_sql, values = {}) => {
@@ -262,7 +262,7 @@ test('scheduler continues after errors, serializes runs, backfills newest first,
         assert.deepEqual(seen.filter(d=>d!=='undefined'), [day(0), day(1), day(2), day(3)])
         assert.equal(ingestStatus().running, false)
         assert.match(ingestStatus().last_error!, /temporary failure/)
-        assert.equal(JSON.parse(logs[0]).event, 'tasks.ingest_error')
+        assert.equal(JSON.parse(logs[0]).tool, 'tasks_ingest'); assert.equal(JSON.parse(logs[0]).error_kind,'upstream'); assert.doesNotMatch(logs[0],/temporary failure/)
         assert.equal((tasksDb.prepare('SELECT count(*) AS n FROM task_attempts').get() as { n: number }).n, 0)
         assert.equal((tasksDb.prepare('SELECT count(*) AS n FROM task_daily').get() as { n: number }).n, 1)
         assert.equal((tasksDb.prepare('SELECT count(*) AS n FROM task_users_daily').get() as { n: number }).n, 1)

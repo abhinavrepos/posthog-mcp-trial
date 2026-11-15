@@ -1,3 +1,5 @@
+import { McpError } from '@modelcontextprotocol/sdk/types.js'
+import { errorDiagnostic } from '../core/errordiagnostics.ts'
 import { isPosthogQuery, posthogQueryContext } from './posthog-query.ts'
 import { isPublicToolError, publicToolError } from './publicerror.ts'
 import { randomUUID, createHash } from 'node:crypto'
@@ -8,7 +10,7 @@ import { toolLimiter } from './ratelimit.ts'
 import { writeToolAudit } from './toolaudit.ts'
 import { toolContext, auditClient, requestedToolWindow } from '../core/toolcontext.ts'
 import { privacyMode } from '../core/anonymise.ts'
-import { installJobTools, createJobDispatch, JobAnswer, JOB_TOOLS, type JobOptions } from './jobtools.ts'
+import { installJobTools, createJobDispatch, JobAnswer, JOB_TOOLS, jobBacked, type JobOptions } from './jobtools.ts'
 import { privacyCurrent, PRIVACY_CHANGED, privacyKey, withPrivacy } from '../core/anonymise.ts'
 import { analyticalResult } from './historyresult.ts'
 // MCP tools over the same core as the Jira automation. Each one answers a question a PM or
@@ -169,20 +171,35 @@ type ToolCaller = Pick<ChatCaller, 'who'> & Partial<Pick<ChatCaller,'email'|'tok
 /** Account for authenticated invocations refused by the transport's privacy guard. */
 export function auditToolRefusal(name:string,keys:string[],refusal:unknown,caller?:ToolCaller): unknown {
     const started=Date.now(),correlation_id=randomUUID()
-    let release:(()=>void)|undefined,kind='privacy_refused'
-    let result={...(refusal as {isError:boolean;content:unknown[]}),content:[...(refusal as {content:unknown[]}).content,{type:'text',text:`Correlation id: ${correlation_id}`} ]}
+    let release:(()=>void)|undefined,kind=name==='unknown' ? 'unknown_tool' : 'privacy_refused'
+    let result: unknown = refusal && typeof refusal === 'object' && 'code' in refusal ? refusal : {...(refusal as object),isError:true,content:[...(Array.isArray((refusal as {content?:unknown[]})?.content) ? (refusal as {content:unknown[]}).content : []),{type:'text',text:`Correlation id: ${correlation_id}`}]}
     try {release=toolLimiter.acquire(caller?.email || caller?.who || 'stdio',caller?.tokenId || caller?.who || 'stdio',name)}
-    catch(error) {const mapped=toolError(error,name,correlation_id);result=mapped.result;kind=mapped.kind}
+    catch(error) {const mapped=toolError(error,name,correlation_id);result=refusal && typeof refusal==='object' && 'code' in refusal ? {code:-32602,message:mapped.result.content[0].text} : mapped.result;kind=mapped.kind}
     finally {
         release?.()
         try {writeToolAudit({at:new Date(started).toISOString(),user_email:caller?.email || caller?.who || 'stdio',token_id:caller?.tokenId || 'stdio',tool:name,argument_keys:keys,client_ids:[],duration_ms:Date.now()-started,result_chars:JSON.stringify(result).length,is_error:true,error_kind:kind,privacy_mode:privacyMode(),correlation_id})}
-        catch(error) {console.error('Lens refusal audit failed',{correlation_id,error})}
+        catch(error) {errorDiagnostic(error,name,'audit',correlation_id)}
     }
     return result
 }
 export function wrapTools(server: McpServer, insights = false, caller?: ToolCaller, jobOptions?: JobOptions) {
     const dispatch = createJobDispatch(caller, jobOptions)
     const register = server.registerTool.bind(server)
+    const setRequestHandler = server.server.setRequestHandler.bind(server.server)
+    server.server.setRequestHandler = ((requestSchema: unknown, handler: (request:any, extra:any)=>unknown) => {
+        return setRequestHandler(requestSchema as never, (async (request:any,extra:any) => {
+            if(request.method==='tools/call') {
+                const registry=(server as unknown as {_registeredTools: Record<string,unknown>})._registeredTools
+                if(!Object.hasOwn(registry,request.params.name)) {
+                    const error={code:-32602,message:'Unknown tool.'}
+                    const answer=auditToolRefusal('unknown',[],error,caller) as {code?:number;message?:string;content?:{text:string}[]}
+                    throw new McpError(answer.code ?? -32602,answer.message ?? answer.content?.[0]?.text ?? 'Unknown tool.')
+                }
+            }
+            return handler(request,extra)
+        }) as never)
+    }) as typeof server.server.setRequestHandler
+
     // The SDK otherwise validates before invoking handlers. Delegate that step to our boundary so
     // rejected input also gets rate accounting, audit, and a safe execution error. listTools still
     // advertises the full strict schema. This SDK integration is covered by in-memory MCP tests.
@@ -190,7 +207,8 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
     const validate = boundary.validateToolInput.bind(server)
     const wrapped = new Set<string>()
     boundary.validateToolInput = (tool,args,name) => wrapped.has(name) ? Promise.resolve(args ?? {}) : validate(tool,args,name)
-    server.registerTool = ((name: string, cfg: { description?: string; inputSchema?: z.ZodRawShape }, cb: unknown) => {
+    server.registerTool = ((name: string, cfg: { description?: string; inputSchema?: z.ZodRawShape; annotations?: {readOnlyHint?: boolean} }, cb: unknown) => {
+        const isJob = (args: {command?:unknown} = {}) => jobBacked(name,cfg.annotations?.readOnlyHint ?? JOB_TOOLS.has(name),args)
         const original = cfg.inputSchema || {}
         const windowed = ['when','days','weeks','from','to'].some(k=>k in original)
         const shared = {...timeShape}
@@ -226,12 +244,12 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
                 for(const key of Object.keys(timeShape)) if(!(key in original)) delete args[key]
                 result=await toolContext.run({window:resolved,clients,correlationId:correlation},async()=>{
                     const execute=async()=>{
-                        const result=(JOB_TOOLS.has(name) || name==='posthog_exec' && isPosthogQuery(args.command))
+                        const result=isJob(args)
                             ? await dispatch.execute(name,args,resolved,extra,AsyncLocalStorage.bind(async(query)=>query ? posthogQueryContext.run(query,async()=>call(args,extra)) : call(args,extra)))
                             : await call(args,extra)
                         return {result,clients:[...clients],isError:!!(result as {isError?:boolean})?.isError}
                     }
-                    const answer=await (CACHED_TOOLS.has(name) && !JOB_TOOLS.has(name) ? cachedToolCall(name,{args,insights,window},execute) : execute()) as {result:unknown;clients:string[]}
+                    const answer=await (CACHED_TOOLS.has(name) && !isJob(args) ? cachedToolCall(name,{args,insights,window},execute) : execute()) as {result:unknown;clients:string[]}
                     for(const id of answer.clients) clients.add(id)
                     let output=answer.result, outputName=name, outputArgs=args, outputWindow=resolved
                     if(output instanceof JobAnswer) {
@@ -265,7 +283,7 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
                 release?.()
                 // Only schema-defined argument keys; unknown keys can themselves contain private values.
                 try {writeToolAudit({at:new Date(started).toISOString(),user_email:caller?.email || caller?.who || 'stdio',token_id:caller?.tokenId || 'stdio',tool:name,argument_keys:keys.filter(k=>k in shape).sort(),resolved_window:window,client_ids:[...clients],duration_ms:Date.now()-started,result_chars:JSON.stringify(result ?? {}).length,is_error:!!(result as {isError?:boolean})?.isError,error_kind:errorKind,result_kind:resultKind,job_hash:jobHash,privacy_mode:privacyMode(),correlation_id:correlation})}
-                catch(error) {console.error('Lens tool audit failed',{correlation_id:correlation,error})}
+                catch(error) {errorDiagnostic(error,name,'audit',correlation)}
             }
             return result
         })

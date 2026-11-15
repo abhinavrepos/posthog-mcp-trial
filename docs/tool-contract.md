@@ -18,7 +18,7 @@ Day-count-only query functions use an async context for exact date ranges, and t
 
 ## Errors
 
-Tool execution errors remain MCP `isError` results. Every invocation gets a UUID correlation id; thrown errors are logged in full to stderr with that id. Public messages never echo thrown diagnostics.
+Tool execution errors remain MCP `isError` results. Every invocation gets a UUID correlation id; stderr contains only the correlation id, tool, fixed error category, HTTP status and a fixed safe message in every privacy mode. Raw diagnostics are appended only to `LENS_DEBUG_ERRORS_FILE` when configured, with credential redaction and file mode 0600. Public messages never echo thrown diagnostics.
 
 | Kind | Public recovery instruction |
 | --- | --- |
@@ -92,6 +92,14 @@ The ordinary job race returns a result or `{status:"running",job_id}` within 20 
 
 A process-wide FIFO gate admits `LENS_POSTHOG_MAX_CONCURRENT_QUERIES=3` analytics jobs independently of the general worker-thread limit. At most `LENS_POSTHOG_MAX_QUEUED_QUERIES=30` wait; overflow says PostHog is busy and to retry later. Existing per-user outstanding-job limits and expiry still apply. As with other process-local admission controls, use one Lens service process for these limits.
 
-Upstream HTTP failures, JSON-RPC errors and MCP `isError` answers use fixed public messages with correlation ids. Memory/data-capacity failures suggest narrowing dates/filters or Lens `aggregate_events`; timeouts add job retry guidance; 429 responses include a valid Retry-After delay; 401/403 explain the key's access; unavailable servers suggest retrying later. Raw diagnostics stay in server logs.
+Upstream HTTP failures, JSON-RPC errors and MCP `isError` answers use fixed public messages with correlation ids. Memory/data-capacity failures suggest narrowing dates/filters or Lens `aggregate_events`; timeouts add job retry guidance; 429 responses include a valid Retry-After delay; 401/403 explain the key's access; unavailable servers suggest retrying later. Raw diagnostics go only to the optional administrator error file; stderr receives fixed safe metadata.
 
-The `/posthog-mcp` streaming proxy keeps its existing streaming and 30-second timeout behavior and cannot return job handles. It applies the same failure mapping, including SSE error frames. Agents should use `posthog_exec` for long queries; this is the default PostHog tool when `POSTHOG_MCP_VIA_LENS=on`.
+The `/posthog-mcp` streaming proxy keeps its existing streaming and 30-second timeout behavior and cannot return job handles. It applies the same failure mapping, including SSE error frames. Each authenticated proxied tools/call, including every batch member and policy refusal, uses the shared user/token limiter and tool audit (`posthog:<command>`, argument keys only). Analytics use the same PostHog concurrency gate; analytical batch members are dispatched sequentially as individual upstream requests to prevent upstream batch parallelism from bypassing that gate. Agents should use `posthog_exec` for long queries; this is the default PostHog tool when `POSTHOG_MCP_VIA_LENS=on`.
+
+## Review E boundary updates
+
+Read-only analytical tools use job dispatch by default. The explicit fast exceptions are `resolve_client`, `get_replay_link`, `find_task`, `list_dashboards`, `get_job_result`, and configuration-only describe tools; writes stay direct. Fast completed analyses return their ordinary output through the same boundary. A reusable `LENS_JOB_WORKERS` pool (default two) executes raw analytical callbacks, including synchronous SQLite and decoding, off the service thread. PostHog analytics keep their separate HTTP gate.
+
+Every authenticated unknown tool call is limited and audited as `unknown`, with `error_kind=unknown_tool` and no untrusted argument keys. HTTP/stdio transport handles malformed names and preserves a normal JSON-RPC error; SDK-only callers are covered by the dispatcher fallback. Privacy refusal accounting accepts JSON-RPC errors without an MCP result.
+
+Each job runner has a random instance owner. Working rows carry `owner_instance` and `lease_expires`; leases last 30 seconds and renew every 15 seconds. Startup recovery fails only leases expired more than 60 seconds ago (legacy unleased rows count as expired). Live jobs survive a second runner opening the database. Admission and worker/query concurrency remain process-local, as documented above.
