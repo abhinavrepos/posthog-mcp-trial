@@ -44,7 +44,10 @@ test('two dimensions, all filter operators, events override, cross-day sessions 
   const q={from:new Date('2026-01-30'),to:new Date('2026-03-02'),metrics:[...metrics],group_by:['dialog','button'],events:[reg.events.interaction],filters:[{dimension:'client',op,value:op==='in'?['C0','C1']:'C0'}],limit:1}
   const result=dailyAggregate(tasksDb,q)!
   const selected=raw.filter(r=>r.dims.event===reg.events.interaction&&(op==='neq'?r.dims.client!=='C0':op==='eq'?r.dims.client==='C0':['C0','C1'].includes(r.dims.client)))
-  assert.deepEqual(result.totals,count(selected));assert.equal(result.rows.length,1);assert.ok(result.groups_omitted>0)
+  assert.deepEqual(result.totals,count(selected));assert.equal(result.rows.length,2);assert.ok(result.groups_omitted>0);assert.ok(result.rows.some(r=>r.is_other));assert.match(result.limits.truncated!, /To get the rest/)
+  const shown=result.rows.find(r=>!r.is_other)!,other=result.rows.find(r=>r.is_other)!
+  const complement=selected.filter(r=>r.dims.dialog!==shown.dialog || r.dims.button!==shown.button)
+  for(const metric of metrics)assert.equal(other[metric],count(complement)[metric])
  }
  assert.equal(dailyAggregate(tasksDb,{from:new Date('2026-01-29'),to:new Date('2026-02-02')}),undefined)
  assert.equal(dailyAggregate(tasksDb,{from:new Date('2026-01-30T12:00Z'),to:new Date('2026-02-02')}),undefined)

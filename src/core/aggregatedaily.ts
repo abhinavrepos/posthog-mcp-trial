@@ -107,16 +107,34 @@ export function dailyAggregate(db: DatabaseSync, q: DailyQuery) {
     }
     const value=(a:Acc,m:string)=>m==='events'?a.events:a[m as 'users'|'sessions'|'clients'].size
     const totals=Object.fromEntries(metrics.map(m=>[m,value(total,m)]))
-    let rows=[...by.values()].map(a=>({...a.dims,...Object.fromEntries(metrics.map(m=>[m,value(a,m)]))})), omitted=0
-    if(groups.length) {
-        const scores=new Map<string,number>()
-        for(const r of rows){const k=JSON.stringify(groups.map(g=>r[g]));scores.set(k,(scores.get(k)||0)+Number(r[metrics[0]]))}
-        const top=new Set([...scores].sort((a,b)=>b[1]-a[1]).slice(0,q.limit??50).map(([k])=>k));omitted=scores.size-top.size
-        rows=rows.filter(r=>top.has(JSON.stringify(groups.map(g=>r[g]))))
+    let rows: Record<string, unknown>[] = [], omitted=0
+    const periods = new Map<string, Acc[]>()
+    for (const a of by.values()) {
+        const key = String(a.dims.period || '')
+        if (!periods.has(key)) periods.set(key, [])
+        periods.get(key)!.push(a)
     }
+    const allowance = q.limit ?? 200
+    const n = Math.min(allowance, 20)
+    for (const entries of periods.values()) {
+        entries.sort((a,b)=>value(b,metrics[0])-value(a,metrics[0]) || JSON.stringify(a.dims).localeCompare(JSON.stringify(b.dims)))
+        const kept = groups.length && entries.length > allowance ? entries.slice(0,n) : entries
+        rows.push(...kept.map(a=>({...a.dims,...Object.fromEntries(metrics.map(m=>[m,value(a,m)]))})))
+        const rest = entries.slice(kept.length)
+        omitted += rest.length
+        if (rest.length) {
+            const other = acc({...rest[0].dims,...Object.fromEntries(groups.map(g=>[g,'other'])),is_other:true})
+            for (const a of rest) {
+                other.events += a.events
+                for (const m of ['users','sessions','clients'] as const) for (const id of a[m]) retain(other[m],id)
+            }
+            rows.push({...other.dims,...Object.fromEntries(metrics.map(m=>[m,value(other,m)]))})
+        }
+    }
+    const limits = omitted ? {truncated:`Top ${n} groups per bucket plus other. To get the rest, repeat with eq or in filters on ${groups.join(' or ')} (at most 50 values) until other disappears.`} : {}
     rows.sort((a,b)=>String(a.period??'').localeCompare(String(b.period??''))||Number(b[metrics[0]])-Number(a[metrics[0]]))
     return { window:{from:q.from.toISOString(),to:q.to.toISOString()},metrics,group_by:groups,bucket,filters,totals,rows,groups_omitted:omitted,queries:0,seconds:0,
-        source:'history',coverage:{status:'complete',detail:'Exact event-day dimension rollups cover the entire window.'},note:'Counts are exact. Distinct user, client and session sets are unioned across every matching grain and day. Distinct counts per period are not additive across periods.' }
+        limits,source:'history',coverage:{status:'complete',detail:'Exact event-day dimension rollups cover the entire window.'},note:'Counts are exact. Distinct user, client and session sets are unioned across every matching grain and day. Distinct counts per period are not additive across periods.' }
 }
 /** Vocabulary uses the same exact grains. A full-coverage check prevents silent partial counts. */
 export function dailyVocabulary(db: DatabaseSync, from: Date, to: Date) {

@@ -726,7 +726,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
                 filters: z.array(z.object({ dimension: z.enum(['event', 'client', 'app_version', 'dialog', 'dialog_name', 'tab', 'action', 'button']), op: z.enum(['eq', 'neq', 'in']), value: z.union([z.string().max(200), z.array(z.string().max(200)).max(50)]) })).max(5).optional(),
                 events: z.array(z.string().max(200)).max(20).optional().describe('Event names; default: the app\'s own screen and interaction events.'),
                 client: z.string().optional(),
-                limit: z.number().int().min(1).max(200).default(50),
+                limit: z.number().int().min(1).max(200).default(200).describe('Maximum groups per bucket within the result budget. Oversized buckets return at most 20 top groups plus an exact other row. See limits for truncation and distinct total availability.'),
             },
             outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },

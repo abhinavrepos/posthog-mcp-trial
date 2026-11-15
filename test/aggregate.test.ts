@@ -16,12 +16,12 @@ test('compiles a bounded, aggregate-only query with bound values and exact disti
     const seen: { query: string; values: Record<string, unknown> }[] = []
     t.mock.method(globalThis, 'fetch', async (_u: unknown, init: RequestInit) => {
         const body = JSON.parse(String(init.body)).query; seen.push(body)
-        return body.query.includes('GROUP BY') ? response([{ period: '2024-01-01T00:00:00Z', app_version: '26.3', events: 10, users: 2 }, { period: '2024-02-01T00:00:00Z', app_version: '26.3', events: 7, users: 2 }])
+        return body.query.includes('GROUP BY') ? response([{ period: body.values.from, app_version: '26.3', events: 10, users: 2 }])
             : body.query.startsWith('SELECT count() AS events') ? response([{ events: new Date(body.values.from).getUTCFullYear() - 2018 }])
             : response([{ users: 3 }])
     })
     const r = await aggregateEvents({ ...q, metrics: ['events', 'users'], group_by: ['app_version'], bucket: 'month', filters: [{ dimension: 'dialog', op: 'eq', value: "DlgX'); DROP TABLE events; --" }] })
-    assert.equal(r.queries, 4)
+    assert.equal(r.queries, 48)
     assert.equal(seen.find((s) => s.query.includes('GROUP BY'))!.values.f0, "DlgX'); DROP TABLE events; --")
     // Without groups: events counted one year at a time (5+6+7+8 from the fake); distinct users once over all four.
     seen.length = 0
@@ -31,7 +31,8 @@ test('compiles a bounded, aggregate-only query with bound values and exact disti
     assert.deepEqual(yearly, [['2023-01-01T00:00:00.000Z', '2024-01-01T00:00:00.000Z'], ['2024-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z'], ['2025-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'], ['2026-01-01T00:00:00.000Z', '2027-01-01T00:00:00.000Z']])
     const whole = seen.filter((x) => /uniqExact\(distinct_id\) AS users \$\{?|uniqExact\(distinct_id\) AS users FROM/.test(x.query) && !x.query.includes('GROUP BY'))
     assert.equal(whole.length, 1); assert.equal(whole[0].values.from, '2023-01-01T00:00:00.000Z'); assert.equal(whole[0].values.to, '2027-01-01T00:00:00.000Z')
-    assert.equal(r.rows.length, 2); assert.equal(r.rows[0].period, '2024-01-01')
+    assert.equal(r.rows.length, 48); assert.equal(r.rows[0].period, '2023-01-01')
+    assert.equal((r.totals as Record<string, unknown>).users, null); assert.match((r.limits as {distinct:string}).distinct, /must not be summed/)
     for (const s of seen) {
         assert.match(s.query, /timestamp >= \{from\} AND timestamp < \{to\} AND event IN \{events\}/)
         assert.ok(!s.query.includes('DROP TABLE'), 'filter values are bound, never inlined')
@@ -48,9 +49,10 @@ test('no person dimension, unknown names and oversized requests are refused', as
 })
 test('more groups than the limit are reported, never silently dropped', async (t) => {
     t.mock.method(globalThis, 'fetch', async (_u: unknown, init: RequestInit) => JSON.parse(String(init.body)).query.query.includes('GROUP BY')
-        ? response(Array.from({ length: 4 }, (_, i) => ({ dialog: 'D' + i, events: 10 - i }))) : response([{ events: 34 }]))
+        ? response(Array.from({ length: 4 }, (_, i) => ({ dialog: 'D' + i, events: 10 - i }))) : response([{ events: 7 }]))
     const r = await aggregateEvents({ from: new Date('2026-01-01'), to: new Date('2026-03-01'), group_by: ['dialog'], limit: 3 })
-    assert.equal(r.rows.length, 3); assert.equal(r.groups_omitted, 1)
+    assert.equal(r.rows.length, 4); assert.equal(r.groups_omitted, 1)
+    assert.ok(r.rows.some(r=>r.is_other)); assert.match(r.limits!.truncated!, /To get the rest/)
 })
 
 test('weekly periods split on Mondays so no week is cut in two', async () => {
@@ -75,4 +77,86 @@ test('exhausted rollup budgets fall back to exact live counts and explain the re
   }finally{delete process.env[budget]}
  }
  assert.ok(calls>=4)
+})
+
+test('bucket chunks keep exact distincts across year boundaries and do not add window totals', async t => {
+    const { splitBuckets } = await import('../src/core/aggregate.ts')
+    const from = new Date('2023-12-28'), to = new Date('2025-01-08')
+    const chunks = splitBuckets(from, to, 'week')
+    assert.equal(+chunks[0].from, +from); assert.equal(+chunks.at(-1)!.to, +to)
+    for (let i=1;i<chunks.length;i++) {
+        assert.equal(+chunks[i-1].to,+chunks[i].from)
+        assert.equal(chunks[i].from.getUTCDay(),1)
+    }
+    const seen: string[] = []
+    t.mock.method(globalThis,'fetch',async (_u:unknown,init:RequestInit)=>{
+        const body=JSON.parse(String(init.body)).query
+        seen.push(body.values.from)
+        const d=new Date(body.values.from);d.setUTCDate(d.getUTCDate()-(d.getUTCDay()+6)%7)
+        return response([{period:d.toISOString(),events:8,sessions:1,clients:1}])
+    })
+    const r=await aggregateEvents({from,to,bucket:'week',metrics:['events','sessions','clients']})
+    assert.equal(r.rows.length,chunks.length)
+    assert.equal(new Set(r.rows.map(r=>r.period)).size,chunks.length)
+    assert.equal((r.totals as Record<string, unknown>).events,8*chunks.length)
+    assert.equal((r.totals as Record<string, unknown>).sessions,null);assert.equal((r.totals as Record<string, unknown>).clients,null)
+    assert.ok(r.rows.every(r=>r.sessions===1))
+    assert.equal(seen.length,chunks.length)
+    assert.match((r.limits as {distinct:string}).distinct,/Exact sessions, clients/)
+})
+
+test('live truncation recounts other distincts exactly and bounds retained groups', async t=>{
+    const queries: string[]=[]
+    t.mock.method(globalThis,'fetch',async(_u:unknown,init:RequestInit)=>{
+        const body=JSON.parse(String(init.body)).query;queries.push(body.query)
+        if(body.query.includes('AND NOT')) return response([{period:'2025-04-01',events:12,sessions:1,clients:2}])
+        return response(Array.from({length:3},(_,i)=>({period:'2025-04-01',client:'C'+i,app_version:'v',events:10-i,sessions:1,clients:1})))
+    })
+    try {
+        process.env.LENS_AGG_MAX_GROUPS='2'
+        const r=await aggregateEvents({from:new Date('2025-04-01'),to:new Date('2025-05-01'),bucket:'month',group_by:['client','app_version'],metrics:['events','sessions','clients']})
+        assert.equal(r.rows.length,3)
+        const other=r.rows.find(r=>r.is_other)!
+        assert.equal(other.events,12);assert.equal(other.sessions,1);assert.equal(other.clients,2)
+        assert.equal((r.totals as Record<string, unknown>).events,31)
+        assert.match(r.limits!.truncated!,/Top 2 groups per bucket plus other/)
+        assert.match(r.limits!.truncated!,/filters on client or app_version/)
+        assert.match(queries[0],/LIMIT 3$/)
+        assert.match(queries[1],/uniqExact.*AND NOT/)
+    }finally{delete process.env.LENS_AGG_MAX_GROUPS}
+})
+
+test('invalid dates and reversed windows fail as input errors before querying',async()=>{
+    await assert.rejects(aggregateEvents({from:new Date('bad'),to:new Date()}),/valid dates/)
+    await assert.rejects(aggregateEvents({from:new Date('2026-01-02'),to:new Date('2026-01-01')}),/from must be before/)
+    await assert.rejects(aggregateEvents({from:new Date('2010-01-01'),to:new Date('2026-01-01')}),/four years/)
+})
+
+test('whole-window rollup budget exhaustion releases sets and merges exact bucket rollups', async()=>{
+    const {tasksDb}=await import('../src/core/tasks.ts')
+    const {storeAggregateDaily,ROLLUP_DIMENSIONS}=await import('../src/core/aggregatedaily.ts')
+    const {required}=await import('../src/core/appevents.ts')
+    const row={...Object.fromEntries(ROLLUP_DIMENSIONS.map(d=>[d,d==='event'?required().events.screen:''])),n:4,users:['u'],sessions:['same-session']} as import('../src/core/aggregatedaily.ts').DailyRow
+    storeAggregateDaily(tasksDb,'2024-12-31',[row]);storeAggregateDaily(tasksDb,'2025-01-01',[row])
+    try {
+        process.env.LENS_AGG_MAX_DISTINCT='2'
+        const r=await aggregateEvents({from:new Date('2024-12-31'),to:new Date('2025-01-02'),bucket:'month',metrics:['events','sessions']})
+        assert.equal(r.source,'history');assert.equal(r.queries,0)
+        assert.equal(r.rows.length,2);assert.ok(r.rows.every(r=>r.sessions===1))
+        assert.deepEqual(r.totals,{events:8,sessions:null})
+        assert.match(r.note,/LENS_AGG_MAX_DISTINCT/)
+        assert.match((r.limits as {distinct:string}).distinct,/must not be summed/)
+    }finally{delete process.env.LENS_AGG_MAX_DISTINCT}
+})
+
+test('sane monthly breakdowns remain complete instead of always truncating at twenty',async t=>{
+    t.mock.method(globalThis,'fetch',async(_u:unknown,init:RequestInit)=>{
+        const body=JSON.parse(String(init.body)).query
+        assert.match(body.query,/LIMIT 201$/)
+        return response(Array.from({length:100},(_,i)=>({period:'2025-07-01',client:'C'+i,events:1,sessions:1,clients:1})))
+    })
+    const r=await aggregateEvents({from:new Date('2025-07-01'),to:new Date('2025-08-01'),bucket:'month',group_by:['client'],metrics:['events','sessions','clients']})
+    assert.equal(r.rows.length,100);assert.equal(r.groups_omitted,0)
+    assert.equal(r.limits!.truncated,undefined)
+    assert.equal((r.totals as Record<string,unknown>).events,100)
 })

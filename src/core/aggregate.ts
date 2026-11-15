@@ -29,6 +29,28 @@ const METRICS = {
 const BUCKETS = { none: '', day: 'toStartOfDay(timestamp)', week: 'toMonday(timestamp)', month: 'toStartOfMonth(timestamp)', quarter: 'toStartOfQuarter(timestamp)', year: 'toStartOfYear(timestamp)' } as const
 export type Metric = keyof typeof METRICS
 const DAY = 86_400_000, GROUP_CAP = 20_000
+
+/** Cuts only at bucket boundaries: distinct identities never need adding across chunks. */
+export function splitBuckets(from: Date, to: Date, bucket: string) {
+    const chunks: { from: Date; to: Date }[] = []
+    let start = from
+    while (+start < +to) {
+        const end = new Date(start)
+        end.setUTCHours(0, 0, 0, 0)
+        if (bucket === 'week') end.setUTCDate(end.getUTCDate() + (7 - (end.getUTCDay() + 6) % 7))
+        else if (bucket === 'day') end.setUTCDate(end.getUTCDate() + 1)
+        else {
+            end.setUTCDate(1)
+            if (bucket === 'month') end.setUTCMonth(end.getUTCMonth() + 1)
+            else if (bucket === 'quarter') end.setUTCMonth(Math.floor(end.getUTCMonth() / 3) * 3 + 3)
+            else { end.setUTCMonth(0); end.setUTCFullYear(end.getUTCFullYear() + 1) }
+        }
+        const next = +end < +to ? end : to
+        chunks.push({ from: start, to: next }); start = next
+    }
+    return chunks
+}
+
 /** [from, to) split at each 1 January (or the Monday on or before it, for weekly periods), when longer than 400 days. */
 export function splitByYear(from: Date, to: Date, monday: boolean): { from: Date; to: Date }[] {
     if (+to - +from <= 400 * DAY) return [{ from, to }]
@@ -48,19 +70,21 @@ export interface AggregateQuery {
     bucket?: keyof typeof BUCKETS
     filters?: { dimension: string; op: 'eq' | 'neq' | 'in'; value: string | string[] }[]
     events?: string[]              // default: the app's own screen and interaction events
-    limit?: number                 // groups returned (1-200, default 50); the rest are counted
+    limit?: number                 // requested groups (1-200, default 200); oversized buckets return at most 20 plus other
 }
 
 export async function aggregateEvents(q: AggregateQuery) {
+    if (!Number.isFinite(+q.from) || !Number.isFinite(+q.to) || +q.from >= +q.to) throw new ToolInputError('from must be before to, with valid dates.')
+    if (+q.to - +q.from > 1462 * DAY) throw new ToolInputError('Windows are limited to four years.')
     const reg = required()
     const metrics = [...new Set(q.metrics?.length ? q.metrics : ['events' as Metric])]
-    for (const m of metrics) if (!(m in METRICS)) throw new Error(`Unknown metric "${m}". Choose from ${Object.keys(METRICS).join(', ')}.`)
+    for (const m of metrics) if (!Object.hasOwn(METRICS, m)) throw new ToolInputError(`Unknown metric "${m}". Choose from ${Object.keys(METRICS).join(', ')}.`)
     const groups = [...new Set(q.group_by || [])]
     if (groups.length > 2) throw new ToolInputError('Group by at most two dimensions.')
-    for (const g of groups) if (!DIMENSIONS[g]) throw new Error(`Unknown dimension "${g}". Choose from ${Object.keys(DIMENSIONS).join(', ')}.`)
+    for (const g of groups) if (!Object.hasOwn(DIMENSIONS, g)) throw new ToolInputError(`Unknown dimension "${g}". Choose from ${Object.keys(DIMENSIONS).join(', ')}.`)
     const bucket = q.bucket || 'none'
-    if (!(bucket in BUCKETS)) throw new Error(`Unknown bucket "${bucket}".`)
-    const limit = q.limit ?? 50
+    if (!Object.hasOwn(BUCKETS, bucket)) throw new ToolInputError(`Unknown bucket "${bucket}".`)
+    const limit = q.limit ?? 200
     if (!Number.isInteger(limit) || limit < 1 || limit > 200) throw new ToolInputError('limit is 1-200.')
     const filters = q.filters || []
     if (filters.length > 5) throw new ToolInputError('At most five filters.')
@@ -68,7 +92,8 @@ export async function aggregateEvents(q: AggregateQuery) {
         events: q.events?.length ? q.events.map(String) : [reg.events.screen, reg.events.interaction] }
     const where = filters.map((f, i) => {
         const d = DIMENSIONS[f.dimension]
-        if (!d) throw new Error(`Unknown filter dimension "${f.dimension}".`)
+        if (!['eq', 'neq', 'in'].includes(f.op)) throw new ToolInputError('Filter op must be eq, neq or in.')
+        if (!Object.hasOwn(DIMENSIONS, f.dimension)) throw new ToolInputError(`Unknown filter dimension "${f.dimension}".`)
         const list = Array.isArray(f.value) ? f.value.map(String) : [String(f.value)]
         if (!list.length || list.length > 50 || list.some((v) => v.length > 200)) throw new ToolInputError('A filter takes 1-50 values of at most 200 characters.')
         values[`f${i}`] = f.op === 'in' ? list : list[0]
@@ -88,29 +113,72 @@ export async function aggregateEvents(q: AggregateQuery) {
     const scope = `FROM events WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}${where.length ? ' AND ' + where.join(' AND ') : ''}`
     const order = metrics[0], distinct = metrics.filter((m) => m !== 'events')
     const started = performance.now()
-    // Long windows run as one query per calendar year (Monday-aligned for weekly periods), one at a time, so no
-    // single PostHog query has to scan four years before its time limit. This stays exact: event counts add up
-    // across years, and every period lies wholly inside one year. Distinct counts over the whole window cannot
-    // be added across years, so those run as one query and are reported as unavailable if it does not finish.
+    // Without periods only event counts can be added across years. Bucketed requests below
+    // use smaller, complete periods so exact distinct states never cross chunk boundaries.
     const chunks = splitByYear(q.from, q.to, bucket === 'week')
-    const chunked = chunks.length > 1 && (bucket !== 'none' || !distinct.length)
-    const run = (sql: string, from: Date, to: Date) => hogql(sql, { ...values, from: from.toISOString(), to: to.toISOString() }, { timeoutMs: 120_000 })
-        .catch((e) => { throw new Error(`PostHog could not finish this count (${(e as Error).message.slice(0, 160)}). ${bucket === 'none' && distinct.length ? 'Add a bucket (month, quarter or year) so it can run a year at a time, ' : ''}narrow the window, add a filter or group by fewer dimensions.`) })
-    let rows: Record<string, unknown>[] = [], capped = false
-    if (names.length) {
-        const merged = new Map<string, Record<string, unknown>>()
-        for (const c of chunked ? chunks : [{ from: q.from, to: q.to }]) {
-            const got = await run(`SELECT ${select} ${scope} GROUP BY ${names.join(', ')} ORDER BY ${order} DESC LIMIT ${GROUP_CAP + 1}`, c.from, c.to)
-            if (got.length > GROUP_CAP) capped = true
-            for (const r of got.slice(0, GROUP_CAP)) {
-                const k = JSON.stringify(names.map((n) => String(r[n])))
-                const old = merged.get(k)
-                // Only additive event counts can meet here: with periods, a key never spans two years.
-                if (old) for (const m of metrics) old[m] = Number(old[m] || 0) + Number(r[m] || 0)
-                else merged.set(k, { ...r })
+    const maxGroups = Math.max(1, Math.min(GROUP_CAP, Math.floor(Number(process.env.LENS_AGG_MAX_GROUPS)) || GROUP_CAP))
+    let queries = 0
+    const run = (sql: string, from: Date, to: Date) => {
+        queries++
+        return hogql(sql, { ...values, from: from.toISOString(), to: to.toISOString() }, { timeoutMs: 120_000 })
+            .catch((e) => { throw new Error(`PostHog could not finish this count (${(e as Error).message.slice(0, 160)}). ${bucket === 'none' && distinct.length ? 'Add a bucket (month, quarter or year) so it can run one bucket at a time, ' : ''}narrow the window, add a filter or group by fewer dimensions.`) })
+    }
+    if (bucket !== 'none') {
+        const rows: Record<string, unknown>[] = [], totals: Record<string, number | null> = {}
+        const buckets = splitBuckets(q.from, q.to, bucket)
+        // Reserve a fair share of the result budget for every bucket. Small breakdowns
+        // stay complete; only oversized buckets are reduced to top-N plus other.
+        const allowance = Math.max(1, Math.min(limit, Math.floor(maxGroups / buckets.length)))
+        const n = Math.min(20, allowance)
+        let truncated = false, omitted = 0
+        for (const c of buckets) {
+            // Prefer retained exact sets, releasing them after each bucket. Budget exhaustion only
+            // selects the live path; it never causes a partial rollup to be merged into the answer.
+            let rolled
+            try { rolled = dailyAggregate(tasksDb, { ...q, from: c.from, to: c.to, limit: allowance }) }
+            catch (e) { if (!(e instanceof RollupBudgetError)) throw e; rollupNote = ' ' + e.message }
+            if (rolled) {
+                rows.push(...rolled.rows)
+                truncated ||= Boolean(rolled.limits?.truncated)
+                omitted += rolled.groups_omitted
+                continue
+            }
+            const got = await run(`SELECT ${select} ${scope} GROUP BY ${names.join(', ')} ORDER BY ${order} DESC${groups.length ? ', ' + groups.join(', ') : ''} LIMIT ${allowance + 1}`, c.from, c.to)
+            const kept = got.length > allowance ? got.slice(0, n) : got
+            rows.push(...kept)
+            if (got.length > allowance) {
+                truncated = true; omitted++
+                // Recount the complement from source. Summing group distincts would double count
+                // sessions/clients shared by two omitted groups.
+                const exclusions = kept.map((r, i) => '(' + groups.map((g, j) => {
+                    values[`top${i}_${j}`] = r[g]
+                    return `(ifNull(${DIMENSIONS[g].expr(reg)} = {top${i}_${j}}, 0) OR (${DIMENSIONS[g].expr(reg)} IS NULL AND {top${i}_${j}} IS NULL))`
+                }).join(' AND ') + ')').join(' OR ')
+                const rest = await run(`SELECT ${BUCKETS[bucket]} AS period, ${metrics.map(m => `${METRICS[m]} AS ${m}`).join(', ')} ${scope} AND NOT (${exclusions}) GROUP BY period LIMIT 1`, c.from, c.to)
+                rows.push(...rest.map(r => ({ ...r, ...Object.fromEntries(groups.map(g => [g, 'other'])), is_other: true })))
             }
         }
-        rows = [...merged.values()]
+        if (metrics.includes('events')) totals.events = rows.reduce((sum, r) => sum + Number(r.events || 0), 0)
+        // An exact window-wide distinct requires retaining IDs across all buckets, or another
+        // unbounded scan. Publish bucket counts and explicitly leave that total unavailable.
+        for (const m of distinct) totals[m] = null
+        const limits = {
+            ...(truncated ? { truncated: `Top ${n} groups per bucket plus other. To get the rest, repeat this window with filters on ${groups.join(' or ')} (eq or in, at most 50 values), or request one bucket with narrower filters until other disappears.` } : {}),
+            ...(distinct.length ? { distinct: `Exact ${distinct.join(', ')} counts are computed per bucket and per other row only. Window totals are unavailable; distinct counts must not be summed across buckets or groups.` } : {}),
+        }
+        return { window: { from: values.from, to: values.to }, metrics, group_by: groups, bucket, filters,
+            totals, rows: rows.map(r => Object.fromEntries(Object.entries(r).map(([k,v]) => [k, k === 'period' ? String(v).slice(0,10) : (metrics as string[]).includes(k) ? Number(v) : v]))),
+            groups_omitted: truncated && queries ? `At least ${omitted} omitted group rows; filter dimensions to retrieve the rest.` : omitted, queries, seconds: Math.round((performance.now()-started)/100)/10,
+            source: queries ? 'live' : 'history', coverage: { status: 'complete', detail: 'Each complete bucket uses exact daily rollups where available, otherwise an exact source query.' }, limits,
+            note: 'Counts are exact. Other is counted from the complement, never by summing distinct counts.' + rollupNote }
+    }
+    // No bucket: grouped distincts must see the entire window. Event-only totals below
+    // can still be split by year. A bounded result LIMIT is applied after aggregation.
+    let rows: Record<string, unknown>[] = [], capped = false
+    if (names.length) {
+        const got = await run(`SELECT ${select} ${scope} GROUP BY ${names.join(', ')} ORDER BY ${order} DESC LIMIT ${maxGroups + 1}`, q.from, q.to)
+        capped = got.length > maxGroups
+        rows = got.slice(0, maxGroups)
     }
     const totals: Record<string, number | null> = {}
     let totalsNote = ''
@@ -130,7 +198,7 @@ export async function aggregateEvents(q: AggregateQuery) {
             totalsNote = ` Distinct totals over the whole window are unavailable: ${(e as Error).message}`
         }
     }
-    // With periods and groups: keep the top groups overall (by the first metric) in every period.
+    // With no period, keep the top groups over the entire window.
     let shown = rows, omitted: number | string = 0
     if (groups.length) {
         const score = new Map<string, number>()
@@ -139,13 +207,23 @@ export async function aggregateEvents(q: AggregateQuery) {
         omitted = score.size - top.size
         shown = rows.filter((r) => top.has(JSON.stringify(groups.map((g) => r[g]))))
     }
-    if (capped) omitted = 'more groups exist than shown; narrow the window, filter or group by fewer dimensions'
+    const limits: { truncated?: string } = {}
+    if (groups.length && (capped || Number(omitted) > 0)) {
+        const selected = shown.map((r,i) => '(' + groups.map((g,j) => {
+            values[`top${i}_${j}`] = r[g]
+            return `(ifNull(${DIMENSIONS[g].expr(reg)} = {top${i}_${j}}, 0) OR (${DIMENSIONS[g].expr(reg)} IS NULL AND {top${i}_${j}} IS NULL))`
+        }).join(' AND ') + ')').join(' OR ')
+        const rest = await run(`SELECT ${metrics.map(m=>`${METRICS[m]} AS ${m}`).join(', ')} ${scope} AND NOT (${selected})`, q.from, q.to)
+        shown.push(...rest.map(r=>({...r,...Object.fromEntries(groups.map(g=>[g,'other'])),is_other:true})))
+        limits.truncated = `Top ${Math.min(limit,maxGroups)} groups plus other. To get the rest, repeat with eq or in filters on ${groups.join(' or ')} (at most 50 values) until other disappears.`
+    }
+    if (capped) omitted = 'more groups exist than shown; use dimension filters to retrieve the rest'
     shown.sort((a, b) => String(a.period ?? '').localeCompare(String(b.period ?? '')) || Number(b[order] || 0) - Number(a[order] || 0))
     return {
         window: { from: values.from, to: values.to }, metrics, group_by: groups, bucket, filters,
         totals,
         rows: shown.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, k === 'period' ? String(v).slice(0, 10) : (metrics as string[]).includes(k) ? Number(v) : v]))),
-        groups_omitted: omitted, queries: chunked ? chunks.length : 1,
+        limits, groups_omitted: omitted, queries,
         seconds: Math.round((performance.now() - started) / 100) / 10,
         source: 'live', coverage: { status: 'complete', detail: 'Every matching PostHog event in the window, aggregated in ClickHouse. Events PostHog no longer keeps cannot be counted.' },
         note: 'Counts are exact (distinct counts use uniqExact). Totals cover every matching event; rows are the largest groups. No raw events or people are returned. Distinct counts per period are not additive across periods.' + totalsNote + rollupNote,
