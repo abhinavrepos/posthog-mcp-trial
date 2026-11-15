@@ -15,6 +15,7 @@ import { privacyMode } from '../core/anonymise.ts'
 import { installJobTools, createJobDispatch, JobAnswer, JOB_TOOLS, jobBacked, type JobOptions } from './jobtools.ts'
 import { privacyCurrent, PRIVACY_CHANGED, privacyKey, withPrivacy } from '../core/anonymise.ts'
 import { analyticalResult } from './historyresult.ts'
+import { DETAIL_TOOLS, detailInput, applyDetail, outputSchemaFor, structuredOf, ANALYSIS_OUTPUT, ROWS_OUTPUT } from './structured.ts'
 // MCP tools over the same core as the Jira automation. Each one answers a question a PM or
 // support lead asks that Jira alone cannot.
 import { jsonResult, reportResult, safeResult } from './result.ts'
@@ -186,6 +187,14 @@ export function auditToolRefusal(name:string,keys:string[],refusal:unknown,calle
     }
     return result
 }
+/** A job handle after the privacy pass, with structuredContent parsed from its own first text block. Applied to
+ * every JobAnswer, so a handle can never reach an outputSchema tool's client without structuredContent. */
+function runningHandle(safe: unknown, jobId: string): unknown {
+    const r = safe as { isError?: boolean; structuredContent?: unknown; content?: { type: string; text?: string }[] }
+    if (!r || r.isError || r.structuredContent || typeof r.content?.[0]?.text !== 'string') return safe
+    try { const value = structuredOf(JSON.parse(r.content[0].text)); return value?.status === 'running' && value.job_id === jobId ? { ...r, structuredContent: value } : safe }
+    catch { return safe }
+}
 export function wrapTools(server: McpServer, insights = false, caller?: ToolCaller, jobOptions?: JobOptions) {
     const dispatch = createJobDispatch(caller, jobOptions)
     const register = server.registerTool.bind(server)
@@ -217,7 +226,8 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
         const windowed = ['when','days','weeks','from','to'].some(k=>k in original)
         const shared = {...timeShape}
         if(!['compare','compare_with','compared_with'].some(k=>k in original)) for(const key of ['compare','compare_from','compare_to','compare_with','compared_with']) delete (shared as Record<string,unknown>)[key]
-        const shape = windowed ? {...original,...shared} : original
+        const detailed = DETAIL_TOOLS.has(name) && !('detail' in original)
+        const shape: z.ZodRawShape = {...(windowed ? {...original,...shared} : original),...(detailed ? {detail:detailInput} : {})}
         // Legacy defaults are applied only after exclusive time selectors have been validated.
         const validationShape = {...shape}
         for(const key of ['days','weeks']) if(key in validationShape) validationShape[key] = validationShape[key] instanceof z.ZodDefault ? (validationShape[key].removeDefault() as z.ZodType).optional() : (validationShape[key] as z.ZodType).optional()
@@ -246,6 +256,9 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
                     if(args.compare_with && 'compared_with' in original) {const c=args.compare_with as {from:string;to:string};args.compared_with=`${c.from} to ${c.to}`}
                 }
                 for(const key of Object.keys(timeShape)) if(!(key in original)) delete args[key]
+                // detail shapes only the final answer: callbacks, caches and job single-flight never see it.
+                const detail=detailed ? args.detail as 'concise'|'full'|undefined : undefined
+                if(detailed) delete args.detail
                 result=await toolContext.run({window:resolved,clients,correlationId:correlation},async()=>{
                     const execute=async()=>{
                         const result=isJob(args)
@@ -255,8 +268,9 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
                     }
                     const answer=await (CACHED_TOOLS.has(name) && !isJob(args) ? cachedToolCall(name,{args,insights,window},execute) : execute()) as {result:unknown;clients:string[]}
                     for(const id of answer.clients) clients.add(id)
-                    let output=answer.result, outputName=name, outputArgs=args, outputWindow=resolved
+                    let output=answer.result, outputName=name, outputArgs=args, outputWindow=resolved, jobId:string|undefined
                     if(output instanceof JobAnswer) {
+                        jobId=output.id
                         jobHash=createHash('sha256').update(output.id).digest('hex')
                         resultKind=output.started ? 'job_started' : 'job_result'
                         outputName=output.context.name;outputArgs=output.context.args;outputWindow=output.context.window
@@ -265,7 +279,7 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
                         for(const id of output.context.clients || []) clients.add(id)
                         if(output.context.publicError && output.result && typeof output.result === 'object') publicToolError(output.result)
                         output=output.result
-                        if(started) return safeResult(output)
+                        if(started) return runningHandle(await safeResult(output),jobId)
                     }
                     const value=output as {isError?:boolean;content?:unknown;_lensJson?:{value?:{window?:{from:string;to:string};period?:{from:string;to:string}}}}
                     const effective=value?._lensJson?.value?.window || value?._lensJson?.value?.period
@@ -279,7 +293,8 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
                         errorKind='tool_error'
                         return safeResult({...value,content:[...(Array.isArray(value.content)?value.content:[]),{type:'text',text:`Correlation id: ${correlation}`}]})
                     }
-                    return safeResult(analyticalResult(outputName,outputArgs,output,outputWindow))
+                    const final=await safeResult(applyDetail(outputName,analyticalResult(outputName,outputArgs,output,outputWindow),detail))
+                    return jobId ? runningHandle(final,jobId) : final
                 })
                 if(!privacyCurrent()) {errorKind='privacy_changed';result={isError:true,content:[{type:'text',text:`${PRIVACY_CHANGED} Correlation id: ${correlation}` }]}}
             } catch(error) {const mapped=toolError(error,name,correlation,contract);errorKind=mapped.kind;result=mapped.result}
@@ -295,7 +310,8 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
         const description=cfg.description || ''
         const first=description.match(/^.*?[.!?](?:\s|$)/)?.[0] || description
         const rest=description.slice(first.length)
-        return register(name, {...cfg,inputSchema:schema,description:`${first.trim()}${windowed ? ` Time: period or from/to (YYYY-MM-DD). Default: ${typeof WINDOW_DEFAULTS[name] === 'string' ? String(WINDOW_DEFAULTS[name]).replaceAll('_',' ') : `last ${WINDOW_DEFAULTS[name] || 7} days`}.` : ''} ${rest} ${DIRECT_CALL}`.trim()} as never,handler as never)
+        const outputSchema=outputSchemaFor((cfg as {outputSchema?:unknown}).outputSchema,isJob())
+        return register(name, {...cfg,inputSchema:schema,...(outputSchema ? {outputSchema} : {}),description:`${first.trim()}${windowed ? ` Time: period or from/to (YYYY-MM-DD). Default: ${typeof WINDOW_DEFAULTS[name] === 'string' ? String(WINDOW_DEFAULTS[name]).replaceAll('_',' ') : `last ${WINDOW_DEFAULTS[name] || 7} days`}.` : ''} ${rest} ${DIRECT_CALL}`.trim()} as never,handler as never)
     }) as typeof server.registerTool
     return dispatch
 }
@@ -324,7 +340,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
             title: 'Identify a client',
             description: `Identifies which ${A} client a name, client code or user email belongs to. Use it when a ticket names a client loosely.`,
             inputSchema: { query: z.string().describe('Client name, id, or a user email') },
-            annotations: { readOnlyHint: true },
+            outputSchema: ROWS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ query }) => json(`Matches for "${query}":`, await resolveClient({ text: query, emails: emailsIn(query), clientHint: query }))
     )
@@ -342,7 +358,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
                 screen: z.string().optional().describe('Screen name or path, e.g. "invoices" or /invoices'),
                 email: z.string().optional().describe('Only this user'),
             },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ client, when: w, timezone, screen, email }) => {
             const { best } = await pickClient(client)
@@ -407,7 +423,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
                 client: z.string().optional(),
                 days: z.number().int().min(1).max(1500).default(30),
             },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ screen, client, days }) => {
             const path = screenPath(screen)!
@@ -429,7 +445,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
                 screen: z.string().optional(),
                 days: z.number().int().min(1).max(1500).default(30),
             },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ issue_id, error_type, error_message, screen, days }) => {
             if (!issue_id && (!error_type || !error_message)) throw new ToolInputError('Give issue_id, or error_type and error_message.')
@@ -443,7 +459,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
             title: 'Problems without errors',
             description: `Finds sessions where a ${A} client struggled without errors: rage clicks, dead clicks, repeated actions or long stays. Use it for wrong data or confusion reported in a ticket.`,
             inputSchema: { client: z.string(), screen: z.string().optional(), when, timezone: tz },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ client, screen, when: w, timezone }) => {
             const { best } = await pickClient(client)
@@ -682,7 +698,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             title: 'Which tasks people do and finish',
             description: `Which tasks do people do in ${app}, and do they finish them? Discovers frequent ordered dialog chains ending in a submit, ranked by sessions × clients, with completed and queued counts, durations and top errors. Lens supplies names from dialog titles, the submit button and success message, plus stable ids; no setup needed.`,
             inputSchema: { when, client: z.string().optional(), limit: z.number().int().min(1).max(50).default(15) },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ when: w, client, limit }) => {
             const win = (await import('../core/analysishistory.ts')).completeDayWindow(requestedToolWindow() || parseTimeWindow(w || 'last 7 days'), w)
@@ -705,7 +721,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
                 client: z.string().optional(),
                 limit: z.number().int().min(1).max(200).default(50),
             },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ when: w, client, filters, ...rest }) => {
             const win = (await import('../core/analysishistory.ts')).completeDayWindow(requestedToolWindow() || parseTimeWindow(w || 'last 30 days'), w)
@@ -721,7 +737,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             title: 'Do clients finish a workflow',
             description: `Which tasks do people do in ${app}, and do they finish them? Measures a discovered workflow id/name or ordered dialogs per client and overall: starts, funnel, done, failures, retries, abandonment, time, dropout errors and example replay links for the person. Compares the previous equal window. Give either workflow or dialogs. Discovered workflows count completed or queued as done and report them separately; dialog lists require completed.`,
             inputSchema: { ...comparisonInputs(), workflow: z.string().trim().min(1).max(WORKFLOW_NAME_LIMIT).optional().describe('Discovered workflow id or exact name from discover_workflows.'), dialogs: z.array(z.string().min(1).max(80)).min(1).max(10).optional(), client: z.string().optional(), when },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ workflow, dialogs, client, when: w, ...comparison }) => {
             const win = (await import('../core/analysishistory.ts')).completeDayWindow(requestedToolWindow() || parseTimeWindow(w || 'last 7 days'), w)
@@ -737,7 +753,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             title: `What ${app}'s events mean`,
             description: `Explains ${app} dialogs, screens, buttons, fields and error messages using the app's event vocabulary. Includes coverage, real example values, common dialogs and messages, clients and HogQL guidance. Use for vocabulary details when drilling into events; reval_brief investigates directly. Use the Lens tool reval_brief to investigate app events and session_story for a session timeline.`,
             inputSchema: { days: z.number().int().min(1).max(1500).default(7).describe('How many days of data to look at.') },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ days }) => json(`${app} events (last ${days} days):`, await describeAppEvents(days, clientSource()))
     )
@@ -776,7 +792,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
                 timezone: tz,
                 limit: z.number().int().min(1).max(50).default(15),
             },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ client, dialog, when: w, timezone, limit }) => {
             const win = (await import('../core/analysishistory.ts')).completeDayWindow(requestedToolWindow() || parseTimeWindow(w || 'last 7 days', new Date(), timezone), w)
@@ -796,7 +812,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
                 message: z.string().optional().describe('Text to match in an error message or its template, ignoring case.'),
                 when,
             },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ client, dialog, message, when: w }) => {
             const win = requestedToolWindow() || parseTimeWindow(w || 'last 7 days')
@@ -831,7 +847,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             title: 'The week\'s top pains',
             description: `Ranks where ${app} clients struggle most: failing dialogs, retries, unfinished attempts, error messages and clients at risk. Gives counts, changes against the previous period and example session links. Start here for a weekly product summary or what to fix first.`,
             inputSchema: { ...comparisonInputs(), when: z.string().optional().describe('Default: last 7 days (compared with the 7 days before).'), timezone: tz, max: z.number().int().min(1).max(15).default(5) },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ when: w, timezone, max, ...comparison }) => {
             const win = (await import('../core/analysishistory.ts')).completeDayWindow(requestedToolWindow() || parseTimeWindow(w || 'last 7 days', new Date(), timezone), w)
@@ -850,7 +866,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
                 when: z.string().optional().describe('Default: last 30 days.'),
                 timezone: tz,
             },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ id, client, when: w, timezone }) => {
             const win = requestedToolWindow() || parseTimeWindow(w || 'last 30 days', new Date(), timezone)
@@ -869,7 +885,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
                 timezone: tz,
                 limit: z.number().int().min(1).max(100).default(20),
             },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ client, when: w, timezone, limit, ...comparison }) => {
             const win = requestedToolWindow() || parseTimeWindow(w || 'last 14 days', new Date(), timezone)

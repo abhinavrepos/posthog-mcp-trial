@@ -3,6 +3,7 @@ import { auditClient } from '../core/toolcontext.ts'
 // would see it and saves it as a draft. Launching is never possible from chat: only on the Surveys page. Every survey and
 // its answers are also on the Surveys page (/replays/surveys).
 import { jsonResult } from './result.ts'
+import { ANALYSIS_OUTPUT } from './structured.ts'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
@@ -134,7 +135,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             title: 'Check a survey before saving it',
             description: `Checks an in-app ${app} survey described in ${app}'s words (dialogs, buttons, messages, clients, colours) and estimates how many sessions would have seen it in the last 14 days. Users are protected from survey fatigue: at least ${config.surveys.gapHours} hours between surveys, at most ${config.surveys.perUser} running at once, and ${config.surveys.quietDaysAfterClose} quiet days after they close one. When this survey's users are already in another running survey, it returns a ⚠ notice (overlap, or queued users who get it later); always pass it on to the person, first and in full. Saves nothing. Use describe_app_events for dialog ids and button names. Then show the person the plan and problems, and save_survey when they agree.`,
             inputSchema: { ...specShape, days:z.number().int().min(1).max(1500).default(14),estimate: z.boolean().default(true).describe('Count past sessions that went through the steps') },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async (args) => {
             const { estimate, days, ...spec } = args
@@ -200,7 +201,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             title: 'Which surveys are there?',
             description: `Every in-app survey (made in Lens or in PostHog): status, the steps that show it, clients, and how many were shown and answered.`,
             inputSchema: { days: z.number().int().min(1).max(1500).default(30).describe('Counts over this many days') },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ days }) => {
             const list = await surveyOverview(days)
@@ -214,7 +215,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             title: 'What did users answer?',
             description: 'A survey\'s numbers: how often its steps completed, shown, answered and dismissed, each question\'s answers (ratings, NPS, choices, recent written answers), per client and per day.',
             inputSchema: { survey_id: z.string(), days: z.number().int().min(1).max(1500).default(90) },
-            annotations: { readOnlyHint: true },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ survey_id, days }) => {
             const r = await surveyResults(survey_id, days)

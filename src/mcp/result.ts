@@ -1,6 +1,7 @@
 import { renderReport } from '../core/report.ts'
 import type { TriageReport } from '../core/triage.ts'
 import { aiSafety } from '../core/aisafety.ts'
+import { structuredOf } from './structured.ts'
 
 // Keep the original structure until the registered tool's output boundary.
 export const jsonResult = (label: string, value: unknown) => ({
@@ -18,7 +19,10 @@ export async function safeResult(result: unknown): Promise<unknown> {
     if (r?._lensJson) {
         const { _lensJson, ...rest } = r
         const { label, value } = await aiSafety(_lensJson)
-        return { ...rest, content: [{ type: 'text', text: label ? `${label}\n\n\`\`\`json\n${JSON.stringify(value, roundNumbers, value && typeof value==='object' && 'coverage' in value ? undefined : 2)}\n\`\`\`` : JSON.stringify(value, roundNumbers, value && typeof value==='object' && 'coverage' in value ? undefined : 2) }] }
+        const body = JSON.stringify(value, roundNumbers, value && typeof value==='object' && 'coverage' in value ? undefined : 2)
+        // structuredContent is parsed back from the very text the client sees: same masking, same rounding.
+        const structuredContent = body === undefined ? undefined : structuredOf(JSON.parse(body))
+        return { ...rest, content: [{ type: 'text', text: label ? `${label}\n\n\`\`\`json\n${body}\n\`\`\`` : body }], ...(structuredContent ? { structuredContent } : {}) }
     }
     return aiSafety(result)
 }

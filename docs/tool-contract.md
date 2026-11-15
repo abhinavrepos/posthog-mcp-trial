@@ -16,6 +16,20 @@ Comparison-capable tools accept `compare: "previous" | "none"` or `compare_from`
 
 Day-count-only query functions use an async context for exact date ranges, and their caches include the resolved range. The scorecard MCP adapter samples complete Sunday observations inside the requested range, reusing weekly observations without changing the performance engineer's scorecard or weekly modules.
 
+## Structured output and detail (MCP 2025-11-25)
+
+Every `jsonResult` answer carries `structuredContent` next to the unchanged text block (label + fenced JSON). `safeResult` parses it back from that exact serialised text, after `analyticalResult` and the AI-safety pass, so masking and number rounding are identical. The transport guard walks the whole message, `structuredContent` included. A top-level list is carried as `{rows: [...]}` because `structuredContent` must be an object. Job handles carry `{status:"running", job_id, poll_after_seconds, note}`.
+
+`outputSchema` is declared at the registration site through a marker (`ANALYSIS_OUTPUT`, `ROWS_OUTPUT`, `CANDIDATES_OUTPUT` in `src/mcp/structured.ts`) only where the callback answers every successful call with `jsonResult`. `wrapTools` expands the marker. Analysis answers require `window{from,to}`, `coverage.processing.status` and `limits`, with `additionalProperties: true`. Job-backed tools use `type: object` + `anyOf` [answer, running handle]. Errors are `isError` and exempt. Tools with any text-only success path declare none: `attempt_timings`, `handover_pack`, `pin_dashboard`, `list_dashboards`, `share_dashboard`, `save_survey`, `draft_rescue_survey`, and `get_job_result` (it returns any tool's shape).
+
+Analysis tools and `get_job_result` accept `detail: "concise" | "full"` (default full). `detail` is removed from the callback arguments, so caches and job single-flight are shared. Concise compaction runs before the privacy pass, on the final object:
+- `window`, `coverage`, `limits` and top-level scalars stay.
+- Example/replay keys and per-day/week/month series are dropped.
+- Lists keep at most 10 rows at the top level and 3 when nested.
+- Every removal is counted in `omitted` (`path: count`), and the answer is marked `detail: "concise"`.
+
+`survey_results.spec` is kept whole.
+
 ## Errors
 
 Tool execution errors remain MCP `isError` results. Every invocation gets a UUID correlation id; stderr contains only the correlation id, tool, fixed error category, HTTP status and a fixed safe message in every privacy mode. Raw diagnostics are appended only to `LENS_DEBUG_ERRORS_FILE` when configured, with credential redaction and file mode 0600. Public messages never echo thrown diagnostics.

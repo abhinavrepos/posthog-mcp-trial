@@ -2,6 +2,7 @@ import { auditClient, requestedToolWindow } from '../core/toolcontext.ts'
 import { replayMonths } from './historyresult.ts'
 import { clientActivityChanges, compareClientPatterns } from '../core/clientpatterns.ts'
 import { jsonResult } from './result.ts'
+import { ANALYSIS_OUTPUT, CANDIDATES_OUTPUT } from './structured.ts'
 import { windowedScorecard as scorecard } from './scorecardwindow.ts'
 import { rescuePrivacy } from '../core/rescueprivacy.ts'
 import { clientStory, handoverPack } from '../core/story.ts'
@@ -91,11 +92,11 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         if (flagged !== undefined) q.set('only_flagged', String(flagged))
         return `${page()}?${q}`
     }
-    reg('signal_scorecard', {
+    reg('signal_scorecard', { outputSchema: ANALYSIS_OUTPUT,
         description: 'How did client flags compare with recorded outcomes? Weekly historical sanity check with hits, misses and lead days; never a probability.',
         inputSchema: { weeks: z.number().int().min(1).max(209).optional() }, annotations: { readOnlyHint: true },
     }, safe(async input => json(await d.scorecard(input))))
-    reg('client_experience', {
+    reg('client_experience', { outputSchema: ANALYSIS_OUTPUT,
         title: 'How is this client doing?',
         description: 'How a client is doing: their usage and how their people actually work, from replays. Use it first for "how is <client> doing / are they using it / do they struggle": usage (sessions, people, completed work against the period before) and, from session replays, (hesitation, cursor circling, scrolling to find things, clicks that do nothing, rage clicks, error loops, idle time, failed calls), compared with other clients, with plain findings, where it happens, next steps and replay links for the person. Replays are read as structure only: no values or text.',
         inputSchema: { client: z.string().describe('Client name or id'), days: z.number().int().min(7).max(1500).default(28) }, annotations: { readOnlyHint: true },
@@ -110,7 +111,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
             ...(x.next_steps.length ? ['Next steps:', ...x.next_steps.map((n) => `- ${n}`)] : []), x.note, `Open in Lens: ${page()}?${new URLSearchParams({ view: 'story', client: matches[0].id })}`]
         return jsonResult(lines.join('\n'), await rescuePrivacy({ ...x, recording_months:replayMonths(x.window.from,x.window.to,matches[0].id),client_name: name }))
     }))
-    reg('friction_hotspots', {
+    reg('friction_hotspots', { outputSchema: ANALYSIS_OUTPUT,
         title: 'Where do clients struggle on screen?',
         description: 'Where on screen clients struggle most, across all clients. From session replays: the buttons and fields where friction gathers (rage clicks, clicks that do nothing, error loops, heavy re-editing), by how many clients hit them. Use it for "what should we fix first".',
         inputSchema: { days: z.number().int().min(7).max(1500).default(28) }, annotations: { readOnlyHint: true },
@@ -119,7 +120,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         const window=requestedToolWindow() ? {from:day(requestedToolWindow()!.from),to:day(new Date(+requestedToolWindow()!.to-1))} : windowFor(`last ${days} days`,28)
         return json({ window,recording_months:replayMonths(window.from,window.to),hotspots: h, replays_read: c.sessions, clients: c.clients, note: h.length ? 'Ranked by how many clients hit each place, then by how often.' : 'No friction found yet in the replays read so far.' })
     }))
-    reg('client_story', {
+    reg('client_story', { outputSchema: ANALYSIS_OUTPUT,
         description: 'One client story: weekly work counts, changes, signals, actions, surveys and unknowns from local Lens history only.',
         inputSchema: { client: z.string(), weeks: z.number().int().min(1).max(209).optional(), from:z.string().optional(), to:z.string().optional(), bucket:z.enum(['month','week']).optional(), anchor:z.string().optional() }, annotations: { readOnlyHint: true },
     }, safe(async ({ client, ...options }) => {
@@ -128,11 +129,11 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         if (matches.length !== 1) return json(await rescuePrivacy({ message: 'Choose a client id.', candidates: matches }))
         return json(await rescuePrivacy({ ...await d.clientStory({ client: matches[0].id, ...options }), open: page() + '?' + new URLSearchParams({ view: 'story', client: matches[0].id }) }))
     }))
-    reg('client_activity_changes', {
+    reg('client_activity_changes', { outputSchema: ANALYSIS_OUTPUT,
         description:'Which clients went quiet after established use, and which returned? Uses complete daily history; usage-based inactivity is not confirmed churn.',
         inputSchema:{from:z.string().optional(),to:z.string().optional(),silence_days:z.number().int().min(1).max(1500).optional(),established_days:z.number().int().min(1).max(1500).optional(),limit:z.number().int().min(1).max(150).optional()},annotations:{readOnlyHint:true},
     },safe(async input=>json(await rescuePrivacy(d.clientActivityChanges(input)))))
-    reg('compare_client_patterns', {
+    reg('compare_client_patterns', { outputSchema: ANALYSIS_OUTPUT,
         description:'How did a departing or inactive client’s usage differ from clients that stayed? Compares monthly medians before dated outcomes or usage silence, without claiming causation.',
         inputSchema:{client:z.string().optional(),group:z.enum(['left_or_contracted','inactive']).optional(),from:z.string().optional(),to:z.string().optional(),months:z.number().int().min(1).max(48).optional(),followup_days:z.number().int().min(1).max(1500).optional(),silence_days:z.number().int().min(1).max(1500).optional()},annotations:{readOnlyHint:true},
     },safe(async input=>{
@@ -148,7 +149,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         if (matches.length !== 1) return json(await rescuePrivacy({ message: 'Choose a client id.', candidates: matches }))
         return text(await d.handoverPack(matches[0].id, true))
     }))
-    reg('monday_brief', {
+    reg('monday_brief', { outputSchema: ANALYSIS_OUTPUT,
         description: 'What changed at my clients since last week, and what needs me today? A saved weekly briefing with actions and verified recoveries.', inputSchema: {},
     }, safe(async () => json({ ...await d.mondayBrief({ by: caller.email || caller.who }), open: page() + '?view=briefing' })))
     reg('draft_rescue_survey', {
@@ -159,7 +160,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         if (matches.length !== 1) return json({ message: 'Choose a client id.', candidates: matches })
         return json(await d.draftRescueSurvey(matches[0].id, caller.email || caller.who, d))
     }))
-    reg('rescue_queue', {
+    reg('rescue_queue', { outputSchema: ANALYSIS_OUTPUT,
         description: 'Which clients need someone this week, and why? Ranked rescue queue with evidence, next steps, owner and status from processed Lens history.',
         inputSchema: { when: filters.when, compared_with: filters.compared_with, compare:filters.compare,compare_with:filters.compare_with,min_attempts: z.number().int().min(1).max(100000).optional(), include_snoozed: z.boolean().optional(), limit: z.number().int().min(1).max(50).default(10) },
         annotations: { readOnlyHint: true },
@@ -171,7 +172,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         return json({ ...result, headline: result.coverage.complete ? `${result.clients.length} clients need someone this week` : result.coverage.text,
             clients: result.clients.slice(0, input.limit).map(c => ({ ...c, reasons: c.reasons.slice(0, 3) })), open: `${page()}?${q}` })
     }))
-    reg('set_rescue_status', {
+    reg('set_rescue_status', { outputSchema: ANALYSIS_OUTPUT,
         description: 'Set the owner, status, note, due date or expected-decline snooze for a client in the rescue queue.',
         inputSchema: { client: z.string(), owner: z.string().optional(), status: z.enum(RESCUE_STATUSES).optional(), note: z.string().max(500).optional(), due: z.string().optional(), snooze_until: z.string().optional(), when: filters.when, compared_with: filters.compared_with, compare: filters.compare, compare_with: filters.compare_with },
     }, safe(async ({ client, when, compared_with, compare, compare_with, ...change }) => {
@@ -182,7 +183,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         const view = { compare,compare_with,...(when ? { window: windowFor(when, 28) } : {}), ...(compared_with ? { baseline: windowFor(compared_with, 28) } : {}) }
         return json(await d.setRescueAction(matches[0].id, Object.fromEntries(Object.entries(change).filter(([, v]) => v !== undefined)), caller.email || caller.who, view))
     }))
-    reg('find_task', {
+    reg('find_task', { outputSchema: CANDIDATES_OUTPUT,
         description: `Which ${appEvents()?.app || 'app'} task does someone mean? Matches their own words ("book a hedge", "run the FX report") to task ids and names, with use over the last 90 days. Call it before flow_time when a task is named loosely.`,
         inputSchema: { query: z.string().describe('Task in the person’s own words, or its id.') },
         annotations: { readOnlyHint: true },
@@ -190,7 +191,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         ready()
         return json({ candidates: await d.findTasks(query) })
     }))
-    reg('task_map', {
+    reg('task_map', { outputSchema: ANALYSIS_OUTPUT,
         description: `Which ${appEvents()?.app || 'app'} clients stopped doing tasks they used to do, do them less, take longer or fail more? Client task map: a recent period against the one before, per client and task (missing work, dropped, slower, failing, new). For "is ACME still booking hedges?", "which clients are drifting away?". Returns flags with numbers and a link to the live Lens dashboard.`,
         inputSchema: filters,
         annotations: { readOnlyHint: true }
@@ -214,7 +215,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
             open: open('task_map', p, input.only_flagged),
         })
     }))
-    reg('flow_time', {
+    reg('flow_time', { outputSchema: ANALYSIS_OUTPUT,
         description: `How long does a ${appEvents()?.app || 'app'} client take to finish a task, and which path do they take? Flow time for a task such as booking a hedge designation: median and p90 over time against all clients, paths with their share and time, slowest attempts with replay links (for the person; never view replays) and common errors. Returns a link to the live Lens dashboard.`,
         inputSchema: { client: filters.client, task: z.string(), when: filters.when },
         annotations: { readOnlyHint: true }
