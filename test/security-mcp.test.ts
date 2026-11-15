@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createClipQueue } from '../src/core/clip-queue.ts'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -66,10 +67,10 @@ test('MCP clip admission skips full queues and hourly limits while preserving th
     const source = readFileSync('src/mcp/tools.ts', 'utf8')
     const admission = source.slice(source.indexOf('const mcpRenders:'), source.indexOf('// Every Lens tool result goes through the AI-safety pass'))
     const callback = source.slice(source.indexOf('async ({ session_id: raw'), source.indexOf("\n    server.registerTool(\n        'screen_usage'")).replace(/\n    \)\s*$/, '')
-    let pending = 3, renders = 0
-    const handler = new Function('pendingRenders', 'renderClip', 'recordClip', 'sessionIdOf', 'replayUrl', 'config', 'text', 'toolError',
+    let pending = 20, renders = 0
+    const handler = new Function('pendingRenders', 'renderClip', 'recordClip', 'waitForReplayClip', 'replayDeps', 'caller', 'sessionIdOf', 'replayUrl', 'config', 'text', 'toolError',
         stripTypeScriptTypes(admission.replace('export function', 'function') + '\nconst handler = ' + callback) + '\nreturn handler'
-    )(() => pending, async () => { renders++; throw new Error('fake renderer') }, () => {}, (s: string) => s, () => 'https://posthog/replay', config, (s: string) => s, () => ({id:'test-correlation'}))
+    )(() => pending, async () => { renders++; throw new Error('fake renderer') }, () => {}, async () => { renders++; throw new Error('fake renderer') }, {}, undefined, (s: string) => s, () => 'https://posthog/replay', config, (s: string) => s, () => ({id:'test-correlation'}))
     const call = () => handler({ session_id: 'test', start_s: 0, duration_s: 30 }) as Promise<string>
     assert.match(await call(), /queue is full/)
     assert.equal(renders, 0)
@@ -86,19 +87,19 @@ test('MCP clip admission skips full queues and hourly limits while preserving th
 })
 
 test('render count includes running and waiting jobs and recovers after failure', async () => {
-    const source = readFileSync('src/core/clip.ts', 'utf8')
-    const serial = source.slice(source.indexOf('let pending ='), source.indexOf("/** The recording's snapshots"))
-    const api = new Function(stripTypeScriptTypes(serial.replace('export const', 'const')) + '\nreturn { serial, pendingRenders }')() as {
-        serial: (fn: () => Promise<void>) => Promise<void>; pendingRenders: () => number
-    }
+    const api = createClipQueue<void>(async key => {
+        if (key === 'first') await new Promise<void>(resolve => { finish = resolve })
+        if (key === 'second') throw new Error('render failed')
+    }, { concurrency: 1 })
+    const pendingRenders = () => { const s = api.stats(); return s.rendering + s.queued }
     let finish!: () => void
-    const first = api.serial(() => new Promise<void>(resolve => { finish = resolve }))
-    const second = api.serial(async () => { throw new Error('render failed') })
+    const first = api.run('first')
+    const second = api.run('second')
     const failed = assert.rejects(second, /render failed/)
-    const third = api.serial(async () => {})
-    assert.equal(api.pendingRenders(), 3)
+    const third = api.run('third')
+    assert.equal(pendingRenders(), 3)
     await Promise.resolve()
     finish()
     await Promise.all([first, failed, third])
-    assert.equal(api.pendingRenders(), 0)
+    assert.equal(pendingRenders(), 0)
 })

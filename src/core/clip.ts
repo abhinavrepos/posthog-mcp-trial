@@ -10,6 +10,7 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
+import { createClipQueue } from './clip-queue.ts'
 import { config, ROOT } from './config.ts'
 import { startEgress } from './egress.ts'
 import { moveFile } from './files.ts'
@@ -72,7 +73,12 @@ let engine: { r: Rasterizer; pool: InstanceType<Rasterizer['BrowserPool']>; html
 
 let egress: Awaited<ReturnType<typeof startEgress>> | undefined
 
-async function getEngine() {
+let engineFlight: Promise<NonNullable<typeof engine>> | undefined
+function getEngine() {
+    return engineFlight ??= initializeEngine().catch(error => { engineFlight = undefined; throw error })
+}
+
+async function initializeEngine() {
     if (engine) return engine
     const bundle = join(ROOT, 'vendor/rasterizer.cjs')
     if (!existsSync(bundle)) throw new Error('vendor/rasterizer.cjs is missing. Run `pnpm build:rasterizer` first.')
@@ -86,6 +92,7 @@ async function getEngine() {
     process.env.RASTERIZER_USE_PROXY = 'true'
     process.env.CHROME_HOST_RESOLVER_RULES = hostResolverRules()
     process.env.LOG_LEVEL ||= 'warn'
+    process.env.MAX_IDLE_BROWSERS ??= String(Math.min(2, clipQueueStats().concurrency))
     const r = require(bundle) as Rasterizer
     const pool = new r.BrowserPool()
     await pool.launch()
@@ -96,6 +103,7 @@ async function getEngine() {
 export async function shutdownClips(): Promise<void> {
     if (engine) await engine.pool.shutdown()
     engine = undefined
+    engineFlight = undefined
     await egress?.close()
     egress = undefined
 }
@@ -111,19 +119,23 @@ export function cleanRenderWork(now = Date.now()): void {
 }
 cleanRenderWork()
 
-// One render at a time: each one drives a full Chrome.
-let pending = 0
-export const pendingRenders = () => pending
-let queue: Promise<unknown> = Promise.resolve()
-function serial<T>(fn: () => Promise<T>): Promise<T> {
-    pending++
-    const next = queue.then(fn, fn).finally(() => { pending-- })
-    queue = next.catch(() => {})
-    return next
-}
+const renders = createClipQueue(async key => renderUnqueued(JSON.parse(key) as ClipRequest), {
+    timing: times => console.info(JSON.stringify({ msg: 'clip render timing', ...times })),
+})
+export const clipQueueStats = renders.stats
+export const pendingRenders = () => { const s = renders.stats(); return s.queued + s.rendering }
 
 /** The recording's snapshots as a cached JSONL file (also read by replaynet.ts). */
-export async function snapshotsFile(sessionId: string): Promise<string> {
+const snapshotFlights = new Map<string, Promise<string>>()
+export function snapshotsFile(sessionId: string): Promise<string> {
+    let flight = snapshotFlights.get(sessionId)
+    if (!flight) {
+        flight = fetchSnapshotsFile(sessionId).finally(() => snapshotFlights.delete(sessionId))
+        snapshotFlights.set(sessionId, flight)
+    }
+    return flight
+}
+async function fetchSnapshotsFile(sessionId: string): Promise<string> {
     const dir = join(config.clip.cacheDir, 'snapshots')
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     const meta = await getRecording(sessionId)
@@ -171,44 +183,57 @@ export async function withRenderWork<T>(work: string, render: () => Promise<T>):
     finally { rmSync(work, { recursive: true, force: true }) }
 }
 
-export async function renderClip(req: ClipRequest): Promise<Clip> {
+export function renderClip(req: ClipRequest, owner?: string, onStart?: () => void): Promise<Clip> {
+    const normalized = { sessionId: req.sessionId, startOffsetS: Math.max(0, Math.floor(req.startOffsetS)), durationS: Math.max(1, Math.round(req.durationS)) }
+    // An already rendered clip is a file lookup: answer at once instead of queuing behind Chrome renders.
+    const cached = cachedClip(normalized)
+    if (cached) { onStart?.(); return Promise.resolve(cached) }
+    return renders.run(JSON.stringify(normalized), owner, onStart)
+}
+
+function cachedClip(req: ClipRequest): Clip | undefined {
+    const name = clipName(req), file = join(config.clip.outDir, name)
+    if (!existsSync(file)) return undefined
+    const start = Math.max(0, Math.floor(req.startOffsetS)), end = start + Math.max(1, Math.round(req.durationS))
+    return { session_id: req.sessionId, file, name, start_offset_s: start, end_offset_s: end, video_duration_s: end - start, size_bytes: statSync(file).size, render_s: 0, cached: true }
+}
+
+async function renderUnqueued(req: ClipRequest): Promise<Clip> {
     const name = clipName(req)
     const outDir = config.clip.outDir
     mkdirSync(outDir, { recursive: true, mode: 0o700 })
     const file = join(outDir, name)
     const start = Math.max(0, Math.floor(req.startOffsetS))
     const end = start + Math.max(1, Math.round(req.durationS))
-    if (existsSync(file)) {
-        return { session_id: req.sessionId, file, name, start_offset_s: start, end_offset_s: end, video_duration_s: end - start, size_bytes: statSync(file).size, render_s: 0, cached: true }
-    }
-    return serial(async () => {
-        const t0 = Date.now()
-        const input = await snapshotsFile(req.sessionId)
-        const { r, pool, html } = await getEngine()
-        const work = join(config.clip.cacheDir, 'render', name.replace(/\.mp4$/, ''))
-        return withRenderWork(work, async () => {
-            const out = await r.rasterizeFile(pool, html, input, work, {
-                start_offset_s: start,
-                end_offset_s: end,
-                playback_speed: 1,
-                skip_inactivity: false,
-                show_metadata_footer: true,
-                recording_fps: 12,
-                output_format: 'mp4',
-            })
-            moveFile(join(work, 'video.mp4'), file)
-            return {
-                session_id: req.sessionId,
-                file,
-                name,
-                start_offset_s: start,
-                end_offset_s: end,
-                video_duration_s: Number(out.video_duration_s ?? end - start),
-                size_bytes: statSync(file).size,
-                render_s: (Date.now() - t0) / 1000,
-                cached: false,
-            }
+    // Re-checked inside the queue: an identical request may have finished while this one waited.
+    const cached = cachedClip(req)
+    if (cached) return cached
+    const t0 = Date.now()
+    const input = await snapshotsFile(req.sessionId)
+    const { r, pool, html } = await getEngine()
+    const work = join(config.clip.cacheDir, 'render', name.replace(/\.mp4$/, ''))
+    return withRenderWork(work, async () => {
+        const out = await r.rasterizeFile(pool, html, input, work, {
+            start_offset_s: start,
+            end_offset_s: end,
+            playback_speed: 1,
+            skip_inactivity: false,
+            show_metadata_footer: true,
+            recording_fps: 12,
+            output_format: 'mp4',
         })
+        moveFile(join(work, 'video.mp4'), file)
+        return {
+            session_id: req.sessionId,
+            file,
+            name,
+            start_offset_s: start,
+            end_offset_s: end,
+            video_duration_s: Number(out.video_duration_s ?? end - start),
+            size_bytes: statSync(file).size,
+            render_s: (Date.now() - t0) / 1000,
+            cached: false,
+        }
     })
 }
 

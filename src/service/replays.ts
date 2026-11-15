@@ -177,7 +177,7 @@ export function storage(): { clips: number; bytes: number; saved: number; saved_
 }
 
 // ------------------------------------------------------------------ jobs
-interface Job {
+export interface ReplayJob {
     id: string
     state: 'queued' | 'rendering' | 'done' | 'failed'
     owner: string
@@ -191,7 +191,7 @@ interface Job {
     error?: string
     clip?: ClipRecord
 }
-const jobs = new Map<string, Job>()
+const jobs = new Map<string, ReplayJob>()
 export function pruneJobs<T extends { finished_at?: number }>(entries: Map<string, T>, now = Date.now(), cap = 1000): void {
     for (const [id, job] of entries) if (job.finished_at !== undefined && now - job.finished_at >= 3_600_000) entries.delete(id)
     for (const [id, job] of entries) {
@@ -200,46 +200,56 @@ export function pruneJobs<T extends { finished_at?: number }>(entries: Map<strin
     }
 }
 setInterval(() => pruneJobs(jobs), 60_000).unref()
-const queue: Job[] = []
-let busy = false
+const queue: ReplayJob[] = []
 const limit = new HourlyLimit(PER_HOUR)
 
-async function work() {
-    if (busy) return
-    busy = true
-    try {
-        for (let job = queue.shift(); job; job = queue.shift()) {
-            job.state = 'rendering'
-            job.started_at = Date.now()
-            try {
-                const clip = await renderClip({ sessionId: job.session_id, startOffsetS: job.start_s, durationS: job.length_s })
-                const record = storeClip(clip, job.info, job.owner)
-                job.clip = record
-                job.state = 'done'
-                audit(job.owner, 'clip.created', { session_id: job.session_id, clip: clip.name, cached: clip.cached, render_s: clip.render_s, shared_with: record.holders.length - 1 })
-            } catch (e) {
-                const msg = (e as Error).message
-                job.state = 'failed'
-                job.error = /No usable sandbox|Failed to launch/.test(msg)
-                    ? 'The clip renderer could not start on the server.'
-                    : /no stored snapshots/i.test(msg)
-                      ? 'This recording is still being saved. Try again in a minute.'
-                      : msg.split('\n')[0].slice(0, 200)
-                console.error(JSON.stringify({ t: new Date().toISOString(), msg: 'clip job failed', job: job.id, error: msg.slice(0, 1000) }))
-            }
-            job.finished_at = Date.now()
-            pruneJobs(jobs)
+/** Submit each job once; the shared clip limiter decides when it actually starts. */
+export function createReplayWorker(queue: ReplayJob[], deps: {
+    render: typeof renderClip; store: typeof storeClip; audit: typeof audit; prune: () => void
+}) {
+    const submitted = new Set<ReplayJob>()
+    return function work() {
+        for (const job of [...queue]) {
+            if (submitted.has(job)) continue
+            submitted.add(job)
+            void (async () => {
+                try {
+                    const clip = await deps.render({ sessionId: job.session_id, startOffsetS: job.start_s, durationS: job.length_s }, job.owner, () => {
+                        job.state = 'rendering'
+                        job.started_at = Date.now()
+                        const index = queue.indexOf(job)
+                        if (index >= 0) queue.splice(index, 1)
+                    })
+                    const record = deps.store(clip, job.info, job.owner)
+                    job.clip = record
+                    job.state = 'done'
+                    deps.audit(job.owner, 'clip.created', { session_id: job.session_id, clip: clip.name, cached: clip.cached, render_s: clip.render_s, shared_with: record.holders.length - 1 })
+                } catch (e) {
+                    const msg = (e as Error).message
+                    job.state = 'failed'
+                    job.error = /No usable sandbox|Failed to launch/.test(msg)
+                        ? 'The clip renderer could not start on the server.'
+                        : /no stored snapshots/i.test(msg)
+                          ? 'This recording is still being saved. Try again in a minute.'
+                          : msg.split('\n')[0].slice(0, 200)
+                    console.error(JSON.stringify({ t: new Date().toISOString(), msg: 'clip job failed', job: job.id, error: msg.slice(0, 1000) }))
+                }
+                job.finished_at = Date.now()
+                deps.prune()
+                const index = queue.indexOf(job)
+                if (index >= 0) queue.splice(index, 1)
+                submitted.delete(job)
+            })()
         }
-    } finally {
-        busy = false
     }
 }
+const work = createReplayWorker(queue, { render: renderClip, store: storeClip, audit, prune: () => pruneJobs(jobs) })
 
-function jobView(job: Job) {
+export function jobView(job: ReplayJob, queued = queue) {
     return {
         id: job.id,
         state: job.state,
-        position: job.state === 'queued' ? queue.indexOf(job) + 1 : 0,
+        position: job.state === 'queued' ? queued.indexOf(job) + 1 : 0,
         error: job.error,
         elapsed_s: Math.round(((job.finished_at || Date.now()) - (job.started_at || job.created_at)) / 1000),
         clip: job.clip ? clipView(getClip(job.clip.name) || job.clip, job.owner) : undefined,
@@ -441,7 +451,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
             json(res, 400, { error: `The recording is only ${formatClock(info.duration_s)} long.` })
             return true
         }
-        const job: Job = { id: randomUUID(), state: 'queued', owner: viewer.email, session_id: input.sessionId, start_s: Math.floor(start), length_s: Math.max(3, Math.min(length, Math.ceil(info.duration_s - start))), info, created_at: Date.now() }
+        const job: ReplayJob = { id: randomUUID(), state: 'queued', owner: viewer.email, session_id: input.sessionId, start_s: Math.floor(start), length_s: Math.max(3, Math.min(length, Math.ceil(info.duration_s - start))), info, created_at: Date.now() }
         pruneJobs(jobs, Date.now(), 999)
         jobs.set(job.id, job)
         queue.push(job)

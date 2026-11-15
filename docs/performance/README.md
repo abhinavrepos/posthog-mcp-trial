@@ -109,3 +109,30 @@ Before storing a PostHog rollup for a finalized day, source distinct sessions an
 Task E validation (2026-11-15): `npx tsc --noEmit` and `git diff --check` pass. `npm test` cannot start because the sandbox denies tsx's IPC listener (`EPERM`). All 65 files were attempted with the requested Node fallback. Serial per-file diagnostic execution reports **1,018 cases: 987 passed, 19 existing skips, 12 failed**, with `posthog-client.test.ts` additionally aborting on its loopback listener before case reporting. Every reported failure is a sandbox denial: `comments` (ffmpeg), `egress`, `posthog-client`, `security-server`, `status-alerts` (loopback listeners), `install-permissions`, `offline-upgrade` (bash), and `survey-engine` (Node subprocess). No product-code failures remain in this run; the full suite cannot be claimed green in this environment. The final ten-file focused Node fallback passes all ten files; follow-up lease/worker and malformed-name/diagnostic checks pass as well.
 
 New regressions cover group and retained-ID exhaustion, bounded decompression, exact live fallback with explanatory notes, empty/reduced backfills and unavailable coverage through the output boundary, two live runners and expired leases, cross-runner single-flight completion, reusable workers, newly job-backed read-only tools with direct fast/write results, shared proxy budgets and query gating for batches, fixed diagnostics in every privacy mode and credential-redacted mode-0600 debug files, and unknown/malformed names across all modes. Existing test fixtures now supply dependency fakes inside job work, isolate caller identities for policy-only proxy checks, and expect normal JSON-RPC errors for unknown tools. No dependency installation or commit was made.
+
+## Replay clip queue
+
+Clips use a separate FIFO queue, independent of analytics jobs. `LENS_CLIP_CONCURRENCY=5`
+(clamped to 1–8) bounds renders across all callers. `LENS_CLIP_PER_USER=2` (minimum 1,
+clamped to concurrency) bounds each person's active renders; queued requests whose owner
+is capped yield to the oldest eligible request. Ownerless callers share the `system` owner.
+Identical session/range requests share one render, charged to the first requester.
+Replay-page jobs remain queued, with positions among still-queued jobs, until rendering starts.
+Logs contain `queuedMs` and `renderMs`, without recording identifiers or content.
+
+`LENS_CLIP_MCP_WAIT_MS=25000` (clamped to 1–55000 ms) bounds the MCP wait, including
+recording the result. Slow clips finish and are recorded in the background; the response
+includes the same clip-page URL. The existing hourly MCP limit and queue-full refusal remain,
+with queue-full admission at 20 outstanding renders to accommodate five simultaneous people.
+
+Peak Chromium memory is approximately concurrency × 250 MB on top of the service
+(about 1.25 GB at the default five). Idle Chromium uses roughly 100–250 MB each.
+Lens defaults `MAX_IDLE_BROWSERS` to min(2, concurrency) before loading the rasterizer,
+only when it is unset. An explicitly larger idle limit may retain additional memory.
+
+The vendored BrowserPool removes idle slots synchronously before awaiting page creation,
+launches a separate browser when none is idle, tracks page-to-slot ownership, and releases
+only the requested page in rasterizeRecording's finally block. rasterizeFile uses per-call
+input/options/source and output paths. Concurrent calls on one initialized pool are safe
+with distinct output directories; Lens single-flights engine startup, snapshot downloads,
+and identical clip renders to prevent shared-file races.

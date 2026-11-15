@@ -27,7 +27,8 @@ import { appEvents, clientSignalsReport, describeAppEvents, dialogFriction, find
 import { completionWorkflow, discoverWorkflows, workflowCompletionReport } from '../core/workflowqueries.ts'
 import { WORKFLOW_NAME_LIMIT } from '../core/workflows.ts'
 import { revalBrief } from '../core/brief.ts'
-import { pendingRenders, renderClip } from '../core/clip.ts'
+import { waitForReplayClip } from './replay-clip.ts'
+import { clipName, pendingRenders, renderClip } from '../core/clip.ts'
 import { errorImpact } from '../core/impact.ts'
 import { bestPerSession, findIncidents } from '../core/incidents.ts'
 import { messageDoctor } from '../core/messagedoctor.ts'
@@ -161,7 +162,7 @@ export async function cachedToolCall(name: string, args: unknown, run: () => Pro
 
 const mcpRenders: number[] = []
 export function mcpClipRefusal(): string | undefined {
-    if (pendingRenders() >= 3) return 'the render queue is full'
+    if (pendingRenders() >= 20) return 'the render queue is full'
     const now = Date.now()
     while (mcpRenders.length && now - mcpRenders[0]! >= 3_600_000) mcpRenders.shift()
     if (mcpRenders.length >= (Number(process.env.CLIPS_PER_HOUR) || 20)) return 'the hourly MCP clip limit has been reached'
@@ -326,7 +327,7 @@ const fewClients = <T extends { clients_with_errors: string[] }>(d: T) =>
     ({ ...d, clients_with_errors_count: d.clients_with_errors.length, clients_with_errors: d.clients_with_errors.slice(0, CLIENT_EXAMPLES) })
 
 /** raw is reserved for the isolated analysis worker: it calls handlers directly, never tools/call. */
-export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'tokenId' | 'dashboardRole' | 'admin' | 'insights'>>, raw = false): void {
+export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<ChatCaller, 'who' | 'surveyRole'> & Partial<Pick<ChatCaller, 'email' | 'tokenId' | 'dashboardRole' | 'admin' | 'insights'>>, raw = false, replayDeps = { render: renderClip, record: recordClip }): void {
     if (raw && isMainThread) throw new Error('Raw registration is reserved for isolated analysis workers.')
     const insights = !!caller?.admin || caller?.insights === true
     if (!raw) installJobTools(server, wrapTools(server, insights, caller))
@@ -401,9 +402,15 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
                     lines.push(`No MP4 clip: ${refusal}. Use the PostHog replay link above.`)
                     return text(lines.join('\n'))
                 }
-                const clip = await renderClip({ sessionId: session_id, startOffsetS: start_s, durationS: duration_s })
-                await recordClip(clip, 'claude (MCP)')
-                lines.push(`MP4 clip, ${Math.round(clip.video_duration_s)} s, on the clip page (sign-in and the "Watch clips" role needed): ${config.service.publicUrl}/replays?clip=${encodeURIComponent(clip.name)}`)
+                const request = { sessionId: session_id, startOffsetS: start_s, durationS: duration_s }
+                const clip = await waitForReplayClip(request, caller?.email || caller?.who, {
+                    render: replayDeps.render,
+                    record: clip => replayDeps.record(clip, 'claude (MCP)'),
+                    backgroundError: error => { toolError(error, 'get_replay_link') },
+                })
+                const page = `${config.service.publicUrl}/replays?clip=${encodeURIComponent(clip?.name ?? clipName(request))}`
+                if (!clip) lines.push(`The MP4 is still rendering and will appear on the clip page (sign-in and the "Watch clips" role needed): ${page}`)
+                else lines.push(`MP4 clip, ${Math.round(clip.video_duration_s)} s, on the clip page (sign-in and the "Watch clips" role needed): ${page}`)
             } catch (e) {
                 const mapped=toolError(e,'get_replay_link')
                 lines.push(`No MP4 clip is available. Use the PostHog replay link above. Correlation id: ${mapped.id}.`)
