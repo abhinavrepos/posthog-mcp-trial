@@ -95,6 +95,8 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
         // "value" alone is too generic ({"property":"browser","value":"Chrome 120"}): only a bare number there.
         const field = key.split('.').at(-1) || ''   // properties.value, person.properties.amount
         if (/^trade_?ids?$/i.test(field)) return v
+        // Releases ("Reval 26.3", "26.3.1") are labels, not money: the amount pass read "26.3" as cash.
+        if (/^(?:app_?)?version$|_version$/i.test(field) && (typeof v === 'string' || typeof v === 'number')) return v
         if (/^(client|client_?code|client_?id)$/i.test(field) && (typeof v === 'string' || typeof v === 'number')) return v
         if (/^value$/i.test(field) && (typeof v === 'number' || typeof v === 'string' && /^[-+]?\d[\d., ]*$/.test(v))) return '<amount>'
         if (/(?:notional|amount|cash|balance|price)/i.test(field)) {

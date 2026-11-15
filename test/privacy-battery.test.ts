@@ -96,3 +96,9 @@ test('many opening fences without a closing one stay linear (no regex rescans)',
     const t = performance.now(); safetyWith('```json\n'.repeat(80_000), [])
     assert.ok(performance.now() - t < 2_000, `took ${Math.round(performance.now() - t)} ms`)
 })
+
+test('app versions are labels, not amounts', async () => {
+    const { safetyWith } = await import('../src/core/aisafety.ts')
+    const out = safetyWith({ rows: [{ app_version: 'Reval 26.3', events: 4002949 }, { version: '26.3.1' }], note: 'paid 26.3 USD' }, [])
+    assert.equal(out.rows[0].app_version, 'Reval 26.3'); assert.equal(out.rows[1].version, '26.3.1'); assert.doesNotMatch(out.note, /26\.3/)
+})
