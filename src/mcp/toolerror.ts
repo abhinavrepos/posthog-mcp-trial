@@ -1,3 +1,4 @@
+import { JobCapError } from '../core/jobs.ts'
 import { errorDiagnostic } from '../core/errordiagnostics.ts'
 import { posthogPublicMessage, posthogFailure } from './posthog-error.ts'
 import { RescueInputError } from '../core/rescue.ts'
@@ -12,6 +13,7 @@ export function toolError(error: unknown, tool: string, id: string = toolCorrela
     if(posthogPublicMessage(raw)) {kind=/memory|timed out/.test(raw) ? 'capacity' : 'unavailable';message=raw}
     else if(tool==='posthog_exec' && /memory limit|too much data|code:\s*241|timeout|timed out/i.test(raw)) {kind='capacity';message=posthogFailure(error).message}
     else if(error instanceof RateLimitError) {kind='rate_limit';message=raw}
+    else if(error instanceof JobCapError) {kind='busy';message=error.message}
     else if(raw === 'Unknown or expired job id.') {kind='not_found';message=raw}
     else if(raw === 'Privacy or access settings changed. Submit the tool again.') {kind='privacy_changed';message=raw}
     else if(error instanceof z.ZodError) {

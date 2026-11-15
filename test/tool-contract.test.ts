@@ -251,3 +251,13 @@ test('unknown tool calls are accounted and audited in all privacy modes, with no
   }
  }finally{setAnonymise({mode:'standard'})}
 })
+
+test('error logs keep the error type and a cleaned message: amounts, people, paths and query text never logged', async (t) => {
+    const lines: string[] = []
+    t.mock.method(console, 'error', (...a: unknown[]) => { lines.push(JSON.stringify(a)) })
+    const { errorDiagnostic } = await import('../src/core/errordiagnostics.ts')
+    errorDiagnostic(new Error('Counterparty limit exceeded: 250000.00 USD for jane.doe@client07.example at /srv/lens/src/core/tasks.ts:695:60\nHogQL: SELECT secret FROM events'), 'dialog_friction', 'internal', 'cid')
+    const line = lines.join('\n')
+    assert.match(line, /Counterparty limit exceeded/); assert.match(line, /"error_type":"Error"/)
+    for (const leak of ['250000', 'jane.doe', '/srv/lens', 'SELECT secret']) assert.ok(!line.includes(leak), leak)
+})

@@ -30,7 +30,7 @@ test('global concurrency, two per user, cancellation, failure, expiry and restar
  let now=100000;const db=new DatabaseSync(':memory:'),runner=new JobRunner(db,{concurrency:1,ttlMs:100,now:()=>now});let starts=0,cancelled=0
  const work=()=>{starts++;return {promise:new Promise(()=>{}),cancel:()=>{cancelled++}}}
  const a=runner.start('alice','a',{},'r',work),b=runner.start('alice','b',{},'r',work),c=runner.start('bob','c',{},'r',work)
- assert.throws(()=>runner.start('alice','d',{},'r',work),/Two analysis/)
+ assert.throws(()=>runner.start('alice','d',{},'r',work),/Two analyses are already running/)
  await until(()=>starts>=1);await delay(20);assert.equal(starts,1)
  assert.equal(runner.cancel('alice',a.id,'r').status,'cancelled');await until(()=>starts>=2);assert.equal(starts,2);assert.equal(cancelled,1)
  now=100101;runner.prune();assert.throws(()=>runner.get('alice',b.id,'r'),/expired/);assert.throws(()=>runner.get('bob',c.id,'r'),/expired/)
@@ -67,4 +67,11 @@ test('two runners preserve live ownership, renew leases and only recover abandon
   db.prepare("INSERT INTO analysis_jobs (id,owner,revision,flight,status,created,updated,expires,owner_instance,lease_expires) VALUES ('abandoned','alice','r','old','working',?,?,?,'gone',?)").run(now,now,now+1000000,now-60001)
   const c=new JobRunner(db,{now:()=>now});assert.equal(c.get('alice','abandoned','r').status,'failed');c.close()
  } finally {a.close();b.close();db.close()}
+})
+test('the per-user cap reaches the agent as an actionable busy message with its own job ids', async () => {
+    // Found by the agent evaluation: the cap surfaced as "The tool could not complete" and the agent retried blindly.
+    const { JobCapError } = await import('../src/core/jobs.ts'), { toolError } = await import('../src/mcp/toolerror.ts')
+    const mapped = toolError(new JobCapError(['aaa111', 'bbb222']), 'workflow_completion', 'cid')
+    assert.equal(mapped.kind, 'busy')
+    assert.match(mapped.result.content[0].text, /aaa111, bbb222/); assert.match(mapped.result.content[0].text, /get_job_result/)
 })

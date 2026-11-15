@@ -8,6 +8,10 @@ export interface JobRow { id: string; owner: string; revision: string; status: J
 export interface JobWork { promise: Promise<unknown>; cancel?: () => void; metadata?: () => Record<string, unknown> }
 const stable = (v: unknown): string => Array.isArray(v) ? `[${v.map(stable)}]` : v && typeof v === 'object'
     ? `{${Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stable((v as Record<string, unknown>)[k])).join(',')}}` : JSON.stringify(v) ?? 'null'
+/** The per-user cap was reached. Carries the caller's own running job ids, so the agent can poll them. */
+export class JobCapError extends Error {
+    constructor(readonly running: string[]) { super(`Two analyses are already running for you (job ids: ${running.join(', ')}). Call get_job_result with one of them until it finishes, then ask again.`) }
+}
 export class JobRunner {
     private active = new Map<string, { resolve: (v: unknown) => void; work: () => JobWork; cancel?: () => void; running: boolean; independent: boolean }>()
     private timer: NodeJS.Timeout
@@ -45,8 +49,8 @@ export class JobRunner {
         const flight = createHash('sha256').update(stable([tool, args, revision, JSON.parse(serializedContext)])).digest('hex')
         const existing = this.db.prepare("SELECT id FROM analysis_jobs WHERE owner=? AND flight=? AND status='working' AND expires>?").get(owner, flight, this.now())
         if (existing) return { id: String(existing.id), done: this.wait(String(existing.id)) }
-        const count = Number(this.db.prepare("SELECT count(*) n FROM analysis_jobs WHERE owner=? AND status='working'").get(owner)!.n)
-        if (count >= 2) throw new Error('Two analysis jobs are already running for this user. Poll or cancel an existing job first.')
+        const running = (this.db.prepare("SELECT id FROM analysis_jobs WHERE owner=? AND status='working' AND expires>? ORDER BY created").all(owner, this.now()) as { id: string }[]).map(r => String(r.id))
+        if (running.length >= 2) throw new JobCapError(running)
         const id = randomBytes(16).toString('hex'), now = this.now()
         this.db.prepare("INSERT INTO analysis_jobs (id,owner,revision,flight,status,created,updated,expires,result,error,owner_instance,lease_expires) VALUES (?,?,?,?,'working',?,?,?,?,NULL,?,?)").run(id, owner, revision, flight, now, now, now + Math.max(1, Math.min(this.ttlMs, ttlMs)), null, this.instanceId, now+30000)
         this.db.prepare('INSERT INTO analysis_job_context VALUES (?,?)').run(id, serializedContext)

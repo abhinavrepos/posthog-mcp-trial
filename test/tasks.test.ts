@@ -262,7 +262,7 @@ test('scheduler continues after errors, serializes runs, backfills newest first,
         assert.deepEqual(seen.filter(d=>d!=='undefined'), [day(0), day(1), day(2), day(3)])
         assert.equal(ingestStatus().running, false)
         assert.match(ingestStatus().last_error!, /temporary failure/)
-        assert.equal(JSON.parse(logs[0]).tool, 'tasks_ingest'); assert.equal(JSON.parse(logs[0]).error_kind,'upstream'); assert.doesNotMatch(logs[0],/temporary failure/)
+        assert.equal(JSON.parse(logs[0]).tool, 'tasks_ingest'); assert.equal(JSON.parse(logs[0]).error_kind,'upstream'); assert.match(JSON.parse(logs[0]).message,/temporary failure/) // cleaned message kept for operators (masking is tested in tool-contract)
         assert.equal((tasksDb.prepare('SELECT count(*) AS n FROM task_attempts').get() as { n: number }).n, 0)
         assert.equal((tasksDb.prepare('SELECT count(*) AS n FROM task_daily').get() as { n: number }).n, 1)
         assert.equal((tasksDb.prepare('SELECT count(*) AS n FROM task_users_daily').get() as { n: number }).n, 1)
