@@ -28,8 +28,13 @@ function liveSettings(): AnonSettings {
 export const anonSettings = (): AnonSettings => policy.getStore()?.settings ?? liveSettings()
 export const privacyMode = (): PrivacyMode => anonSettings().mode
 export const privacyRevision = (): number => getSetting('codename_revision', 0)
-export const privacyKey = (): string => JSON.stringify([anonSettings(), policy.getStore()?.revision ?? privacyRevision()])
-export const privacyCurrent = (): boolean => !policy.getStore() || (JSON.stringify(liveSettings()) === JSON.stringify(anonSettings()) && policy.getStore()!.revision === privacyRevision())
+// Codenames only exist in private mode: a new client getting one (the roster sync on a first call does that) must
+// not invalidate standard/open answers, where it changes nothing. In private mode it still does: an answer computed
+// before the client was known could hold its real name, so that request is refused and retried.
+const codenameRevision = (settings: AnonSettings, revision: number): number => settings.mode === 'private' ? revision : 0
+export const privacyKey = (): string => JSON.stringify([anonSettings(), codenameRevision(anonSettings(), policy.getStore()?.revision ?? privacyRevision())])
+export const privacyCurrent = (): boolean => !policy.getStore() || (JSON.stringify(liveSettings()) === JSON.stringify(anonSettings())
+    && codenameRevision(anonSettings(), policy.getStore()!.revision) === codenameRevision(anonSettings(), privacyRevision()))
 export const PRIVACY_CHANGED = 'Privacy settings changed during this request. Please retry.'
 export function withPrivacy<T>(work: () => T): T { return policy.getStore() ? work() : policy.run({ settings: liveSettings(), revision: privacyRevision() }, work) }
 export const anonymiseOn = (): boolean => privacyMode() === 'private'

@@ -1,11 +1,24 @@
 import { randomUUID } from 'node:crypto'
 import { openSync, writeSync, closeSync, fchmodSync, constants } from 'node:fs'
 
+import { safetyWith } from './aisafety.ts'
+const cleanMessage = (error: unknown): string => {
+    try {
+        let text = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+        text = text.split(/\n|HogQL:|\bSELECT\b|\bINSERT\b|\bFROM\s+\w/i)[0]            // no query text
+        text = text.replace(/(?:file:\/\/)?(?:\/[\w.@-]+){2,}(?::\d+(?::\d+)?)?/g, '[path]') // no file paths
+        text = text.replace(/\b(?:(?:phx|phc)_|sk-)[\w-]+|\b(Bearer|Basic)\s+\S+/gi, '[redacted]')
+        return safetyWith(text, []).slice(0, 200) || 'Operation failed.'
+    } catch { return 'Operation failed.' }
+}
 /** Diagnostics accessible to the launching agent contain server-authored text only. */
 export function errorDiagnostic(error: unknown, tool: string, kind = 'internal', correlation_id: string = randomUUID(), status?: number) {
     // Fixed messages already satisfy standard/private masking, including in open mode. Never
     // copy an upstream message, SQL, identity, amount, stack or file path onto stdio.
-    console.error('Lens error', {correlation_id, tool: /^[\w:-]{1,80}$/.test(tool) ? tool : 'unknown', error_kind: kind, http_status: status ?? null, message:'Operation failed.'})
+    // Operators still need to know what failed: the error's type and a cleaned message (query text and paths cut,
+    // emails/ids/amounts masked, capped), never the raw text. Full detail only in LENS_DEBUG_ERRORS_FILE.
+    console.error('Lens error', {correlation_id, tool: /^[\w:-]{1,80}$/.test(tool) ? tool : 'unknown', error_kind: kind, http_status: status ?? null,
+        error_type: error instanceof Error && /^[A-Za-z]{1,40}$/.test(error.name) ? error.name : typeof error, message: cleanMessage(error)})
     const file = process.env.LENS_DEBUG_ERRORS_FILE
     if (!file) return
     const redact = (text: string) => {
