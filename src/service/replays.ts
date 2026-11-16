@@ -611,11 +611,11 @@ const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&
 // Colour rules for every page: neutral greys, one blue accent (links, current tab, primary
 // action), red for errors and real warnings, amber for "worth a look". Success and routine
 // states stay neutral (--ok is grey on purpose), so red and amber stand out where they matter.
-const CSS = `:root{color-scheme:light;--bg:#fafafb;--side-bg:#f4f5f7;--card:#fff;--ink:#20242c;--muted:#5f6b7a;--faint:#6f7a88;--line:#e3e6eb;--line-strong:#cfd4db;--control:#c9ced6;--chip:#f1f3f6;--hover:#f5f7fa;
---accent:#315dd9;--accent-ink:#fff;--accent-soft:#ebf0ff;--ok:#4f5b69;--ok-bg:#f1f3f6;--warn:#925b08;--warn-bg:#fff3db;--err:#b33730;--err-bg:#fcedea;
---r:8px;--r-sm:6px;--shadow:none;--pop:0 12px 32px rgba(16,24,40,.16);--page:1440px;--hh:56px;--side:232px}
-@media(prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#0e1218;--side-bg:#12171f;--card:#161c25;--ink:#e6eaf0;--muted:#9aa4b2;--faint:#7c8695;--line:#262f3b;--line-strong:#344050;--control:#3e4a5a;--chip:#1e2631;--hover:#1b222c;
---accent:#86a8ff;--accent-ink:#0b1630;--accent-soft:#1a2540;--ok:#a9b3c0;--ok-bg:#1e2631;--warn:#eec27a;--warn-bg:#2e2410;--err:#ff9a90;--err-bg:#331a19;--pop:0 12px 32px rgba(0,0,0,.5)}}
+// The same near-black palette as the PS Dashboard (one look across ION's internal tools), and the only theme:
+// a canvas, tiles one step lighter, hairline borders. Colour values are PS Dashboard's tokens.
+const CSS = `:root{color-scheme:dark;--bg:#0f1114;--side-bg:#13161a;--card:#171a1f;--ink:#e6e9ed;--muted:#a9b1bb;--faint:#8b939e;--line:#2a2f36;--line-strong:#3d444d;--control:#4a525c;--chip:#1f2329;--hover:#262b32;
+--accent:#7aa7e6;--accent-ink:#0f1114;--accent-soft:#1c2633;--ok:#a9b1bb;--ok-bg:#1f2329;--warn:#d9a75b;--warn-bg:#2a2419;--err:#ef7d7d;--err-bg:#2e1c1d;
+--r:8px;--r-sm:6px;--shadow:none;--pop:0 18px 40px -16px rgba(0,0,0,.75);--page:1440px;--hh:56px;--side:232px}
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}body{margin:0;background:var(--bg);color:var(--ink);font:14px/20px -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased;font-feature-settings:'tnum' 1}
 header{display:flex;align-items:center;gap:16px;background:var(--card);border-bottom:1px solid var(--line);padding:0 24px;height:var(--hh)}
 .brand{display:inline-flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;white-space:nowrap;flex:none;line-height:1}
@@ -728,7 +728,7 @@ const ICON: Record<string, string> = {
 }
 const icon = (name: string) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[name] || ''}</svg>`
 /** The product mark: a lens (two rings) on the accent square, drawn to sit on the text's centre line. */
-export const LOGO = `<svg class="mark" viewBox="0 0 28 28" aria-hidden="true" focusable="false"><rect width="28" height="28" rx="7" fill="var(--accent)"/><circle cx="14" cy="14" r="6" fill="none" stroke="#fff" stroke-width="2.4"/></svg>`
+export const LOGO = `<svg class="mark" viewBox="0 0 28 28" aria-hidden="true" focusable="false"><rect width="28" height="28" rx="7" fill="var(--accent)"/><circle cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="2.4"/></svg>`
 
 /** The app shell: a sidebar (brand, sections, account) on wide screens, a top bar on narrow ones. */
 export function headerHtml(v: Viewer | undefined, section: Section): string {
