@@ -182,8 +182,9 @@ export function analysisCoverage(q: EventWindow, margin = false) {
     return { ...historyCoverage(from,to,days,dataThrough(),'analysis_history'), complete: c.complete && !missing.size && aligned, unprocessed: [...missing].sort(), aligned }
 }
 export function analysisMeta(q: EventWindow, margin = false) {
-    const coverage = analysisCoverage(q, margin)
-    return { source: coverage.aligned && (coverage.covered_days>0 || +q.to-+q.from>7*DAY) ? 'history' as const : 'live' as const, coverage, data_through: dataThrough(), sample_rate: 1 }
+    const coverage = analysisCoverage(q)
+    const support = margin ? analysisCoverage(q, true) : coverage
+    return { source: support.aligned && (support.covered_days>0 || +q.to-+q.from>7*DAY) ? 'history' as const : 'live' as const, coverage, data_through: dataThrough(), sample_rate: 1 }
 }
 function storeGlobalFriction(owner: string, groups: [string,FrictionCandidate[]][]) {
     const by=new Map<string,FrictionCandidate>()

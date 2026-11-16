@@ -19,6 +19,7 @@ export function analyticalResult(name:string,args:unknown,result:unknown, reques
         parsed={from:new Date(output.from),to:new Date(output.to.length===10 ? Date.parse(output.to)+86400000 : output.to)}
     } else if(requested) parsed=requested
     else if(input.from && input.to) parsed=analyticalWindow(`${input.from} to ${input.to}`)
+    else if(name==='session_story') return result // A session id has no implied rolling analysis window.
     else parsed=analyticalWindow(input.when || `last ${input.days || (input.weeks ? input.weeks*7 : defaults[name] || 7)} days`,new Date(),dataThrough()) || parseTimeWindow(input.when!)
     if(!parsed)return result
     const window={from:day(parsed.from),to:day(new Date(+parsed.to-1))}
@@ -26,13 +27,14 @@ export function analyticalResult(name:string,args:unknown,result:unknown, reques
     if(value?.coverage && typeof value.coverage==='object' && 'requested' in value.coverage) block=value.coverage as Record<string,unknown>
     else if(retained.has(name)) block=coverage(window) as unknown as Record<string,unknown>
     else block={requested:{from:parsed.from.toISOString(),to_exclusive:parsed.to.toISOString(),timezone:'UTC'},answered:[{from:parsed.from.toISOString(),to_exclusive:parsed.to.toISOString()}],status:'source_observed',datasets:[{name,source:'posthog_live_or_retained_objects',covered_ranges:[{from:parsed.from.toISOString(),to_exclusive:parsed.to.toISOString()}],missing_ranges:[],detail:'Successful source query covers the requested timestamps; source retention and historical object availability are not independently verified.'}],comparison:{status:'none'},freshness:{data_through:dataThrough(),computed_at:new Date().toISOString()}}
+    if(name==='client_experience' && value?.usage) block={...block,comparison:(value.usage as {comparison:unknown}).comparison}
     const arrays=value ? Object.values(value).filter(Array.isArray) : []
     const rows=arrays.reduce((n,a)=>n+a.length,0)
     const limits=value?.limits || {...historyLimits(rows),population:retained.has(name)?'covered_days_only':'source_available_data',warnings:['Missing or expired upstream events and historical object revisions cannot be reconstructed. Ranked rows and replay/message examples are bounded; totals are not inferred from examples.']}
     const through=dataThrough()
     block={...block,processing:{data_through:through,status:through ? (window.to>through ? 'includes_unprocessed_days' : 'processed') : 'unknown',note:through && window.to>through ? 'The requested literal/calendar window includes days after dataThrough. They are not fully processed; missing observations are not zero activity.' : 'Rolling windows end at the last fully processed day; source coverage is disclosed separately.'}}
     const compact={...block};delete compact.days;delete compact.unprocessed
-    const out={...(value || {}),window,coverage:compact,limits}
+    const out:Record<string,unknown>={...(value || {}),window,coverage:compact,limits}
     // Prevent accidental unbounded payloads. Every removed row is counted, including nested examples.
     const omitted:Record<string,number>={}
     const candidates:(()=>boolean)[]=[]
@@ -46,6 +48,12 @@ export function analyticalResult(name:string,args:unknown,result:unknown, reques
     }
     walk(out)
     while(JSON.stringify(out).length>27500) {let changed=false;for(const trim of candidates) {if(trim()) {changed=true;break}}if(!changed)break}
+    if(name==='rescue_queue' && Array.isArray(out.clients)) {
+        const total=Number((out as Record<string,unknown>).total_clients)
+        const offset=Number((out as Record<string,unknown>).offset || 0)
+        out.limits={...(out.limits as object),returned_rows:out.clients.length,omitted_rows:Math.max(0,total-out.clients.length)}
+        Object.assign(out,{next_offset:offset+out.clients.length<total ? offset+out.clients.length : null})
+    }
     if(Object.keys(omitted).length) (out as Record<string,unknown>).omitted_rows_by_path=omitted
     // Per-day flags are internal; coalesced ranges carry the same evidence without 1500 rows.
     const clean=JSON.parse(JSON.stringify(out,(key,v)=>key==='days' && Array.isArray(v) && v[0]?.status ? undefined : key==='unprocessed' && Array.isArray(v) ? undefined : v))

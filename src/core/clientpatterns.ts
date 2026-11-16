@@ -118,6 +118,7 @@ export function compareClientPatterns(p:CompareOptions={}) {
     if(!Number.isInteger(months)||months<1||months>48||!Number.isInteger(followup)||followup<1||followup>1500) throw new ToolInputError('Choose 1–48 months and 1–1500 follow-up days')
     const w=timelineWindow({client:'',from:p.from,to:p.to}), cover=coverage(w), outcomes=clientOutcomes()
     const index=new Map<string,string>(), peers=new Map<string,string>()
+    const reasons=new Map<string,string>(), followups=new Map<string,string>()
     let indexNote=''
     if(p.client) {
         const end=timelineWindow({client:p.client,from:w.from,to:w.to,anchor:outcomes.some(o=>o.client===p.client)?'outcome date':'last activity'}).to
@@ -125,20 +126,23 @@ export function compareClientPatterns(p:CompareOptions={}) {
         // and was excluded with no data. Its pattern then runs up to the window's end, and the answer says so.
         if(end>w.to) indexNote=`${p.client}'s ${outcomes.some(o=>o.client===p.client)?'outcome date':'last activity'} (${end}) is after this window, so its months are aligned to the window's end (${w.to}).`
         index.set(p.client,end>w.to?shift(w.to,1):end)
+        reasons.set(p.client,(outcomes.some(o=>o.client===p.client)?'dated outcome':'last activity fallback')+(end>w.to?' aligned to window end':''))
     } else if(p.group==='inactive') {
-        for(const c of clientActivityChanges({...w,silence_days:p.silence_days,all:true}).clients) if(c.first_sustained_silence) index.set(c.client,c.first_sustained_silence)
-    } else for(const o of outcomes) if(['left','contracted'].includes(o.outcome)&&o.decided_on>=w.from&&o.decided_on<=w.to) index.set(o.client,o.decided_on)
+        for(const c of clientActivityChanges({...w,silence_days:p.silence_days,all:true}).clients) if(c.first_sustained_silence) { index.set(c.client,c.first_sustained_silence); reasons.set(c.client,'first sustained silence') }
+    } else for(const o of outcomes) if(['left','contracted'].includes(o.outcome)&&o.decided_on>=w.from&&o.decided_on<=w.to) { index.set(o.client,o.decided_on); reasons.set(o.client,'dated outcome') }
     const confirmed=outcomes.filter(o=>['stayed','renewed'].includes(o.outcome) && !index.has(o.client) && o.decided_on>=w.from && o.decided_on<=w.to)
-    for(const o of confirmed) if(shift(o.decided_on,-followup)>=w.from && coverage({from:shift(o.decided_on,-followup),to:o.decided_on}).complete) peers.set(o.client,shift(o.decided_on,-followup))
+    for(const o of confirmed) if(shift(o.decided_on,-followup)>=w.from && coverage({from:shift(o.decided_on,-followup),to:o.decided_on}).complete) { peers.set(o.client,shift(o.decided_on,-followup)); reasons.set(o.client,'dated outcome minus follow-up days'); followups.set(o.client,o.decided_on) }
     if(!peers.size && index.size) {
         // Same index date and follow-up for all observed-active controls.
         const at=[...index.values()].sort().at(-1)!, end=shift(at,followup)
-        if(end<=w.to && coverage({from:at,to:end}).complete) for(const r of query<{client:string}>(`SELECT DISTINCT client FROM client_daily WHERE day BETWEEN ? AND ? AND sessions>0 AND ${eligible}`,end,end)) if(!index.has(r.client)) peers.set(r.client,at)
+        if(end<=w.to && coverage({from:at,to:end}).complete) for(const r of query<{client:string}>(`SELECT DISTINCT client FROM client_daily WHERE day BETWEEN ? AND ? AND sessions>0 AND ${eligible}`,end,end)) if(!index.has(r.client)) { peers.set(r.client,at); reasons.set(r.client,'target index with observed active follow-up'); followups.set(r.client,end) }
     }
     const prepared:PreparedTimeline={window:w,tables:new Map()}
     const aligned=(group:Map<string,string>)=>{
-        const rows=new Map<number,TimelineBucket[]>(), contributing=new Set<string>(), excluded:{client:string;reason:string}[]=[]
+        const rows=new Map<number,TimelineBucket[]>(), contributing=new Set<string>(), excluded:{client:string;reason:string}[]=[], indices:{client:string;index_date:string;reason:string;followup_date:string|null;calendar_months:string[]}[]=[]
         for(const [client,at] of group) {
+            const provenance={client,index_date:at,reason:reasons.get(client)!,followup_date:followups.get(client)||null,calendar_months:[] as string[]}
+            indices.push(provenance)
             const end=new Date(at);end.setUTCDate(1)
             const start=new Date(end);start.setUTCMonth(start.getUTCMonth()-months)
             const from=start.toISOString().slice(0,10), to=shift(end.toISOString().slice(0,10),-1)
@@ -147,15 +151,15 @@ export function compareClientPatterns(p:CompareOptions={}) {
             // starting mid-month found no one). Months outside the window, partial ones included (half a month is
             // not comparable with full months), or with missing days are unavailable; the rest still count.
             const timeline=clientTimeline({client,from,to,bucket:'month'},index.size+peers.size===1?undefined:prepared)
-            timeline.buckets.forEach((b,i)=>{if(b.from<w.from || b.to>w.to || b.missing_days) return;contributing.add(client);const offset=i-months;if(!rows.has(offset))rows.set(offset,[]);rows.get(offset)!.push(b)})
+            timeline.buckets.forEach((b,i)=>{if(b.from<w.from || b.to>w.to || b.missing_days) return;contributing.add(client);provenance.calendar_months.push(b.from.slice(0,7));const offset=i-months;if(!rows.has(offset))rows.set(offset,[]);rows.get(offset)!.push(b)})
             if(!contributing.has(client)) excluded.push({client,reason:'no complete month before the index date inside the window and Lens history'})
         }
-        return {rows,contributing,excluded}
+        return {rows,contributing,excluded,indices}
     }
     const a=aligned(index),b=aligned(peers)
     const median=(values:(number|null)[])=>{const ns=values.filter((v):v is number=>v!==null).sort((a,b)=>a-b);return ns.length?(ns[Math.floor((ns.length-1)/2)]+ns[Math.floor(ns.length/2)])/2:null}
     const stats=(rows:TimelineBucket[])=>({clients:rows.length,sessions:median(rows.map(r=>r.sessions)),active_users:median(rows.map(r=>r.active_users)),attempts:median(rows.map(r=>r.attempts)),completion_rate:median(rows.map(r=>r.completion_rate)),error_rate:median(rows.map(r=>r.error_rate)),median_s:median(rows.map(r=>r.median_s)),exports:median(rows.map(r=>r.exports))})
     const series=Array.from({length:months},(_,i)=>({months_before_index:i-months,target:stats(a.rows.get(i-months)||[]),comparison:stats(b.rows.get(i-months)||[])}))
-    return {window:w,...(indexNote?{index_note:indexNote}:{}),target_clients:a.contributing.size,comparison_clients:b.contributing.size,target_selected:index.size,comparison_selected:peers.size,target_excluded:a.excluded.slice(0,20),comparison_excluded:b.excluded.slice(0,20),series,coverage:cover,limits:historyLimits(series.length),
-        note:'Descriptive association, no causation. Index is the dated outcome or first sustained usage silence; months are complete calendar months before its month. Stayed means confirmed renewed/stayed at follow-up or observed active through follow-up. Only completely observed months enter medians; each month gives its exact contributing group size. Selection, seasonality and survivor bias may explain differences.'}
+    return {window:w,...(indexNote?{index_note:indexNote}:{}),target_indices:a.indices,comparison_indices:b.indices,target_clients:a.contributing.size,comparison_clients:b.contributing.size,target_selected:index.size,comparison_selected:peers.size,target_excluded:a.excluded.slice(0,20),comparison_excluded:b.excluded.slice(0,20),series,coverage:cover,limits:historyLimits(series.length),
+        note:'Descriptive association, no causation. Index is the dated outcome, first sustained usage silence, or last activity fallback for a named client without a dated outcome; months are complete calendar months before its month. Stayed means confirmed renewed/stayed at follow-up or observed active through follow-up. Only completely observed months enter medians; each month gives its exact contributing group size. Selection, seasonality and survivor bias may explain differences.'}
 }

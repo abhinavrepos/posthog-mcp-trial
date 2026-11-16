@@ -16,7 +16,7 @@ import { snapshotsFile } from './clip.ts'
 import { getRecording, hogql, replayUrl } from './posthog.ts'
 import { P } from './props.ts'
 import { safeName, type SessionSignals } from './replaysignals.ts'
-import { tasksDb } from './tasks.ts'
+import { tasksDb, coverage } from './tasks.ts'
 
 tasksDb.exec(`
 CREATE TABLE IF NOT EXISTS replay_signals(session_id TEXT PRIMARY KEY, client TEXT NOT NULL, user_hash TEXT NOT NULL,
@@ -205,16 +205,18 @@ export interface ClientExperience {
     usage: Usage
     note: string
 }
-export interface Usage { sessions: number; people: number; completed_work: number; before: { sessions: number; people: number; completed_work: number }; change_pct: number | null; text: string }
+export interface Usage { sessions: number; people: number; completed_work: number; before: { sessions: number; people: number; completed_work: number }; change_pct: number | null; comparison: { status: string; baseline: { from: string; to: string; covered_days: number; requested_days: number }; current_covered_days: number; reason: string }; text: string }
 /** Are they using it: sessions, people (daily average) and completed work, against the period before. */
 export function usageOf(client: string, from: string, to: string): Usage {
     const len = Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000) + 1
     const pf = day(Date.parse(from) - len * 86_400_000), pt = day(Date.parse(from) - 86_400_000)
     const sum = (a: string, b: string) => tasksDb.prepare('SELECT coalesce(sum(sessions),0) AS sessions, coalesce(max(users),0) AS people, coalesce(sum(productive_done),0) AS done FROM client_daily WHERE client=? AND day BETWEEN ? AND ?').get(client, a, b) as { sessions: number; people: number; done: number }
     const now = sum(from, to), before = sum(pf, pt)
-    const change = before.done ? Math.round(100 * (now.done / before.done - 1)) : null
+    const currentCoverage = coverage({ from, to }), baselineCoverage = coverage({ from: pf, to: pt })
+    const comparison = { status: currentCoverage.complete && baselineCoverage.complete ? 'complete' : 'unavailable', baseline: { from: pf, to: pt, covered_days: baselineCoverage.covered_days ?? 0, requested_days: len }, current_covered_days: currentCoverage.covered_days ?? 0, reason: 'Growth figures require complete current and baseline periods.' }
+    const change = currentCoverage.complete && baselineCoverage.complete && before.done ? Math.round(100 * (now.done / before.done - 1)) : null
     const text = !now.sessions ? 'No use recorded in this period.' : `${now.sessions} sessions, up to ${now.people} people a day, ${now.done} pieces of work completed${change === null ? '' : ` (${change >= 0 ? '+' : ''}${change}% against the ${len} days before)`}.`
-    return { sessions: now.sessions, people: now.people, completed_work: now.done, before: { sessions: before.sessions, people: before.people, completed_work: before.done }, change_pct: change, text }
+    return { sessions: now.sessions, people: now.people, completed_work: now.done, before: { sessions: before.sessions, people: before.people, completed_work: before.done }, change_pct: change, comparison, text: `${text} Baseline coverage: ${baselineCoverage.covered_days} of ${len} days. ${comparison.reason}` }
 }
 
 const MIN_SESSIONS = 3, MIN_PEER_CLIENTS = 3

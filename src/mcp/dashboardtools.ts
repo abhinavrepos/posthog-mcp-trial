@@ -162,7 +162,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
     }))
     reg('rescue_queue', { outputSchema: ANALYSIS_OUTPUT,
         description: 'Which clients need someone this week, and why? Ranked rescue queue with evidence, next steps, owner and status from processed Lens history.',
-        inputSchema: { when: filters.when, compared_with: filters.compared_with, compare:filters.compare,compare_with:filters.compare_with,min_attempts: z.number().int().min(1).max(100000).optional(), include_snoozed: z.boolean().optional(), limit: z.number().int().min(1).max(50).default(10) },
+        inputSchema: { when: filters.when, compared_with: filters.compared_with, compare:filters.compare,compare_with:filters.compare_with,min_attempts: z.number().int().min(1).max(100000).optional(), include_snoozed: z.boolean().optional(), offset: z.number().int().min(0).default(0), limit: z.number().int().min(1).max(50).default(10) },
         annotations: { readOnlyHint: true },
     }, safe(async input => {
         const result = await d.rescueQueue({compare:input.compare,compare_with:input.compare_with, ...(input.when ? { window: windowFor(input.when, 28) } : {}), ...(input.compared_with ? { baseline: windowFor(input.compared_with, 28) } : {}), min_attempts: input.min_attempts, include_snoozed: input.include_snoozed })
@@ -170,7 +170,10 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         if (input.include_snoozed) q.set('include_snoozed', 'true')
         if (input.min_attempts) q.set('min_attempts', String(input.min_attempts))
         return json({ ...result, headline: result.coverage.complete ? `${result.clients.length} clients need someone this week` : result.coverage.text,
-            clients: result.clients.slice(0, input.limit).map(c => ({ ...c, reasons: c.reasons.slice(0, 3) })), open: `${page()}?${q}` })
+            total_clients: result.clients.length, offset: input.offset,
+            totals_by_category: {urgent:result.clients.filter(c=>c.level==='urgent').length,watch:result.clients.filter(c=>c.level==='watch').length},
+            totals_by_status: Object.fromEntries(RESCUE_STATUSES.map(status=>[status,result.clients.filter(c=>(c.action?.status || 'open')===status).length])),
+            clients: result.clients.slice(input.offset, input.offset + input.limit).map(c => ({ ...c, reasons: c.reasons.slice(0, 3) })), open: `${page()}?${q}` })
     }))
     reg('set_rescue_status', { outputSchema: ANALYSIS_OUTPUT,
         description: 'Set the owner, status, note, due date or expected-decline snooze for a client in the rescue queue.',

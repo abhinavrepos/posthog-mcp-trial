@@ -100,6 +100,11 @@ export function conciseValue(name: string, value: Record<string, unknown>): Reco
         return out
     }
     const out = walk(value, '', false, true) as Record<string, unknown>
+    if(name==='rescue_queue' && Array.isArray(out.clients)) {
+        const total=Number(out.total_clients), offset=Number(out.offset || 0)
+        out.limits={...(out.limits as object),returned_rows:out.clients.length,omitted_rows:Math.max(0,total-out.clients.length)}
+        out.next_offset=offset+out.clients.length<total ? offset+out.clients.length : null
+    }
     return { ...out, detail: 'concise', omitted }
 }
 /** Apply detail=concise to a jsonResult before the privacy pass. Text-only and error results pass unchanged. */

@@ -109,3 +109,62 @@ test('timeline uses captured users when present and exact task memberships only 
     const timeline=clientTimeline({client:'A',from:'2024-01-01',to:'2024-03-31',bucket:'month'})
     assert.deepEqual(timeline.buckets.map(b=>b.active_users),[2,2,0])
 })
+
+test('usage growth withholds the 84052/12470 comparison when only 47 of 317 baseline days are covered',async()=>{
+    const {usageOf}=await import('../src/core/experience.ts')
+    observed(shift('2026-01-01',-47),'2026-11-13')
+    active('growth','2025-12-31','2026-11-13')
+    tasksDb.prepare('UPDATE client_daily SET productive_done=? WHERE client=? AND day=?').run(12470,'growth','2025-12-31')
+    tasksDb.prepare('UPDATE client_daily SET productive_done=? WHERE client=? AND day=?').run(84052,'growth','2026-11-13')
+    let r=usageOf('growth','2026-01-01','2026-11-13')
+    assert.equal(r.change_pct,null);assert.equal(r.comparison.status,'unavailable')
+    assert.equal(r.comparison.baseline.covered_days,47);assert.equal(r.comparison.baseline.requested_days,317)
+    assert.match(r.text,/47 of 317 days/);assert.match(r.text,/require complete/);assert.doesNotMatch(r.text,/%/)
+    const disclosed=analyticalResult('client_experience',{}, {_lensJson:{label:'',value:{window:{from:'2026-01-01',to:'2026-11-13'},usage:r}}}) as any
+    assert.equal(disclosed._lensJson.value.coverage.comparison.status,'unavailable')
+    observed(shift('2026-01-01',-317),'2025-12-31')
+    r=usageOf('growth','2026-01-01','2026-11-13')
+    assert.equal(r.change_pct,574);assert.equal(r.comparison.status,'complete')
+    tasksDb.prepare('DELETE FROM task_ingest WHERE day=?').run('2026-02-01')
+    assert.equal(usageOf('growth','2026-01-01','2026-11-13').change_pct,null)
+})
+
+test('session stories without an analysis window never acquire a default rolling window',()=>{
+    const result={content:[{type:'text',text:'Session april: 2026-04-01 UTC. Timeline.'}]}
+    assert.deepEqual(analyticalResult('session_story',{session_id:'april'},result),result)
+})
+
+test('workflow discovery and completion disclose only October and Q2, excluding supporting days',async()=>{
+    const {analysisMeta}=await import('../src/core/analysishistory.ts')
+    for(const [from,to,count] of [['2026-10-01','2026-11-01',31],['2026-04-01','2026-07-01',91]] as const) {
+        observed(shift(from,-1),shift(to,-1))
+        for(let d=shift(from,-1);d<to;d=shift(d,1))tasksDb.prepare('INSERT OR IGNORE INTO analysis_days VALUES (?)').run(d)
+        const q={from:new Date(from),to:new Date(to)},meta=analysisMeta(q,true)
+        assert.equal(analysisCoverage(q,true).covered_days,count+1,'supporting read keeps its margin')
+        for(const name of ['discover_workflows','workflow_completion']) {
+            const result=analyticalResult(name,{}, {_lensJson:{label:'',value:{window:q,...meta}}}) as any
+            const c=result._lensJson.value.coverage
+            assert.equal(c.requested.from,from);assert.equal(c.requested.to_exclusive,to)
+            assert.equal(c.covered_days,count);assert.equal(c.answered[0].from,from)
+        }
+    }
+})
+
+test('comparison discloses index dates, reasons and contributing months for outcomes, silence and last activity',()=>{
+    observed('2024-01-01','2024-12-31')
+    active('target','2024-01-01','2024-01-02','2024-01-03','2024-11-13')
+    active('stay','2024-01-01')
+    db.prepare('INSERT INTO client_outcomes VALUES (?,?,?,?,?,?)').run('stay','renewed','2024-11-12','','admin','2024-11-12')
+    let r=compareClientPatterns({client:'target',from:'2024-01-01',to:'2024-12-31',months:6})
+    assert.deepEqual(r.target_indices,[{client:'target',index_date:'2024-11-13',reason:'last activity fallback',followup_date:null,calendar_months:['2024-05','2024-06','2024-07','2024-08','2024-09','2024-10']}])
+    assert.equal(r.comparison_indices[0].index_date,'2024-09-13')
+    assert.equal(r.comparison_indices[0].reason,'dated outcome minus follow-up days')
+    assert.equal(r.comparison_indices[0].followup_date,'2024-11-12')
+    assert.deepEqual(r.comparison_indices[0].calendar_months,['2024-03','2024-04','2024-05','2024-06','2024-07','2024-08'])
+    assert.match(r.note,/last activity fallback/)
+    r=compareClientPatterns({group:'inactive',from:'2024-01-01',to:'2024-12-31',months:6})
+    assert.equal(r.target_indices[0].reason,'first sustained silence');assert.equal(r.target_indices[0].index_date,'2024-01-04')
+    db.prepare('INSERT INTO client_outcomes VALUES (?,?,?,?,?,?)').run('target','left','2024-11-01','','admin','2024-11-01')
+    r=compareClientPatterns({from:'2024-01-01',to:'2024-12-31',months:6})
+    assert.equal(r.target_indices[0].reason,'dated outcome');assert.equal(r.target_indices[0].index_date,'2024-11-01')
+})

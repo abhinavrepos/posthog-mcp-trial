@@ -263,3 +263,25 @@ test('signal scorecard is a view-role read and validates bounded weeks', async (
         assert.equal(seen.length,1)
     } finally { await c.close() }
 })
+
+test('rescue queue totals survive size trimming and offset pages deliver every candidate', async(t)=>{
+    const {toolLimiter,ToolLimiter}=await import('../src/mcp/ratelimit.ts')
+    const limiter=new ToolLimiter(600,6000)
+    t.mock.method(toolLimiter,'acquire',limiter.acquire.bind(limiter))
+    const queue={coverage:{complete:true,unprocessed:[]},window:{from:'2026-01-01',to:'2026-01-28'},baseline:{from:'2025-12-04',to:'2025-12-31'},data_through:'2026-01-28',hidden_snoozed:0,note:'',clients:Array.from({length:109},(_,i)=>({client:String(i),client_name:String(i),score:100-i,level:i<80?'urgent' as const:'watch' as const,trend:'new' as const,reasons:Array.from({length:3},()=>({kind:'missing' as const,text:'Evidence '.repeat(60),now:0,before:5})),next_step:'Review',...(i%2?{action:{status:'expected' as const,owner:null,note:null,due:null,snooze_until:'2099-01-01'}}:{})}))}
+    const seen:string[]=[]
+    let offset:number|null=0
+    do {
+        const r=JSON.parse(await call('rescue_queue',{limit:50,offset,include_snoozed:true,detail:offset===0?'concise':'full'},{rescueQueue:async()=>queue} as any))
+        assert.deepEqual(r.totals_by_category,{urgent:80,watch:29})
+        assert.deepEqual(r.totals_by_status,{open:55,contacted:0,in_progress:0,resolved:0,expected:54})
+        assert.equal(r.total_clients,109);assert.equal(r.limits.returned_rows,r.clients.length)
+        assert.equal(r.limits.omitted_rows,109-r.clients.length)
+        assert.ok(r.clients.length>0 && r.clients.length<50)
+        assert.equal((r.omitted_rows_by_path?.clients || 0)+(r.omitted?.clients || 0),Math.min(50,109-offset)-r.clients.length)
+        seen.push(...r.clients.map((c:any)=>c.client))
+        assert.equal(r.next_offset,offset+r.clients.length<109?offset+r.clients.length:null)
+        offset=r.next_offset
+    } while(offset!==null)
+    assert.equal(seen.length,109);assert.equal(new Set(seen).size,109)
+})
