@@ -25,10 +25,13 @@ export const DETAIL_TOOLS = new Set([...ANALYSIS_SCHEMA_TOOLS, 'attempt_timings'
 export const detailInput = z.enum(['concise', 'full']).optional().describe('concise: headline numbers, window, coverage, top 10 rows and counts of what was left out. Default full.')
 
 const loose = <T extends z.ZodRawShape>(shape: T) => z.looseObject(shape).meta({ additionalProperties: true })
+// Every field is optional: the MCP SDK rejects an answer whose structuredContent does not match the advertised
+// schema, so a required field that one answer path omits turns a good answer into a PM-facing error (find_trade
+// did exactly that). The schema documents the fields; it must never be able to fail a real answer.
 const analysisShape = () => loose({
-    window: loose({ from: z.string(), to: z.string() }),
-    coverage: loose({ status: z.string().optional(), processing: loose({ status: z.string() }) }),
-    limits: loose({}),
+    window: loose({ from: z.string(), to: z.string() }).optional(),
+    coverage: loose({ status: z.string().optional(), processing: loose({ status: z.string() }).optional() }).optional(),
+    limits: loose({}).optional(),
     detail: z.enum(['concise', 'full']).optional(),
     omitted: z.record(z.string(), z.number()).optional(),
     omitted_rows_by_path: z.record(z.string(), z.number()).optional(),
@@ -37,8 +40,8 @@ const analysisShape = () => loose({
 const runningShape = () => loose({ status: z.literal('running'), job_id: z.string(), poll_after_seconds: z.number().optional(), note: z.string().optional() })
 const SHAPES = new Map<unknown, () => z.ZodObject>([
     [ANALYSIS_OUTPUT, analysisShape],
-    [ROWS_OUTPUT, () => loose({ rows: z.array(loose({})) })],
-    [CANDIDATES_OUTPUT, () => loose({ candidates: z.array(loose({})) })],
+    [ROWS_OUTPUT, () => loose({ rows: z.array(loose({})).optional() })],
+    [CANDIDATES_OUTPUT, () => loose({ candidates: z.array(loose({})).optional() })],
 ])
 /**
  * The output schema to advertise for a registration marker; any other value passes through unchanged.
@@ -107,4 +110,14 @@ export function applyDetail(name: string, result: unknown, detail: 'concise' | '
     const value = structuredOf(r._lensJson.value)
     if (!value) return result
     return { ...r, _lensJson: { ...r._lensJson, value: conciseValue(name, value) } }
+}
+
+/** Last line of defence for tools that advertise an outputSchema: a successful text-only answer gets its text as
+ * structuredContent.overview, so the SDK can never turn a real answer into "has an output schema but did not
+ * return structured content". Errors and answers that already carry structuredContent pass unchanged. */
+export function ensureStructured(result: unknown): unknown {
+    const r = result as { isError?: boolean; structuredContent?: unknown; content?: { type?: string; text?: unknown }[] }
+    if (!r || typeof r !== 'object' || r.isError || r.structuredContent || !Array.isArray(r.content)) return result
+    const text = r.content.map(c => c?.type === 'text' && typeof c.text === 'string' ? c.text : '').filter(Boolean).join('\n\n')
+    return { ...r, structuredContent: { overview: text } }
 }

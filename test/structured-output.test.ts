@@ -215,3 +215,18 @@ test('detail=concise is smaller, keeps window, coverage and headline numbers, an
         console.log(rows.join('\n'))
     } finally { await c.close() }
 })
+
+test('an outputSchema can never reject a real answer: missing analysis fields and text-only answers still reach the client', async () => {
+    const s = new McpServer({ name: 'loose', version: '1' })
+    installJobTools(s, wrapTools(s, true, { ...caller, who: 'loose' }, { work: (_n, _a, _w, execute) => ({ promise: execute() }) }))
+    // find_trade's real failure: a JSON answer without window/coverage/limits (rows only).
+    s.registerTool('find_trade', { inputSchema: { id: z.string() }, outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true } }, async () => jsonResult('Trade 1006:', { matches: [], note: 'No events name this id.' }))
+    s.registerTool('resolve_client', { inputSchema: { query: z.string() }, outputSchema: ROWS_OUTPUT, annotations: { readOnlyHint: true } }, async () => ({ content: [{ type: 'text' as const, text: 'No client matches "zz".' }] }))
+    const c = await connect(s)
+    try {
+        const t = await c.client.callTool({ name: 'find_trade', arguments: { id: '1006' } }) as Result
+        assert.ok(!t.isError, JSON.stringify(t)); assert.match(t.content[0].text, /No events name this id/)
+        const r = await c.client.callTool({ name: 'resolve_client', arguments: { query: 'zz' } }) as Result
+        assert.ok(!r.isError, JSON.stringify(r)); assert.equal((r.structuredContent as { overview?: string }).overview, 'No client matches "zz".')
+    } finally { await c.close() }
+})

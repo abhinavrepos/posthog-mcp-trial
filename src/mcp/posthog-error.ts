@@ -39,7 +39,7 @@ export function posthogUsageMessage(raw: string): string | undefined {
     const tool = /"([a-z0-9-]+)" is a tool, not a command/i.exec(raw)?.[1]
     if (tool && TOOL_NAME.test(tool)) return `PostHog command format: "${tool}" is a tool. Use: call ${tool} <json_input>. ${USAGE_HELP}`
     if (/unknown (?:command|tool)|is not a (?:known )?(?:command|tool)|no such (?:command|tool)/i.test(raw)) return `PostHog does not know that command. ${USAGE_HELP}`
-    const sql = /(syntax error|unknown (?:table|field|function|identifier)|unable to resolve field|unknown column)[^"\\]{0,200}/i.exec(raw)?.[0]
+    const sql = /(syntax error|unknown (?:table|field|function|identifier)|unable to resolve field|unknown column|illegal type|illegal_type_of_argument|number of arguments|no such column|cannot convert|type mismatch|there is no supertype|missing columns|not an aggregate function|aggregate function .{0,40}is found inside)[^"\\]{0,200}/i.exec(raw)?.[0]
     if (sql) return `PostHog could not run the SQL: ${sql.replace(/[^A-Za-z0-9 _.,:()'=<>*-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)}. Fix the query and retry.`
     if (/invalid (?:input|arguments?|json)|validation (?:error|failed)|expected [a-z]+, received|required property|is required|unexpected token/i.test(raw)) return `PostHog rejected the input for this command. ${USAGE_HELP}`
 }

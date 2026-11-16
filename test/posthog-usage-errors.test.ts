@@ -41,3 +41,9 @@ test("PostHog's own max-execution-time limit says so and points to Lens rollup t
     assert.equal(posthogPublicMessage(e.message), e.message)
     assert.equal(toolError(e, 'posthog_exec').kind, 'capacity')
 })
+
+test('SQL type and argument errors from PostHog are corrections, not "unavailable"', () => {
+    const e = posthogFailure({ isError: true, content: [{ type: 'text', text: "Error: [execute-sql]: Tool failed: MaxToolRetryableError: Illegal type DateTime64(6, 'UTC') of first argument of aggregate function windowFunnel, must be Unsigned Number, Date, DateTime.. You may retry" }] })
+    assert.match(e.message, /^PostHog could not run the SQL: Illegal type DateTime64/)
+    assert.equal(toolError(e, 'posthog_exec').kind, 'validation')
+})

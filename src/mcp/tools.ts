@@ -15,7 +15,7 @@ import { privacyMode } from '../core/anonymise.ts'
 import { installJobTools, createJobDispatch, JobAnswer, JOB_TOOLS, jobBacked, type JobOptions } from './jobtools.ts'
 import { privacyCurrent, PRIVACY_CHANGED, privacyKey, withPrivacy } from '../core/anonymise.ts'
 import { analyticalResult } from './historyresult.ts'
-import { DETAIL_TOOLS, detailInput, applyDetail, outputSchemaFor, structuredOf, ANALYSIS_OUTPUT, ROWS_OUTPUT } from './structured.ts'
+import { DETAIL_TOOLS, detailInput, applyDetail, outputSchemaFor, structuredOf, ensureStructured, ANALYSIS_OUTPUT, ROWS_OUTPUT } from './structured.ts'
 // MCP tools over the same core as the Jira automation. Each one answers a question a PM or
 // support lead asks that Jira alone cannot.
 import { jsonResult, reportResult, safeResult } from './result.ts'
@@ -314,7 +314,7 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
         const first=description.match(/^.*?[.!?](?:\s|$)/)?.[0] || description
         const rest=description.slice(first.length)
         const outputSchema=outputSchemaFor((cfg as {outputSchema?:unknown}).outputSchema,isJob())
-        return register(name, {...cfg,inputSchema:schema,...(outputSchema ? {outputSchema} : {}),description:`${first.trim()}${windowed ? ` Time: period or from/to (YYYY-MM-DD). Default: ${typeof WINDOW_DEFAULTS[name] === 'string' ? String(WINDOW_DEFAULTS[name]).replaceAll('_',' ') : `last ${WINDOW_DEFAULTS[name] || 7} days`}.` : ''} ${rest} ${DIRECT_CALL}`.trim()} as never,handler as never)
+        return register(name, {...cfg,inputSchema:schema,...(outputSchema ? {outputSchema} : {}),description:`${first.trim()}${windowed ? ` Time: period or from/to (YYYY-MM-DD). Default: ${typeof WINDOW_DEFAULTS[name] === 'string' ? String(WINDOW_DEFAULTS[name]).replaceAll('_',' ') : `last ${WINDOW_DEFAULTS[name] || 7} days`}.` : ''} ${rest} ${DIRECT_CALL}`.trim()} as never,(outputSchema ? async (input: unknown, extra: unknown) => ensureStructured(await handler(input, extra)) : handler) as never)
     }) as typeof server.registerTool
     return dispatch
 }
