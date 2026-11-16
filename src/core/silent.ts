@@ -65,7 +65,9 @@ export async function struggleSessions(q: { clientId: string; pathname?: string;
     const repeated = new Map<string, { event: string; count: number }>()
     if (rows.length) {
         const counts = await hogql(
-            `SELECT sid, argMax(event, n) AS event, max(n) AS n FROM (
+            // The outer alias must differ from the inner n: ClickHouse resolves n in argMax to the alias
+            // max(n) and refuses an aggregate inside an aggregate (ILLEGAL_AGGREGATION), failing every call.
+            `SELECT sid, argMax(event, n) AS event, max(n) AS top FROM (
              SELECT toString(properties.$session_id) AS sid, event, count() AS n
              FROM events
              WHERE toString(properties.$session_id) IN {ids} AND NOT startsWith(event, '$')
@@ -76,7 +78,7 @@ export async function struggleSessions(q: { clientId: string; pathname?: string;
         )
         for (const c of counts) {
             const prev = repeated.get(String(c.sid))
-            if (!prev || Number(c.n) > prev.count) repeated.set(String(c.sid), { event: String(c.event), count: Number(c.n) })
+            if (!prev || Number(c.top) > prev.count) repeated.set(String(c.sid), { event: String(c.event), count: Number(c.top) })
         }
     }
     const sessions: StruggleSession[] = rows.map((r) => {

@@ -3,7 +3,7 @@ import { errorDiagnostic } from './errordiagnostics.ts'
 import { auditClient, toolCorrelationId } from './toolcontext.ts'
 // One deterministic PM entry point. Queries stay here; composeBrief only reads supplied results.
 import {
-    appEvents, clientSignalsReport, dialogFriction, dialogNames, findTrade,
+    appEvents, clientSignalsReport, dialogFriction, dialogLabels, findTrade,
     sessionStory, slowAttempts, toRaw, toSteps, topPains,
     type ClientSignalsResult, type FrictionResult, type PainsReport, type SessionStoryResult, type Step,
 } from './appevents.ts'
@@ -292,7 +292,7 @@ async function contributions(from: Date, to: Date, clientId?: string) {
 }
 
 // Injectable data functions let orchestration be tested without a PostHog or a recording.
-export const briefSources = { resolveClient, dialogNames, topPains, clientSignalsReport, dialogFriction, slowAttempts, findTrade, sessionStory, recordingSpans, contributions }
+export const briefSources = { resolveClient, dialogNames: dialogLabels, topPains, clientSignalsReport, dialogFriction, slowAttempts, findTrade, sessionStory, recordingSpans, contributions }
 export async function revalBrief(input: BriefInput, sources = briefSources, now = new Date()): Promise<string> {
     const limits: string[] = []
     const optional = async <T>(label: string, work: () => Promise<T>): Promise<T | undefined> => {

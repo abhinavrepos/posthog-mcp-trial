@@ -200,6 +200,8 @@ for (const later of [false, true]) test(`typed input errors survive job persiste
         if (later) { const id = handle(result); await turn(); reject(new ToolInputError('Choose 1–48 months and 1–1500 follow-up days')); result = await poll(c.client, id) }
         assert.equal(result.isError, true); assert.match(text(result), /Choose 1–48 months/)
         assert.equal(rows(`input-failure-${later}`).at(-1)?.error_kind, 'validation')
+        // Read back through get_job_result: name the tool to call again, never get_job_result's own job_id example.
+        if (later) { assert.doesNotMatch(text(result), /"job_id":"example"/); assert.match(text(result), /Call \S+ again with corrected arguments/) }
     } finally { await c.close(); m.close() }
 })
 test('error_blast_radius missing identification returns actionable validation through a real worker', async () => {

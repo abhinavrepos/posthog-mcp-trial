@@ -118,9 +118,13 @@ export function compareClientPatterns(p:CompareOptions={}) {
     if(!Number.isInteger(months)||months<1||months>48||!Number.isInteger(followup)||followup<1||followup>1500) throw new ToolInputError('Choose 1–48 months and 1–1500 follow-up days')
     const w=timelineWindow({client:'',from:p.from,to:p.to}), cover=coverage(w), outcomes=clientOutcomes()
     const index=new Map<string,string>(), peers=new Map<string,string>()
+    let indexNote=''
     if(p.client) {
         const end=timelineWindow({client:p.client,from:w.from,to:w.to,anchor:outcomes.some(o=>o.client===p.client)?'outcome date':'last activity'}).to
-        index.set(p.client,end)
+        // A client still active today has its index (outcome or last activity) after a past window such as 2023,
+        // and was excluded with no data. Its pattern then runs up to the window's end, and the answer says so.
+        if(end>w.to) indexNote=`${p.client}'s ${outcomes.some(o=>o.client===p.client)?'outcome date':'last activity'} (${end}) is after this window, so its months are aligned to the window's end (${w.to}).`
+        index.set(p.client,end>w.to?shift(w.to,1):end)
     } else if(p.group==='inactive') {
         for(const c of clientActivityChanges({...w,silence_days:p.silence_days,all:true}).clients) if(c.first_sustained_silence) index.set(c.client,c.first_sustained_silence)
     } else for(const o of outcomes) if(['left','contracted'].includes(o.outcome)&&o.decided_on>=w.from&&o.decided_on<=w.to) index.set(o.client,o.decided_on)
@@ -152,6 +156,6 @@ export function compareClientPatterns(p:CompareOptions={}) {
     const median=(values:(number|null)[])=>{const ns=values.filter((v):v is number=>v!==null).sort((a,b)=>a-b);return ns.length?(ns[Math.floor((ns.length-1)/2)]+ns[Math.floor(ns.length/2)])/2:null}
     const stats=(rows:TimelineBucket[])=>({clients:rows.length,sessions:median(rows.map(r=>r.sessions)),active_users:median(rows.map(r=>r.active_users)),attempts:median(rows.map(r=>r.attempts)),completion_rate:median(rows.map(r=>r.completion_rate)),error_rate:median(rows.map(r=>r.error_rate)),median_s:median(rows.map(r=>r.median_s)),exports:median(rows.map(r=>r.exports))})
     const series=Array.from({length:months},(_,i)=>({months_before_index:i-months,target:stats(a.rows.get(i-months)||[]),comparison:stats(b.rows.get(i-months)||[])}))
-    return {window:w,target_clients:a.contributing.size,comparison_clients:b.contributing.size,target_selected:index.size,comparison_selected:peers.size,target_excluded:a.excluded.slice(0,20),comparison_excluded:b.excluded.slice(0,20),series,coverage:cover,limits:historyLimits(series.length),
+    return {window:w,...(indexNote?{index_note:indexNote}:{}),target_clients:a.contributing.size,comparison_clients:b.contributing.size,target_selected:index.size,comparison_selected:peers.size,target_excluded:a.excluded.slice(0,20),comparison_excluded:b.excluded.slice(0,20),series,coverage:cover,limits:historyLimits(series.length),
         note:'Descriptive association, no causation. Index is the dated outcome or first sustained usage silence; months are complete calendar months before its month. Stayed means confirmed renewed/stayed at follow-up or observed active through follow-up. Only completely observed months enter medians; each month gives its exact contributing group size. Selection, seasonality and survivor bias may explain differences.'}
 }

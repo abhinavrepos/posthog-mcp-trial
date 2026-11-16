@@ -7,6 +7,7 @@ import { after, describe, test } from 'node:test'
 
 const dir = mkdtempSync(join(tmpdir(), 'lens-message-doctor-'))
 process.env.TRIAGE_DB = join(dir, 'test.db')
+process.env.TASKS_DB = join(dir, 'tasks.db')
 process.env.APP_EVENTS_FILE = 'config/app-events.reval.json'
 process.env.CLIENT_FROM_DISTINCT_ID = '3'
 process.env.POSTHOG_PROJECT_ID = '123456'
@@ -287,6 +288,46 @@ describe('bounded message-doctor queries', () => {
             return response(Array.from({ length: 10000 }, () => huge))
         })
         await assert.rejects(messageDoctor({ from: new Date(ts(0)), to: new Date(ts(3)) }), /pagination did not advance/)
+    })
+    // Two years held 2.4 million error sessions: reading them all could never finish. Past the cap, the most recent
+    // slices are diagnosed and the whole window's totals come from the daily history, said plainly.
+    test('a window with more error sessions than the cap is diagnosed from its latest slices, with history totals', async (t) => {
+        const { tasksDb } = await import('../src/core/tasks.ts')
+        const day = (n: number) => new Date(T0 - n * 86400000).toISOString().slice(0, 10)
+        for (const d of [day(25), day(5)]) {
+            tasksDb.prepare('INSERT OR REPLACE INTO task_ingest VALUES (?,1,1,1,0,1,?,1)').run(d, new Date().toISOString())
+            tasksDb.prepare("INSERT INTO errors_daily VALUES (?,'RQA','D','save','Invalid date',7,2)").run(d)
+        }
+        tasksDb.prepare("INSERT INTO errors_daily VALUES (?,'RQB','D','save','Invalid date',1,0)").run(day(5))
+        process.env.LENS_MESSAGE_DOCTOR_SESSIONS = '50'
+        t.after(() => { delete process.env.LENS_MESSAGE_DOCTOR_SESSIONS })
+        const slices: { from: string; to: string }[] = [], reads: string[] = []
+        t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+            const q = JSON.parse(String(init.body)).query as Query
+            if (q.query.includes('GROUP BY sid')) {
+                slices.push({ from: String(q.values.from), to: String(q.values.to) })
+                return response(Array.from({ length: 30 }, (_, i) => ({ sid: `s${slices.length}-${i}`, last: ts(1) })))
+            }
+            if (q.query.includes('raw_session_replay_events')) return response([])
+            reads.push(String(q.values.from))
+            return response((q.values.sids as string[]).flatMap((sid) => session(sid, [press(0), message(1)])))
+        })
+        const from = new Date(T0 - 30 * 86400000), to = new Date(T0)
+        const r = await messageDoctor({ from, to })
+        // 7 days, then 14 more: 60 sessions > 50, so the 30-day window stops 21 days back.
+        assert.deepEqual(slices, [{ from: new Date(T0 - 7 * 86400000).toISOString(), to: to.toISOString() },
+            { from: new Date(T0 - 21 * 86400000).toISOString(), to: new Date(T0 - 7 * 86400000).toISOString() }])
+        assert.equal(r.truncated, true)
+        assert.equal(r.sample!.error_sessions, 50)
+        assert.equal(r.sample!.from, new Date(T0 - 21 * 86400000).toISOString())
+        assert.match(r.sample!.note, /more than 50 error sessions/)
+        assert.ok(reads.every((f) => f === new Date(T0 - 21 * 86400000 - 60000).toISOString()))
+        assert.equal(r.sessions_read, 50)
+        assert.deepEqual(r.window_totals!.messages, [{ dialog: 'D', name: 'D', template: 'Invalid date', occurrences: 15, unrecovered: 4, clients: 2 }])
+        assert.equal(r.window_totals!.complete, false)
+        assert.match(r.window_totals!.coverage!, /missing/)
+        const one = await messageDoctor({ from, to, clientId: 'RQB' })
+        assert.equal(one.window_totals!.messages[0].occurrences, 1)
     })
 })
 

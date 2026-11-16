@@ -80,7 +80,8 @@ export function resolveWorkflowDialogs(inputs: string[], reg: AppEvents, names: 
 }
 
 export async function completionWorkflow(q: Window & { workflow?: string; dialogs?: string[] }) {
-    if ((q.workflow !== undefined) === (q.dialogs !== undefined)) throw new ToolInputError('Give either a discovered workflow id/name or dialogs, not both.')
+    if (q.workflow !== undefined && q.dialogs !== undefined) throw new ToolInputError('Give either a discovered workflow id/name or dialogs, not both.')
+    if (q.workflow === undefined && q.dialogs === undefined) throw new ToolInputError('Say which workflow: a workflow id or name from discover_workflows (for the same window), or its dialogs in order.')
     const reg = required()
     if (q.workflow !== undefined) {
         const input = q.workflow.trim()

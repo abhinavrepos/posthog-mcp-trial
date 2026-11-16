@@ -57,6 +57,10 @@ function nextStep(r: RescueReason): string {
 }
 async function compute(window: Window, baseline: Window, min: number): Promise<RescueClient[]> {
     const now = new Map((await periodAggregates(window)).map(r => [JSON.stringify([r.client, r.task_id]), r]))
+    // A baseline of another length (28 days against two years) is compared per day: raw totals flagged every
+    // client as "use fell". Counts are scaled to the window's length; rates and medians need no scaling.
+    const len = (w: Window) => (Date.parse(w.to) - Date.parse(w.from)) / 86400000 + 1
+    const scale = len(window) / len(baseline), per = scale === 1 ? '' : ` (baseline per ${len(window)} days)`, scaled = (n: number) => Math.round(n * scale)
     const names = new Map(query<{ client: string; name: string }>('SELECT * FROM client_names').map(r => [r.client, r.name]))
     const tasks = new Map(query<{ task_id: string; name: string }>('SELECT * FROM task_catalog').map(r => [r.task_id, r.name]))
     const clients = new Map<string, { reasons: RescueReason[]; before: number; now: number }>()
@@ -68,10 +72,10 @@ async function compute(window: Window, baseline: Window, min: number): Promise<R
         const a = now.get(JSON.stringify([b.client, b.task_id])), n = metrics(a), prev = metrics(b)
         const task = { task_id: b.task_id, task_name: tasks.get(b.task_id) || b.task_id.slice(2) }
         const add = (kind: ReasonKind, text: string, now: number, before: number) => c.reasons.push({ kind, text, ...task, now, before })
-        const missing = prev.done >= min && n.attempts === 0
-        if (missing) add('missing', `Stopped doing ${task.task_name}: ${prev.done} done before, none in the last ${(Date.parse(window.to) - Date.parse(window.from)) / 86400000 + 1} days`, 0, prev.done)
-        if (!missing && prev.attempts >= min && n.attempts <= prev.attempts * RESCUE.dropped)
-            add('dropped', `${task.task_name} attempts fell from ${prev.attempts} to ${n.attempts}`, n.attempts, prev.attempts)
+        const missing = prev.done * scale >= min && n.attempts === 0
+        if (missing) add('missing', `Stopped doing ${task.task_name}: ${scaled(prev.done)} done before${per}, none in the last ${len(window)} days`, 0, scaled(prev.done))
+        if (!missing && prev.attempts * scale >= min && n.attempts <= prev.attempts * scale * RESCUE.dropped)
+            add('dropped', `${task.task_name} attempts fell from ${scaled(prev.attempts)}${per} to ${n.attempts}`, n.attempts, scaled(prev.attempts))
         if (prev.attempts >= min && n.attempts >= min && prev.done / prev.attempts - n.done / n.attempts >= RESCUE.failing - 1e-12)
             add('failing', `${task.task_name} done rate fell from ${Math.round(prev.done / prev.attempts * 100)}% to ${Math.round(n.done / n.attempts * 100)}%`, n.done / n.attempts, prev.done / prev.attempts)
         if (n.done >= RESCUE.done_min && prev.done >= RESCUE.done_min && n.median_s !== null && prev.median_s !== null && n.median_s >= prev.median_s * RESCUE.slower && n.median_s - prev.median_s >= RESCUE.slower_seconds)
@@ -117,8 +121,8 @@ async function compute(window: Window, baseline: Window, min: number): Promise<R
             c.reasons.push({ kind: 'users_lost', text: `${lost.length} of ${reg.length} regular users stopped: last seen ${label}`, now: lost.length, before: reg.length,
                 last_seen: last, evidence: { lost_users: lost.length, regular_users: reg.length } })
         }
-        if (c.before >= RESCUE.activity_min && c.now <= c.before * (1 - RESCUE.activity_drop))
-            c.reasons.push({ kind: 'activity_drop', text: `Overall use fell: ${c.now} attempts, from ${c.before}`, now: c.now, before: c.before })
+        if (c.before * scale >= RESCUE.activity_min && c.now <= c.before * scale * (1 - RESCUE.activity_drop))
+            c.reasons.push({ kind: 'activity_drop', text: `Overall use fell: ${c.now} attempts, from ${scaled(c.before)}${per}`, now: c.now, before: scaled(c.before) })
         if (!c.reasons.length) continue
         c.reasons.sort((a, b) => weights[b.kind] - weights[a.kind] || b.before - a.before || (a.task_id || '').localeCompare(b.task_id || ''))
         const score = c.reasons.reduce((sum, r) => sum + weights[r.kind], 0) * Math.log2(2 + c.before)

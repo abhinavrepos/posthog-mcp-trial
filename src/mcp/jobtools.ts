@@ -43,7 +43,7 @@ export function createJobDispatch(caller?: Caller, options: JobOptions = {}) {
         const runner = getRunner(), row = runner.get(owner, id, revision())
         const context = runner.context(row) as Context
         if (context.window) context.window = { ...context.window, from: new Date(context.window.from), to: new Date(context.window.to) }
-        if (row.status === 'failed' || row.status === 'cancelled') throw context.inputError ? new ToolInputError(row.error || 'Invalid arguments.') : new Error(row.error || 'Analysis job failed.')
+        if (row.status === 'failed' || row.status === 'cancelled') throw context.inputError ? new ToolInputError(`${context.name}: ${row.error || 'Invalid arguments.'} Call ${context.name} again with corrected arguments.`) : new Error(row.error || 'Analysis job failed.')
         return new JobAnswer(row.status === 'completed' ? runner.result(row) : json(runningResult(id)), context, id, row.status === 'working')
     }
     return {

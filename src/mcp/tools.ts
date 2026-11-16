@@ -53,6 +53,7 @@ import {
 import { addComment } from '../jira/client.ts'
 import { clientSource } from '../core/props.ts'
 import { resolveClient, resolveScreen } from '../core/resolve.ts'
+import { SCREENS } from '../core/catalog.ts'
 import { struggleSessions } from '../core/silent.ts'
 import { emailsIn } from '../core/text.ts'
 import { parseTimeWindow } from '../core/timewindow.ts'
@@ -78,7 +79,8 @@ function screenPath(screen?: string): string | undefined {
     if (!screen) return undefined
     if (screen.startsWith('/')) return screen
     const m = resolveScreen(screen)[0]
-    if (!m) throw new ToolInputError('No screen matches. Use a configured screen name or path.')
+    // Name the screens there are, and where app dialogs belong: a bare refusal left agents guessing.
+    if (!m) throw new ToolInputError(`No screen matches. Screens: ${SCREENS.slice(0, 12).map((x) => x.name).join(', ')}, or a path starting with /.${appEvents() ? ` For ${appEvents()!.app} dialogs (e.g. ${screen}) use dialog_friction or aggregate_events with a dialog filter.` : ''}`)
     return m.path
 }
 

@@ -74,6 +74,15 @@ test('a lookback reaching before the window still counts the client (clamped), n
     assert.deepEqual(r.target_excluded,[])
     assert.equal(r.series.at(-1)!.months_before_index,-1)
 })
+test('a client active today, compared in a past year, is aligned to that year\'s end instead of excluded',()=>{
+    // Found by an agent run: "compare 2023 with 2025" for an active client gave "index date is after the window".
+    observed('2023-01-01','2026-11-13');active('busy','2023-01-10','2023-06-10','2023-12-10','2026-11-13')
+    const r=compareClientPatterns({client:'busy',from:'2023-01-01',to:'2023-12-31',months:12})
+    assert.equal(r.target_clients,1)
+    assert.deepEqual(r.target_excluded,[])
+    assert.equal(r.series.at(-1)!.target.sessions,1,'December 2023 is the last month')
+    assert.match((r as {index_note?:string}).index_note!,/last activity \(2026-11-13\) is after this window.*2023-12-31/)
+})
 test('MCP disclosure preserves all requested dates and bounds rows with exact omission counts',()=>{
     observed('2021-01-01','2024-12-31')
     const r=analyticalResult('task_map',{when:'2021-01-01 to 2024-12-31'},{_lensJson:{label:'',value:{rows:Array.from({length:1000},(_,i)=>({id:i,payload:'x'.repeat(100)}))}}}) as {_lensJson:{value:{coverage:{requested:{from:string;to_exclusive:string}};omitted_rows_by_path:Record<string,number>}}}

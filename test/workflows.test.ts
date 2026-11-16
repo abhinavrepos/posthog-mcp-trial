@@ -175,7 +175,8 @@ describe('workflow definitions', () => {
         assert.deepEqual(resolveWorkflowDialogs(['Swap'], { ...reg, aliases: { DlgA: 'Swap' } }, new Map()), ['DlgA'])
     })
     test('completion requires exactly one of discovered workflow or dialogs', async () => {
-        await assert.rejects(completionWorkflow({ ...win }), /either/)
+        // Neither given: say what to give (it used to say "not both", which misled agents that gave nothing).
+        await assert.rejects(completionWorkflow({ ...win }), (e: Error) => /Say which workflow.*discover_workflows/.test(e.message) && !/not both/.test(e.message))
         await assert.rejects(completionWorkflow({ ...win, workflow: 'x', dialogs: ['A'] }), /either/)
         await assert.rejects(completionWorkflow({ ...win, workflow: '', dialogs: ['A'] }), /either/)
         await assert.rejects(completionWorkflow({ ...win, workflow: 'wf_bad' }), /Invalid discovered/)

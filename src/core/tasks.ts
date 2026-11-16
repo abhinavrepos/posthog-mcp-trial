@@ -599,6 +599,7 @@ async function computeTaskMap(p: TaskMapParams): Promise<TaskMap> {
     const cover={...current,complete:current.complete && previous.complete && p.compare!=='none',comparison:{requested:baseline,status:p.compare==='none'?'none':current.complete && previous.complete?'complete':'unavailable',reason:p.compare==='none'?'Comparison disabled':current.complete && previous.complete?'Both periods complete':'Comparisons require complete current and baseline periods; omitted'},baseline:previous}
     const min = p.min_attempts ?? 5
     if (!Number.isInteger(min) || min < 1) throw new ToolInputError('min_attempts must be a positive integer')
+    const scale = days / ((Date.parse(baseline.to) - Date.parse(baseline.from)) / DAY + 1)
     const now = new Map(aggregates(p.window, p.task, p.client).map((r) => [key(r), r])), before = new Map(aggregates(baseline, p.task, p.client).map((r) => [key(r), r]))
     const un = userCounts(p.window, p.task, p.client), ub = userCounts(baseline, p.task, p.client)
     const names = new Map(all<{ client: string; name: string }>('SELECT * FROM client_names').map((r) => [r.client, r.name]))
@@ -618,8 +619,9 @@ async function computeTaskMap(p: TaskMapParams): Promise<TaskMap> {
     for (const k of new Set([...now.keys(), ...before.keys()])) {
         const a = now.get(k), b = before.get(k), source = a || b!, n = metrics(a, un.get(k)), prev = metrics(b, ub.get(k))
         const flags: TaskMapRow['flags'] = []
-        if (prev.done >= min && n.done === 0) flags.push('missing')
-        if (prev.attempts >= min && n.attempts <= prev.attempts * 0.5) flags.push('dropped')
+        // A baseline of another length is compared per day (see rescue.ts): raw totals flag everyone as dropped.
+        if (prev.done * scale >= min && n.done === 0) flags.push('missing')
+        if (prev.attempts * scale >= min && n.attempts <= prev.attempts * scale * 0.5) flags.push('dropped')
         if (prev.attempts >= min && n.done >= 5 && prev.done >= 5 && n.median_s !== null && prev.median_s !== null && n.median_s >= prev.median_s * 1.3 && n.median_s - prev.median_s >= 10) flags.push('slower')
         if (prev.attempts >= min && n.attempts > 0 && prev.done / prev.attempts - n.done / n.attempts >= 0.15 - 1e-12) flags.push('failing')
         if (!prev.attempts && n.attempts) flags.push('new')

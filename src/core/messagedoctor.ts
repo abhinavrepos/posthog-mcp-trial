@@ -190,7 +190,31 @@ export interface MessageDoctorReport {
     omitted_sessions: string[]
     truncated: boolean
     replay_links: 'available' | 'unavailable'
+    /** Only when the window had more error sessions than are diagnosed live. */
+    sample?: { from: string; to: string; error_sessions: number; note: string }
+    window_totals?: WindowTotals
     note: string
+}
+export interface WindowTotals {
+    source: 'history'
+    complete: boolean
+    coverage?: string
+    messages: { dialog: string; name: string; template: string; occurrences: number; unrecovered: number; clients: number }[]
+}
+const maxErrorSessions = () => { const n = Number(process.env.LENS_MESSAGE_DOCTOR_SESSIONS || 1000); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1000 }
+/** Every error chain in the window, per dialog and template, from the daily history (complete days only). */
+async function historyTotals(q: MessageScope & { from: Date; to: Date }): Promise<WindowTotals> {
+    const { tasksDb, coverage } = await import('./tasks.ts')
+    const window = { from: q.from.toISOString().slice(0, 10), to: new Date(+q.to - 1).toISOString().slice(0, 10) }
+    const cover = coverage(window)
+    const like = (s?: string) => s ? `%${s.replace(/[\\%_]/g, (c) => '\\' + c)}%` : null
+    const rows = tasksDb.prepare(`SELECT e.dialog, coalesce(n.name, e.dialog) AS name, e.template, sum(e.chains) AS occurrences, sum(e.unrecovered) AS unrecovered,
+            count(DISTINCT e.client) AS clients FROM errors_daily e LEFT JOIN dialog_names n ON n.dialog = e.dialog
+        WHERE e.day BETWEEN ? AND ? AND e.day IN (SELECT day FROM task_ingest WHERE finalized = 1 AND truncated = 0)
+          AND (? IS NULL OR e.client = ?) AND (? IS NULL OR e.dialog LIKE ? ESCAPE '\\' OR n.name LIKE ? ESCAPE '\\') AND (? IS NULL OR e.template LIKE ? ESCAPE '\\')
+        GROUP BY e.dialog, e.template ORDER BY occurrences DESC, e.dialog, e.template LIMIT 20`)
+        .all(window.from, window.to, q.clientId ?? null, q.clientId ?? null, like(q.dialog), like(q.dialog), like(q.dialog), like(q.message), like(q.message)) as WindowTotals['messages']
+    return { source: 'history', complete: cover.complete, ...(cover.text ? { coverage: cover.text } : {}), messages: rows.map((r) => ({ ...r })) }
 }
 
 /** Error sessions first, then their events (including fields), so busy sessions do not hide errors. */
@@ -214,23 +238,41 @@ export async function messageDoctor(q: { from: Date; to: Date; clientId?: string
         : `if(${prop(reg, 'dialog')} IN {notices}, {noticeOutcome}, {messageOutcome})`
     // Filter dialog/message after attribution/grouping. A messagebox carries neither its originating
     // dialog nor its title, and filtering raw messages would also miss id-free template matches.
+    // Error sessions are read from the window's end backwards, in slices that double (7, 14, 28 … days), up to
+    // MAX_ERROR_SESSIONS. Every page re-aggregates its slice, and two years held 2.4 million error sessions
+    // (2,400 pages of a 2-year scan, then 95,000 event batches): the job could never finish. A window with fewer
+    // error sessions is still read completely; a larger one is diagnosed from the most recent slice reached
+    // (sessions ordered by id within it, so effectively at random), and says so. Window totals come from history.
     const candidates: Record<string, unknown>[] = []
-    let cursor = ''
-    while (true) {
-        const page = await hogql(
-            `SELECT toString(properties.$session_id) AS sid, max(timestamp) AS last FROM events
-             WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}
-               AND ${prop(reg, 'dialog')} IN {special} AND (${outcome}) = {error}
-               AND notEmpty(toString(properties.$session_id)) AND ({client} = '' OR toString(${P.client}) = {client})
-             AND toString(properties.$session_id) > {cursor}
-             GROUP BY sid ORDER BY sid LIMIT 1000`, { ...values, cursor }
-        )
-        candidates.push(...page)
-        if (page.length < 1000) break
-        const next = String(page.at(-1)!.sid)
-        if (next <= cursor) throw new Error('Error session pagination did not advance')
-        cursor = next
+    const cap = maxErrorSessions()
+    let sliceTo = q.to, sliceDays = 7, sampledFrom = q.from, sampled = false
+    while (sliceTo > q.from && !sampled) {
+        const sliceFrom = new Date(Math.max(+q.from, +sliceTo - sliceDays * 86_400_000))
+        let cursor = ''
+        while (true) {
+            const page = await hogql(
+                `SELECT toString(properties.$session_id) AS sid, max(timestamp) AS last FROM events
+                 WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events}
+                   AND ${prop(reg, 'dialog')} IN {special} AND (${outcome}) = {error}
+                   AND notEmpty(toString(properties.$session_id)) AND ({client} = '' OR toString(${P.client}) = {client})
+                 AND toString(properties.$session_id) > {cursor}
+                 GROUP BY sid ORDER BY sid LIMIT 1000`, { ...values, from: sliceFrom.toISOString(), to: sliceTo.toISOString(), cursor }
+            )
+            candidates.push(...page)
+            // More than the cap, with more still unread (this slice or older ones): diagnose what was read.
+            if (candidates.length > cap && (page.length === 1000 || sliceFrom > q.from)) { sampled = true; break }
+            if (page.length < 1000) break
+            const next = String(page.at(-1)!.sid)
+            if (next <= cursor) throw new Error('Error session pagination did not advance')
+            cursor = next
+        }
+        if (sampled) sampledFrom = sliceFrom
+        sliceTo = sliceFrom; sliceDays *= 2
     }
+    // A session with errors in two slices is read once.
+    const unique = [...new Map(candidates.map((r) => [String(r.sid), r])).values()].slice(0, sampled ? cap : undefined)
+    candidates.length = 0; candidates.push(...unique)
+    const scope = sampled ? { ...q, from: sampledFrom } : q
     // Read through now, not just the requested window: a retry just after the window still counts.
     // One minute of history covers toSteps' attribution window for an error at the left edge.
     const observed = new Date()
@@ -241,7 +283,7 @@ export async function messageDoctor(q: { from: Date; to: Date; clientId?: string
     let sessionsRead = 0
     const { liveEvents } = await import('./liveevents.ts')
     const read = async (ids: string[]): Promise<void> => {
-        const rows = await liveEvents({ ...q, from: new Date(+q.from - 60_000), to: observed }, ids)
+        const rows = await liveEvents({ ...q, from: new Date(+scope.from - 60_000), to: observed }, ids)
         eventRows += rows.length
         const byPerson = new Map<string, typeof rows>()
         const seen = new Set<string>()
@@ -255,7 +297,8 @@ export async function messageDoctor(q: { from: Date; to: Date; clientId?: string
         for (const events of byPerson.values()) sessions.push(toSteps(events, reg))
     }
     for (let i = 0; i < candidates.length; i += BATCH_SIZE) await read(candidates.slice(i, i + BATCH_SIZE).map((r) => String(r.sid)))
-    const messages = diagnoseMessages(sessions, reg, q)
+    const messages = diagnoseMessages(sessions, reg, scope)
+    const history = sampled ? await historyTotals(q) : undefined
     const examples = messages.flatMap((m) => Object.values(m.examples))
     let replayLinks: MessageDoctorReport['replay_links'] = 'available'
     const spans = await recordingSpans(examples.map((e) => e.session_id)).catch(() => {
@@ -270,8 +313,11 @@ export async function messageDoctor(q: { from: Date; to: Date; clientId?: string
         window: { from: q.from.toISOString(), to: q.to.toISOString() }, observed_through: observed.toISOString(), messages,
         rows_read: candidates.length + eventRows,
         query_rows: { sessions: candidates.length, events: eventRows, capped_event_batches: cappedBatches },
-        sessions_read: sessionsRead, omitted_sessions: omitted, truncated: false, replay_links: replayLinks,
-        note: 'All error sessions and their events are keyset paged; client is filtered before selection, dialog and message after attribution. No population cap. ' +
+        sessions_read: sessionsRead, omitted_sessions: omitted, truncated: sampled, replay_links: replayLinks,
+        ...(sampled ? { sample: { from: scope.from.toISOString(), to: q.to.toISOString(), error_sessions: candidates.length,
+            note: `This window has more than ${cap.toLocaleString('en-US')} error sessions. Recovery, give-up, fields and examples are learned from ${candidates.length.toLocaleString('en-US')} error sessions in its most recent days (${scope.from.toISOString().slice(0, 10)} to ${q.to.toISOString().slice(0, 10)}); window_totals counts every error in the whole window from Lens's daily history. For behaviour in an earlier period, ask for that period.` },
+            window_totals: history } : {}),
+        note: (sampled ? 'Sampled: see sample. ' : 'All error sessions and their events are keyset paged; no population cap. ') + 'Client is filtered before selection, dialog and message after attribution. ' +
             'Only errors inside the window count; following events are read through observed_through. Gave up means no later submit in the observed session, which may still be active. ' +
             'Actions stop at the next submit (on any dialog) or 5 min. Fixed fields are labels touched, not proof of a correction. ' +
             'Recovery requires a later same-dialog, same-button submit ending completed or accepted within 15 min of the error; accepted means queued, not finished. ' +

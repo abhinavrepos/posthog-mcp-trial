@@ -234,3 +234,21 @@ test('signal-only clients merge into rescue with exact weights, metadata and saf
     assert.doesNotMatch(JSON.stringify(await queue()), /private-person|secret.example|"users":\[/)
     tasksDb.exec('DELETE FROM errors_daily; DELETE FROM user_daily'); forgetAnswers()
 })
+
+// A PM compared the last 28 days with the previous two years: raw totals made every client "use fell". A baseline
+// of another length is compared per day (scaled to the window's length).
+test('a longer baseline is compared per day, not by raw totals', async () => {
+    reset()
+    const long = { from: '2026-01-01', to: '2026-02-04' } // 35 days before the 28-day window
+    // The same pace in both periods: 10 a week (50 in 35 days, 40 in 28). Raw totals would say "fell from 50 to 40".
+    for (let i = 0; i < 5; i++) put(shift(long.from, i * 7), attempts(shift(long.from, i * 7), 10))
+    for (let i = 0; i < 4; i++) put(shift(window.from, i * 7), attempts(shift(window.from, i * 7), 10))
+    assert.deepEqual((await rescueQueue({ window, baseline: long })).clients.flatMap((c) => c.reasons.map((r) => r.kind)).filter((k) => k === 'dropped' || k === 'activity_drop'), [])
+    // A real fall at that pace: 8 a week in the baseline (40 per 35 days = 32 per 28 days), 1 in the window.
+    reset()
+    for (let i = 0; i < 5; i++) put(shift(long.from, i * 7), attempts(shift(long.from, i * 7), 8))
+    put(window.from, attempts(window.from, 1))
+    const dropped = (await rescueQueue({ window, baseline: long })).clients[0].reasons.find((r) => r.kind === 'dropped')!
+    assert.match(dropped.text, /fell from 32 \(baseline per 28 days\) to 1/)
+    assert.equal(dropped.before, 32)
+})

@@ -36,7 +36,7 @@ export function toolError(error: unknown, tool: string, id: string = toolCorrela
 
     }
     else if(error instanceof RescueInputError) {kind='validation';message=raw + ' Example: ' + JSON.stringify({client:'client-id from resolve_client',status:'expected',snooze_until:new Date(Date.now()+86400000).toISOString().slice(0,10)})}
-    else if(error instanceof ToolInputError) {kind='validation';message=raw + (contract ? ' Example: ' + JSON.stringify(contract.example) + '. ' + (contract.keys.includes('period') && !raw.includes(TIME_HELP) ? TIME_HELP : '') : '')}
+    else if(error instanceof ToolInputError) {kind='validation';message=raw + (contract && tool !== 'get_job_result' ? ' Example: ' + JSON.stringify(contract.example) + '. ' + (contract.keys.includes('period') && !raw.includes(TIME_HELP) ? TIME_HELP : '') : '')}
     else if(error instanceof ToolValidationError || /invalid time window|unrecognised time window|dates must|ordered window|invalid relative window/i.test(raw)) {kind='validation';message='Invalid time arguments. ' + TIME_HELP}
     else if(/memory|timeout|timed out|too large|limit exceeded|code: 241/i.test(raw)) {kind='capacity';message='The window or grouping is too large for a single call. Use a narrower window, a coarser bucket (month instead of week), or fewer group_by dimensions.'}
     else if(/not in the kept releases/i.test(raw)) {kind='not_found';message='The ticket is not in the kept releases. Call list_releases, then ticket_evidence for a valid ticket key.'}

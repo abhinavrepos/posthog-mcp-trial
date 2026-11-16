@@ -676,6 +676,37 @@ export async function dialogNames(from: Date, to: Date, clientId = ''): Promise<
     )
 }
 
+/** The newest sessions matching a query, read from the window's end backwards in bounded slices (7, 14, 28, 56,
+ * then 90 days), stopping once `limit` are found. One GROUP BY over years scans every event (minutes at 300M+
+ * events, past PostHog's 30 s query timeout) to return a few sessions; the slices return the same newest ones.
+ * `sql` must filter timestamp >= {from} AND < {to} and return sid plus the time column `by`, newest first. */
+export async function newestSessions(sql: string, values: Record<string, unknown>, from: Date, to: Date, limit: number, by: 'first' | 'last'): Promise<Record<string, unknown>[]> {
+    const found = new Map<string, Record<string, unknown>>()
+    for (let end = to, days = 7; end > from && found.size < limit; days = Math.min(days * 2, 90)) {
+        const start = new Date(Math.max(+from, +end - days * 86_400_000))
+        for (const r of await hogql(sql, { ...values, from: start.toISOString(), to: end.toISOString() })) {
+            const old = found.get(String(r.sid)), t = String(r[by])
+            // A session crossing a slice edge: keep its earliest first / latest last.
+            if (!old || (by === 'first' ? t < String(old[by]) : t > String(old[by]))) found.set(String(r.sid), r)
+        }
+        end = start
+    }
+    return [...found.values()].sort((a, b) => String(b[by]).localeCompare(String(a[by]))).slice(0, limit)
+}
+
+/** Names only (labels, routing): Lens's stored names plus a live read of at most the window's last 30 days.
+ * dialogNames over years counts exact sessions and clients per dialog live: minutes of scanning and, at
+ * 300M+ events, ClickHouse's memory limit, only to learn names that the history already has. */
+export async function dialogLabels(from: Date, to: Date, clientId = ''): Promise<Map<string, { name?: string }>> {
+    const recent = await dialogNames(new Date(Math.max(+from, +to - 30 * 86_400_000)), to, clientId).catch(() => new Map<string, { name?: string }>())
+    if (+to - +from <= 30 * 86_400_000) return recent
+    const { tasksDb } = await import('./tasks.ts')
+    const out = new Map<string, { name?: string }>(recent)
+    for (const r of tasksDb.prepare('SELECT dialog, name FROM dialog_names').all() as { dialog: string; name: string }[])
+        if (!out.get(r.dialog)?.name && known(r.name)) out.set(r.dialog, { name: r.name })
+    return out
+}
+
 const nameLookup = (m: Map<string, { name?: string }>): DialogNames => ({ get: (d) => m.get(d)?.name })
 
 export interface SessionStoryResult {
@@ -763,30 +794,32 @@ export interface SlowAttempt {
 export async function slowAttempts(q: { from: Date; to: Date; clientId?: string; dialog?: string; sessions?: number }): Promise<{ sessions_read: number; sessions_without_network: number; attempts: SlowAttempt[]; note: string }> {
     const reg = required()
     const want = Math.min(Math.max(q.sessions ?? 12, 1), 40)
-    const names = await dialogNames(q.from, q.to, q.clientId)
+    const names = await dialogLabels(q.from, q.to, q.clientId)
     const wanted = q.dialog?.toLowerCase()
     const dialogs = wanted ? [...names.keys()].filter((d) => d.toLowerCase() === wanted || (names.get(d)?.name || '').toLowerCase().includes(wanted)) : []
     if (wanted && !dialogs.length) throw new Error(`No dialog matches "${q.dialog}" in this period.`)
     // The newest recorded sessions with attempts (in the dialog, if one is given).
-    const rows = await hogql(
+    const rows = await newestSessions(
         `SELECT toString(properties.$session_id) AS sid, max(timestamp) AS last FROM events
          WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND ${prop(reg, 'button')} IN {submit}
            AND ({client} = '' OR toString(${P.client}) = {client}) AND ({all} = 1 OR ${prop(reg, 'dialog')} IN {dialogs})
            AND notEmpty(toString(properties.$session_id))
          GROUP BY sid ORDER BY last DESC LIMIT 200`,
-        { from: q.from.toISOString(), to: q.to.toISOString(), events: [reg.events.screen, reg.events.interaction], submit: reg.submitButtons, client: q.clientId || '', all: dialogs.length ? 0 : 1, dialogs: dialogs.length ? dialogs : [''] }
-    )
+        { events: [reg.events.screen, reg.events.interaction], submit: reg.submitButtons, client: q.clientId || '', all: dialogs.length ? 0 : 1, dialogs: dialogs.length ? dialogs : [''] }, q.from, q.to, 200, 'last')
+    const lastOf = new Map(rows.map((r) => [String(r.sid), Date.parse(String(r.last))]))
     const spans = await recordingSpans(rows.map((r) => String(r.sid)))
     const sids = rows.map((r) => String(r.sid)).filter((s) => spans.has(s)).slice(0, want)
     const by = new Map<string, { waits: number[]; errors: number; slow?: { call: string; ms: number }; clients: Set<string>; ex?: SlowAttempt['example'] & { ms: number } }>()
     let without = 0
     for (const sid of sids) {
         const ev = (
+            // Around this session's last submit, not the whole window: events are stored by day, so a
+            // session-id filter over three years read every event of those years for each session.
             await hogql(`SELECT ${columns(reg)} FROM events WHERE properties.$session_id = {sid} AND event IN {events} AND timestamp >= {from} - INTERVAL 1 DAY AND timestamp < {to} + INTERVAL 1 DAY ORDER BY ts LIMIT 5000`, {
                 sid,
                 events: [reg.events.screen, reg.events.interaction],
-                from: q.from.toISOString(),
-                to: q.to.toISOString(),
+                from: new Date(Math.max(+q.from, (lastOf.get(sid) ?? +q.from) - 86_400_000)).toISOString(),
+                to: new Date(Math.min(+q.to, (lastOf.get(sid) ?? +q.to - 86_400_000) + 86_400_000)).toISOString(),
             })
         ).map(toRaw)
         const steps = toSteps(ev, reg)
@@ -907,12 +940,20 @@ export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vo
     const reg = required()
     const requested=requestedToolWindow() || analyticalWindow(`last ${days} days`)!
     const { dailyVocabulary } = await import('./aggregatedaily.ts')
-    const { tasksDb } = await import('./tasks.ts')
-    const retained = dailyVocabulary(tasksDb, requested.from, requested.to)
+    const { tasksDb, dataThrough } = await import('./tasks.ts')
+    let retained = dailyVocabulary(tasksDb, requested.from, requested.to), answered = requested
+    // A window that ends today or yesterday has days not processed yet: answer the processed days from the daily
+    // rollups and say so. Falling back to a 7-day live read for that reason answered "since 2023" with one week.
+    const through = dataThrough(), end = through ? new Date(Date.parse(through) + 86_400_000) : undefined
+    if (!retained && end && end < requested.to && end > requested.from) {
+        retained = dailyVocabulary(tasksDb, requested.from, end)
+        if (retained) answered = { ...requested, to: end }
+    }
     // Legacy/missing dimension history has an explicitly bounded vocabulary window. Counts are never
     // presented as covering the requested years when only this recent window was read.
-    const {from,to}=retained ? requested : { from: new Date(Math.max(+requested.from, +requested.to-7*86400000)), to: requested.to }
+    const {from,to}=retained ? answered : { from: new Date(Math.max(+requested.from, +requested.to-7*86400000)), to: requested.to }
     const bounded = !retained && +from !== +requested.from
+    const unprocessed = retained && +answered.to < +requested.to ? Math.round((+requested.to - +answered.to) / 86_400_000) : 0
     const w = { from: from.toISOString(), to: to.toISOString(), events: [reg.events.screen, reg.events.interaction] }
     const roles = ROLES.filter((r) => reg.properties[r])
     const [events, props, names, msgs, clients, defined] = await Promise.all([
@@ -978,7 +1019,8 @@ export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vo
             `Errors: ${prop(reg, 'dialog')} IN (${reg.dialogs.messages.map((d) => `'${d}'`).join(', ')}); notices: IN (${reg.dialogs.notices.map((d) => `'${d}'`).join(', ')}). Messages carry no dialog of their own: the attempt just before them in the session is what failed.`,
             `Always bound queries by timestamp; event IN ('${reg.events.screen}', '${reg.events.interaction}').`,
         ],
-        window: bounded ? `Requested last ${days} days; vocabulary counts cover only ${from.toISOString()} to ${to.toISOString()} (at most 7 recent days). Older dimension rollups are not yet available.` : `last ${days} days`,
+        window: bounded ? `Requested last ${days} days; vocabulary counts cover only ${from.toISOString()} to ${to.toISOString()} (at most 7 recent days). Daily dimension rollups do not cover this whole window.`
+            : unprocessed ? `Counts cover ${from.toISOString().slice(0, 10)} to ${through} from Lens's daily history; the last ${unprocessed} day${unprocessed === 1 ? '' : 's'} of the requested window ${unprocessed === 1 ? 'is' : 'are'} not processed yet (data through ${through}).` : `last ${days} days`,
     }
 }
 
@@ -1273,7 +1315,7 @@ export interface TradeHit {
  * named it in a message, and what went wrong in those sessions from then on. For client services:
  * "trade 4348 failed for us".
  */
-export async function findTrade(q: { id: string; from: Date; to: Date; clientId?: string; limit?: number }): Promise<{ id: string; sessions: TradeHit[]; note: string }> {
+export async function findTrade(q: { id: string; from: Date; to: Date; clientId?: string; limit?: number }): Promise<{ id: string; sessions: TradeHit[]; more_sessions?: boolean; limits?: string; note: string }> {
     const reg = required()
     const id = q.id.trim()
     if (!/^\d{1,15}$/.test(id)) throw new ToolInputError('A trade or link id is a number, e.g. 4348.')
@@ -1286,17 +1328,19 @@ export async function findTrade(q: { id: string; from: Date; to: Date; clientId?
         re: `(^|[^0-9])${id}([^0-9]|$)`,
         client: q.clientId || '',
     }
-    const hits = await hogql(
+    const hits = await newestSessions(
         `SELECT toString(properties.$session_id) AS sid, min(timestamp) AS first FROM events
          WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND notEmpty(toString(properties.$session_id))
            AND ((${prop(reg, 'dialog')} IN {special} AND match(${prop(reg, 'button')}, {re}))
                 OR (upper(${prop(reg, 'control')}) = 'SEARCH' AND trim(${prop(reg, 'action')}) = {id}))
            AND ({client} = '' OR toString(${P.client}) = {client})
-         GROUP BY sid ORDER BY first DESC LIMIT ${Math.min(q.limit ?? 10, 30)}`,
-        values
-    )
+         GROUP BY sid ORDER BY first DESC LIMIT ${Math.min(q.limit ?? 10, 30) + 1}`,
+        values, q.from, q.to, Math.min(q.limit ?? 10, 30) + 1, 'first')
+    // One more than shown: say when older sessions exist, so "the newest 10" is never read as "all of them".
+    const more = hits.length > Math.min(q.limit ?? 10, 30)
+    hits.length = Math.min(hits.length, Math.min(q.limit ?? 10, 30))
     const spans = await recordingSpans(hits.map((h) => String(h.sid))).catch(() => new Map())
-    const names = await dialogNames(new Date(q.from.getTime()), q.to).catch(() => new Map())
+    const names = await dialogLabels(new Date(q.from.getTime()), q.to)
     const out: TradeHit[] = []
     for (const h of hits) {
         const sid = String(h.sid)
@@ -1342,6 +1386,7 @@ export async function findTrade(q: { id: string; from: Date; to: Date; clientId?
     return {
         id,
         sessions: out,
+        ...(more ? { more_sessions: true, limits: `More sessions mention this id: these are the newest ${out.length}${out.length ? `, from ${out.at(-1)!.first_seen?.slice(0, 10) ?? ''}` : ''}. For older ones, ask for a window that ends before the oldest shown.` } : {}),
         note:
             'Sessions where someone searched for this id or Reval named it in a message, newest first. Errors and attempts run from when the person reached the trade (their search, or opening the dialog) until they searched for something else; ' +
             'an error that names no trade is likely, not proven, to be about this one. session_story tells a whole session.',
