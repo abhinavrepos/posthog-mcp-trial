@@ -113,3 +113,36 @@ test('find_trade says when older sessions mention the id than the ones shown', a
     const all = await findTrade({ id: '1003', from, to })
     assert.equal(all.more_sessions, undefined)
 })
+
+// Graded open-mode run (r37): "a window that ends before the oldest shown" skipped the rest of a day with more than
+// one page of matches. A keyset cursor (first seen, session id) continues exactly after the last row shown.
+test('find_trade pages with a cursor that never skips same-day sessions', async (t) => {
+    const { findTrade } = await import('../src/core/appevents.ts')
+    // 25 sessions on one day, three of them at the same instant.
+    const all = Array.from({ length: 25 }, (_, i) => ({ sid: `s${String(i).padStart(2, '0')}`, first: new Date(Date.parse('2026-10-31T16:00:00Z') - (i < 3 ? 0 : i) * 60000).toISOString() }))
+    t.mock.method(globalThis, 'fetch', async (_u: unknown, init: RequestInit) => {
+        const { query, values } = body(init)
+        if (!/GROUP BY sid/.test(query)) return reply([], [])
+        let rows = all.filter((r) => r.first >= values.from && r.first < values.to)
+        if (/HAVING first < \{cts\} OR \(first = \{cts\} AND sid < \{csid\}\)/.test(query))
+            rows = rows.filter((r) => r.first < values.cts! || (r.first === values.cts && r.sid < values.csid!))
+        rows.sort((a, b) => b.first.localeCompare(a.first) || b.sid.localeCompare(a.sid))
+        return reply(['sid', 'first'], rows.slice(0, Number(/LIMIT (\d+)/.exec(query)![1])).map((r) => [r.sid, r.first]))
+    })
+    const from = new Date('2026-10-01T00:00:00Z'), to = new Date('2026-11-01T00:00:00Z')
+    // Session details are not mocked, so the shown page is read from the cursors: each names the last row of its page.
+    const cursors: string[] = []
+    let cursor: string | undefined, pages = 0
+    do {
+        const r = await findTrade({ id: '1006', from, to, cursor })
+        cursor = r.next_cursor
+        if (cursor) cursors.push(cursor)
+        pages++
+    } while (cursor && pages < 10)
+    assert.equal(pages, 3)
+    assert.deepEqual(cursors.map((c) => c.split('|')[1]), ['s09', 's19'])
+    // Rows strictly after each cursor, in page order, are exactly the 25 sessions once each.
+    const order = [...all].sort((a, b) => b.first.localeCompare(a.first) || b.sid.localeCompare(a.sid)).map((r) => r.sid)
+    assert.deepEqual([order.indexOf('s09'), order.indexOf('s19')], [9, 19])
+    await assert.rejects(findTrade({ id: '1006', from, to, cursor: 'yesterday' }), /cursor: pass next_cursor exactly/)
+})

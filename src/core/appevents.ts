@@ -705,7 +705,8 @@ export async function newestSessions(sql: string, values: Record<string, unknown
         }
         end = start
     }
-    return [...found.values()].sort((a, b) => String(b[by]).localeCompare(String(a[by]))).slice(0, limit)
+    // Ties broken by session id, so a page boundary (find_trade's cursor) is stable.
+    return [...found.values()].sort((a, b) => String(b[by]).localeCompare(String(a[by])) || String(b.sid).localeCompare(String(a.sid))).slice(0, limit)
 }
 
 /** Names only (labels, routing): Lens's stored names plus a live read of at most the window's last 30 days.
@@ -1329,10 +1330,19 @@ export interface TradeHit {
  * named it in a message, and what went wrong in those sessions from then on. For client services:
  * "trade 4348 failed for us".
  */
-export async function findTrade(q: { id: string; from: Date; to: Date; clientId?: string; limit?: number }): Promise<{ id: string; sessions: TradeHit[]; more_sessions?: boolean; limits?: string; note: string }> {
+export async function findTrade(q: { id: string; from: Date; to: Date; clientId?: string; limit?: number; cursor?: string }): Promise<{ id: string; sessions: TradeHit[]; more_sessions?: boolean; next_cursor?: string; limits?: string; note: string }> {
     const reg = required()
     const id = q.id.trim()
     if (!/^\d{1,15}$/.test(id)) throw new ToolInputError('A trade or link id is a number, e.g. 4348.')
+    // Keyset paging: the cursor is the (first seen, session id) of the last row shown; the next page is strictly older.
+    // A date-only cutoff skipped the rest of a day that had more matches than one page.
+    let after: { ts: string; sid: string } | undefined
+    if (q.cursor) {
+        const [ts, sid] = [q.cursor.slice(0, q.cursor.indexOf('|')), q.cursor.slice(q.cursor.indexOf('|') + 1)]
+        if (!q.cursor.includes('|') || !Number.isFinite(Date.parse(ts)) || !/^[\w.:-]{1,120}$/.test(sid)) throw new ToolInputError('cursor: pass next_cursor exactly as a previous find_trade answer gave it.')
+        after = { ts, sid }
+    }
+    const to = after ? new Date(Math.min(+q.to, Date.parse(after.ts) + 1)) : q.to
     const values = {
         from: q.from.toISOString(),
         to: q.to.toISOString(),
@@ -1341,6 +1351,8 @@ export async function findTrade(q: { id: string; from: Date; to: Date; clientId?
         id,
         re: `(^|[^0-9])${id}([^0-9]|$)`,
         client: q.clientId || '',
+        cts: after?.ts ?? '',
+        csid: after?.sid ?? '',
     }
     const hits = await newestSessions(
         `SELECT toString(properties.$session_id) AS sid, min(timestamp) AS first FROM events
@@ -1348,11 +1360,13 @@ export async function findTrade(q: { id: string; from: Date; to: Date; clientId?
            AND ((${prop(reg, 'dialog')} IN {special} AND match(${prop(reg, 'button')}, {re}))
                 OR (upper(${prop(reg, 'control')}) = 'SEARCH' AND trim(${prop(reg, 'action')}) = {id}))
            AND ({client} = '' OR toString(${P.client}) = {client})
-         GROUP BY sid ORDER BY first DESC LIMIT ${Math.min(q.limit ?? 10, 30) + 1}`,
-        values, q.from, q.to, Math.min(q.limit ?? 10, 30) + 1, 'first')
+         GROUP BY sid${after ? ' HAVING first < {cts} OR (first = {cts} AND sid < {csid})' : ''} ORDER BY first DESC, sid DESC LIMIT ${Math.min(q.limit ?? 10, 30) + 1}`,
+        values, q.from, to, Math.min(q.limit ?? 10, 30) + 1, 'first')
     // One more than shown: say when older sessions exist, so "the newest 10" is never read as "all of them".
     const more = hits.length > Math.min(q.limit ?? 10, 30)
     hits.length = Math.min(hits.length, Math.min(q.limit ?? 10, 30))
+    const last = hits.at(-1)
+    const next_cursor = more && last ? `${String(last.first)}|${String(last.sid)}` : undefined
     const spans = await recordingSpans(hits.map((h) => String(h.sid))).catch(() => new Map())
     const names = await dialogLabels(new Date(q.from.getTime()), q.to)
     const out: TradeHit[] = []
@@ -1400,7 +1414,7 @@ export async function findTrade(q: { id: string; from: Date; to: Date; clientId?
     return {
         id,
         sessions: out,
-        ...(more ? { more_sessions: true, limits: `More sessions mention this id: these are the newest ${out.length}${out.length ? `, from ${out.at(-1)!.first_seen?.slice(0, 10) ?? ''}` : ''}. For older ones, ask for a window that ends before the oldest shown.` } : {}),
+        ...(more ? { more_sessions: true, limits: `More sessions mention this id: these are the newest ${out.length}${out.length ? `, from ${out.at(-1)!.first_seen?.slice(0, 10) ?? ''}` : ''}. For the next older ones, call find_trade again with the same id, client and window plus cursor: next_cursor.`, next_cursor } : {}),
         note:
             'Sessions where someone searched for this id or Reval named it in a message, newest first. Errors and attempts run from when the person reached the trade (their search, or opening the dialog) until they searched for something else; ' +
             'an error that names no trade is likely, not proven, to be about this one. session_story tells a whole session.',

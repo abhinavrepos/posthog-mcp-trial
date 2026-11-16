@@ -874,13 +874,14 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
                 client: z.string().optional().describe('One client (name, code or a user email), to narrow it down.'),
                 when: z.string().optional().describe('Default: last 30 days.'),
                 timezone: tz,
+                cursor: z.string().max(200).optional().describe('next_cursor from the previous find_trade answer: the next older sessions, with the same id, client and window.'),
             },
             outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
-        async ({ id, client, when: w, timezone }) => {
+        async ({ id, client, when: w, timezone, cursor }) => {
             const win = requestedToolWindow() || parseTimeWindow(w || 'last 30 days', new Date(), timezone)
             const best = client ? (await pickClient(client)).best : undefined
-            return json(`${app}: id ${id}${best ? ` for ${best.name}` : ''} (${win.label}):`, await findTrade({ id, from: win.from, to: win.to, clientId: best?.id }))
+            return json(`${app}: id ${id}${best ? ` for ${best.name}` : ''} (${win.label}):`, await findTrade({ id, from: win.from, to: win.to, clientId: best?.id, cursor }))
         }
     )
     server.registerTool(
