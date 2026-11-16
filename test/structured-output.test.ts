@@ -222,8 +222,12 @@ test('an outputSchema can never reject a real answer: missing analysis fields an
     // find_trade's real failure: a JSON answer without window/coverage/limits (rows only).
     s.registerTool('find_trade', { inputSchema: { id: z.string() }, outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true } }, async () => jsonResult('Trade 1006:', { matches: [], note: 'No events name this id.' }))
     s.registerTool('resolve_client', { inputSchema: { query: z.string() }, outputSchema: ROWS_OUTPUT, annotations: { readOnlyHint: true } }, async () => ({ content: [{ type: 'text' as const, text: 'No client matches "zz".' }] }))
+    // find_trade's second failure: fields present but with other types than the old schema assumed.
+    s.registerTool('client_signals', { inputSchema: { id: z.string() }, outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true } }, async () => jsonResult('Odd shapes:', { window: { from: 20261001, to: null }, coverage: { processing: { status: 2 } }, omitted: { rows: 'many' } }))
     const c = await connect(s)
     try {
+        const odd = await c.client.callTool({ name: 'client_signals', arguments: { id: 'x' } }) as Result
+        assert.ok(!odd.isError, JSON.stringify(odd))
         const t = await c.client.callTool({ name: 'find_trade', arguments: { id: '1006' } }) as Result
         assert.ok(!t.isError, JSON.stringify(t)); assert.match(t.content[0].text, /No events name this id/)
         const r = await c.client.callTool({ name: 'resolve_client', arguments: { query: 'zz' } }) as Result

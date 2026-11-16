@@ -29,15 +29,14 @@ const loose = <T extends z.ZodRawShape>(shape: T) => z.looseObject(shape).meta({
 // schema, so a required field that one answer path omits turns a good answer into a PM-facing error (find_trade
 // did exactly that). The schema documents the fields; it must never be able to fail a real answer.
 const analysisShape = () => loose({
-    window: loose({ from: z.string(), to: z.string() }).optional(),
-    coverage: loose({ status: z.string().optional(), processing: loose({ status: z.string() }).optional() }).optional(),
-    limits: loose({}).optional(),
-    detail: z.enum(['concise', 'full']).optional(),
-    omitted: z.record(z.string(), z.number()).optional(),
-    omitted_rows_by_path: z.record(z.string(), z.number()).optional(),
+    window: z.any().optional().describe('{from, to}: the dates the answer covers'),
+    coverage: z.any().optional().describe('which days were covered and why any are missing'),
+    limits: z.any().optional().describe('caps, truncation and approximations that apply'),
+    detail: z.any().optional().describe('concise or full'),
+    omitted: z.any().optional().describe('concise answers: what was left out, by path'),
 })
 // Exactly the object runningResult() serialises (src/core/jobs.ts).
-const runningShape = () => loose({ status: z.literal('running'), job_id: z.string(), poll_after_seconds: z.number().optional(), note: z.string().optional() })
+const runningShape = () => loose({ status: z.any().optional(), job_id: z.any().optional(), poll_after_seconds: z.any().optional(), note: z.any().optional() })
 const SHAPES = new Map<unknown, () => z.ZodObject>([
     [ANALYSIS_OUTPUT, analysisShape],
     [ROWS_OUTPUT, () => loose({ rows: z.array(loose({})).optional() })],
@@ -55,9 +54,8 @@ export function outputSchemaFor(marker: unknown, jobBacked: boolean): unknown {
     if (!jobBacked) return answer
     const running = runningShape()
     const json = (s: z.ZodType) => { const { $schema: _drop, ...rest } = z.toJSONSchema(s, { io: 'output' }) as Record<string, unknown>; return rest }
-    return z.looseObject({}).superRefine((value, ctx) => {
-        if (!answer.safeParse(value).success && !running.safeParse(value).success) ctx.addIssue({ code: 'custom', message: 'Neither an analysis answer nor a running job handle.' })
-    }).meta({ additionalProperties: true, anyOf: [json(answer), json(running)] })
+    // Documentation only: an answer or a running handle. No refinement, so no answer can be rejected by its shape.
+    return z.looseObject({}).meta({ additionalProperties: true, description: 'An analysis answer, or a running job handle {status:"running", job_id, poll_after_seconds, note}.', anyOf: [json(answer), json(running)] })
 }
 
 /** structuredContent must be a JSON object; a top-level list is carried as {rows}, the convention analyticalResult uses. */
