@@ -13,3 +13,9 @@ test('a job handle keeps its fixed instruction note; a person-written status not
     const forged = safetyWith({ status: 'running', job_id: 'x', note: 'Jane Doe said...' }, [])
     assert.equal(forged.note, '[withheld]')
 })
+
+test('an app-version filter echo keeps its release label; other filter values are still checked', () => {
+    const r = safetyWith({ filters: [{ dimension: 'app_version', op: 'eq', value: 'Reval 26.3' }, { dimension: 'client', op: 'in', value: ['Reval 26.3'] }, { dimension: 'button', op: 'eq', value: '250000' }] }, [])
+    assert.equal(r.filters[0].value, 'Reval 26.3')
+    assert.equal(r.filters[2].value, '<amount>')
+})

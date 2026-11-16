@@ -39,6 +39,57 @@ function maskEmailsIn(token: string, staff: Set<string>): string {
     return out.join('@')
 }
 
+const PERSON_COLUMN = /^(?:distinct_?id|person(?:_?id)?|user(?:_?id|name|_?email)?|email|who)$/i
+const MONEY_COLUMN = /amount|notional|cash|price|pnl|p&l|balance|cost|revenue|nominal|principal|exposure|mtm|market.?value|\bvalue\b/i
+const HEADER_CELL = /^[A-Za-z_$][\w $().%&/-]{0,60}$/
+// PostHog insight tables (trends, funnels, retention, lifecycle) start with one of these; their cells are results.
+const INSIGHT_FIRST = /^(?:date|metric|cohort|period|day|week|month|step|breakdown|series)$/i
+// SQL columns named like counts, rates or times. Unknown names stay under the prose amount rule (5+ digits masked).
+const COUNT_COLUMN = /(?:^|_)(?:count|cnt|n|num|total|events?|sessions?|users?|persons?|people|clients?|dau|wau|mau|visits?|views?|opens?|attempts?|errors?|toasts?|rate|ratio|pct|percent(?:age)?|share|conversion|dropoff|drop_off|retention|returning|new|resurrecting|dormant|days?|weeks?|months?|date|time|duration|median|avg|average|p\d{2}|rank|step|level|version)(?:$|_|s$)/i
+/** Column-aware masking of pipe tables (see the call site). Each table row is finished here and wrapped by keep(),
+ * so later passes leave counts, dates and durations ("2h 43m") alone. Non-table lines are returned unchanged. */
+function pipeTables(s: string, keep: (v: string) => string, staff: Set<string>, scrub: (v: string) => string): string {
+    const lines = s.split('\n')
+    let header: string[] | null = null, insight = false
+    const masked = (cell: string) => cell.includes('@') ? maskEmailsIn(cell, staff) : cell
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]!
+        if (!line.includes('|')) { header = null; continue }
+        const cells = line.split('|')
+        const next = lines[i + 1]?.split('|')
+        if (!header) {
+            // A header names its columns and is followed by a row with at least as many cells.
+            if (cells.length >= 2 && cells.every(c => HEADER_CELL.test(c.trim())) && next && next.length >= cells.length) { header = cells; insight = INSIGHT_FIRST.test(cells[0]!.trim()); lines[i] = keep(cells.map(c => scrub(c)).join('|')) }
+            continue
+        }
+        let row = cells
+        const extra = cells.length - header.length
+        if (extra < 0) { header = null; continue }
+        if (extra > 0) {
+            // One column absorbed extra separators: the run with the most alphabetic parts is the distinct id.
+            let best = -1, score = -1
+            for (let j = 0; j + extra < cells.length; j++) {
+                const run = cells.slice(j, j + extra + 1)
+                if (!run.every(Boolean)) continue
+                const sc = run.filter(p => /[A-Za-z]/.test(p)).length * 2 + (PERSON_COLUMN.test(header[j]!.trim()) ? 1 : 0)
+                if (sc > score) { score = sc; best = j }
+            }
+            if (best < 0) { header = null; continue }
+            row = [...cells.slice(0, best), '[person]', ...cells.slice(best + extra + 1)]
+        }
+        // The finished row is protected as a whole: its '|' separators must not look like a distinct id later.
+        lines[i] = keep(row.map((cell, j) => {
+            const name = header![j]!.trim()
+            if (cell === '[person]') return cell
+            if (PERSON_COLUMN.test(name)) return '[person]'
+            if (!MONEY_COLUMN.test(name) && (insight || COUNT_COLUMN.test(name))) return scrub(masked(cell))
+            // Money-like and unnamed columns: the prose amount rule, applied to this cell now.
+            return maskAmounts(scrub(masked(cell)))
+        }).join('|'))
+    }
+    return lines.join('\n')
+}
+
 export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string>()): T {
     if (privacyMode() === 'open') return value
     tokens = tokens.filter(t => !staff.has(t.toLowerCase()))
@@ -74,6 +125,12 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
             return decoded.includes('@') || !!sep && decoded.includes(sep) || scrubWith(tokens, decoded) !== decoded ? decoded : token
         })
         s = s.replace(/https?:\/\/[^\s<>"'`]+/g, url => /\/replay\//.test(url) && (url.includes('@') || !!sep && url.includes(sep) || scrubWith(tokens, url) !== url) ? `${config.service.publicUrl}/replays` : url)
+        // PostHog answers with pipe tables (a header row, then rows with the same number of cells). Reval distinct
+        // ids use the same '|' separator, so the token rule below wiped every table row ("2025-11-01|900") as a
+        // person. Tables are read column by column instead: person-like columns are masked, money-like columns keep
+        // amount masking, everything else (counts, dates, rates) is protected from the amount pass. A row with more
+        // cells than its header holds a distinct id inside one cell: that run of cells becomes [person].
+        if (sep === '|') s = pipeTables(s, keep, staff, (x) => scrubWith(tokens, x))
         s = s.replace(/[^\s<>"'`]+/g, t => sep && t.includes(sep) && t.split(sep).length >= 2 && t.split(sep).every(Boolean) ? '[person]' : t)
         // Emails in linear time: one regex over the text retries from every position of a long run without an
         // @ (quadratic: 200,000 digits took minutes). Only tokens with an @ are scanned, split at each @.
@@ -124,6 +181,9 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
                 }
                 // A job handle's note is the fixed server instruction (runningResult in jobs.ts), not a person's free text.
                 const jobNote = k === 'note' && (v as { status?: unknown }).status === 'running' && 'job_id' in v && x === JOB_HANDLE_NOTE
+                // A filter echo on an app version ({dimension:'app_version', value:'Reval 26.3'}) is a release label.
+                if (k === 'value' && typeof (v as { dimension?: unknown }).dimension === 'string' && /version/i.test((v as { dimension: string }).dimension)
+                    && (typeof x === 'string' || Array.isArray(x) && x.every(y => typeof y === 'string'))) { out[text(k)] = x; continue }
                 const key = text(k), safe = !jobNote && (k === 'note' && ('owner' in v || 'status' in v) || k === 'text' && 'kind' in v && v.kind === 'note') && x != null ? '[withheld]' : walk(x, k)
                 // Masked survey labels can coincide; retain their combined answer count.
                 out[key] = typeof out[key] === 'number' && typeof safe === 'number' ? out[key] + safe : safe
