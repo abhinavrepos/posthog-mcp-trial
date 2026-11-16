@@ -145,7 +145,14 @@ const asciiDigits = (s: string) => s.replace(/\p{Nd}/gu, (d) => {
 })
 const CODES = 'USD|EUR|GBP|CAD|CHF|JPY|AUD|INR|CNY|HKD|SGD|SEK|NOK|DKK|ZAR|MXN|BRL'
 // What a count or a measure is followed by: kept, so "1,358 attempts", "87.5%" and "12.5 s" stay readable.
-const MEASURE = /^\s?(?:%|percent\b|(?:ms|s|secs?|seconds?|mins?|minutes?|h|hrs?|hours?|days?|weeks?|months?|years?|x)\b|(?:attempts?|users?|sessions?|clients?|events?|times|errors?|people|persons?|tasks?|rows?|occurrences?|records?|replays?|clips?|calls?|screens?|dialogs?|steps?|messages?|signals?|completions?|items?|pages?|clicks?|visits?|views?|accounts?|days?|releases?|issues?|tickets?|surveys?|answers?|responses?)\b)/i
+// A unit ends at anything but a letter or digit: "2.4 s_" (markdown italics) is still seconds.
+const UNIT = String.raw`(?:%|percent(?![A-Za-z0-9])|(?:ms|s|secs?|seconds?|mins?|minutes?|h|hrs?|hours?|days?|weeks?|months?|years?|x)(?![A-Za-z0-9])|(?:attempts?|users?|sessions?|clients?|events?|times|errors?|retries|retry|people|persons?|pieces?|tasks?|rows?|occurrences?|records?|replays?|clips?|calls?|screens?|dialogs?|steps?|messages?|signals?|completions?|items?|pages?|clicks?|visits?|views?|accounts?|days?|releases?|issues?|tickets?|surveys?|answers?|responses?)(?![A-Za-z0-9]))`
+const MEASURE = new RegExp(String.raw`^\s?` + UNIT, 'i')
+// "38574 of 457189 attempts" and "100% of 97118352 Reval events": the first number is a count of the same unit.
+const OF_MEASURE = new RegExp(String.raw`^\s?(?:of|out of)\s+[0-9][0-9,]*\s+(?:[A-Z][A-Za-z]+\s+)?` + UNIT, 'i')
+// A long count Lens writes ("18200 sessions", "457189 attempts") is a count, unless a money word comes just before it:
+// "notional 250000 attempts" stays masked.
+const MONEY_BEFORE = /\b(?:notional|nominal|amount|limit|balance|value|valued|price|cost|exposure|principal|cash|payment|paid|fee|premium|strike|worth|cap|threshold|deposit|loan|credit|debit)\b(?:(?![.;](?:\s|$))[^\n]){0,32}$/i
 // A number never starts or ends inside a word: USD-LIBOR3M is a name, not 3 million, and a hex id such as
 // 12e45fa0 is not 12e45; neither are the seconds of 09.123Z. A space groups digits only in
 // thousands form (250 000), so "250000 42 users" is two numbers: the cash, then a count.
@@ -167,6 +174,10 @@ export function maskAmounts(text: string): string {
         const suffixed = /[0-9](?:e[+-]?[0-9]+| ?(?:k|m|mn|bn|million|thousand|billion)\b)/i.test(trimmed)
         const bareLong = /(?:^|[^0-9.,'])[0-9]{5,}(?:$|[^0-9.,'])/.test(` ${trimmed} `)
         if (!money && !suffixed && !bareLong && MEASURE.test(after)) return token
+        // An integer count (457189 or 457,189; never 250,000.00 or −250000) followed by a unit, or by "of <count> <unit>",
+        // is a count Lens wrote, unless a money word comes just before it.
+        if (!money && !suffixed && /^(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)$/.test(trimmed) && (MEASURE.test(after) || OF_MEASURE.test(after))
+            && !/^\s?x(?![A-Za-z0-9])/i.test(after) && !MONEY_BEFORE.test(text.slice(Math.max(0, offset - 48), offset))) return token
         if (money || /[0-9](?:e[+-]?[0-9]+| ?(?:k|m|mn|bn|million|thousand|billion)\b)/i.test(trimmed)
             || /[0-9][.,'][0-9]|[0-9] [0-9]{3}(?:[^0-9]|$)/.test(trimmed)) return '<amount>' + token.slice(trimmed.length)
         return token.replace(/\d{5,}/g, (digits, at) => {
@@ -202,14 +213,14 @@ const maskEmails = (s: string) => s.replace(/[\w.+@-]+/g, (t) => {
 })
 
 /** A message as shown: entities decoded, one line, the redact patterns applied (search text). Ids stay. */
-export function cleanMessage(text: string, reg: Pick<AppEvents, 'redact'>, max = 300): string {
+export function cleanMessage(text: string, reg: Pick<AppEvents, 'redact'>, max = 300, mask = privacyMode() !== 'open'): string {
     let s = firstValue(text)
         .replace(/&(#39|[a-z]+);/gi, (m, e) => ENTITIES[e.toLowerCase()] ?? m)
         .replace(/\\n|\s+/g, ' ')
         .trim()
     // After the whitespace is one space: "USD<tab>1234" and "USD 1 234" are amounts too.
-    if (privacyMode() !== 'open') s = maskEmails(maskAmounts(s))
-    if (privacyMode() !== 'open') for (const r of reg.redact) s = s.replace(new RegExp(r, 'i'), (_m, keep = '') => `${keep}…`)
+    if (mask) s = maskEmails(maskAmounts(s))
+    if (mask) for (const r of reg.redact) s = s.replace(new RegExp(r, 'i'), (_m, keep = '') => `${keep}…`)
     return s.length > max ? s.slice(0, max - 1) + '…' : s
 }
 
@@ -217,14 +228,14 @@ export function cleanMessage(text: string, reg: Pick<AppEvents, 'redact'>, max =
  * A message generalised, for grouping: dates, ids and long numbers replaced, the redact patterns
  * applied. "Trade Id 4348 Updated" → "Trade Id # Updated". Short numbers stay ("IFRS 9").
  */
-export function generalise(text: string, reg: Pick<AppEvents, 'redact'>, max = 200): string {
+export function generalise(text: string, reg: Pick<AppEvents, 'redact'>, max = 200, mask = privacyMode() !== 'open'): string {
     let s = firstValue(text)
         .replace(/&(#39|[a-z]+);/gi, (m, e) => ENTITIES[e.toLowerCase()] ?? m)
         .replace(/\\n|\s+/g, ' ')
         .trim()
     // After the whitespace is one space: "USD<tab>1234" and "USD 1 234" are amounts too.
-    if (privacyMode() !== 'open') s = maskEmails(maskAmounts(s))
-    if (privacyMode() !== 'open') for (const r of reg.redact) s = s.replace(new RegExp(r, 'i'), (_m, keep = '') => `${keep}…`)
+    if (mask) s = maskEmails(maskAmounts(s))
+    if (mask) for (const r of reg.redact) s = s.replace(new RegExp(r, 'i'), (_m, keep = '') => `${keep}…`)
     s = s
         .replace(/\b\d{4}[-/]\d{2}[-/]\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?/g, '<date>')
         .replace(/\b\d{1,2}[-/ ][A-Za-z]{3}[-/ ]\d{4}( \d{2}:\d{2}(:\d{2})?)?/g, '<date>')
@@ -305,8 +316,11 @@ export function toSteps(events: RawEvent[], reg: AppEvents): Step[] {
         let template: string | undefined
         if (isMsg || isNotice) {
             kind = isMsg ? 'message' : 'notice'
-            text = cleanMessage(button || action, reg)
-            template = generalise(button || action, reg)
+            // Steps feed the daily rollups and the web dashboards, which have no output privacy pass. Their message
+            // text is always the masked form, whatever the mode: a mode switch must not split one error into two
+            // templates ("…: <amount>" and "…: #.00 USD") or leave cash amounts stored for the dashboards to show.
+            text = cleanMessage(button || action, reg, 300, true)
+            template = generalise(button || action, reg, 200, true)
         } else if (e.event === reg.events.screen && reg.screenActions.open.includes(action)) kind = 'open'
         else if (e.event === reg.events.screen && reg.screenActions.focus.includes(action)) kind = 'focus'
         else if (e.event === reg.events.screen && reg.screenActions.close.includes(action)) kind = 'close'
@@ -1004,7 +1018,7 @@ export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vo
             role: r,
             name: reg.properties[r]!.name,
             meaning: reg.properties[r]!.meaning,
-            filled: p[`f${i}`] === null ? 'This property is not retained in the dimension rollup.' : total ? `${Math.round((100 * Number(p[`f${i}`])) / total)}% of ${total} ${reg.app} events` : 'no events in the window',
+            filled: p[`f${i}`] === null ? 'This property is not retained in the dimension rollup.' : total ? `${Math.round((100 * Number(p[`f${i}`])) / total)}% of ${total} events from ${reg.app}` : 'no events in the window',
             examples: (retained && r === 'action' ? [] : (p[`t${i}`] as unknown[]) || []).map((v) => (r === 'button' || r === 'action' ? generalise(String(v), reg, 60) : firstValue(v))).filter(Boolean),
         })),
         dialogs: [...names.entries()]

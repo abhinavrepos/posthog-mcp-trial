@@ -37,17 +37,25 @@ export function analyticalResult(name:string,args:unknown,result:unknown, reques
     const out:Record<string,unknown>={...(value || {}),window,coverage:compact,limits}
     // Prevent accidental unbounded payloads. Every removed row is counted, including nested examples.
     const omitted:Record<string,number>={}
-    const candidates:(()=>boolean)[]=[]
+    const candidates:{path:string;list:unknown[]}[]=[]
     const walk=(v:unknown,path='')=>{
         if(!v || typeof v!=='object')return
         for(const [key,child] of Object.entries(v)) {
             if(['coverage','limits','days','unprocessed'].includes(key))continue
-            if(Array.isArray(child)) {const p=path+key;candidates.push(()=>{if(!child.length)return false;child.pop();omitted[p]=(omitted[p]||0)+1;return true})}
+            if(Array.isArray(child)) candidates.push({path:path+key,list:child})
             else walk(child,path+key+'.')
         }
     }
     walk(out)
-    while(JSON.stringify(out).length>27500) {let changed=false;for(const trim of candidates) {if(trim()) {changed=true;break}}if(!changed)break}
+    // The longest list loses its last row first: data rows go before short descriptive lists such as
+    // aggregate_events' metrics and group_by, which were emptied first when they came first in key order.
+    // Half the estimated overshoot per pass, so a large answer is not re-serialised once per removed row.
+    for(let size=JSON.stringify(out).length;size>27500;size=JSON.stringify(out).length) {
+        const longest=candidates.reduce<typeof candidates[number]|undefined>((best,c)=>c.list.length && (!best || c.list.length>best.list.length) ? c : best,undefined)
+        if(!longest)break
+        const n=Math.max(1,Math.floor(longest.list.length*(size-27500)/size/2))
+        longest.list.splice(longest.list.length-n,n);omitted[longest.path]=(omitted[longest.path]||0)+n
+    }
     if(name==='rescue_queue' && Array.isArray(out.clients)) {
         const total=Number((out as Record<string,unknown>).total_clients)
         const offset=Number((out as Record<string,unknown>).offset || 0)

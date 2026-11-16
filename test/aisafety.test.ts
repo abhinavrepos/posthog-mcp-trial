@@ -29,6 +29,16 @@ test('integer cash is masked while explicit ids and ordinary counts stay', () =>
     assert.equal(maskAmounts('250000 42 users'), '<amount> 42 users')
     assert.equal(maskAmounts('Trade 250000 USD'), 'Trade <amount>')
 })
+test('counts Lens writes stay readable; cash next to a unit word stays masked', () => {
+    // Graded run, standard mode: these Lens sentences came out as "<amount> of <amount> attempts failed".
+    for (const s of ['38574 of 457189 attempts failed', '18200 sessions, up to 6 people a day, 4410 pieces of work completed', '100% of 97118352 events from Reval',
+        '18432 sessions had an error; 52311 retries.', '38,574 of 457,189 attempts', 'estimated as 7200–86400 seconds.', '_ticket-triage · 2.4 s_', '3345 of 457189 attempts'])
+        assert.equal(maskAmounts(s), s)
+    for (const [s, want] of [['notional 250000 attempts', 'notional <amount> attempts'], ['Counterparty limit exceeded: 250000 days', 'Counterparty limit exceeded: <amount> days'],
+        ['Counterparty limit exceeded: 250000.00 USD', 'Counterparty limit exceeded: <amount>'], ['paid 250,000.00 of 900000 sessions', 'paid <amount> of <amount> sessions'],
+        ['250000 42 users', '<amount> 42 users'], ['USD 250000 sessions', '<amount> sessions'], ['250k users', '<amount> users']] as const)
+        assert.equal(maskAmounts(s), want, s)
+})
 test('identities, encoded links, roster names and survey keys are masked without withholding answers', () => {
     const id = ['ENV', '01', 'C01', 'opaque-user'].join(config.properties.distinctIdSeparator)
     const input = { user: 'unknown-id', user_id: 123, users: ['unknown-id'], text: `${id} Jane Smith’s notional is USD 250000; alice%40example.com`, distribution: { 'Jane Smith: 250000': 2 }, recent: [{ text: 'Jane Smith answered yes' }], cash: 22, count: 250000 }

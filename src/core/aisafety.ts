@@ -1,7 +1,7 @@
 // Standard/private mask identities and amounts; open preserves available source data.
 // App messages and errors keep their wording (they are what PMs act on: "Invalid date", "Counterparty
 // not found"); amounts, long numbers, emails, distinct ids and known user names inside them are masked.
-import { maskAmounts } from './appevents.ts'
+import { appEvents, maskAmounts } from './appevents.ts'
 import { protectCodenameTokens, anonFor, hideClientsDeep, privacyMode, withPrivacy } from './anonymise.ts'
 import { config } from './config.ts'
 import { all } from './db.ts'
@@ -144,6 +144,9 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
             /(?:^|_)(?:id|uuid|t|ts|time|session|sid|page|p|v|ver|version)$/i.test(k) || maskAmounts(v) === v ? m : `${sep}${k}=<amount>`)))
         s = s.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, keep)
         s = s.replace(/\b\d{1,2}(?:\.\d{1,2}){2}\b/g, keep)
+        // A release named after the app ("Reval 26.3") is a label, like 26.3.1 above; the amount pass read 26.3 as cash.
+        const app = appEvents()?.app
+        if (app) s = s.replace(new RegExp(String.raw`\b${app.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \d{1,2}\.\d{1,2}(?:\.\d{1,3})?\b`, 'gi'), keep)
         return maskAmounts(s.split(/(\[person\]|<amount>|\[withheld\]|\[client\])/g).map((part, i) => i % 2 ? part : scrubWith(tokens, part)).join('')).replace(/\uE000v(\d+)\uE001/g, (_, index) => versions[Number(index)] || '')
     }
     const walk = (v: unknown, key = ''): unknown => {

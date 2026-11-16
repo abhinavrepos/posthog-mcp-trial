@@ -151,7 +151,11 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
     }))
     reg('monday_brief', { outputSchema: ANALYSIS_OUTPUT,
         description: 'What changed at my clients since last week, and what needs me today? A saved weekly briefing with actions and verified recoveries.', inputSchema: {},
-    }, safe(async () => json({ ...await d.mondayBrief({ by: caller.email || caller.who }), open: page() + '?view=briefing' })))
+    }, safe(async () => {
+        // privacy_key is the stored brief's cache key (the privacy settings); it is not part of the answer.
+        const { privacy_key: _key, ...brief } = await d.mondayBrief({ by: caller.email || caller.who })
+        return json({ ...brief, open: page() + '?view=briefing' })
+    }))
     reg('draft_rescue_survey', {
         description: 'Ask an affected client a short in-app question by creating a targeted draft to review and launch on the Surveys page.', inputSchema: { client: z.string() },
     }, safe(async ({ client }) => {
