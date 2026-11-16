@@ -142,3 +142,7 @@ Conclusion: doubling workers helps modestly but light, rollup-backed tools (0.3â
 The 30-question Sonnet agent regression (one PM, latest code) was refused with `rate_limit` six times. Every refusal said "try again in 1 seconds", which only the concurrency check produces: the agent had more than four Lens calls in flight at once while fanning out analyses in parallel. The per-minute and hourly budgets were never exhausted. The old message ("N calls in the last minute") named the wrong limit for all three cases; refusals now say which limit applied (calls at once, per-minute budget, or hourly budget).
 
 `LENS_MCP_CONCURRENT_CALLS` defaults to 8. With at most five people that is at most 40 calls in flight, and heavy work stays bounded by 4 detached jobs per person, the 64-job queue and 2 workers. `LENS_MCP_CALLS_PER_MINUTE` stays 60 and `LENS_MCP_CALLS_PER_HOUR` stays 600: no evidence called for changing them.
+
+## Follow-up: detached analyses per person raised to 8
+
+In the multi-year agent baseline, an agent started four long analyses, gave up waiting, and moved on. The four abandoned jobs then refused the PM's next question ("4 analyses are already running for you"). Abandoned jobs still finish (and `aggregate_events` long windows now finish rather than fail), so the per-person cap only needs headroom: `LENS_JOBS_PER_USER` defaults to 8, matching `LENS_MCP_CONCURRENT_CALLS`. Total work stays bounded by the 64-job queue and two workers; with five people that is at most 40 detached jobs.

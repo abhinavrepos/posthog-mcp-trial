@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { JobRunner, waitForJob } from '../src/core/jobs.ts'
+process.env.LENS_JOBS_PER_USER='4' // cap mechanics are tested at 4; the default (8) is checked below
 const delay=(ms:number)=>new Promise<void>(r=>setTimeout(r,ms))
 const pending=()=>{let resolve!:(v:unknown)=>void;const promise=new Promise<unknown>(r=>{resolve=r});return {promise,resolve}}
 
@@ -134,4 +135,10 @@ test('dispatch waits its budget before detached-cap refusal and still admits par
   await assert.rejects(dispatch.execute('example',{i:5},undefined,{},async()=>({})),/4 analyses.*get_job_result/)
   assert.ok(Date.now()-start>=25)
  } finally {runner.close();db.close()}
+})
+
+test('per-person detached analyses default to 8',()=>{
+    const saved=process.env.LENS_JOBS_PER_USER; delete process.env.LENS_JOBS_PER_USER
+    try { const db=new DatabaseSync(':memory:'), r=new JobRunner(db); assert.equal((r as unknown as {perUser:number}).perUser,8); r.close(); db.close() }
+    finally { process.env.LENS_JOBS_PER_USER=saved }
 })

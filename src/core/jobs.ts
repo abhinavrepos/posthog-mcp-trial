@@ -30,7 +30,7 @@ export class JobRunner {
     constructor(readonly db: DatabaseSync, options: { ttlMs?: number; concurrency?: number; pruneMs?: number; perUser?: number; queueLimit?: number; now?: () => number } = {}) {
         this.ttlMs = Math.max(1, options.ttlMs ?? 3600000)
         this.concurrency = Math.max(1, options.concurrency ?? 2)
-        this.perUser = integerOption(options.perUser ?? Number(process.env.LENS_JOBS_PER_USER ?? 4), 4, 1)
+        this.perUser = integerOption(options.perUser ?? Number(process.env.LENS_JOBS_PER_USER ?? 8), 8, 1)
         this.queueLimit = integerOption(options.queueLimit ?? Number(process.env.LENS_JOB_QUEUE ?? 64), 64, 0)
         this.now = options.now ?? Date.now
         db.exec(`PRAGMA busy_timeout=5000; CREATE TABLE IF NOT EXISTS analysis_jobs (
