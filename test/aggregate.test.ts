@@ -129,7 +129,6 @@ test('live truncation recounts other distincts exactly and bounds retained group
 test('invalid dates and reversed windows fail as input errors before querying',async()=>{
     await assert.rejects(aggregateEvents({from:new Date('bad'),to:new Date()}),/valid dates/)
     await assert.rejects(aggregateEvents({from:new Date('2026-01-02'),to:new Date('2026-01-01')}),/from must be before/)
-    await assert.rejects(aggregateEvents({from:new Date('2010-01-01'),to:new Date('2026-01-01')}),/four years/)
 })
 
 test('whole-window rollup budget exhaustion releases sets and merges exact bucket rollups', async()=>{
@@ -159,4 +158,29 @@ test('sane monthly breakdowns remain complete instead of always truncating at tw
     assert.equal(r.rows.length,100);assert.equal(r.groups_omitted,0)
     assert.equal(r.limits!.truncated,undefined)
     assert.equal((r.totals as Record<string,unknown>).events,100)
+})
+
+test('"all time" style windows are shortened to the last four years with a note, not refused',async(t)=>{
+    const seen:string[]=[]
+    t.mock.method(globalThis,'fetch',async(_u:unknown,init:RequestInit)=>{const b=JSON.parse(String(init.body));seen.push(b.query.values.from);return response([{events:5}])})
+    const r=await aggregateEvents({from:new Date('2010-01-01'),to:new Date('2026-01-01'),metrics:['events']}) as {window:{from:string},note:string}
+    assert.equal(r.window.from.slice(0,10),new Date(+new Date('2026-01-01')-1461*86400000).toISOString().slice(0,10))
+    assert.match(r.note,/shortened to the last four years/)
+    assert.ok(seen.every(f=>f>='2022'),'no query reaches back to 2010')
+})
+
+test('a whole-window distinct count that exceeds memory falls back to approximate uniq and says so; events stay exact',async(t)=>{
+    const queries:string[]=[]
+    t.mock.method(globalThis,'fetch',async(_u:unknown,init:RequestInit)=>{
+        const sql=JSON.parse(String(init.body)).query.query as string; queries.push(sql)
+        if(sql.includes('uniqExact(')) return new Response(JSON.stringify({detail:'Code: 241. DB::Exception: Query memory limit exceeded'}),{status:500})
+        return sql.includes('GROUP BY') ? response([{dialog:'A',events:10,sessions:4},{dialog:'B',events:6,sessions:3}]) : response([{sessions:6,events:16}])
+    })
+    const r=await aggregateEvents({from:new Date('2023-01-01'),to:new Date('2026-11-01'),group_by:['dialog'],metrics:['events','sessions']}) as {rows:Record<string,unknown>[],totals:Record<string,number|null>,limits:{approximate?:string},note:string}
+    assert.equal(r.rows.length,2)
+    assert.equal(r.totals.events,16)
+    assert.equal(r.totals.sessions,6)
+    assert.match(r.limits.approximate!,/sessions are approximate .*bucket: 'month'/)
+    assert.match(r.note,/distinct counts are approximate/)
+    assert.ok(queries.some(q=>q.includes('uniq(') && !q.includes('uniqExact(')),'retried with uniq')
 })

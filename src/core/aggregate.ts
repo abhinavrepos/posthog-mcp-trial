@@ -75,7 +75,9 @@ export interface AggregateQuery {
 
 export async function aggregateEvents(q: AggregateQuery) {
     if (!Number.isFinite(+q.from) || !Number.isFinite(+q.to) || +q.from >= +q.to) throw new ToolInputError('from must be before to, with valid dates.')
-    if (+q.to - +q.from > 1462 * DAY) throw new ToolInputError('Windows are limited to four years.')
+    // "all time" and other very long requests are answered for the last four years (the most Lens keeps), not refused.
+    let clampNote = ''
+    if (+q.to - +q.from > 1462 * DAY) { q = { ...q, from: new Date(+q.to - 1461 * DAY) }; clampNote = ' The window was shortened to the last four years, the most Lens keeps.' }
     const reg = required()
     const metrics = [...new Set(q.metrics?.length ? q.metrics : ['events' as Metric])]
     for (const m of metrics) if (!Object.hasOwn(METRICS, m)) throw new ToolInputError(`Unknown metric "${m}". Choose from ${Object.keys(METRICS).join(', ')}.`)
@@ -100,7 +102,7 @@ export async function aggregateEvents(q: AggregateQuery) {
         return f.op === 'in' ? `${d.expr(reg)} IN {f${i}}` : `${d.expr(reg)} ${f.op === 'neq' ? '!=' : '='} {f${i}}`
     })
     if (bucket === 'day' && +q.to - +q.from > 400 * DAY) throw new ToolInputError('Daily periods are limited to 400 days; use week, month, quarter or year for longer windows.')
-    let rollupNote = ''
+    let rollupNote = clampNote
     try { const rolled = dailyAggregate(tasksDb, q); if (rolled) return rolled }
     catch(e) { if (!(e instanceof RollupBudgetError)) throw e; rollupNote = ' ' + e.message }
     if (tasksDb.prepare("SELECT 1 FROM aggregate_dimension_skipped WHERE day>=? AND day<? AND reason='source_expired' LIMIT 1").get(q.from.toISOString().slice(0,10),q.to.toISOString().slice(0,10))) {
@@ -174,9 +176,16 @@ export async function aggregateEvents(q: AggregateQuery) {
     }
     // No bucket: grouped distincts must see the entire window. Event-only totals below
     // can still be split by year. A bounded result LIMIT is applied after aggregation.
+    // An exact distinct count over a whole long window can exceed ClickHouse memory. Then distinct metrics fall back to
+    // ClickHouse's approximate uniq (about 1% error, small memory) and the answer says so; events stay exact.
+    let approx = false
+    const expr = (m: Metric) => approx ? METRICS[m].replace('uniqExact(', 'uniq(') : METRICS[m]
+    const tooBig = (e: unknown) => distinct.length > 0 && /memory|code:\s*241|too much data/i.test(String((e as Error)?.message ?? e))
     let rows: Record<string, unknown>[] = [], capped = false
     if (names.length) {
-        const got = await run(`SELECT ${select} ${scope} GROUP BY ${names.join(', ')} ORDER BY ${order} DESC LIMIT ${maxGroups + 1}`, q.from, q.to)
+        const grouped = () => run(`SELECT ${[...keys, ...metrics.map((m) => `${expr(m)} AS ${m}`)].join(', ')} ${scope} GROUP BY ${names.join(', ')} ORDER BY ${order} DESC LIMIT ${maxGroups + 1}`, q.from, q.to)
+        let got: Record<string, unknown>[]
+        try { got = await grouped() } catch (e) { if (!tooBig(e)) throw e; approx = true; got = await grouped() }
         capped = got.length > maxGroups
         rows = got.slice(0, maxGroups)
     }
@@ -191,7 +200,9 @@ export async function aggregateEvents(q: AggregateQuery) {
     }
     if (distinct.length) {
         try {
-            const t = await run(`SELECT ${distinct.map((m) => `${METRICS[m]} AS ${m}`).join(', ')} ${scope}`, q.from, q.to)
+            const total = () => run(`SELECT ${distinct.map((m) => `${expr(m)} AS ${m}`).join(', ')} ${scope}`, q.from, q.to)
+            let t: Record<string, unknown>[]
+            try { t = await total() } catch (e) { if (!tooBig(e) || approx) throw e; approx = true; t = await total() }
             for (const m of distinct) totals[m] = Number(t[0]?.[m] || 0)
         } catch (e) {
             for (const m of distinct) totals[m] = null
@@ -207,13 +218,14 @@ export async function aggregateEvents(q: AggregateQuery) {
         omitted = score.size - top.size
         shown = rows.filter((r) => top.has(JSON.stringify(groups.map((g) => r[g]))))
     }
-    const limits: { truncated?: string } = {}
+    const limits: { truncated?: string; approximate?: string } = {}
+    if (approx) limits.approximate = `${distinct.join(' and ')} are approximate (ClickHouse uniq, about 1% error): an exact count over this whole window did not fit in memory. Events are exact. For exact distinct counts add bucket: 'month' (exact per month) or use a shorter window.`
     if (groups.length && (capped || Number(omitted) > 0)) {
         const selected = shown.map((r,i) => '(' + groups.map((g,j) => {
             values[`top${i}_${j}`] = r[g]
             return `(ifNull(${DIMENSIONS[g].expr(reg)} = {top${i}_${j}}, 0) OR (${DIMENSIONS[g].expr(reg)} IS NULL AND {top${i}_${j}} IS NULL))`
         }).join(' AND ') + ')').join(' OR ')
-        const rest = await run(`SELECT ${metrics.map(m=>`${METRICS[m]} AS ${m}`).join(', ')} ${scope} AND NOT (${selected})`, q.from, q.to)
+        const rest = await run(`SELECT ${metrics.map(m=>`${expr(m)} AS ${m}`).join(', ')} ${scope} AND NOT (${selected})`, q.from, q.to)
         shown.push(...rest.map(r=>({...r,...Object.fromEntries(groups.map(g=>[g,'other'])),is_other:true})))
         limits.truncated = `Top ${Math.min(limit,maxGroups)} groups plus other. To get the rest, repeat with eq or in filters on ${groups.join(' or ')} (at most 50 values) until other disappears.`
     }
@@ -226,6 +238,6 @@ export async function aggregateEvents(q: AggregateQuery) {
         limits, groups_omitted: omitted, queries,
         seconds: Math.round((performance.now() - started) / 100) / 10,
         source: 'live', coverage: { status: 'complete', detail: 'Every matching PostHog event in the window, aggregated in ClickHouse. Events PostHog no longer keeps cannot be counted.' },
-        note: 'Counts are exact (distinct counts use uniqExact). Totals cover every matching event; rows are the largest groups. No raw events or people are returned. Distinct counts per period are not additive across periods.' + totalsNote + rollupNote,
+        note: (approx ? 'Event counts are exact; distinct counts are approximate (see limits). ' : 'Counts are exact (distinct counts use uniqExact). ') + 'Totals cover every matching event; rows are the largest groups. No raw events or people are returned. Distinct counts per period are not additive across periods.' + totalsNote + rollupNote,
     }
 }
