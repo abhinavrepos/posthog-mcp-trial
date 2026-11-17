@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 
 import { config, ROOT } from './config.ts'
-import { hogql, propertyDefinitions, replayUrl } from './posthog.ts'
+import { cachedPosthogRead, readCacheKey, hogql, propertyDefinitions, replayUrl } from './posthog.ts'
 import { recordingSpans } from './incidents.ts'
 import { snapshotsFile } from './clip.ts'
 import { attemptTimings, clockShift, networkFromFile, seconds, timingWords, type AttemptTiming } from './replaynet.ts'
@@ -1435,4 +1435,12 @@ export async function findTrade(q: { id: string; from: Date; to: Date; clientId?
             'Sessions where someone searched for this id or Reval named it in a message, newest first. Errors and attempts run from when the person reached the trade (their search, or opening the dialog) until they searched for something else; ' +
             'an error that names no trade is likely, not proven, to be about this one. session_story tells a whole session.',
     }
+}
+
+/** A name-only, cached vocabulary for advisory query guards; an incomplete read proves no absence. */
+export async function observedAppEventNames(): Promise<string[] | undefined> {
+    return (await cachedPosthogRead(readCacheKey('observed-app-event-names', {}), async () => {
+        const rows = await hogql('SELECT DISTINCT event FROM events LIMIT 1000', {}, { timeoutMs: 2000, retries: 0 })
+        return rows.length < 1000 ? rows.map(r => String(r.event)) : null
+    }, { ttlMs: 300_000 })).value ?? undefined
 }

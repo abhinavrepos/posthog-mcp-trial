@@ -23,7 +23,7 @@ import { verifyClipLink } from '../core/links.ts'
 import { renderReport } from '../core/report.ts'
 import { triage } from '../core/triage.ts'
 import { addAttachment, addComment, addLabels, getIssue, hasTriageComment, issueToTicket, verifyWebhookSignature } from '../jira/client.ts'
-import { bearerAuthorized, handlePosthogMcp } from '../mcp/posthog-proxy.ts'
+import { bearerAuthorized, handlePosthogMcp, keepPosthogDocsWarm } from '../mcp/posthog-proxy.ts'
 import { lensServerInfo } from '../mcp/server-info.ts'
 import { guardTransport, registryOf } from '../mcp/anonymise.ts'
 import { anonymiseOn } from '../core/anonymise.ts'
@@ -301,6 +301,8 @@ pruneOldClips()
 if (appEvents()) startTaskHistory()
 if (appEvents()) startBriefingDelivery()
 if (appEvents() && config.features.lensMcp) startPrewarm()
+// PostHog's static docs (tools, info) for posthog_exec: built once and kept warm, never on an agent's clock.
+if (config.posthog.mcpViaLens && posthogMcpActive()) keepPosthogDocsWarm({ url: config.posthog.mcpUrl, apiKey: config.posthog.mcpApiKey, name: config.mcp.name })
 // Session replays read as structure only, into per-client experience signals (src/core/experience.ts).
 if (appEvents()) startReplaySignals()
 // Client codenames (src/core/anonymise.ts): every client Lens sees gets one, also while anonymisation is off, so

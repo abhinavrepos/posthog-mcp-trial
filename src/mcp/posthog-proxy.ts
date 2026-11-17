@@ -1,3 +1,6 @@
+import { compactInfo, compactTools, metadataCommand, posthogDocsCache, posthogServerKey, PREWARM_DOCS } from './posthog-docs.ts'
+import { annotatePosthogBuckets } from './posthog-buckets.ts'
+import { closestNames, toolNames, obsoleteCorrection, posthogInputWarnings } from './posthog-input.ts'
 import { dataDictionary } from '../core/datadictionary.ts'
 import { errorDiagnostic } from '../core/errordiagnostics.ts'
 import { toolLimiter } from './ratelimit.ts'
@@ -6,7 +9,7 @@ import type { ChatCaller } from '../service/access.ts'
 import { isPosthogMetadata, isPosthogQuery, posthogQueryGate, posthogQueryContext } from './posthog-query.ts'
 import { posthogFailure, posthogPublicMessage } from './posthog-error.ts'
 import { toolError } from './toolerror.ts'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { publicToolError } from './publicerror.ts'
 // Routing text is pure; the HTTP adapter only handles authentication and transport.
 import { safetyWith, metadataSafetyWith, staffEmails } from '../core/aisafety.ts'
@@ -387,6 +390,13 @@ function upstreamRequest(url: string | URL, apiKey: string, init: RequestInit): 
     return fetch(url, { ...init, headers, redirect: 'error' })
 }
 
+/** Warm the static PostHog docs now and every 20 minutes (the cache refreshes ahead of expiry). One at a time. */
+export function keepPosthogDocsWarm(options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): () => void {
+    const warm = async () => { for (const command of PREWARM_DOCS) await posthogExec(command, options).catch(() => undefined) }
+    void warm()
+    const timer = setInterval(() => void warm(), 20 * 60_000); timer.unref()
+    return () => clearInterval(timer)
+}
 export function posthogExec(command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
     return withPrivacy(() => posthogExecFrozen(command, options))
 }
@@ -404,10 +414,50 @@ export async function posthogExecPolicy(command: string, name = 'lens'): Promise
     }
     return { call }
 }
+const upstreamToolNames = new Map<string, { at: number; names: string[] }>()
 async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
     const policy = await posthogExecPolicy(command, options.name)
     if ('refusal' in policy) return policy.refusal
-    let call = policy.call
+    const server = posthogServerKey(options.url, options.apiKey)
+    const metadata = isPosthogMetadata(command) ? metadataCommand(command) : undefined
+    const fetchRaw = async (upstreamCommand: string) => {
+        const upstreamPolicy = upstreamCommand === command ? policy : await posthogExecPolicy(upstreamCommand, options.name)
+        if ('refusal' in upstreamPolicy) return upstreamPolicy.refusal
+        return posthogExecRaw(upstreamPolicy.call, upstreamCommand, options)
+    }
+    const docs = (raw: string): Promise<any> => posthogDocsCache.get(server, raw, () => fetchRaw(raw))
+    try {
+        let raw: any
+        if (metadata) {
+            raw = await docs(metadata.raw)
+            if (metadata.compact && !raw?.isError) raw = await posthogDocsCache.get(server, `compact:${metadata.raw}`, async () => {
+                const content = await Promise.all((raw.content || []).map(async (block: Rpc) => {
+                    if (block.type !== 'text') return block
+                    const text = metadata.tool ? await compactInfo(block.text, metadata.tool, async path => {
+                        const field = await docs(`schema ${metadata.tool} ${path}`)
+                        for (const part of field?.content || []) {
+                            try { const parsed = JSON.parse(part.text); if (parsed.schema) return parsed.schema } catch { /* unfamiliar formats retain the original outline */ }
+                        }
+                    }) : compactTools(block.text)
+                    return { ...block, text }
+                }))
+                return { ...raw, content }
+            })
+        } else raw = await fetchRaw(command)
+        if (isPosthogMetadata(command)) return guardResponse(raw, 'posthog_cleaned')
+        // Advisory lines (unknown event or property names) are Lens-authored; the answer still gets every privacy pass.
+        const warnings = await posthogInputWarnings(command).catch(() => [])
+        const annotated = annotatePosthogBuckets(command, warnings.length ? { ...raw, content: [...(raw.content || []), ...warnings.map(text => ({ type: 'text', text }))] } : raw)
+        const result = safetyWith(annotated, await identityTokens(), staffEmails())
+        return guardResponse(result, 'posthog_cleaned')
+    } catch (error) {
+        posthogDocsCache.invalidate(server)
+        if (error instanceof Error && posthogPublicMessage(error.message)) throw error
+        throw posthogFailure(error)
+    }
+}
+async function posthogExecRaw(call: unknown, command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
+    const toolCacheKey = options.url + ':' + createHash('sha256').update(options.apiKey).digest('hex')
     const controller = new AbortController()
     const query = posthogQueryContext.getStore()
     const abort = () => controller.abort()
@@ -424,7 +474,27 @@ async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'u
             ? raw.split('\n').filter(l => l.startsWith('data:')).flatMap(l => { try { return [JSON.parse(l.slice(5))] } catch { return [] } })
             : [JSON.parse(raw)]
         const reply = values.flat().find(v => v?.id === id)
-        if (!reply || reply.error || reply.result?.isError) throw posthogFailure(reply?.error || reply?.result || 'Missing MCP reply')
+        if (!reply || reply.error || reply.result?.isError) {
+            const failure = posthogFailure(reply?.error || reply?.result || 'Missing MCP reply')
+            if (id === 2 && failure.message.startsWith('PostHog does not know that command.')) {
+                const key = toolCacheKey
+                let cached = upstreamToolNames.get(key)
+                if (!cached || Date.now() - cached.at > 300_000) try {
+                    const listed = await read(await request({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'exec', arguments: { command: 'tools' } } }), 3)
+                    cached = { at: Date.now(), names: toolNames(listed) }
+                    if (upstreamToolNames.size >= 32) upstreamToolNames.delete(upstreamToolNames.keys().next().value!)
+                    upstreamToolNames.set(key, cached)
+                } catch { /* suggestions are optional */ }
+                const requested = /^\s*(?:(?:call|info|schema)\s+)?(?:posthog:)?([\w-]+)/i.exec(command)?.[1] || ''
+                const suggestions = closestNames(requested, cached?.names || [])
+                if (suggestions.length) failure.message += ` Closest tools: ${suggestions.join(', ')}.`
+            }
+            if (id === 2 && failure.message.startsWith('PostHog rejected the input')) {
+                const correction = obsoleteCorrection(command)
+                if (correction) failure.message += ' ' + correction
+            }
+            throw failure
+        }
         return reply.result
     }
     try {
@@ -437,8 +507,14 @@ async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'u
         if (!notified.ok) { await read(notified, 0) }
         await notified.body?.cancel()
         const raw = await read(await request(call), 2)
-        const result = isPosthogMetadata(command) ? raw : safetyWith(raw, await identityTokens(), staffEmails())
-        return guardResponse(result, 'posthog_cleaned')
+        if (/^\s*tools\s*$/i.test(command)) {
+            const names = toolNames(raw)
+            if (names.length) {
+                if (upstreamToolNames.size >= 32) upstreamToolNames.delete(upstreamToolNames.keys().next().value!)
+                upstreamToolNames.set(toolCacheKey, { at: Date.now(), names })
+            }
+        }
+        return raw
     } catch (error) {
         if (error instanceof Error && posthogPublicMessage(error.message)) throw error
         throw posthogFailure(controller.signal.aborted ? 'timeout' : error)

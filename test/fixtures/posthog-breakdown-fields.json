@@ -1,0 +1,23 @@
+{
+  "info query-funnel": {
+    "breakdownFilter": {
+      "type": "object",
+      "fields": [
+        "breakdown",
+        "breakdown_group_type_index",
+        "breakdown_limit",
+        "breakdown_type"
+      ]
+    }
+  },
+  "info query-trends": {
+    "breakdownFilter": {
+      "type": "object",
+      "fields": [
+        "breakdown_limit",
+        "breakdown_path_cleaning",
+        "breakdowns"
+      ]
+    }
+  }
+}
