@@ -1,18 +1,19 @@
 {
     "app": "Reval",
     "about": "Reval sends its own events next to PostHog's: one per dialog opened and one per click, field or button. A dialog is a Reval window (a trade, a report's parameters, a list); messages Reval shows (errors, confirmations) arrive as events of their own.",
+    "distinctIdParts": ["ENV", "01", "{client}", "{user}"],
     "events": {
         "screen": "PageView",
         "interaction": "Event"
     },
     "properties": {
-        "dialog": { "name": "dialog_id", "meaning": "The Reval dialog (window) the event happened in, a stable code like DlgDetailIRSwap. Special values: messagebox (a message Reval showed), toast (a short notice), menuCmb (the menu and search bar)." },
-        "dialogName": { "name": "dialog_name", "meaning": "The dialog's title as the user sees it, e.g. \"IR Swap\". UNKNOWN on messages; use dialog for grouping." },
-        "tab": { "name": "tab_name", "meaning": "The tab inside the dialog, e.g. Terms, Cashflow, Parameters." },
-        "action": { "name": "action", "meaning": "On PageView: OPEN, FOCUS or CLOSE of the dialog. On Event: the field's label (\"Trade Date\"), DOUBLECLICK on a row, the text typed into the search bar, or a generated id like gridfloatedit-3404-inputEl for unlabelled grid cells." },
-        "control": { "name": "control_type", "meaning": "What kind of control: TEXTFIELD, DATEFIELD, DROPDOWN, CHECKBOX, SEARCH (search text), SEARCHTYPE (what is searched), MENU, ROW (a grid row), RIGHTCLICK." },
-        "button": { "name": "action_name", "meaning": "The button pressed (Save, Run, Apply, Export...) or a grid operation (applyFilter, loadGrid). On messagebox and toast events, a list whose first item is the message text." },
-        "version": { "name": "title", "meaning": "The window title with the release, e.g. \"REVAL 27.0.0\". Only on some PageView events." }
+        "dialog": { "name": "dialog_id", "meaning": "The Reval dialog (window) the event happened in, a stable code like DlgDetailIRSwap. Special values: messagebox (a message Reval showed), toast (a short notice), menuCmb (the menu and search bar).", "examples": ["DlgTask35", "DlgList", "messagebox", "toast", "menuCmb"] },
+        "dialogName": { "name": "dialog_name", "meaning": "The dialog's title as the user sees it, e.g. \"IR Swap\". UNKNOWN on messages; use dialog for grouping.", "examples": ["IR Swap", "UNKNOWN", "messagebox"] },
+        "tab": { "name": "tab_name", "meaning": "The tab inside the dialog, e.g. Terms, Cashflow, Parameters.", "examples": ["Terms", "Cashflow", "Parameters"] },
+        "action": { "name": "action", "meaning": "On PageView: OPEN, FOCUS or CLOSE of the dialog. On Event: CHANGE or the field's label (\"Trade Date\"), DOUBLECLICK on a row, the text typed into the search bar, or a generated id like gridfloatedit-3404-inputEl for unlabelled grid cells.", "examples": ["OPEN", "FOCUS", "CLOSE", "CHANGE", "Trade Date"] },
+        "control": { "name": "control_type", "meaning": "What kind of control: TEXTFIELD, DATEFIELD, DROPDOWN, CHECKBOX, SEARCH (search text), SEARCHTYPE (what is searched), MENU, ROW (a grid row), RIGHTCLICK.", "examples": ["TEXTFIELD", "DATEFIELD", "DROPDOWN", "CHECKBOX"] },
+        "button": { "name": "action_name", "meaning": "The button pressed (Save, Run, Apply, Export...) or a grid operation (applyFilter, loadGrid). On messagebox and toast events, a list whose first item is the message text.", "examples": ["Save", "Run", "Apply", "Export"] },
+        "version": { "name": "title", "meaning": "The window title with the release, e.g. \"REVAL 27.0.0\". Only on some PageView events.", "examples": ["REVAL 27.0.0"] }
     },
     "dialogs": {
         "messages": ["messagebox"],

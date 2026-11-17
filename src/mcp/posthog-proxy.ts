@@ -1,3 +1,4 @@
+import { dataDictionary } from '../core/datadictionary.ts'
 import { errorDiagnostic } from '../core/errordiagnostics.ts'
 import { toolLimiter } from './ratelimit.ts'
 import { writeToolAudit } from './toolaudit.ts'
@@ -34,11 +35,15 @@ export function routingBlock(name: string, info: LensInfo = DEFAULT_INFO): strin
     return `${privacy}Replays are private: use ${name}'s get_replay_link and give the person the link; never call session-recording-*, query-session-recordings-list or vision-* tools.
 Messaging (workflows-*, broadcasts-*), ${privacyMode() === 'open' ? 'person mutations (person reads are allowed)' : 'person lists (persons-*, query-*-actors, cohort membership changes)'}, session lookups (heatmaps-events, logs-impact), error investigation (query-error-tracking-issue, query-error-tracking-issue-events, query-error-tracking-issues-list) and surveys are refused. Use discover_workflows/workflow_completion for app tasks, resolve_client/client_experience/client_signals for clients, session_story/find_client_incidents/find_silent_issues for sessions, error_blast_radius for errors and Lens survey tools for surveys.
 Use the Lens server (${name}) instead for a named ${app} client or user, trade/link id, ${app} dialog/screen/button, errors ${app} showed users, which clients or users an error hit, one session, Jira ticket, release outcome, "where do clients struggle" or "who is at risk", which clients stopped doing a task, how long a flow takes or which path people take${info.tools.includes('design_survey') ? `, and in-app surveys for ${app} users (making, stopping, answers; launching only on the Lens Surveys page)` : ''}. Call its tools directly with JSON arguments, never through exec.
-Use PostHog exec for generic product analytics and PostHog objects: trends, funnels, retention, insights, dashboards, feature flags, experiments, cohorts, annotations, actions/event definitions, error-tracking administration, data warehouse/batch exports, docs/SDK help${privacyMode() === 'private' ? '; raw SQL is refused' : ' and raw SQL' }.`
+Use PostHog exec for generic product analytics and PostHog objects: trends, funnels, retention, insights, dashboards, feature flags, experiments, cohorts, annotations, actions/event definitions, error-tracking administration, data warehouse/batch exports, docs/SDK help${privacyMode() === 'private' ? '; raw SQL is refused' : ' and raw SQL' }.
+
+${dataDictionary({ format: 'compact' })}`
 }
 
 export function execRoutingLine(name: string, info: LensInfo = DEFAULT_INFO): string {
-    return `Replays, session/user lookups, error investigation, ${privacyMode() === 'open' ? 'person mutations' : 'person lists'}, messaging and surveys are refused;${privacyMode() === 'private' ? ' SQL is refused in private mode;' : ''} use get_replay_link, session_story, find_client_incidents, find_silent_issues, error_blast_radius, resolve_client, client_experience, client_signals, discover_workflows, workflow_completion and Lens survey tools. Not for ${info.app} clients or users, trade ids, ${info.app} screens or the errors it shows users, client task maps, flow times and paths, single sessions, replays, Jira tickets${info.tools.includes('design_survey') ? ', release outcomes or in-app surveys' : ' or release outcomes'}: use the ${name} server's tools (${info.tools.join(', ')}) for those.`
+    return `Replays, session/user lookups, error investigation, ${privacyMode() === 'open' ? 'person mutations' : 'person lists'}, messaging and surveys are refused;${privacyMode() === 'private' ? ' SQL is refused in private mode;' : ''} use get_replay_link, session_story, find_client_incidents, find_silent_issues, error_blast_radius, resolve_client, client_experience, client_signals, discover_workflows, workflow_completion and Lens survey tools. Not for ${info.app} clients or users, trade ids, ${info.app} screens or the errors it shows users, client task maps, flow times and paths, single sessions, replays, Jira tickets${info.tools.includes('design_survey') ? ', release outcomes or in-app surveys' : ' or release outcomes'}: use the ${name} server's tools (${info.tools.join(', ')}) for those.
+
+${dataDictionary({ format: 'compact' })}`
 }
 
 type Rpc = Record<string, any>

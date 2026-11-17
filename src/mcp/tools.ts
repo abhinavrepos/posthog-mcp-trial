@@ -340,7 +340,8 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
     const insights = !!caller?.admin || caller?.insights === true
     if (!raw) installJobTools(server, wrapTools(server, insights, caller))
     if (config.posthog.mcpViaLens && posthogMcpActive()) server.registerTool('posthog_exec', {
-        description: `Runs PostHog commands for generic analytics and objects: trends, funnels, retention, insights, dashboards, flags, experiments, annotations, error-tracking administration, docs and SQL. command syntax: "tools" lists tools, "info <tool>" shows a tool's input schema, "call <tool> <json_input>" runs it (e.g. call query-trends {...}). In SQL, name count columns like count() AS events_count so standard privacy keeps them (unnamed large numbers are masked as possible amounts). Long analytics calls return a result or a job handle within 20 seconds; poll handles with get_job_result. ${execRoutingLine(config.mcp.name)}`,
+        // The real app name and Lens tool list: without them the routing text said "the app" and named one tool.
+        description: `Runs PostHog commands for generic analytics and objects: trends, funnels, retention, paths, insights, dashboards, flags, experiments, annotations, error-tracking administration, docs and SQL. command syntax: "tools" lists tools, "info <tool>" shows a tool's input schema, "call <tool> <json_input>" runs it. Long calls return a result or job handle within 20 seconds; poll get_job_result. ${execRoutingLine(config.mcp.name, { app: appEvents()?.app || 'the app', tools: lensToolNames() })}`,
         inputSchema: { command: z.string() },
     }, async ({ command }) => posthogExec(command, { url: config.posthog.mcpUrl, apiKey: config.posthog.mcpApiKey, name: config.mcp.name }))
     server.registerTool(
@@ -361,7 +362,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
             description:
                 `Finds the sessions where a ${A} client, or one of its users, hit errors, rage clicks or dead clicks, with screens, releases and replay links. Use the Lens tool session_story for the event timeline and get_replay_link for a replay link.`,
             inputSchema: {
-                client: z.string().describe('Client name, id or a user email'),
+                client: z.string().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`),
                 when,
                 timezone: tz,
                 screen: z.string().optional().describe('Screen name or path, e.g. "invoices" or /invoices'),
@@ -435,7 +436,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
             description: `Shows how a ${A} screen is used, by which clients and users, on which days, and where one client ranks. Use PostHog's exec instead for generic trends, insights or product analytics.`,
             inputSchema: {
                 screen: z.string().describe('Screen name or path'),
-                client: z.string().optional(),
+                client: z.string().optional().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`),
                 days: z.number().int().min(1).max(1500).default(30),
             },
             outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
@@ -473,7 +474,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
         {
             title: 'Problems without errors',
             description: `Finds sessions where a ${A} client struggled without errors: rage clicks, dead clicks, repeated actions or long stays. Use it for wrong data or confusion reported in a ticket.`,
-            inputSchema: { client: z.string(), screen: z.string().optional(), when, timezone: tz },
+            inputSchema: { client: z.string().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`), screen: z.string().optional(), when, timezone: tz },
             outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ client, screen, when: w, timezone }) => {
@@ -697,8 +698,8 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             description: 'Start here for any question a product manager asks about Reval: what to worry about, how a client is doing, a dialog, a trade, or a weekly brief. The server investigates and returns a concise brief with comparisons, evidence links, limits and next questions. Relay it as returned; add no invented facts. No setup or other tool calls needed.',
             inputSchema: {
                 question: z.string().optional().describe('The PM’s question in their own words. Omit for a general brief.'),
-                client: z.string().optional().describe('Client name, id or email, if already known.'),
-                dialog: z.string().optional().describe('Dialog name or code, if already known.'),
+                client: z.string().optional().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`),
+                dialog: z.string().optional().describe(`Dialog code: ${appEvents()?.properties.dialog?.name || 'configured dialog property'}, e.g. ${appEvents()?.properties.dialog?.examples?.[0] || '<dialog code>'}; or part of its title.`),
                 trade: z.string().regex(/^\d{1,15}$/).optional().describe('Trade/link id, if already known.'),
                 when: z.string().optional().describe('Plain-language window; default last 14 days, or 30 for a trade.'),
                 timezone: tz,
@@ -712,7 +713,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
         {
             title: 'Which tasks people do and finish',
             description: `Which tasks do people do in ${app}, and do they finish them? Discovers frequent ordered dialog chains ending in a submit, ranked by sessions × clients, with completed and queued counts, durations and top errors. Lens supplies names from dialog titles, the submit button and success message, plus stable ids; no setup needed.`,
-            inputSchema: { when, client: z.string().optional(), limit: z.number().int().min(1).max(50).default(15) },
+            inputSchema: { when, client: z.string().optional().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`), limit: z.number().int().min(1).max(50).default(15) },
             outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ when: w, client, limit }) => {
@@ -729,11 +730,11 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             inputSchema: {
                 when,
                 metrics: z.array(z.enum(['events', 'sessions', 'users', 'clients'])).min(1).max(4).optional(),
-                group_by: z.array(z.enum(['event', 'client', 'app_version', 'dialog', 'dialog_name', 'tab', 'action', 'button'])).max(2).optional(),
+                group_by: z.array(z.enum(['event', 'client', 'app_version', 'dialog', 'dialog_name', 'tab', 'action', 'button'])).max(2).optional().describe('Lens dimensions mapped to property names by describe_app_events; e.g. dialog groups the configured dialog code property.'),
                 bucket: z.enum(['none', 'day', 'week', 'month', 'quarter', 'year']).optional(),
-                filters: z.array(z.object({ dimension: z.enum(['event', 'client', 'app_version', 'dialog', 'dialog_name', 'tab', 'action', 'button']), op: z.enum(['eq', 'neq', 'in']), value: z.union([z.string().max(200), z.array(z.string().max(200)).max(50)]) })).max(5).optional(),
+                filters: z.array(z.object({ dimension: z.enum(['event', 'client', 'app_version', 'dialog', 'dialog_name', 'tab', 'action', 'button']), op: z.enum(['eq', 'neq', 'in']), value: z.union([z.string().max(200), z.array(z.string().max(200)).max(50)]) })).max(5).optional().describe(`Lens dimension filters: dialog = ${appEvents()?.properties.dialog?.name}, action = ${appEvents()?.properties.action?.name}, button = ${appEvents()?.properties.button?.name}, client = ${config.properties.client}; e.g. {dimension: "dialog", op: "eq", value: "${appEvents()?.properties.dialog?.examples?.[0] || '<dialog code>'}"}.`),
                 events: z.array(z.string().max(200)).max(20).optional().describe('Event names; default: the app\'s own screen and interaction events.'),
-                client: z.string().optional(),
+                client: z.string().optional().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`),
                 limit: z.number().int().min(1).max(200).default(200).describe('Maximum groups per bucket within the result budget. Oversized buckets return at most 20 top groups plus an exact other row. See limits for truncation and distinct total availability.'),
             },
             outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
@@ -751,7 +752,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
         {
             title: 'Do clients finish a workflow',
             description: `Which tasks do people do in ${app}, and do they finish them? Measures a discovered workflow id/name or ordered dialogs per client and overall: starts, funnel, done, failures, retries, abandonment, time, dropout errors and example replay links for the person. Compares the previous equal window. Give either workflow or dialogs. Discovered workflows count completed or queued as done and report them separately; dialog lists require completed.`,
-            inputSchema: { ...comparisonInputs(), workflow: z.string().trim().min(1).max(WORKFLOW_NAME_LIMIT).optional().describe('Discovered workflow id or exact name from discover_workflows.'), dialogs: z.array(z.string().min(1).max(80)).min(1).max(10).optional(), client: z.string().optional(), when },
+            inputSchema: { ...comparisonInputs(), workflow: z.string().trim().min(1).max(WORKFLOW_NAME_LIMIT).optional().describe('Discovered workflow id or exact name from discover_workflows.'), dialogs: z.array(z.string().min(1).max(80)).min(1).max(10).optional().describe(`Ordered ${appEvents()?.properties.dialog?.name} codes, e.g. ${appEvents()?.properties.dialog?.examples?.slice(0, 2).join(', ') || '<dialog code>'}.`), client: z.string().optional().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`), when },
             outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async ({ workflow, dialogs, client, when: w, ...comparison }) => {
@@ -766,7 +767,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
         'describe_app_events',
         {
             title: `What ${app}'s events mean`,
-            description: `Explains ${app} dialogs, screens, buttons, fields and error messages using the app's event vocabulary. Includes coverage, real example values, common dialogs and messages, clients and HogQL guidance. Use for vocabulary details when drilling into events; reval_brief investigates directly. Use the Lens tool reval_brief to investigate app events and session_story for a session timeline.`,
+            description: `Teaches what can be queried in ${app}: events, properties, identity, time and copy-ready query examples. Includes coverage, real example values, common dialogs and messages, clients and HogQL guidance. Use for vocabulary details when drilling into events; reval_brief investigates directly. Use the Lens tool reval_brief to investigate app events and session_story for a session timeline.`,
             inputSchema: { days: z.number().int().min(1).max(1500).default(7).describe('How many days of data to look at.') },
             outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
@@ -778,7 +779,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             title: 'What happened in a session',
             description: `Explains what happened in one ${app} session: dialogs, tabs, fields, button presses, outcomes and error messages in time order. Uses events, with replay links for the person to open. Field names are shown, never typed values. Follow up on sessions from dialog_friction or find_client_incidents.`,
             inputSchema: {
-                session_id: z.string().describe('The session id or a PostHog replay link.'),
+                session_id: z.string().describe('$session_id / properties.$session_id, e.g. <session id>, or a PostHog replay link.'),
                 max_lines: z.number().int().min(20).max(1000).default(300),
             },
             annotations: { readOnlyHint: true },
@@ -801,8 +802,8 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             title: 'Where clients fail',
             description: `Explains why a ${app} dialog fails: button attempts, outcomes, error messages, affected clients, retry loops and stuck sessions. Optionally narrow to one client or dialog. Each error has an example session for session_story.`,
             inputSchema: {
-                client: z.string().optional().describe('A client (name, code or a user email). All clients if left out.'),
-                dialog: z.string().optional().describe('A dialog code (DlgDetailIRSwap) or part of its name (IR Swap).'),
+                client: z.string().optional().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`),
+                dialog: z.string().optional().describe(`Dialog code: ${appEvents()?.properties.dialog?.name || 'configured dialog property'}, e.g. ${appEvents()?.properties.dialog?.examples?.[0] || '<dialog code>'}; or part of its title.`),
                 when,
                 timezone: tz,
                 limit: z.number().int().min(1).max(50).default(15),
@@ -822,8 +823,8 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             title: 'Which error messages mislead',
             description: `Which of Reval's error messages leave people stuck, and what do they do to recover? Groups errors by template and dialog, learns the field labels touched, other dialogs opened and whether people search, then reports recovery, repeated failures and give-ups. Flags dead ends and messages pointing elsewhere, with counts and example sessions.`,
             inputSchema: {
-                client: z.string().optional().describe('One client (name, code or a user email). All clients if left out.'),
-                dialog: z.string().optional().describe('A dialog code or part of its name.'),
+                client: z.string().optional().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`),
+                dialog: z.string().optional().describe(`Dialog code: ${appEvents()?.properties.dialog?.name || 'configured dialog property'}, e.g. ${appEvents()?.properties.dialog?.examples?.[0] || '<dialog code>'}; or part of its title.`),
                 message: z.string().optional().describe('Text to match in an error message or its template, ignoring case.'),
                 when,
             },
@@ -841,8 +842,8 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             title: 'Slow or failing server calls',
             description: `Shows whether ${app} buttons such as Save, Run or Export are slow, and which server calls fail with HTTP errors. Includes median, 90th percentile and longest waits by dialog/button, method/path, clients and example replay links. Reads network timing on the server from a limited number of recent recordings.`,
             inputSchema: {
-                client: z.string().optional().describe('One client (name, code or a user email). All clients if left out.'),
-                dialog: z.string().optional().describe('A dialog code or part of its name.'),
+                client: z.string().optional().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`),
+                dialog: z.string().optional().describe(`Dialog code: ${appEvents()?.properties.dialog?.name || 'configured dialog property'}, e.g. ${appEvents()?.properties.dialog?.examples?.[0] || '<dialog code>'}; or part of its title.`),
                 when,
                 timezone: tz,
                 sessions: z.number().int().min(1).max(40).default(12).describe('How many recent recorded sessions to read.'),
@@ -877,7 +878,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             description: `Finds what happened to a ${app} trade or link id, such as 4348, including clients, sessions, errors and button attempts. Matches searches and messages that name the id, with replay links for the person.`,
             inputSchema: {
                 id: z.string().describe('The trade or link id, digits only, e.g. 4348.'),
-                client: z.string().optional().describe('One client (name, code or a user email), to narrow it down.'),
+                client: z.string().optional().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`),
                 when: z.string().optional().describe('Default: last 30 days.'),
                 timezone: tz,
                 cursor: z.string().max(200).optional().describe('next_cursor from the previous find_trade answer: the next older sessions, with the same id, client and window.'),
@@ -896,7 +897,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             title: 'Which clients need attention',
             description: `Shows which ${app} clients are at risk or using the app less: fewer sessions, active days or dialogs, absent users and more failed attempts. Compares periods with reasons and numbers. These are warning signs, not a churn prediction; say so and follow up with dialog_friction for the client.`,
             inputSchema: { ...comparisonInputs(),
-                client: z.string().optional().describe('One client (name, code or a user email). All clients if left out.'),
+                client: z.string().optional().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`),
                 when: z.string().optional().describe('The recent period, in plain words. Default: last 14 days (compared with the 14 days before).'),
                 timezone: tz,
                 limit: z.number().int().min(1).max(100).default(20),
@@ -914,7 +915,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
         {
             title: 'Where clients struggle',
             description: `A short report for a product manager: the ${app} dialogs that hurt most, and what happens there.`,
-            argsSchema: { client: z.string().optional().describe('One client, or all'), when: z.string().optional().describe('e.g. last 14 days') },
+            argsSchema: { client: z.string().optional().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`), when: z.string().optional().describe('e.g. last 14 days') },
         },
         ({ client, when: w }) => ({
             messages: [
@@ -941,7 +942,7 @@ Relay the returned brief, including its evidence and limits. Add nothing invente
     }, () => briefPrompt({ question: 'Brief me on what needs attention this week', when: 'last 7 days' }))
     server.registerPrompt('client_check', {
         title: 'Check a Reval client', description: 'How is this client doing?',
-        argsSchema: { client: z.string().describe('Client name or id') },
+        argsSchema: { client: z.string().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`) },
     }, ({ client }) => briefPrompt({ question: 'How is this client doing?', client }))
     if (config.features.jira) server.registerPrompt('release_check', {
         title: 'Check after a release', description: 'What needs attention after a release?',

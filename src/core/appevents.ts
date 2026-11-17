@@ -1,3 +1,4 @@
+import { dataDictionary } from './datadictionary.ts'
 import { historyLimits } from './historycoverage.ts'
 import { ToolInputError } from './toolinputerror.ts'
 import { requestedToolWindow } from './toolcontext.ts'
@@ -30,9 +31,10 @@ export type Outcome = 'completed' | 'accepted' | 'error' | 'empty' | 'none'
 
 export interface AppEvents {
     app: string
+    distinctIdParts?: string[]
     about: string
     events: { screen: string; interaction: string }
-    properties: Partial<Record<Role, { name: string; meaning: string }>>
+    properties: Partial<Record<Role, { name: string; meaning: string; examples?: string[] }>>
     dialogs: { messages: string[]; notices: string[]; menu: string[] }
     screenActions: { open: string[]; focus: string[]; close: string[] }
     submitButtons: string[]
@@ -61,7 +63,7 @@ export function parseAppEvents(raw: unknown, source = 'APP_EVENTS_FILE'): AppEve
     for (const [role, v] of Object.entries(r.properties || {})) {
         if (!ROLES.includes(role as Role)) throw bad(`unknown property role "${role}" (known: ${ROLES.join(', ')})`)
         if (!v || typeof v.name !== 'string' || !IDENT.test(v.name)) throw bad(`properties.${role}.name must be a plain property name`)
-        properties[role as Role] = { name: v.name, meaning: String(v.meaning || '') }
+        properties[role as Role] = { name: v.name, meaning: String(v.meaning || ''), examples: list(v.examples, `properties.${role}.examples`) }
     }
     if (!properties.dialog) throw bad('properties.dialog is required')
     const regexes = (v: unknown, what: string) => {
@@ -86,6 +88,7 @@ export function parseAppEvents(raw: unknown, source = 'APP_EVENTS_FILE'): AppEve
     })
     return {
         app: String(r.app || 'the app'),
+        distinctIdParts: list(r.distinctIdParts, 'distinctIdParts'),
         about: String(r.about || ''),
         events: { screen: String(r.events?.screen || '$pageview'), interaction: String(r.events?.interaction || '$autocapture') },
         properties,
@@ -938,6 +941,7 @@ export async function dialogFriction(q: { from: Date; to: Date; clientId?: strin
 }
 
 export interface Vocabulary {
+    dictionary: string
     app: string
     about: string
     client: string
@@ -1009,7 +1013,7 @@ export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vo
         m.set(text, e)
     }
     const describedNames = new Set(roles.map((r) => reg.properties[r]!.name))
-    return {
+    const vocabulary: Omit<Vocabulary, 'dictionary'> = {
         app: reg.app,
         about: reg.about,
         client: clientSource,
@@ -1042,6 +1046,7 @@ export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vo
         note: bounded ? `Requested ${requested.from.toISOString()} to ${requested.to.toISOString()}; vocabulary counts cover only ${from.toISOString()} to ${to.toISOString()} (at most 7 recent days). Daily dimension rollups do not cover this whole window.`
             : unprocessed ? `Counts cover ${from.toISOString().slice(0, 10)} to ${through} from Lens's daily history; the last ${unprocessed} day${unprocessed === 1 ? '' : 's'} of the requested window ${unprocessed === 1 ? 'is' : 'are'} not processed yet (data through ${through}).` : `Counts cover only ${from.toISOString()} to ${to.toISOString()} (UTC, end exclusive).`,
     }
+    return { ...vocabulary, dictionary: dataDictionary({ format: 'full', live: vocabulary }) }
 }
 
 async function eventPropertyNames(): Promise<string[] | undefined> {
