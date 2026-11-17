@@ -14,7 +14,7 @@ export interface SessionSignals {
     hesitations: { before: string; ms: number; at_ms: number }[]
     cursor: { px_per_min: number; direction_changes_per_min: number; circling_bursts: number }
     scroll: { px: number; reversals: number; hunting_bursts: number }
-    network_errors: number; slow_calls: number; console_errors: number
+    network_errors: number; slow_calls: number; console_errors: number // slow_calls excludes failures so their sum counts calls once.
 }
 
 /** Keep short structural identifiers; free-form multiword labels are conservatively dropped. */
@@ -30,7 +30,7 @@ const htmlTags = new Set('a button input select textarea label div span form tab
 const keys = ['data-field', 'data-action', 'name', 'id', 'aria-label', 'role', 'type', 'data-testid', 'data-dialog'] as const
 interface NodeInfo { tag: string; attrs: Record<string, string>; parent?: number; error: boolean; hidden: boolean; errorClass: boolean }
 
-/** One pass over JSONL; only sanitized structure survives each line. */
+/** Process in browser time order; only sanitized structure survives extraction. */
 export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, opts?: { names?: Iterable<string> }): SessionSignals {
     // token -> the name as written in the reviewed list; output uses that, never the page's own spelling.
     const knownNames = new Map<string, string>([...structuralNames].map((n) => [n, n]))
@@ -44,12 +44,14 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
     const fields = new Map<string, SessionSignals['fields'][number]>()
     let nodes = new Map<number, NodeInfo>()
     let start: number | undefined, end = 0, lastActivity: number | undefined, lastAction: number | undefined, moving = false
-    let hasActivity = false
+    let hasActivity = false, loaded = false
+    let window = ''
     let focus: { field: string; at: number } | undefined
-    const pending: { target: string; time: number }[] = []
-    const effects: number[] = []
+    const pending: { target: string; time: number; window: string; id: number; rage?: boolean }[] = []
+    const effects = new Map<string, { time: number; removed?: Set<number> }[]>()
     const rages = new Map<string, { times: number[]; result?: SessionSignals['rage_clicks'][number] }>()
-    let submit = false, failed = false, edited: string | undefined
+    const attempts = new Map<string, { submit: boolean; failed: boolean; edited?: string; retry?: string }>()
+    let attempt = { submit: false, failed: false } as NonNullable<ReturnType<typeof attempts.get>>
     const loops = new Map<string, number>()
     let point: { x: number; y: number } | undefined, vector: { x: number; y: number } | undefined, distance = 0, turns = 0, circle: number[] = []
     const scrolls = new Map<string, { x: number; y: number; sign: number }>()
@@ -75,10 +77,16 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
         return f
     }
     const blur = (t: number) => { if (focus) { fields.get(focus.field)!.ms += Math.max(0, t - focus.at); focus = undefined } }
-    const effect = (t: number) => { effects.push(t) }
+    const effect = (t: number, removed?: Set<number>) => {
+        if (!effects.has(window)) effects.set(window, [])
+        effects.get(window)!.push({ time: t, removed })
+    }
     const appeared = (id: number, t: number) => {
         out.errors_shown.push({ target: name(id), at_ms: relative(t) })
-        if (submit) { failed = true; submit = false }
+        if (attempt.submit) {
+            if (attempt.retry) loops.set(attempt.retry, (loops.get(attempt.retry) || 0) + 1)
+            attempt.failed = true; attempt.submit = false; attempt.retry = undefined
+        }
     }
     const attrs = (raw: any): Record<string, string> => {
         const result: Record<string, string> = {}
@@ -97,7 +105,7 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
             return undefined
         }
     }
-    const add = (root: any, parent: number | undefined, t: number) => {
+    const add = (root: any, parent: number | undefined) => {
         const stack = [{ node: root, parent }]
         while (stack.length) {
             const item = stack.pop()!, n = item.node
@@ -109,19 +117,38 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
                 const info = { tag: htmlTags.has(tag) ? tag : 'element', attrs: attrs(n.attributes), parent: item.parent, error: isError(n.attributes?.role, errorClass(n.attributes)), hidden: hidden(n.attributes), errorClass: errorClass(n.attributes) }
                 nodes.set(n.id, info)
                 visibility.set(info, { hidden: n.attributes?.hidden != null, aria: n.attributes?.['aria-hidden'] === 'true', style: hidden({ style: n.attributes?.style }) })
-                if (info.error && !info.hidden) appeared(n.id, t)
             }
             for (const child of n.childNodes || []) stack.push({ node: child, parent: n.type === 2 ? n.id : item.parent })
         }
     }
-    const activity = (t: number) => { if (lastActivity !== undefined && t - lastActivity > 15000) out.idle_ms += t - lastActivity; lastActivity = Math.max(lastActivity ?? t, t); hasActivity = true }
-    for (let offset = 0; offset < jsonl.length;) {
-        let stop = jsonl.indexOf('\n', offset); if (stop < 0) stop = jsonl.length
-        const line = jsonl.slice(offset, stop); offset = stop + 1
-        let parsed: any
-        try { parsed = JSON.parse(line) } catch { continue }
+    const visibleErrors = () => {
+        const result = new Map<string, number>()
+        for (const [id, n] of nodes) {
+            if (!n.error) continue
+            let current: NodeInfo | undefined = n, nested = false, hidden = false
+            const path: string[] = []
+            const seen = new Set<NodeInfo>()
+            while (current && !seen.has(current)) {
+                seen.add(current)
+                hidden ||= current.hidden
+                if (current !== n && current.error) nested = true
+                // Structural paths survive checkpoint node-id changes without retaining text.
+                const siblings = [...nodes.values()].filter(v => v.parent === current!.parent && v.tag === current!.tag)
+                path.push(`${current.tag}:${siblings.indexOf(current)}`)
+                current = current.parent === undefined ? undefined : nodes.get(current.parent)
+            }
+            if (!hidden && !nested) result.set(path.join('/'), id)
+        }
+        return result
+    }
+    const activity = (t: number) => { if (lastActivity !== undefined && t - lastActivity > 15000 && (hasActivity || !loaded)) out.idle_ms += t - lastActivity; lastActivity = Math.max(lastActivity ?? t, t); hasActivity = true }
+    const events: { parsed: any; line: string; timestamp: number }[] = []
+    for (const line of jsonl.split('\n')) {
+        try { const parsed = JSON.parse(line), ev = Array.isArray(parsed) ? parsed[1] : parsed; if (Number.isFinite(ev?.timestamp)) events.push({ parsed, line, timestamp: ev.timestamp }) } catch {}
+    }
+    events.sort((a, b) => a.timestamp - b.timestamp)
+    for (const { parsed, line } of events) {
         const ev = Array.isArray(parsed) ? parsed[1] : parsed
-        if (!ev || !Number.isFinite(ev.timestamp)) continue
         const t = ev.timestamp as number, d = ev.type === 2 ? unpack(ev.data) : ev.data
         if (ev.type === 3 && d?.source === 0) {
             for (const k of ['adds', 'attributes', 'removes', 'texts']) d[k] = unpack(d[k])
@@ -130,33 +157,37 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
         end = Math.max(end, t)
         // Explicit DOMContentLoaded/load events establish a page-load prefix.
         // Without that evidence, a long initial gap remains observable idle.
-        if ((ev.type === 0 || ev.type === 1) && !hasActivity) lastActivity = undefined
-        const window = String(Array.isArray(parsed) ? parsed[0] : '')
+        if ((ev.type === 0 || ev.type === 1) && !hasActivity) loaded = true
+        window = String(Array.isArray(parsed) ? parsed[0] : '')
+        if (!attempts.has(window)) attempts.set(window, { submit: false, failed: false })
+        attempt = attempts.get(window)!
         if (!windows.has(window)) windows.set(window, new Map())
         nodes = windows.get(window)!
         if (!textWindows.has(window)) textWindows.set(window, new Map())
         textParents = textWindows.get(window)!
-        if (ev.type === 2) { nodes.clear(); textParents.clear(); effect(t); add(d?.node, undefined, t) }
+        if (ev.type === 2) {
+            const before = visibleErrors()
+            nodes.clear(); textParents.clear(); effect(t); add(d?.node, undefined)
+            for (const [key, id] of visibleErrors()) if (!before.has(key)) appeared(id, t)
+        }
         if (ev.type === 4) { if (typeof d?.href === 'string') pathTemplate(d.href); effect(t) }
         if (ev.type === 6 && d?.plugin === 'rrweb/console@1' && d.payload?.level === 'error') out.console_errors++
         if (ev.type === 6 && d?.plugin === 'rrweb/network@1') {
-            for (const r of parseNetwork(line)) {
-                const k = `${r.method} ${r.path} ${Math.round(r.start / 50)}`
-                if (networkSeen.has(k)) continue
-                networkSeen.add(k)
+            for (const r of parseNetwork(line, networkSeen)) {
                 if ((r.status ?? 0) >= 400) out.network_errors++
-                if (r.ms >= 5000) out.slow_calls++
+                else if (r.ms >= 5000) out.slow_calls++
                 effect(r.start)
             }
         }
         if (ev.type !== 3 || !d) continue
         if (d.source === 0) {
-            effect(t)
-            for (const a of d.adds || []) add(a.node, a.parentId, t)
+            const before = visibleErrors()
+            // Expiring an unrelated toast is not feedback on the latest click.
+            if (d.adds?.length || d.attributes?.length || d.texts?.length) effect(t)
+            for (const a of d.adds || []) add(a.node, a.parentId)
             for (const a of d.attributes || []) {
                 const n = nodes.get(a.id); if (!n) continue
                 for (const k of keys) if (Object.hasOwn(a.attributes || {}, k)) { delete n.attrs[k]; const v = safeName(a.attributes[k]); if (v) n.attrs[k] = v }
-                const wasVisible = n.error && !n.hidden
                 if (Object.hasOwn(a.attributes || {}, 'class')) n.errorClass = errorClass(a.attributes)
                 n.error = isError(n.attrs.role, n.errorClass)
                 for (const k of ['hidden', 'aria-hidden', 'style']) if (Object.hasOwn(a.attributes || {}, k)) {
@@ -168,24 +199,26 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
                     visibility.set(n, flags)
                     n.hidden = flags.hidden || flags.aria || flags.style
                 }
-                if (n.error && !n.hidden && (!wasVisible || submit)) appeared(a.id, t)
             }
             // Re-rendering an already visible alert after a submission also counts.
             // Read mutation IDs only, with at most one error per submission.
-            if (submit) for (const change of d.texts || []) {
+            const after = visibleErrors()
+            for (const [key, id] of after) if (!before.has(key) || (attempt.submit && (d.attributes || []).some((a: any) => a.id === id))) appeared(id, t)
+            if (attempt.submit) for (const change of d.texts || []) {
                 let id = textParents.get(change.id)
                 for (let depth = 0; id !== undefined && depth < 20; depth++) {
                     const n = nodes.get(id)
-                    if (n?.error && !n.hidden) { appeared(id, t); break }
+                    if (n?.error && [...after.values()].includes(id)) { appeared(id, t); break }
                     id = n?.parent
                 }
-                if (!submit) break
+                if (!attempt.submit) break
             }
             for (const r of d.removes || []) {
                 const removed = new Set<number>([r.id])
                 let changed = true
                 while (changed) { changed = false; for (const [id, n] of nodes) if (n.parent !== undefined && removed.has(n.parent) && !removed.has(id)) { removed.add(id); changed = true } }
-                for (const id of removed) nodes.delete(id)
+                effect(t, removed)
+                for (const id of removed) { nodes.delete(id); textParents.delete(id) }
             }
         }
         if ([2, 3, 5].includes(d.source)) activity(t)
@@ -214,7 +247,7 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
             }
             scrolls.set(k, { x: Number.isFinite(d.x) ? d.x : 0, y: d.y, sign: sign || prev?.sign || 0 })
         }
-        if (d.source === 5) { const f = fieldFor(d.id); f.edits++; if (failed) edited = f.field; lastAction = t; moving = false }
+        if (d.source === 5) { const f = fieldFor(d.id); f.edits++; if (attempt.failed) attempt.edited = f.field; lastAction = t; moving = false }
         if (d.source === 2) {
             if (d.type === 5) { blur(t); const f = fieldFor(d.id); f.focus_count++; focus = { field: f.field, at: t } }
             if (d.type === 6) blur(t)
@@ -233,10 +266,11 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
                 if (!rage.result) { rage.result = { target, count: rage.times.length, at_ms: relative(rage.times[0]) }; out.rage_clicks.push(rage.result) }
                 else rage.result.count = rage.times.length
             }
-            if (!['input', 'label', 'textarea', 'select'].includes(n?.tag || '')) pending.push({ target, time: t })
+            if (!['input', 'label', 'textarea', 'select'].includes(n?.tag || '')) pending.push({ target, time: t, window, id: d.id })
+            if (rage.result) for (const c of pending) if (c.window === window && c.id === d.id && rage.times.includes(c.time)) c.rage = true
             if (n?.attrs.type === 'submit' || /save|submit|run|confirm|apply/i.test(target)) {
-                if (failed && edited) loops.set(edited, (loops.get(edited) || 0) + 1)
-                submit = true; failed = false; edited = undefined
+                attempt.retry = attempt.failed ? attempt.edited : undefined
+                attempt.submit = true; attempt.failed = false; attempt.edited = undefined
             }
         }
     }
@@ -246,14 +280,19 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
     blur(end)
     if (lastActivity !== undefined && end - lastActivity > 15000) out.idle_ms += end - lastActivity
     out.duration_ms = Math.max(0, end - (start ?? end)); out.active_ms = Math.max(0, out.duration_ms - out.idle_ms)
-    effects.sort((a, b) => a - b)
+    for (const list of effects.values()) list.sort((a, b) => a.time - b.time)
     for (const c of pending) {
-        let lo = 0, hi = effects.length
-        while (lo < hi) { const mid = (lo + hi) >>> 1; if (effects[mid] < c.time) lo = mid + 1; else hi = mid }
-        if (end - c.time >= 1000 && (effects[lo] === undefined || effects[lo] - c.time > 1000)) out.dead_clicks.push({ target: c.target, at_ms: relative(c.time) })
+        if (c.rage) continue
+        const list = effects.get(c.window) || []
+        let lo = 0, hi = list.length, responded = false
+        while (lo < hi) { const mid = (lo + hi) >>> 1; if (list[mid].time < c.time) lo = mid + 1; else hi = mid }
+        for (let i = lo; i < list.length && list[i].time - c.time <= 1000; i++) {
+            if (!list[i].removed || list[i].removed!.has(c.id)) { responded = true; break }
+        }
+        if (end - c.time >= 1000 && !responded) out.dead_clicks.push({ target: c.target, at_ms: relative(c.time) })
     }
     out.fields = [...fields.values()]
-    out.error_loops = [...loops].filter(([, count]) => count >= 2).map(([field, count]) => ({ field, count }))
+    out.error_loops = [...loops].filter(([, count]) => count >= 1).map(([field, count]) => ({ field, count }))
     const minutes = out.duration_ms / 60000
     out.cursor.px_per_min = minutes ? distance / minutes : 0
     out.cursor.direction_changes_per_min = minutes ? turns / minutes : 0

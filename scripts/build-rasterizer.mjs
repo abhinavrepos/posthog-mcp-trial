@@ -6,7 +6,8 @@
 // stay external and resolve from this project's node_modules, so at runtime nothing depends on
 // the PostHog checkout. The player page (common/replay-headless/dist/player.html) is copied too.
 import { build } from 'esbuild'
-import { copyFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { patchReplayPlayer } from './patch-replay-player.mjs'
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -82,7 +83,7 @@ await build({
     logLevel: 'warning',
 })
 
-copyFileSync(playerHtml, join(vendor, 'player.html'))
+writeFileSync(join(vendor, 'player.html'), patchReplayPlayer(readFileSync(playerHtml, 'utf8')))
 writeFileSync(
     join(vendor, 'BUILD_INFO.json'),
     JSON.stringify({ posthog_src: src, built_at: new Date().toISOString() }, null, 2) + '\n'

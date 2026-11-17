@@ -1,0 +1,40 @@
+{
+  "error-looping": {
+    "session_id": "01a1eb05-cda8-7125-a42c-6a7e2becf458",
+    "client_id": "LAB5",
+    "client_name": "Lab Error Co",
+    "persona": "error-looping",
+    "expected": {
+      "rage_click_bursts": 0,
+      "rage_clicks": 0,
+      "dead_target_clicks": 0,
+      "error_submissions": 4,
+      "error_retries": 3,
+      "hesitations": 0,
+      "circling_bursts_min": 0,
+      "scroll_reversals": 0,
+      "hunting_bursts_min": 0,
+      "idle_ms_min": 0
+    },
+    "duration_ms": 70003
+  },
+  "idle": {
+    "session_id": "01a1eb05-cdd6-7079-8ea6-2ebb2f2fa25d",
+    "client_id": "LAB6",
+    "client_name": "Lab Idle Co",
+    "persona": "idle",
+    "expected": {
+      "rage_click_bursts": 0,
+      "rage_clicks": 0,
+      "dead_target_clicks": 0,
+      "error_submissions": 0,
+      "error_retries": 0,
+      "hesitations": 0,
+      "circling_bursts_min": 0,
+      "scroll_reversals": 0,
+      "hunting_bursts_min": 0,
+      "idle_ms_min": 50000
+    },
+    "duration_ms": 70003
+  }
+}

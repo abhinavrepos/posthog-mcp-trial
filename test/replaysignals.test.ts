@@ -23,7 +23,7 @@ test('clicks, rage, dead clicks and named ancestor resolution', () => {
     const s = run(full(), click(100, 4), click(200, 4), click(300, 4), click(400, 3), meta(2000))
     assert.equal(s.clicks, 4)
     assert.deepEqual(s.rage_clicks, [{ target: 'span#save', count: 3, at_ms: 100 }])
-    assert.equal(s.dead_clicks.length, 3)
+    assert.equal(s.dead_clicks.length, 0)
     assert.equal(run(full(), click(100), inc(200, 0, { texts: [{ id: 99, value: 'never read' }] }), meta(2000)).dead_clicks.length, 0)
     assert.equal(run(full(), click(100), meta(900), meta(2000)).dead_clicks.length, 0)
 })
@@ -31,12 +31,12 @@ test('clicks, rage, dead clicks and named ancestor resolution', () => {
 test('errors, repeated edit-submit loops, focus duration and input counts', () => {
     const s = run(full(), inc(100, 2, { type: 5, id: 3 }), click(200), error(300), inc(400, 5, { id: 3, text: 'ignored' }), click(500), error(600, 9), inc(700, 5, { id: 3 }), click(800), inc(900, 2, { type: 6, id: 3 }), meta(2000))
     assert.equal(s.errors_shown.length, 2)
-    assert.deepEqual(s.error_loops, [{ field: 'field:notional', count: 2 }])
+    assert.deepEqual(s.error_loops, [{ field: 'field:notional', count: 1 }])
     assert.deepEqual(s.fields, [{ field: 'field:notional', edits: 2, focus_count: 1, ms: 800 }])
 })
 
 test('mutation attributes, added descendants, removals and full snapshot reset', () => {
-    const s = run(full(), inc(10, 0, { adds: [{ parentId: 2, node: element(10, 'span') }] }), click(20, 10), inc(30, 0, { attributes: [{ id: 2, attributes: { 'data-action': 'run', class: 'invalid' } }] }), click(40, 10), inc(50, 0, { removes: [{ id: 2 }] }), click(60, 10), meta(2000))
+    const s = run(full(), inc(10, 0, { adds: [{ parentId: 2, node: element(10, 'span') }] }), click(20, 10), inc(30, 0, { attributes: [{ id: 2, attributes: { 'data-action': 'run', class: 'invalid' } }] }), click(40, 10), inc(50, 0, { removes: [{ id: 2 }] }), click(1060, 10), meta(3000))
     assert.equal(s.errors_shown.length, 1)
     assert.deepEqual(s.dead_clicks.map(c => c.target), ['element'])
     assert.equal(run(full(), event(10, 2, { node: element(1, 'div') }), click(20), meta(2000)).dead_clicks[0].target, 'element')
@@ -62,7 +62,7 @@ test('network uses replaynet filtering and deduplication; console counts only er
     const req = { name: 'https://example.com/api/trade/90210?private=value', method: 'POST', startTime: 200, timeOrigin: 0, duration: 6000, status: 500 }
     const s = run(full(), click(100), network(5000, [{ ...req, timestamp: undefined, startTime: 200, timeOrigin: 1 }, { name: '/x.js', status: 500 }]), network(5000, [{ ...req, startTime: 200, timeOrigin: 1 }]), event(5500, 6, { plugin: 'rrweb/console@1', payload: { level: 'error', trace: ['private'] } }), event(5600, 6, { plugin: 'rrweb/console@1', payload: { level: 'warn' } }), meta(7000))
     assert.equal(s.network_errors, 1)
-    assert.equal(s.slow_calls, 1)
+    assert.equal(s.slow_calls, 0)
     assert.equal(s.console_errors, 1)
     assert.equal(s.dead_clicks.length, 0, 'delayed network record still cancels dead click by request start')
 })

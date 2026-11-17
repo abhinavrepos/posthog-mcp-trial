@@ -11,7 +11,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 
 import { ClipQueueError } from '../core/clip-queue.ts'
-import { renderClip } from '../core/clip.ts'
+import { cleanRenderWork, pruneCache, renderClip } from '../core/clip.ts'
 import { addComment, captionedFile, checkComment, commentCounts, cues, DEFAULT_DURATION, deleteComment, DURATIONS, getComment, listComments, MAX_TEXT, removeVariants, toVtt, updateComment, variantOf } from '../core/comments.ts'
 import { config, surveysActive } from '../core/config.ts'
 import { all, db, one, run, tx } from '../core/db.ts'
@@ -90,7 +90,7 @@ export function storeClip(clip: { name: string; session_id: string; start_offset
         run(
             `INSERT INTO clips (name, session_id, start_s, end_s, client, user, recording_start, download_name, bytes, created_by, created_at, last_requested_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT (name) DO UPDATE SET last_requested_at = excluded.last_requested_at, bytes = excluded.bytes`,
+             ON CONFLICT (name) DO UPDATE SET last_requested_at = excluded.last_requested_at, bytes = excluded.bytes, start_s = excluded.start_s, end_s = excluded.end_s, download_name = excluded.download_name`,
             clip.name, clip.session_id, clip.start_offset_s, clip.end_offset_s, info?.client ?? null, info?.user ?? null, info?.start ?? null,
             downloadName({ client: info?.client, user: info?.user, recordingStart: info?.start, startS: clip.start_offset_s, endS: clip.end_offset_s }),
             bytes, by, now, now
@@ -127,6 +127,7 @@ export function setSaved(name: string, email: string, saved: boolean): ClipRecor
 export function deleteClip(name: string): boolean {
     if (!getClip(name)) return false
     rmSync(join(config.clip.outDir, name), { force: true })
+    rmSync(join(config.clip.outDir, name + '.json'), { force: true })
     removeVariants(name)
     run('DELETE FROM clips WHERE name = ?', name) // clip_holders and clip_comments rows go with it
     return true
@@ -135,6 +136,8 @@ export function deleteClip(name: string): boolean {
 /** Deletes clips nobody saved that nobody asked for in CLIP_RETENTION_DAYS, MP4 files no clip
  * row knows about (older than the same), and activity older than AUDIT_RETENTION_DAYS. */
 export function pruneOldClips(now = Date.now()): number {
+    pruneCache(join(config.clip.cacheDir, 'snapshots'), undefined, now)
+    cleanRenderWork(now)
     const cutoff = new Date(now - RETENTION_DAYS * DAY).toISOString()
     const expired = all<{ name: string }>(
         `SELECT name FROM clips WHERE last_requested_at < ? AND NOT EXISTS (SELECT 1 FROM clip_holders h WHERE h.clip_name = clips.name AND h.saved_at IS NOT NULL)`,
@@ -151,6 +154,7 @@ export function pruneOldClips(now = Date.now()): number {
             if (owner && getClip(owner)) continue // a burned-in copy of a clip that still exists
             if (f.endsWith('.mp4') && !getClip(f) && statSync(p).mtimeMs < now - RETENTION_DAYS * DAY) {
                 rmSync(p, { force: true })
+                rmSync(p + '.json', { force: true })
                 stray++
             }
         }
@@ -221,6 +225,8 @@ export function createReplayWorker(queue: ReplayJob[], deps: {
                         if (index >= 0) queue.splice(index, 1)
                     })
                     const record = deps.store(clip, job.info, job.owner)
+                    job.start_s = clip.start_offset_s
+                    job.length_s = clip.video_duration_s
                     job.clip = record
                     job.state = 'done'
                     deps.audit(job.owner, 'clip.created', { session_id: job.session_id, clip: clip.name, cached: clip.cached, render_s: clip.render_s, shared_with: record.holders.length - 1 })
@@ -261,7 +267,7 @@ function clipView(c: ClipRecord, viewer?: string, counts?: Map<string, number>) 
         ...c,
         comments: (counts ?? commentCounts()).get(c.name) ?? 0,
         saved: !!viewer && c.saved_by.includes(viewer),
-        range: `${formatClock(c.start_s)}–${formatClock(c.end_s)}`,
+        range: `${formatClock(c.start_s)}–${formatClock(c.end_s)} (${Number((c.end_s - c.start_s).toFixed(3))} s)`,
         video_url: `/replays/video/${encodeURIComponent(c.name)}`,
         download_url: `/replays/download/${encodeURIComponent(c.name)}`,
         replay_url: replayUrl(c.session_id, c.start_s),
@@ -285,7 +291,21 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 
 /** Streams an MP4 with Range support, inline or as a download. */
 export function streamMp4(req: IncomingMessage, res: ServerResponse, file: string, opts: { download?: string; cache?: string } = {}) {
-    const size = statSync(file).size
+    const fail = (error: NodeJS.ErrnoException) => {
+        if (res.headersSent) { res.destroy(); return }
+        for (const name of ['content-length', 'content-range', 'content-disposition']) res.removeHeader(name)
+        res.writeHead(error.code === 'ENOENT' ? 404 : 500, { 'content-type': 'text/plain' })
+        res.end(error.code === 'ENOENT' ? 'Clip not found' : 'Clip unavailable')
+    }
+    let size: number
+    try { size = statSync(file).size } catch (error) { fail(error as NodeJS.ErrnoException); return }
+    const send = (status: number, headers: Record<string, string>, range?: { start: number; end: number }) => {
+        const stream = createReadStream(file, range)
+        stream.on('error', fail)
+        // Opening can race retention or caption replacement; commit headers only after it succeeds.
+        stream.once('open', () => { res.writeHead(status, headers); stream.pipe(res) })
+        res.once('close', () => stream.destroy())
+    }
     const headers: Record<string, string> = {
         'content-type': 'video/mp4',
         'accept-ranges': 'bytes',
@@ -301,11 +321,9 @@ export function streamMp4(req: IncomingMessage, res: ServerResponse, file: strin
             res.writeHead(416, { 'content-range': `bytes */${size}` })
             return res.end()
         }
-        res.writeHead(206, { ...headers, 'content-range': `bytes ${start}-${end}/${size}`, 'content-length': String(end - start + 1) })
-        return createReadStream(file, { start, end }).pipe(res)
+        return send(206, { ...headers, 'content-range': `bytes ${start}-${end}/${size}`, 'content-length': String(end - start + 1) }, { start, end })
     }
-    res.writeHead(200, { ...headers, 'content-length': String(size) })
-    createReadStream(file).pipe(res)
+    send(200, { ...headers, 'content-length': String(size) })
 }
 
 const SAFE_NAME = /^[A-Za-z0-9-]+_\d+-\d+\.mp4$/
@@ -447,7 +465,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
             json(res, 400, { error: `The recording is only ${formatClock(info.duration_s)} long.` })
             return true
         }
-        const job: ReplayJob = { id: randomUUID(), state: 'queued', owner: viewer.email, session_id: input.sessionId, start_s: Math.floor(start), length_s: Math.max(3, Math.min(length, Math.ceil(info.duration_s - start))), info, created_at: Date.now() }
+        const job: ReplayJob = { id: randomUUID(), state: 'queued', owner: viewer.email, session_id: input.sessionId, start_s: Math.floor(start), length_s: length, info, created_at: Date.now() }
         pruneJobs(jobs, Date.now(), 999)
         jobs.set(job.id, job)
         queue.push(job)

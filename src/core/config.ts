@@ -187,6 +187,7 @@ export const config = {
         // Hosts the replay page may resolve. Everything else is blocked, because recordings are
         // untrusted content. Comma-separated.
         allowedHosts: env('CLIP_ALLOWED_HOSTS', 'localhost'),
+        snapshotMaxDays: Math.max(1, Number(env('CLIP_SNAPSHOT_MAX_DAYS', '7')) || 7),
         maxCacheMb: Number(env('CLIP_CACHE_MAX_MB', '2048')),
     },
     anthropic: {

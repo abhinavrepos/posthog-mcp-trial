@@ -6,6 +6,7 @@ export default function bootstrap() {
     setTaskQuery(async (sql, values = {}) => {
         const crash = process.env.LENS_SYNTHETIC_CRASH_FILE
         if (crash && existsSync(crash)) { unlinkSync(crash); process.exit(17) }
+        if (sql.includes('raw_session_replay_events')) return []
         if (sql.includes('min(timestamp) AS first_event')) return [{ first_event: new Date().toISOString() }]
         const day = String(values.from)
         const sid = (i: number) => `s${String(Math.floor(i / 30)).padStart(6, '0')}`

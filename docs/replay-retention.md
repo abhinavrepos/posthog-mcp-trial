@@ -250,3 +250,10 @@ rule must be **≥ the longest window you will set**. Lens's daily job then hand
 [client]: https://github.com/PostHog/posthog/blob/master/posthog/session_recordings/recordings/recording_api_client.py
 [ddl]: https://github.com/PostHog/posthog/blob/master/posthog/session_recordings/sql/session_replay_event_sql.py
 [pr107240]: https://github.com/PostHog/posthog/pull/107240
+
+Raw snapshot cache files expire after `CLIP_SNAPSHOT_MAX_DAYS` (default 7, minimum 1),
+independently of `CLIP_CACHE_MAX_MB`. Active readers are pinned until completion;
+startup, snapshot fetches and the six-hour cache sweep prune expired files. Recording
+deletion also removes that session's raw snapshots, partial downloads and render work,
+even when a rendered clip was saved. Existing clips without current render metadata
+are regenerated on request so earlier untrimmed exports are not reused.

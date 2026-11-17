@@ -39,7 +39,7 @@ describe('reading network timing from a recording', () => {
         assert.equal(pathTemplate('/api/user/GARCIAJ01/x'), '/api/user/:id/x')
     })
     test('a request reported twice counts once', () => {
-        assert.equal(parseNetwork(line([req('https://x/api/a', 1, 10), req('https://x/api/a', 1.01, 10)])).length, 1)
+        assert.equal(parseNetwork(line([req('https://x/api/a', 1, 10), req('https://x/api/a', 1, 10)])).length, 1)
     })
 })
 
@@ -71,4 +71,24 @@ describe('attempts and their calls', () => {
         assert.equal(clockShift(skewed), 108_000)
         assert.equal(attemptTimings(st, calls, clockShift(skewed)).length, 2)
     })
+})
+
+
+test('distinct raw URLs and exact start times survive network deduplication', () => {
+    const requests = [req('https://x/api/trades/1234?q=one', 1, 10, { status: 200 }),
+        req('https://x/api/trades/5678?q=two', 1.01, 6000, { status: 500 }),
+        req('https://x/api/trades/5678?q=two', 1.02, 6000, { status: 500 })]
+    const calls = parseNetwork([line(requests), line(requests)].join('\n'))
+    assert.equal(calls.length, 3)
+    assert.equal(calls.filter(c => c.status === 500).length, 2)
+    assert.ok(!/1234|5678|q=/.test(JSON.stringify(calls)))
+})
+
+test('a request belongs to only one submission across overlapping lookback windows', () => {
+    const steps = toSteps([1, 1.2].map(t => ({ sid: 's', ts: new Date(T0 + t * 1000).toISOString(), event: 'Event', dialog: 'D', dialogName: 'Hedge Designation', button: 'Save' })), reg)
+    const timings = attemptTimings(steps, parseNetwork(line([req('/api/save', 1.1, 6000, { status: 500 })])))
+    assert.equal(timings.length, 1)
+    assert.equal(timings[0].step, steps[0].i)
+    assert.equal(timings[0].calls, 1)
+    assert.equal(timings[0].http_errors.length, 1)
 })

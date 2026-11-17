@@ -1,0 +1,830 @@
+{
+  "result": {
+    "read": 12,
+    "skipped": 0
+  },
+  "comparisons": [
+    {
+      "session_id": "01a1eb04-b66c-71bf-820b-f4a810108d01",
+      "persona": "hesitant-circling",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 1,
+        "circling_bursts_min": 1,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "signals": {
+        "version": 1,
+        "duration_ms": 70005,
+        "active_ms": 70005,
+        "idle_ms": 0,
+        "clicks": 3,
+        "rage_clicks": [],
+        "dead_clicks": [],
+        "errors_shown": [],
+        "error_loops": [],
+        "fields": [
+          {
+            "field": "field",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 348
+          },
+          {
+            "field": "field:notional",
+            "edits": 12,
+            "focus_count": 1,
+            "ms": 11066
+          },
+          {
+            "field": "field:save",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 58288
+          }
+        ],
+        "hesitations": [
+          {
+            "before": "button#save",
+            "ms": 10268,
+            "at_ms": 11722
+          }
+        ],
+        "cursor": {
+          "px_per_min": 8147.474703986835,
+          "direction_changes_per_min": 65.13820441397043,
+          "circling_bursts": 8
+        },
+        "scroll": {
+          "px": 0,
+          "reversals": 0,
+          "hunting_bursts": 0
+        },
+        "network_errors": 0,
+        "slow_calls": 0,
+        "console_errors": 0
+      }
+    },
+    {
+      "session_id": "01a1eb04-b67c-77a9-a387-0cc7772a86c8",
+      "persona": "scroll-hunting",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 9,
+        "hunting_bursts_min": 1,
+        "idle_ms_min": 0
+      },
+      "signals": {
+        "version": 1,
+        "duration_ms": 70004,
+        "active_ms": 70004,
+        "idle_ms": 0,
+        "clicks": 2,
+        "rage_clicks": [],
+        "dead_clicks": [],
+        "errors_shown": [],
+        "error_loops": [],
+        "fields": [
+          {
+            "field": "field",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 348
+          },
+          {
+            "field": "field:notional",
+            "edits": 12,
+            "focus_count": 1,
+            "ms": 69349
+          }
+        ],
+        "hesitations": [],
+        "cursor": {
+          "px_per_min": 1734.758986523296,
+          "direction_changes_per_min": 10.28512656419633,
+          "circling_bursts": 0
+        },
+        "scroll": {
+          "px": 5350,
+          "reversals": 8,
+          "hunting_bursts": 2
+        },
+        "network_errors": 0,
+        "slow_calls": 0,
+        "console_errors": 0
+      }
+    },
+    {
+      "session_id": "01a1eb04-b67e-753b-b147-c625b285ba1e",
+      "persona": "smooth",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "signals": {
+        "version": 1,
+        "duration_ms": 70004,
+        "active_ms": 70004,
+        "idle_ms": 0,
+        "clicks": 7,
+        "rage_clicks": [],
+        "dead_clicks": [],
+        "errors_shown": [],
+        "error_loops": [],
+        "fields": [
+          {
+            "field": "field",
+            "edits": 0,
+            "focus_count": 3,
+            "ms": 66154
+          },
+          {
+            "field": "field:notional",
+            "edits": 12,
+            "focus_count": 1,
+            "ms": 1067
+          },
+          {
+            "field": "field:save",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 1849
+          },
+          {
+            "field": "field:close",
+            "edits": 0,
+            "focus_count": 2,
+            "ms": 28
+          }
+        ],
+        "hesitations": [],
+        "cursor": {
+          "px_per_min": 2349.4871765041353,
+          "direction_changes_per_min": 11.142220444546025,
+          "circling_bursts": 0
+        },
+        "scroll": {
+          "px": 0,
+          "reversals": 0,
+          "hunting_bursts": 0
+        },
+        "network_errors": 0,
+        "slow_calls": 0,
+        "console_errors": 0
+      }
+    },
+    {
+      "session_id": "01a1eb05-cda6-7bc7-9e37-47ae27245aff",
+      "persona": "rage-dead",
+      "expected": {
+        "rage_click_bursts": 1,
+        "rage_clicks": 4,
+        "dead_target_clicks": 1,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "signals": {
+        "version": 1,
+        "duration_ms": 70005,
+        "active_ms": 70005,
+        "idle_ms": 0,
+        "clicks": 7,
+        "rage_clicks": [
+          {
+            "target": "button#save",
+            "count": 4,
+            "at_ms": 1707
+          }
+        ],
+        "dead_clicks": [
+          {
+            "target": "button#dead",
+            "at_ms": 9009
+          }
+        ],
+        "errors_shown": [],
+        "error_loops": [],
+        "fields": [
+          {
+            "field": "field",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 349
+          },
+          {
+            "field": "field:notional",
+            "edits": 12,
+            "focus_count": 1,
+            "ms": 1065
+          },
+          {
+            "field": "field:save",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 7301
+          },
+          {
+            "field": "field:dead",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 61001
+          }
+        ],
+        "hesitations": [],
+        "cursor": {
+          "px_per_min": 1841.18925851634,
+          "direction_changes_per_min": 8.570816370259267,
+          "circling_bursts": 0
+        },
+        "scroll": {
+          "px": 0,
+          "reversals": 0,
+          "hunting_bursts": 0
+        },
+        "network_errors": 0,
+        "slow_calls": 0,
+        "console_errors": 0
+      }
+    },
+    {
+      "session_id": "01a1eb05-cda8-7125-a42c-6a7e2becf458",
+      "persona": "error-looping",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 4,
+        "error_retries": 3,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "signals": {
+        "version": 1,
+        "duration_ms": 70003,
+        "active_ms": 70003,
+        "idle_ms": 0,
+        "clicks": 10,
+        "rage_clicks": [],
+        "dead_clicks": [],
+        "errors_shown": [
+          {
+            "target": "div#banner",
+            "at_ms": 2973
+          },
+          {
+            "target": "div#banner",
+            "at_ms": 5992
+          },
+          {
+            "target": "div#banner",
+            "at_ms": 9093
+          },
+          {
+            "target": "div#banner",
+            "at_ms": 12255
+          }
+        ],
+        "error_loops": [
+          {
+            "field": "field:counterparty",
+            "count": 3
+          }
+        ],
+        "fields": [
+          {
+            "field": "field",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 349
+          },
+          {
+            "field": "field:notional",
+            "edits": 12,
+            "focus_count": 1,
+            "ms": 1067
+          },
+          {
+            "field": "field:counterparty",
+            "edits": 66,
+            "focus_count": 4,
+            "ms": 5597
+          },
+          {
+            "field": "field:save",
+            "edits": 0,
+            "focus_count": 4,
+            "ms": 62726
+          }
+        ],
+        "hesitations": [],
+        "cursor": {
+          "px_per_min": 7188.043733653514,
+          "direction_changes_per_min": 7.713955116209306,
+          "circling_bursts": 0
+        },
+        "scroll": {
+          "px": 0,
+          "reversals": 0,
+          "hunting_bursts": 0
+        },
+        "network_errors": 0,
+        "slow_calls": 0,
+        "console_errors": 0
+      }
+    },
+    {
+      "session_id": "01a1eb05-cdd6-7079-8ea6-2ebb2f2fa25d",
+      "persona": "idle",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 50000
+      },
+      "signals": {
+        "version": 1,
+        "duration_ms": 70003,
+        "active_ms": 1389,
+        "idle_ms": 68614,
+        "clicks": 2,
+        "rage_clicks": [],
+        "dead_clicks": [],
+        "errors_shown": [],
+        "error_loops": [],
+        "fields": [
+          {
+            "field": "field",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 348
+          },
+          {
+            "field": "field:notional",
+            "edits": 12,
+            "focus_count": 1,
+            "ms": 69424
+          }
+        ],
+        "hesitations": [],
+        "cursor": {
+          "px_per_min": 270.99506644549047,
+          "direction_changes_per_min": 0,
+          "circling_bursts": 0
+        },
+        "scroll": {
+          "px": 0,
+          "reversals": 0,
+          "hunting_bursts": 0
+        },
+        "network_errors": 0,
+        "slow_calls": 0,
+        "console_errors": 0
+      }
+    },
+    {
+      "session_id": "01a1eb06-e4bc-7095-97a0-f31450436708",
+      "persona": "hesitant-circling",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 1,
+        "circling_bursts_min": 1,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "signals": {
+        "version": 1,
+        "duration_ms": 70001,
+        "active_ms": 70001,
+        "idle_ms": 0,
+        "clicks": 3,
+        "rage_clicks": [],
+        "dead_clicks": [],
+        "errors_shown": [],
+        "error_loops": [],
+        "fields": [
+          {
+            "field": "field",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 363
+          },
+          {
+            "field": "field:notional",
+            "edits": 12,
+            "focus_count": 1,
+            "ms": 11199
+          },
+          {
+            "field": "field:save",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 58175
+          }
+        ],
+        "hesitations": [
+          {
+            "before": "button#save",
+            "ms": 10387,
+            "at_ms": 11831
+          }
+        ],
+        "cursor": {
+          "px_per_min": 8300.943740285067,
+          "direction_changes_per_min": 69.42757960600564,
+          "circling_bursts": 8
+        },
+        "scroll": {
+          "px": 0,
+          "reversals": 0,
+          "hunting_bursts": 0
+        },
+        "network_errors": 0,
+        "slow_calls": 0,
+        "console_errors": 0
+      }
+    },
+    {
+      "session_id": "01a1eb06-e4e5-7e4e-a578-d81111ac659e",
+      "persona": "scroll-hunting",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 9,
+        "hunting_bursts_min": 1,
+        "idle_ms_min": 0
+      },
+      "signals": {
+        "version": 1,
+        "duration_ms": 70003,
+        "active_ms": 70003,
+        "idle_ms": 0,
+        "clicks": 2,
+        "rage_clicks": [],
+        "dead_clicks": [],
+        "errors_shown": [],
+        "error_loops": [],
+        "fields": [
+          {
+            "field": "field",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 363
+          },
+          {
+            "field": "field:notional",
+            "edits": 12,
+            "focus_count": 1,
+            "ms": 69394
+          }
+        ],
+        "hesitations": [],
+        "cursor": {
+          "px_per_min": 1746.3609960562733,
+          "direction_changes_per_min": 10.285273488279074,
+          "circling_bursts": 0
+        },
+        "scroll": {
+          "px": 5350,
+          "reversals": 8,
+          "hunting_bursts": 2
+        },
+        "network_errors": 0,
+        "slow_calls": 0,
+        "console_errors": 0
+      }
+    },
+    {
+      "session_id": "01a1eb06-e4a1-7635-a710-6ff79ef61785",
+      "persona": "smooth",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "signals": {
+        "version": 1,
+        "duration_ms": 70003,
+        "active_ms": 70003,
+        "idle_ms": 0,
+        "clicks": 7,
+        "rage_clicks": [],
+        "dead_clicks": [],
+        "errors_shown": [],
+        "error_loops": [],
+        "fields": [
+          {
+            "field": "field",
+            "edits": 0,
+            "focus_count": 3,
+            "ms": 66132
+          },
+          {
+            "field": "field:notional",
+            "edits": 12,
+            "focus_count": 1,
+            "ms": 1083
+          },
+          {
+            "field": "field:save",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 1849
+          },
+          {
+            "field": "field:close",
+            "edits": 0,
+            "focus_count": 2,
+            "ms": 28
+          }
+        ],
+        "hesitations": [],
+        "cursor": {
+          "px_per_min": 2353.8397674085154,
+          "direction_changes_per_min": 11.14237961230233,
+          "circling_bursts": 0
+        },
+        "scroll": {
+          "px": 0,
+          "reversals": 0,
+          "hunting_bursts": 0
+        },
+        "network_errors": 0,
+        "slow_calls": 0,
+        "console_errors": 0
+      }
+    },
+    {
+      "session_id": "01a1eb07-fb72-7a95-81f0-c03f3d3cd16b",
+      "persona": "rage-dead",
+      "expected": {
+        "rage_click_bursts": 1,
+        "rage_clicks": 4,
+        "dead_target_clicks": 1,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "signals": {
+        "version": 1,
+        "duration_ms": 70004,
+        "active_ms": 70004,
+        "idle_ms": 0,
+        "clicks": 7,
+        "rage_clicks": [
+          {
+            "target": "button#save",
+            "count": 4,
+            "at_ms": 1699
+          }
+        ],
+        "dead_clicks": [
+          {
+            "target": "button#dead",
+            "at_ms": 9000
+          }
+        ],
+        "errors_shown": [],
+        "error_loops": [],
+        "fields": [
+          {
+            "field": "field",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 347
+          },
+          {
+            "field": "field:notional",
+            "edits": 12,
+            "focus_count": 1,
+            "ms": 1066
+          },
+          {
+            "field": "field:save",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 7300
+          },
+          {
+            "field": "field:dead",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 61009
+          }
+        ],
+        "hesitations": [],
+        "cursor": {
+          "px_per_min": 1834.5311395444867,
+          "direction_changes_per_min": 9.428032683846636,
+          "circling_bursts": 0
+        },
+        "scroll": {
+          "px": 0,
+          "reversals": 0,
+          "hunting_bursts": 0
+        },
+        "network_errors": 0,
+        "slow_calls": 0,
+        "console_errors": 0
+      }
+    },
+    {
+      "session_id": "01a1eb07-fba1-71e1-978d-ec289c00f73e",
+      "persona": "error-looping",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 4,
+        "error_retries": 3,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 0
+      },
+      "signals": {
+        "version": 1,
+        "duration_ms": 70003,
+        "active_ms": 70003,
+        "idle_ms": 0,
+        "clicks": 10,
+        "rage_clicks": [],
+        "dead_clicks": [],
+        "errors_shown": [
+          {
+            "target": "div#banner",
+            "at_ms": 2964
+          },
+          {
+            "target": "div#banner",
+            "at_ms": 5964
+          },
+          {
+            "target": "div#banner",
+            "at_ms": 9046
+          },
+          {
+            "target": "div#banner",
+            "at_ms": 12195
+          }
+        ],
+        "error_loops": [
+          {
+            "field": "field:counterparty",
+            "count": 3
+          }
+        ],
+        "fields": [
+          {
+            "field": "field",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 347
+          },
+          {
+            "field": "field:notional",
+            "edits": 12,
+            "focus_count": 1,
+            "ms": 1065
+          },
+          {
+            "field": "field:counterparty",
+            "edits": 66,
+            "focus_count": 4,
+            "ms": 5576
+          },
+          {
+            "field": "field:save",
+            "edits": 0,
+            "focus_count": 4,
+            "ms": 62756
+          }
+        ],
+        "hesitations": [],
+        "cursor": {
+          "px_per_min": 7330.473459682992,
+          "direction_changes_per_min": 8.571061240232561,
+          "circling_bursts": 0
+        },
+        "scroll": {
+          "px": 0,
+          "reversals": 0,
+          "hunting_bursts": 0
+        },
+        "network_errors": 0,
+        "slow_calls": 0,
+        "console_errors": 0
+      }
+    },
+    {
+      "session_id": "01a1eb07-fbb9-7548-b4f6-a264bb9b6b11",
+      "persona": "idle",
+      "expected": {
+        "rage_click_bursts": 0,
+        "rage_clicks": 0,
+        "dead_target_clicks": 0,
+        "error_submissions": 0,
+        "error_retries": 0,
+        "hesitations": 0,
+        "circling_bursts_min": 0,
+        "scroll_reversals": 0,
+        "hunting_bursts_min": 0,
+        "idle_ms_min": 50000
+      },
+      "signals": {
+        "version": 1,
+        "duration_ms": 70008,
+        "active_ms": 1386,
+        "idle_ms": 68622,
+        "clicks": 2,
+        "rage_clicks": [],
+        "dead_clicks": [],
+        "errors_shown": [],
+        "error_loops": [],
+        "fields": [
+          {
+            "field": "field",
+            "edits": 0,
+            "focus_count": 1,
+            "ms": 348
+          },
+          {
+            "field": "field:notional",
+            "edits": 12,
+            "focus_count": 1,
+            "ms": 69419
+          }
+        ],
+        "hesitations": [],
+        "cursor": {
+          "px_per_min": 270.9757118669819,
+          "direction_changes_per_min": 0,
+          "circling_bursts": 0
+        },
+        "scroll": {
+          "px": 0,
+          "reversals": 0,
+          "hunting_bursts": 0
+        },
+        "network_errors": 0,
+        "slow_calls": 0,
+        "console_errors": 0
+      }
+    }
+  ]
+}

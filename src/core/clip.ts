@@ -4,7 +4,7 @@
 // Recordings are untrusted content: they are other people's DOM. The replay page therefore runs
 // through an allowlist proxy as well as DNS rules, so literal IPs cannot bypass containment.
 import { execFile } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
@@ -14,7 +14,8 @@ import { createClipQueue } from './clip-queue.ts'
 import { config, ROOT } from './config.ts'
 import { startEgress } from './egress.ts'
 import { moveFile } from './files.ts'
-import { getRecording, getSnapshotsJsonl, PostHogError } from './posthog.ts'
+import { mp4Duration } from './mp4.ts'
+import { getRecording, getSnapshotsJsonl, hogql, PostHogError } from './posthog.ts'
 
 const run = promisify(execFile)
 const require = createRequire(import.meta.url)
@@ -126,6 +127,7 @@ export const clipQueueStats = renders.stats
 export const pendingRenders = () => { const s = renders.stats(); return s.queued + s.rendering }
 
 /** The recording's snapshots as a cached JSONL file (also read by replaynet.ts). */
+const deletedSnapshots = new Set<string>()
 const snapshotFlights = new Map<string, Promise<string>>()
 const snapshotUses = new Map<string, { count: number; files: Set<string> }>()
 /** Pin before fetching: another fetch can prune before an awaiting renderer resumes. */
@@ -137,6 +139,7 @@ export async function withSnapshotsFile<T>(sessionId: string, use: (file: string
     finally { if (!--active.count) snapshotUses.delete(sessionId) }
 }
 export function snapshotsFile(sessionId: string): Promise<string> {
+    if (deletedSnapshots.has(sessionId)) return Promise.reject(new PostHogError('Recording deleted', 404))
     let flight = snapshotFlights.get(sessionId)
     if (!flight) {
         flight = fetchSnapshotsFile(sessionId).finally(() => snapshotFlights.delete(sessionId))
@@ -148,13 +151,16 @@ async function fetchSnapshotsFile(sessionId: string): Promise<string> {
     const dir = join(config.clip.cacheDir, 'snapshots')
     mkdirSync(dir, { recursive: true, mode: 0o700 })
     const meta = await getRecording(sessionId)
+    if (deletedSnapshots.has(sessionId)) throw new PostHogError('Recording deleted', 404)
     // The key includes the end time, so a recording that is still growing gets fetched again.
     const key = `${sessionId}_${Date.parse(meta.end_time) || 0}`.replace(/[^A-Za-z0-9_-]/g, '')
     const file = join(dir, `${key}.jsonl`)
+    if (existsSync(file) && Date.now() - statSync(file).mtimeMs > config.clip.snapshotMaxDays * 86_400_000 && ![...snapshotUses.values()].some(use => use.files.has(file))) rmSync(file, { force: true })
     if (!existsSync(file)) {
         try {
             await getSnapshotsJsonl(sessionId, file + '.tmp')
             if (statSync(file + '.tmp').size > config.clip.maxCacheMb * 1024 * 1024) throw new PostHogError('Recording too large for snapshot cache', 413)
+            if (deletedSnapshots.has(sessionId)) throw new PostHogError('Recording deleted', 404)
             renameSync(file + '.tmp', file)
         } finally { rmSync(file + '.tmp', { force: true }) }
     }
@@ -167,18 +173,57 @@ async function fetchSnapshotsFile(sessionId: string): Promise<string> {
     return file
 }
 
-/** Deletes the oldest cached snapshot files once the cache passes CLIP_CACHE_MAX_MB. */
-export function pruneCache(dir: string, protectedFile: string): void {
+/** Age bounds raw replay retention even when the size budget is never reached. */
+export function pruneCache(dir: string, protectedFile?: string, now = Date.now()): void {
+    if (!existsSync(dir)) return
     const files = readdirSync(dir)
-        .filter((f) => f.endsWith('.jsonl'))
+        .filter((f) => f.endsWith('.jsonl') || f.endsWith('.jsonl.tmp'))
         .map((f) => ({ f: join(dir, f), ...statSync(join(dir, f)) }))
         .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    let total = statSync(protectedFile).size
+    let total = protectedFile && existsSync(protectedFile) ? statSync(protectedFile).size : 0
     for (const x of files) {
         if (x.f === protectedFile) continue
         total += x.size
-        if (total > config.clip.maxCacheMb * 1024 * 1024 && ![...snapshotUses.values()].some(use => use.files.has(x.f))) rmSync(x.f, { force: true })
+        if ((total > config.clip.maxCacheMb * 1024 * 1024 || now - x.mtimeMs > config.clip.snapshotMaxDays * 86_400_000) && ![...snapshotUses.values()].some(use => use.files.has(x.f))
+            && ![...snapshotFlights.keys()].some(id => x.f.startsWith(join(dir, id.replace(/[^A-Za-z0-9_-]/g, '') + '_')))) rmSync(x.f, { force: true })
     }
+}
+
+// Retention is authoritative, including raw files left by interrupted downloads or renders.
+export function deleteReplayCache(sessionId: string): void {
+    const sid = sessionId.replace(/[^A-Za-z0-9_-]/g, '')
+    if (!sid || sid !== sessionId) return
+    deletedSnapshots.add(sessionId) // An in-flight download must not recreate content after deletion.
+    for (const sub of ['snapshots', 'render']) {
+        const dir = join(config.clip.cacheDir, sub)
+        if (existsSync(dir)) for (const name of readdirSync(dir)) {
+            if (name.startsWith(sid + '_')) rmSync(join(dir, name), { recursive: true, force: true })
+        }
+    }
+}
+pruneCache(join(config.clip.cacheDir, 'snapshots'))
+
+/** Seconds from the recording's start to the session's last event. The recorder sends nothing while the page
+ * does not change, so an idle session's recording can span 1 s while the person sat on it for a minute: that
+ * stretch is the still page, and a clip of it must not be refused (replay check 2026-11-17, idle persona). */
+async function sessionEndS(sessionId: string, recordingStart: string, query = hogql): Promise<number> {
+    const start = Date.parse(recordingStart)
+    if (!Number.isFinite(start)) return 0
+    try {
+        const [row] = await query(`SELECT max(timestamp) AS last FROM events WHERE $session_id = {sid} AND timestamp >= {from} AND timestamp < {to}`,
+            { sid: sessionId, from: new Date(start - 3_600_000).toISOString(), to: new Date(start + 86_400_000).toISOString() })
+        const last = Date.parse(String(row?.last ?? ''))
+        return Number.isFinite(last) ? Math.max(0, (last - start) / 1000) : 0
+    } catch { return 0 } // the recording's own length still applies
+}
+
+export async function clipRange(req: ClipRequest, deps: { query?: typeof hogql } = {}): Promise<ClipRequest> {
+    const meta = await getRecording(req.sessionId)
+    const recorded = Number(meta.recording_duration) || (Date.parse(meta.end_time) - Date.parse(meta.start_time)) / 1000
+    const length = Math.max(Number.isFinite(recorded) ? recorded : 0, await sessionEndS(req.sessionId, meta.start_time, deps.query))
+    const start = Math.max(0, Math.floor(req.startOffsetS))
+    if (!(length > 0) || start >= length) throw new PostHogError('Clip starts beyond recording end', 400)
+    return { sessionId: req.sessionId, startOffsetS: start, durationS: Math.min(Math.max(1, Math.round(req.durationS)), length - start) }
 }
 
 export function clipName(req: ClipRequest): string {
@@ -203,9 +248,14 @@ export function renderClip(req: ClipRequest, owner?: string, onStart?: () => voi
 
 function cachedClip(req: ClipRequest): Clip | undefined {
     const name = clipName(req), file = join(config.clip.outDir, name)
-    if (!existsSync(file)) return undefined
-    const start = Math.max(0, Math.floor(req.startOffsetS)), end = start + Math.max(1, Math.round(req.durationS))
-    return { session_id: req.sessionId, file, name, start_offset_s: start, end_offset_s: end, video_duration_s: end - start, size_bytes: statSync(file).size, render_s: 0, cached: true }
+    if (!existsSync(file) || !existsSync(file + '.json')) return undefined
+    try {
+        const meta = JSON.parse(readFileSync(file + '.json', 'utf8'))
+        if (meta.version !== 2) return undefined // Old renders may include content past the requested end.
+        const duration = mp4Duration(file)
+        return { session_id: req.sessionId, file, name, start_offset_s: meta.start, end_offset_s: meta.start + duration,
+            video_duration_s: duration, size_bytes: statSync(file).size, render_s: 0, cached: true }
+    } catch { return undefined }
 }
 
 async function renderUnqueued(req: ClipRequest): Promise<Clip> {
@@ -213,8 +263,8 @@ async function renderUnqueued(req: ClipRequest): Promise<Clip> {
     const outDir = config.clip.outDir
     mkdirSync(outDir, { recursive: true, mode: 0o700 })
     const file = join(outDir, name)
-    const start = Math.max(0, Math.floor(req.startOffsetS))
-    const end = start + Math.max(1, Math.round(req.durationS))
+    const range = await clipRange(req)
+    const start = range.startOffsetS, end = start + range.durationS
     // Re-checked inside the queue: an identical request may have finished while this one waited.
     const cached = cachedClip(req)
     if (cached) return cached
@@ -223,23 +273,29 @@ async function renderUnqueued(req: ClipRequest): Promise<Clip> {
         const { r, pool, html } = await getEngine()
         const work = join(config.clip.cacheDir, 'render', name.replace(/\.mp4$/, ''))
         return withRenderWork(work, async () => {
-            const out = await r.rasterizeFile(pool, html, input, work, {
+            await r.rasterizeFile(pool, html, input, work, {
                 start_offset_s: start,
                 end_offset_s: end,
+                trim: range.durationS,
                 playback_speed: 1,
                 skip_inactivity: false,
                 show_metadata_footer: true,
-                recording_fps: 12,
+                // A fractional recording tail still needs an integral number of frames.
+                recording_fps: Math.ceil(range.durationS * 12) / range.durationS,
                 output_format: 'mp4',
             })
+            if (deletedSnapshots.has(req.sessionId)) throw new PostHogError('Recording deleted', 404)
+            const duration = mp4Duration(join(work, 'video.mp4'))
+            if (Math.abs(duration - range.durationS) > 0.002) throw new Error('Rendered MP4 duration does not match the clip range')
             moveFile(join(work, 'video.mp4'), file)
+            writeFileSync(file + '.json', JSON.stringify({ version: 2, start, end: start + duration }), { mode: 0o600 })
             return {
                 session_id: req.sessionId,
                 file,
                 name,
                 start_offset_s: start,
-                end_offset_s: end,
-                video_duration_s: Number(out.video_duration_s ?? end - start),
+                end_offset_s: start + duration,
+                video_duration_s: duration,
                 size_bytes: statSync(file).size,
                 render_s: (Date.now() - t0) / 1000,
                 cached: false,

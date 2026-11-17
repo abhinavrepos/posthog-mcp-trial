@@ -162,7 +162,7 @@ test('client counts and disappeared-user counts are exact while identities are b
 })
 
 // Every direct HogQL call is audited, including calls inside Promise.all (not only `await hogql`).
-test('all remaining core HogQL calls have a timestamp scope or the replay-metadata exception', () => {
+test('all remaining core HogQL calls have a timestamp scope or a documented session lookup', () => {
     const inherited: Record<string, string> = { 'impact.ts': 'base has timestamp; failure-rate query has its own bound', 'usage.ts': 'scope has timestamp', 'aggregate.ts': 'scope has timestamp' }
     for (const file of readdirSync('src/core').filter((f) => f.endsWith('.ts'))) {
         const source = readFileSync(`src/core/${file}`, 'utf8')
@@ -171,6 +171,10 @@ test('all remaining core HogQL calls have a timestamp scope or the replay-metada
             if (/timestamp\s*(?:>=|>|<|<=)/i.test(query)) continue
             if (file === 'incidents.ts' && query.includes('raw_session_replay_events')) {
                 assert.match(source, /Query audit exception: replay metadata keyed by explicit session ids/); continue
+            }
+            if (file === 'recording-info.ts') {
+                assert.match(source, /Session-scoped: server-time bounds would discard moments/);
+                assert.match(query, /properties\.\$session_id.*\{sid\}/); assert.match(query, /LIMIT 500/); continue
             }
             assert.ok(inherited[file] && /\$\{(?:base|scope)\}/.test(query), `${file}: query needs a timestamp bound or audit reason: ${query}`)
         }

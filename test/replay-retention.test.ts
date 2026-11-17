@@ -11,6 +11,7 @@ Object.assign(process.env, {
     TRIAGE_DB: join(dir, 'main.db'),
     TASKS_DB: join(dir, 'tasks.db'),
     CLIP_OUT_DIR: join(dir, 'clips'),
+    CLIP_CACHE_DIR: join(dir, 'cache'),
     POSTHOG_HOST: 'http://posthog.test',
     POSTHOG_PROJECT_ID: '1',
     POSTHOG_PROJECT_TOKEN: 'phc_test',
@@ -20,7 +21,7 @@ mkdirSync(join(dir, 'clips'))
 const D = await import('../src/core/db.ts')
 const R = await import('../src/service/replayretention.ts')
 const { handleAdmin } = await import('../src/service/admin.ts')
-const { storeClip, setSaved, getClip } = await import('../src/service/replays.ts')
+const { storeClip, setSaved, getClip, jobView } = await import('../src/service/replays.ts')
 const { readAudit } = await import('../src/service/access.ts')
 after(() => { D.db.close(); rmSync(dir, { recursive: true, force: true }) })
 
@@ -392,4 +393,31 @@ test('weekly bounded rescans catch late arrivals behind the persistent watermark
     const resumed = await R.runReplayRetention(deps({}, new Date('2026-11-22T10:30:00Z')))
     assert.equal(resumed.already_gone, 2); assert.equal(resumed.error, undefined)
     assert.equal(ph.queries.at(-1)!.values.after_id, 'late')
+})
+
+
+test('recording deletion removes raw snapshots, partial downloads and render work, preserving other sessions', async () => {
+    setDays(14)
+    ph.sessions = [{ id: 'cache-old', start: day('2026-10-01T00:00:00Z') }]
+    for (const sub of ['snapshots', 'render']) {
+        const folder = join(dir, 'cache', sub); mkdirSync(folder, { recursive: true })
+        for (const name of ['cache-old_123.jsonl', 'cache-old_456.jsonl.tmp', 'cache-old_0-30', 'cache-other_123.jsonl']) writeFileSync(join(folder, name), 'synthetic')
+    }
+    await R.runReplayRetention(deps({ LENS_REPLAY_RETENTION_DRY_RUN: '1' }))
+    assert.ok(existsSync(join(dir, 'cache', 'snapshots', 'cache-old_123.jsonl')))
+    await R.runReplayRetention(deps())
+    for (const sub of ['snapshots', 'render']) {
+        for (const name of ['cache-old_123.jsonl', 'cache-old_456.jsonl.tmp', 'cache-old_0-30']) assert.equal(existsSync(join(dir, 'cache', sub, name)), false)
+        assert.ok(existsSync(join(dir, 'cache', sub, 'cache-other_123.jsonl')))
+    }
+})
+
+
+test('regenerating a clip replaces old range metadata used by the page and comments', () => {
+    const clip = { name: 'metadata_0-120.mp4', session_id: 'metadata', start_offset_s: 0, end_offset_s: 120 }
+    storeClip(clip, {}, 'person')
+    storeClip({ ...clip, end_offset_s: 60.003 }, {}, 'person')
+    const record = getClip(clip.name)!
+    assert.equal(record.end_s, 60.003)
+    assert.match(jobView({ id: 'metadata', state: 'done', owner: 'person', session_id: 'metadata', start_s: 0, length_s: 120, info: {} as never, created_at: Date.now(), clip: record }).clip!.range, /60.003 s/)
 })

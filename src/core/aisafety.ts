@@ -146,9 +146,10 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
         // UUIDs (session ids such as 019b55aa-...-123456789012) and release versions keep their digits,
         // or the links break and the ids cannot be passed to the next tool.
         // A link keeps its path, but query values that look like money are masked (?notional=250000);
-        // id-like parameters (t, id, session, version...) keep their digits so links still work.
+        // id-like parameters (t, id, session, version...) keep their digits so links still work; so does a clip file
+        // name (?clip=<session>_<start>-<end>.mp4): a session id with 5+ digits in a row was masked and the link died.
         s = s.replace(/https?:\/\/[^\s<>"'`]+/g, (url) => keep(url.replace(/([?&])([^=&#]+)=([^&#]*)/g, (m, sep, k, v) =>
-            /(?:^|_)(?:id|uuid|t|ts|time|session|sid|page|p|v|ver|version)$/i.test(k) || maskAmounts(v) === v ? m : `${sep}${k}=<amount>`)))
+            /(?:^|_)(?:id|uuid|t|ts|time|session|sid|page|p|v|ver|version)$/i.test(k) || k === 'clip' && /^[\w-]+_\d+-\d+\.mp4$/.test(decodeURIComponent(v)) || maskAmounts(v) === v ? m : `${sep}${k}=<amount>`)))
         s = s.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, keep)
         s = s.replace(/\b\d{1,2}(?:\.\d{1,2}){2}\b/g, keep)
         // A release named after the app ("Reval 26.3") is a label, like 26.3.1 above; the amount pass read 26.3 as cash.

@@ -15,6 +15,8 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { appEvents, columns, dialogLabel, required, toRaw, toSteps, type AppEvents, type Step, type RawEvent } from './appevents.ts'
 import { config, ROOT } from './config.ts'
+import { recordingSpans, type RecordingSpan } from './incidents.ts'
+import { clockShift } from './replaynet.ts'
 import { hogql, replayUrl } from './posthog.ts'
 import { P } from './props.ts'
 import { workflowEpisodes } from './workflows.ts'
@@ -224,12 +226,14 @@ const bucket = (s: number) => { let i = 0; while (i + 1 < DURATION_BUCKETS.lengt
 /** One slice ends at the first good submit reply; a terminal slice uses its last submitted dialog.
  * A failed submit followed by a successful retry is one attempt, including its errors.
  */
-export function extractAttempts(sessions: Step[][], reg: AppEvents): TaskAttempt[] {
+export function extractAttempts(sessions: Step[][], reg: AppEvents, recordings = new Map<string, RecordingSpan>()): TaskAttempt[] {
     const excluded = new Set([...reg.dialogs.menu, ...reg.dialogs.messages, ...reg.dialogs.notices])
     const result: TaskAttempt[] = []
     for (const session of sessions) {
         if (!session.length) continue
         const first = session.reduce((a, b) => a.ts < b.ts || (a.ts === b.ts && a.i < b.i) ? a : b)
+        const recording = recordings.get(first.raw.sid)
+        const shift = clockShift(session.map(s => ({ ts: s.ts, ctime: s.raw.ctime })))
         for (const ep of workflowEpisodes([session], reg)) {
             let start = 0
             let submits = new Map<number, Step>()
@@ -239,8 +243,8 @@ export function extractAttempts(sessions: Step[][], reg: AppEvents): TaskAttempt
                 for (const s of slice) if (s.kind === 'open' && s.dialog && !excluded.has(s.dialog) && path.at(-1) !== s.dialog) path.push(s.dialog)
                 if (path.at(-1) !== submit.dialog) path.push(submit.dialog)
                 const errors = slice.filter((s) => (s.kind === 'message' || s.kind === 'notice') && s.outcome === 'error')
-                const clock = a.raw.ctime !== undefined && first.raw.ctime !== undefined
-                    ? a.raw.ctime - first.raw.ctime : Date.parse(a.ts) - Date.parse(first.ts)
+                const clock = recording ? Date.parse(a.ts) + shift - Date.parse(recording.start)
+                    : a.raw.ctime !== undefined && first.raw.ctime !== undefined ? a.raw.ctime - first.raw.ctime : Date.parse(a.ts) - Date.parse(first.ts)
                 result.push({ day: first.ts.slice(0, 10), client: first.raw.client || '',
                     user: (first.raw.user || '').split(config.properties.distinctIdSeparator).at(-1) || '', session_id: first.raw.sid,
                     task_id: `t_${submit.dialog}`, path: path.length > 8 ? [...path.slice(0, 3), '…', ...path.slice(-4)] : path,
@@ -794,14 +798,11 @@ export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits
         if (events >= MAX_EVENTS) truncated = true
     }
     for (const ev of by.values()) sessions.push(toSteps(ev, reg))
-    const attempts = extractAttempts(sessions, reg)
-    const sessionFirst = new Map(sessions.filter((s) => s.length).map((s) => [s[0].raw.sid, s[0]]))
-    for (const a of attempts) {
-        a.day = day
-        const first = firsts.get(a.session_id)!, step = sessionFirst.get(a.session_id)!
-        const ctime = Number(first.first_ctime) * 1000
-        a.offset_s += Math.max(0, step.raw.ctime !== undefined && ctime > 0 ? (step.raw.ctime - ctime) / 1000 : (Date.parse(step.ts) - Date.parse(String(first.first_ts))) / 1000)
-    }
+    // Recording spans only sharpen replay offsets: a failed lookup must not fail the day (offsets then fall back
+    // to the session's first event, as before).
+    const spans = await recordingSpans([...by.keys()], q).catch(() => new Map<string, RecordingSpan>())
+    const attempts = extractAttempts(sessions, reg, spans)
+    for (const a of attempts) a.day = day
     const finishes = new Map<string, Map<string, number>>()
     const doneEnds = new Set(attempts.filter((a) => a.outcome === 'done').map((a) => JSON.stringify([a.session_id, a.ended_at, a.task_id])))
     for (const session of sessions) {

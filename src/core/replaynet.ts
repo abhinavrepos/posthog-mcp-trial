@@ -6,6 +6,7 @@
 // Only the method, the path (ids and query left out), the status and the timing are kept. Request and
 // response bodies, even when recorded, are never read.
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 
 import type { Step } from './appevents.ts'
 
@@ -35,14 +36,15 @@ export function pathTemplate(url: string): string {
 }
 
 /** The page's own calls (fetch, XHR, navigation) from a recording's JSONL ([windowId, event] lines). */
-export function parseNetwork(jsonl: string): Request[] {
+export function parseNetwork(jsonl: string, seen = new Set<string>()): Request[] {
     const out: Request[] = []
     for (const line of jsonl.split('\n')) {
         if (!line.includes('rrweb/network@1')) continue
-        let ev: any
+        let ev: any, window = ''
         try {
             const parsed = JSON.parse(line)
             ev = Array.isArray(parsed) ? parsed[1] : parsed
+            window = String(Array.isArray(parsed) ? parsed[0] : '')
         } catch {
             continue
         }
@@ -57,19 +59,14 @@ export function parseNetwork(jsonl: string): Request[] {
             const start = Number.isFinite(Number(r.timestamp)) && Number(r.timestamp) > 1e12 ? Number(r.timestamp) : origin && Number.isFinite(startTime) ? origin + startTime : Number(ev.timestamp)
             const ms = Number.isFinite(Number(r.endTime)) && Number.isFinite(startTime) && Number(r.endTime) >= startTime ? Number(r.endTime) - startTime : Number(r.duration) || 0
             const status = Number(r.responseStatus ?? r.status)
+            // Exact browser identity, before templating; no private URL survives this parse.
+            const key = createHash('sha256').update(JSON.stringify([window, r.name, String(r.method || 'GET').toUpperCase(), start])).digest('hex')
+            if (seen.has(key)) continue
+            seen.add(key)
             out.push({ path: pathTemplate(r.name), method: String(r.method || 'GET').toUpperCase(), status: status > 0 ? status : undefined, start, ms: Math.round(ms) })
         }
     }
-    // The recorder can report a request twice (performance entry and fetch wrapper): keep one.
-    const seen = new Set<string>()
-    return out
-        .sort((a, b) => a.start - b.start)
-        .filter((r) => {
-            const k = `${r.method} ${r.path} ${Math.round(r.start / 50)}`
-            if (seen.has(k)) return false
-            seen.add(k)
-            return true
-        })
+    return out.sort((a, b) => a.start - b.start)
 }
 
 export function networkFromFile(file: string): Request[] {
@@ -92,13 +89,15 @@ export function attemptTimings(steps: Step[], requests: Request[], clockShiftMs 
     const window = opts.startWindowMs ?? 3000
     const out: AttemptTiming[] = []
     const acts = steps.filter((s) => s.kind !== 'message' && s.kind !== 'notice' && s.kind !== 'other')
+    const assigned = new Set<Request>()
     for (const s of steps) {
         if (s.kind !== 'submit') continue
         const t = Date.parse(s.ts) + clockShiftMs
         const next = acts.find((a) => a.i > s.i)
         const until = Math.min(t + window, next ? Date.parse(next.ts) + clockShiftMs : Infinity)
-        const calls = requests.filter((r) => r.start >= t - 500 && r.start <= until)
+        const calls = requests.filter((r) => !assigned.has(r) && r.start >= t - 500 && r.start < until)
         if (!calls.length) continue
+        for (const call of calls) assigned.add(call)
         const slow = calls.reduce((a, b) => (b.ms > a.ms ? b : a))
         out.push({
             step: s.i,

@@ -1,3 +1,4 @@
+import { deleteReplayCache } from '../core/clip.ts'
 // Rolling session-replay retention (docs/replay-retention.md).
 //
 // An admin sets replay_retention_days on the admin page (off by default: nothing is ever deleted). Once a
@@ -261,6 +262,7 @@ export async function runReplayRetention(deps: Partial<Deps> = {}): Promise<RunR
                 if (typeof r === 'object') { result.failed++; result.error = r.error; break outer }
                 if (r === 'deleted') result.deleted++
                 else result.already_gone++
+                deleteReplayCache(rec.id)
                 mark = rec
                 setSetting(WATERMARK, mark) // after every delete, so a crash loses nothing
             }

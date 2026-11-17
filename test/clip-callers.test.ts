@@ -105,3 +105,25 @@ test('web and MCP submissions share the pending cap and overflow maps to busy', 
         render: req => limiter.run(req.sessionId), record: async () => { assert.fail('must not record') }, backgroundError: () => {},
     }), error => { assert.equal(toolError(error,'get_replay_link','test').kind,'busy'); return true })
 })
+
+
+test('get_replay_link reports the actual fractional MP4 duration and records the clamped range', async () => {
+    const clamped = { ...clip, end_offset_s: 2.003, video_duration_s: 2.003 }
+    const session = await mcp(async () => clamped, async c => { assert.equal(c.end_offset_s, 2.003) })
+    try { assert.match(JSON.stringify(await session.call()), /MP4 clip, 2.003 s/) }
+    finally { await session.close() }
+})
+
+
+test('the replay worker publishes the produced duration after a recording-end clamp', async () => {
+    const entry = { id: 'clamp', state: 'queued', owner: 'person', session_id: 'session', start_s: 68, length_s: 30, info: {}, created_at: Date.now() } as ReplayJob
+    const short = { ...clip, start_offset_s: 68, end_offset_s: 70.003, video_duration_s: 2.003 }
+    const queue = [entry]
+    createReplayWorker(queue, {
+        render: async req => { assert.equal(req.durationS, 30); return short },
+        store: c => { assert.equal(c.end_offset_s, 70.003); return { holders: ['person'] } as ClipRecord },
+        audit() {}, prune() {},
+    })()
+    await turn()
+    assert.equal(entry.length_s, 2.003); assert.equal(entry.state, 'done')
+})

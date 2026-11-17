@@ -360,7 +360,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
         {
             title: 'When did this client hit a problem?',
             description:
-                `Finds the sessions where a ${A} client, or one of its users, hit errors, rage clicks or dead clicks, with screens, releases and replay links. Use the Lens tool session_story for the event timeline and get_replay_link for a replay link.`,
+                `Finds the sessions where a ${A} client, or one of its users, hit errors (${A}'s own error messages and exceptions), rage clicks or dead clicks, with screens, releases and replay links. Use the Lens tool session_story for the event timeline and get_replay_link for a replay link.`,
             inputSchema: {
                 client: z.string().describe(`Client: ${config.properties.client}, e.g. ${privacyMode() === 'private' ? 'Client 100 (codename)' : 'C123'}; name or user email also resolved by Lens.`),
                 when,
@@ -419,7 +419,7 @@ export function registerTools(server: McpServer, ai?: TriageAi, caller?: Pick<Ch
                 })
                 const page = `${config.service.publicUrl}/replays?clip=${encodeURIComponent(clip?.name ?? clipName(request))}`
                 if (!clip) lines.push(`The MP4 is still rendering and will appear on the clip page (sign-in and the "Watch clips" role needed): ${page}`)
-                else lines.push(`MP4 clip, ${Math.round(clip.video_duration_s)} s, on the clip page (sign-in and the "Watch clips" role needed): ${page}`)
+                else lines.push(`MP4 clip, ${clip.video_duration_s} s, on the clip page (sign-in and the "Watch clips" role needed): ${page}`)
             } catch (e) {
                 const mapped=toolError(e,'get_replay_link')
                 lines.push(`No MP4 clip is available. Use the PostHog replay link above. Correlation id: ${mapped.id}.`)

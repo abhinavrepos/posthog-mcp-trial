@@ -190,6 +190,7 @@ test('ingest: one session query, 50,000-event keyset pages with timestamp ties, 
     const fake = async (sql: string, values: Record<string, unknown> = {}) => {
         assert.match(sql, /LIMIT \d+/)
         assert.equal(sql.includes(now), false, 'dates must be bound')
+        if (sql.includes('raw_session_replay_events')) return []
         assert.match(sql, /\$session_id/, 'sessions matched on the $session_id column')
         if (sql.includes('GROUP BY sid')) { sessionQueries++; return ids }
         if (sql.includes('{end_sid}')) {
@@ -451,6 +452,7 @@ test('session cap bounds both event pages to the deterministic admitted session 
     let pages = 0
     await ingestDay(d, async (sql, values) => {
         if (sql.includes('first_ctime')) return ids
+        if (sql.includes('raw_session_replay_events')) return []
         pages++
         assert.match(sql, /\$session_id <= \{last_sid\}/)
         assert.match(sql, /ORDER BY \$session_id LIMIT 100000\)/)
@@ -460,4 +462,24 @@ test('session cap bounds both event pages to the deterministic admitted session 
     assert.equal(pages, 2)
     assert.equal(tasksDb.prepare('SELECT attempts FROM task_ingest WHERE day=?').get(d)!.attempts, 1)
     assert.equal(tasksDb.prepare('SELECT truncated FROM task_ingest WHERE day=?').get(d)!.truncated, 1)
+})
+
+
+test('task replay offsets use recording start and browser clock, including during ingest', async () => {
+    reset()
+    const start = Date.parse(`${now}T09:58:00Z`)
+    const events = [submit(0, 'DlgOther'), reply(1), raw(60, 'DlgSave'), submit(61), reply(62)].map(e => ({ ...e, ctime: Date.parse(e.ts) + 30_000 }))
+    const recordings = new Map([['session', { session_id: 'session', start: new Date(start).toISOString(), end: `${now}T10:05:00Z` }]])
+    assert.equal(extractAttempts([toSteps(events, reg)], reg, recordings)[1].offset_s, 210)
+    let keys = false
+    await ingestDay(now, async sql => {
+        if (sql.includes('raw_session_replay_events')) return [...recordings.values()]
+        if (sql.includes('GROUP BY sid')) return [{ sid: 'session', first_ts: events[0].ts, first_ctime: events[0].ctime! / 1000 }]
+        if (sql.includes('{end_sid}')) return events.map((e, i) => ({ ...e, ctime: e.ctime! / 1000, event_uuid: String(i) }))
+        if (keys) return []
+        keys = true
+        return events.map((e, i) => ({ sid: e.sid, ts: e.ts, event_uuid: String(i) }))
+    })
+    const stored = tasksDb.prepare("SELECT offset_s FROM task_attempts WHERE task_id = 't_DlgSave'").get() as { offset_s: number }
+    assert.equal(stored.offset_s, 210)
 })

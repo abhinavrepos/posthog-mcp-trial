@@ -2,6 +2,7 @@
 // clipping. All of it comes from event data; nothing is read from the recording itself.
 import { elementLabel } from './incidents.ts'
 import { getRecording, hogql } from './posthog.ts'
+import { clockShift } from './replaynet.ts'
 import { P } from './props.ts'
 
 export interface Moment {
@@ -25,8 +26,9 @@ export interface RecordingInfo {
 export async function recordingInfo(sessionId: string): Promise<RecordingInfo> {
     const meta = await getRecording(sessionId)
     const start = Date.parse(meta.start_time)
+    // Session-scoped: server-time bounds would discard moments when the browser clock is skewed.
     const rows = await hogql(
-        `SELECT event, timestamp, toString(properties.$pathname) AS path,
+        `SELECT event, timestamp, toFloat(properties.$time) AS ctime, toString(properties.$pathname) AS path,
                 coalesce(nullIf(toString(${P.email}), ''), distinct_id) AS user,
                 toString(${P.clientName}) AS client, toString(${P.version}) AS version,
                 toString(properties.$exception_types[1]) AS etype, toString(properties.$exception_values[1]) AS evalue,
@@ -34,19 +36,17 @@ export async function recordingInfo(sessionId: string): Promise<RecordingInfo> {
          FROM events
          WHERE toString(properties.$session_id) = {sid}
            AND event IN ('$pageview', '$exception', '$rageclick', '$dead_click')
-           AND timestamp >= {from} AND timestamp <= {to}
          ORDER BY timestamp
          LIMIT 500`,
         {
             sid: sessionId,
-            from: new Date(start - 60_000).toISOString(),
-            to: new Date(Date.parse(meta.end_time) + 60_000).toISOString(),
         }
     )
+    const shift = clockShift(rows.map(r => ({ ts: String(r.timestamp), ctime: Number(r.ctime) * 1000 })))
     const moments: Moment[] = []
     const pages: string[] = []
     for (const r of rows) {
-        const offset = Math.max(0, (Date.parse(String(r.timestamp)) - start) / 1000)
+        const offset = Math.max(0, (Date.parse(String(r.timestamp)) + shift - start) / 1000)
         const path = String(r.path || '')
         if (r.event === '$pageview') {
             if (path && pages.at(-1) !== path) pages.push(path)
@@ -58,6 +58,7 @@ export async function recordingInfo(sessionId: string): Promise<RecordingInfo> {
             moments.push({ offset_s: offset, kind: r.event === '$rageclick' ? 'rage click' : 'dead click', label: `on ${what}` })
         }
     }
+    moments.sort((a, b) => a.offset_s - b.offset_s)
     const first = rows[0]
     return {
         session_id: sessionId,

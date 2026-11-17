@@ -223,3 +223,10 @@ test('operational processing notes survive structured and transport passes; acti
     const dirty = { ...processing, note: 'Jane Doe jane@example.com ENV|01|C88|user3 paid 250000' }
     assert.doesNotMatch(safetyWith(dirty, ['Jane Doe']).note, /Jane Doe|jane@|ENV|250000/)
 })
+
+test('clip page links keep their file name in standard mode (a session id with 5+ digits was masked)', () => {
+    const link = 'http://lens.example/replays?clip=01a1eb05-cda6-7bc7-9e37-47ae27245aff_43-58.mp4'
+    assert.equal(safetyWith({ text: `MP4 clip on the clip page: ${link}` }, []).text, `MP4 clip on the clip page: ${link}`)
+    // an amount in another parameter is still masked
+    assert.match(safetyWith({ text: 'http://lens.example/x?notional=2500000&clip=a_1-2.mp4' }, []).text, /notional=<amount>/)
+})
