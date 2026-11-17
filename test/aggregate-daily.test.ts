@@ -96,7 +96,7 @@ test('finalized backfills reject empty and reduced source totals and disclose so
  ] as const) {
   storeAttempts(day,[],{finalized:true,analysisSessions:[]})
   tasksDb.prepare('UPDATE task_ingest SET sessions=2,events=10 WHERE day=?').run(day)
-  assert.equal(await ingestAggregateDaily(tasksDb,day,async()=>structuredClone(rows) as unknown as Record<string,unknown>[]),false)
+  assert.equal(await ingestAggregateDaily(tasksDb,day,async sql=>sql.includes('uniqExact') ? [{sessions: rows.length ? rows[0].sessions.length : 0, events: rows.reduce((n,r)=>n+r.n,0)}] : structuredClone(rows) as unknown as Record<string,unknown>[]),false)
   assert.equal(tasksDb.prepare('SELECT reason FROM aggregate_dimension_skipped WHERE day=?').get(day)?.reason,'source_expired')
   const result=await aggregateEvents({from:new Date(day),to:new Date(Date.parse(day)+DAY)})
   assert.equal(result.coverage.status,'unavailable');assert.match(JSON.stringify(result),/source_expired/)
@@ -106,4 +106,45 @@ test('finalized backfills reject empty and reduced source totals and disclose so
   const disclosed=analyticalResult('aggregate_events',{},jsonResult('Counts',result)) as {_lensJson:{value:{coverage:{status:string;reason:string}}}}
   assert.equal(disclosed._lensJson.value.coverage.status,'unavailable');assert.equal(disclosed._lensJson.value.coverage.reason,'source_expired')
  }
+})
+
+test('cross-midnight session-owned totals do not expire a valid event-day rollup', async () => {
+ const day='2026-06-01'
+ tasksDb.prepare('INSERT OR REPLACE INTO task_ingest VALUES (?,1,10,0,0,0,?,1)').run(day,'2026-06-04')
+ const rows=[{...Object.fromEntries(ROLLUP_DIMENSIONS.map(d=>[d,d==='event'?reg.events.screen:''])),n:1,users:['u'],sessions:['s']}]
+ assert.equal(await ingestAggregateDaily(tasksDb,day,async sql=>sql.includes('uniqExact') ? [{sessions:1,events:10}] : rows),true)
+ assert.equal(dailyAggregate(tasksDb,{from:new Date(day),to:new Date('2026-06-02')})!.totals.events,1)
+})
+
+test('coverage and rows share a read snapshot during concurrent replacement and roll back errors', async t => {
+ const {DatabaseSync}=await import('node:sqlite')
+ const {initAggregateDaily,dailyVocabulary}=await import('../src/core/aggregatedaily.ts')
+ const file=join(dir,'snapshot.db'),reader=new DatabaseSync(file),writer=new DatabaseSync(file)
+ reader.exec('PRAGMA journal_mode=WAL');initAggregateDaily(reader)
+ const day='2026-07-01',q={from:new Date(day),to:new Date('2026-07-02')}
+ const rows=[{...Object.fromEntries(ROLLUP_DIMENSIONS.map(d=>[d,d==='event'?reg.events.screen:''])),n:3,users:['u'],sessions:['s']}] as DailyRow[]
+ const prepare=reader.prepare.bind(reader)
+ let replace=false
+ t.mock.method(reader,'prepare',(sql:string)=>{
+  const statement=prepare(sql)
+  if (!sql.startsWith('SELECT count(*) n FROM aggregate_dimension_daily')) return statement
+  const get=statement.get.bind(statement)
+  t.mock.method(statement,'get',(...args:Parameters<typeof get>)=>{
+   const result=get(...args)
+   if (replace) {replace=false;writer.prepare('DELETE FROM aggregate_dimension_daily WHERE day=?').run(day)}
+   return result
+  })
+  return statement
+ })
+ try {
+  storeAggregateDaily(writer,day,rows);replace=true
+  assert.equal(dailyAggregate(reader,q)!.totals.events,3)
+  assert.equal(dailyAggregate(reader,q),undefined)
+  storeAggregateDaily(writer,day,rows);replace=true
+  assert.equal(dailyVocabulary(reader,q.from,q.to)!.total,3)
+  storeAggregateDaily(writer,day,rows)
+  writer.prepare('UPDATE aggregate_dimension_daily SET value=?').run(Buffer.from('invalid'))
+  assert.throws(()=>dailyAggregate(reader,q),/could not be decoded/)
+  reader.exec('BEGIN; ROLLBACK')
+ } finally {reader.close();writer.close()}
 })

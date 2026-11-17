@@ -14,6 +14,7 @@ Object.assign(process.env, { TRIAGE_DB: join(dir, 'm.db'), TASKS_DB: join(dir, '
 const { wrapTools } = await import('../src/mcp/tools.ts')
 const { installJobTools } = await import('../src/mcp/jobtools.ts')
 const { JobRunner } = await import('../src/core/jobs.ts')
+const { guardTransport } = await import('../src/mcp/anonymise.ts')
 const { posthogExec } = await import('../src/mcp/posthog-proxy.ts')
 const { isPosthogQuery, PosthogQueryGate } = await import('../src/mcp/posthog-query.ts')
 const { setAnonymise } = await import('../src/core/anonymise.ts')
@@ -28,7 +29,7 @@ async function setup(who: string, budgetMs = 5, upstreamOptions = opts) {
     installJobTools(server, wrapTools(server, false, { who }, { runner, budgetMs }))
     server.registerTool('posthog_exec', { inputSchema: { command: z.string() } }, async ({ command }) => posthogExec(command, upstreamOptions))
     const client = new Client({ name: 'test', version: '1' }), [a, b] = InMemoryTransport.createLinkedPair()
-    await server.connect(a); await client.connect(b)
+    await server.connect(a); guardTransport(a); await client.connect(b)
     return { client, runner, close: async () => { await client.close(); await server.close(); runner.close(); store.close() } }
 }
 const call = (c: Client, command: string) => c.callTool({ name: 'posthog_exec', arguments: { command } })
@@ -162,4 +163,20 @@ test('four analytics jobs across sessions share the global cap despite general w
         release[1](); release[2](); release[3](); await tick(); await tick()
         for (let i = 0; i < clients.length; i++) assert.ok(!(await poll(clients[i].client, handle(results[i]))).isError)
     } finally { for (const c of clients) await c.close() }
+})
+
+
+test('static PostHog docs retain numeric examples and schemas through tool and transport boundaries', async t => {
+    const docs = { content: [{ type: 'text', text: '"dateRange": {"date_from":"-180d"}, "minimum":-2147483648, "maximum":2147483647' }] }
+    const fake = fakeMcp(async () => Response.json({ id: 2, result: docs }))
+    t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => init.method === 'DELETE' ? new Response(null, { status: 202 }) : fake(JSON.parse(String(init.body)), init.signal))
+    const c = await setup('static-docs', 1000)
+    try {
+        for (const command of ['tools', 'info query-lifecycle', 'schema query-paths']) assert.deepEqual(await call(c.client, command), docs)
+        for (const command of ['call read-data-schema {}', 'info query-paths; call execute-sql {}', 'tools\ncall query-trends {}']) {
+            const result = await call(c.client, command)
+            assert.match(text(result), /<amount>/)
+            assert.doesNotMatch(text(result), /2147483648/)
+        }
+    } finally { await c.close() }
 })

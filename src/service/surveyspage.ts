@@ -137,7 +137,7 @@ td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
 .days svg{display:block;max-width:100%}
 .empty{color:var(--muted);padding:24px 0;text-align:center}
 .toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap}
-.ldlg{border:0;border-radius:14px;padding:0;width:min(560px,calc(100% - 32px));max-height:calc(100% - 32px);background:var(--card);color:var(--ink);box-shadow:0 24px 60px var(--line)}
+.ldlg{border:1px solid var(--line);border-radius:var(--r);padding:0;width:min(560px,calc(100% - 32px));max-height:calc(100% - 32px);background:var(--card);color:var(--ink);box-shadow:var(--pop)}
 .ldlg::backdrop{background:color-mix(in srgb,var(--ink) 55%,transparent)}
 .ldlg form{padding:20px 22px;display:flex;flex-direction:column;gap:12px}
 .ldlg h2{margin:0;font-size:19px}
@@ -178,10 +178,10 @@ main details p{overflow-wrap:anywhere}
 .ldlg .ack{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;font-size:14px;cursor:pointer;border:0;border-radius:0;background:var(--hover);color:var(--ink)}
 #page-msg:empty,#a-msg:empty,#l-msg:empty{margin:0}#page-msg[role=alert]:not(:empty){color:var(--err);border-left:3px solid var(--err);padding-left:12px}
 main{min-width:0}
-main h1{font-size:24px;line-height:32px;font-weight:650;margin:0}
+main h1{font-size:24px;line-height:32px;font-weight:600;margin:0}
 main .page-head{margin-bottom:24px;align-items:center}
 main .page-head p{margin:4px 0 0;font-size:14px;line-height:20px}
-main h2{font-size:16px;line-height:24px;font-weight:600;margin:0 0 12px}
+main h2{font-size:15px;line-height:24px;font-weight:600;margin:0 0 12px}
 main h3{font-size:14px;line-height:20px;font-weight:600;margin:0 0 8px}
 main input:not([type=checkbox]):not([type=radio]),main select{height:36px;min-height:36px;padding:7px 10px;font-size:13px;line-height:20px;max-width:100%;box-sizing:border-box}
 main button,main .btn{min-height:36px;font-size:13px;line-height:20px;white-space:nowrap;word-break:normal;overflow-wrap:normal}
@@ -203,7 +203,7 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .list .item[aria-current="true"]{border-color:var(--act);background:var(--accent-soft);box-shadow:inset 2px 0 var(--accent)}
 .list .item:hover{border-color:var(--act);background:var(--hover)}
 .head{justify-content:space-between;flex-wrap:wrap;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:start}
-#detail .head h2{font-size:22px!important;line-height:28px}
+#detail .head h2{font-size:15px;line-height:24px}
 .head .acts{display:flex;align-items:center;gap:8px;flex-wrap:nowrap}
 .head .acts details{position:relative}
 .head .acts details>summary{display:flex;align-items:center;min-height:36px;padding:7px 12px;border:1px solid var(--line-strong);border-radius:6px;font-size:13.5px;line-height:20px;box-sizing:border-box;white-space:nowrap}
@@ -214,12 +214,12 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .conf.ok{border-color:var(--good);background:transparent;padding-left:0;border:0;color:var(--muted);margin:12px 0;font-size:13px;line-height:20px}
 .conf details{margin:4px 0}
 .tile span{display:block;color:var(--muted);font-size:12px;line-height:16px}
-.tile b,.tile.secondary b{display:block;font-size:28px;line-height:32px;font-weight:650;margin-top:6px}
+.tile b,.tile.secondary b{display:block;font-size:28px;line-height:32px;font-weight:600;margin-top:6px}
 .tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px 16px;margin:16px 0}
 .secondary-metrics{display:flex;flex-wrap:wrap;gap:8px 24px;font-size:13px;color:var(--muted)}
 .secondary-metrics b{color:var(--ink);font-weight:600}
 .secondary-metrics+details{margin:8px 0 0}
-#detail .card{border:0;border-radius:0;padding:0;margin:0 0 28px;background:transparent;margin-bottom:24px}
+#detail .card{border:1px solid var(--line);border-radius:var(--r);padding:20px 24px;margin:0 0 20px;background:var(--card)}
 .q{border-top:1px solid var(--line);padding:16px 0}
 .q h3{margin:0 0 4px;font-size:14px;line-height:20px;font-weight:600}
 .bars .row{display:grid;align-items:center;font-size:13.5px;grid-template-columns:24px minmax(0,1fr) 32px;gap:12px;margin:8px 0}
@@ -230,7 +230,7 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .screen{position:relative;overflow:hidden;border:1px solid var(--line);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;height:320px;border-radius:8px;background:var(--hover)}
 .screen .bar{display:flex;align-items:center;gap:8px;padding:0 12px;height:28px;background:var(--muted)}
 .screen .bar i{display:block;border-radius:4px;width:40px;height:6px;background:var(--faint)}
-.screen .grid{position:absolute;border-radius:6px;background-size:100% 28px;opacity:.9;inset:40px 12px 12px;background:var(--card);background-image:linear-gradient(var(--line) 1px,transparent 1px);background-size:100% 28px}
+.screen .grid{position:absolute;border-radius:6px;background-size:100% 28px;opacity:.9;inset:40px 12px 12px;background:var(--card);background-size:100% 28px}
 .screen .note{position:absolute;left:14px;bottom:10px;z-index:1;margin:0;border:0;border-radius:3px;padding:2px 4px;background:var(--card);color:var(--muted);font-size:11px;line-height:16px}
 [id^="answers-status-"]:empty{display:none}
 @media(max-width:860px){main.wide{margin-top:0;border-radius:0;padding:20px 16px}
@@ -253,8 +253,8 @@ th,td{padding:8px 3px;font-size:12px}
 }
 </style></head>
 <body>${headerHtml(v, 'Surveys')}<main class="wide" id="main">
-<div class="layout">
-<section><div class="toolbar"><h1>Surveys</h1><select id="days" aria-label="Survey counts period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></div>
+<div class="toolbar page-head"><div><h1>Surveys</h1><p>Survey activity, results and launch options.</p></div><select id="days" aria-label="Survey counts period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></div>
+<div class="layout"><section>
 <p id="page-msg" class="small" role="status" aria-live="polite"></p><div class="list" id="list"><p class="empty">Loading…</p></div><div id="list-pager"></div>
 <p class="small"><a href="/replays/connect">Create a survey in chat</a></p><details><summary>How this works</summary><p class="small muted">Your survey role: ${SURVEY_ROLE_TEXT[v.role === 'admin' ? 'launch' : v.surveys || 'none']}.</p><p class="small muted">Make or change surveys in chat. Describe who should see it, when it appears and what to ask. New surveys stay as drafts until launched.</p></details></section>
 <section id="detail"><div class="card"><p class="empty">Choose a survey to see results and launch options.</p></div></section>

@@ -1,3 +1,7 @@
+export class ClipQueueError extends Error {
+    constructor() { super('The clip queue is full. Try again in a minute.') }
+}
+
 /** FIFO among eligible owners: a capped owner never blocks another person's work. */
 export function clipInteger(value: string | undefined, fallback: number, max: number): number {
     const n = Number(value)
@@ -47,6 +51,7 @@ export function createClipQueue<T>(render: (key: string) => Promise<T>, options:
                 }
                 return existing.promise
             }
+            if (flights.size >= 20) throw new ClipQueueError()
             let resolve!: (value: T) => void
             let reject!: (error: unknown) => void
             const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })

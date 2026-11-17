@@ -309,3 +309,45 @@ test('vertical dialog index avoids unrelated payloads and backfills legacy episo
     assert.deepEqual(historyCompletion(window,def),expected)
     assert.ok(tasksDb.prepare("SELECT 1 FROM workflow_episodes_daily WHERE day=? AND client='@header'").get(owner))
 })
+
+
+function rankedHistory() {
+    const day = '2026-08-12', window = { from: new Date(day), to: new Date('2026-08-13') }
+    const sessions = Array.from({ length: 16 }, (_, n) => [1, 2].map(i =>
+        toSteps(session(day, `rank-${n}-${i}`, 'RANK').map(s => ({ ...s.raw,
+            dialog: s.raw.dialog === 'DlgA' ? `DlgA${n}` : s.raw.dialog === 'DlgB' ? `DlgB${n}` : s.raw.dialog })), reg))).flat()
+    put(day, sessions)
+    return window
+}
+
+test('history discovery discloses ranking omissions before its response cap', async () => {
+    const { analyticalResult } = await import('../src/mcp/historyresult.ts')
+    const result = await discoverWorkflows(rankedHistory())
+    assert.equal(result.source, 'history')
+    assert.equal(result.total_workflows, 16)
+    assert.equal(result.discovered.length, 15)
+    assert.equal(result.truncated, true)
+    assert.equal(result.limits.returned_rows, 15)
+    assert.equal(result.limits.omitted_rows, 1)
+    const output = analyticalResult('discover_workflows', {}, { _lensJson: { label: 'Workflows', value: result } }) as any
+    assert.equal(output._lensJson.value.limits.omitted_rows, 1)
+})
+
+test('top pains discloses ranking omissions before its response cap', async (t) => {
+    const { topPains } = await import('../src/core/appevents.ts')
+    const { analyticalResult } = await import('../src/mcp/historyresult.ts')
+    const window = rankedHistory()
+    t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ columns: [], results: [] })))
+    const result = await topPains({ ...window, compare: 'none', max: 5 })
+    assert.equal(result.source, 'history')
+    assert.equal(result.total_pains, 16)
+    assert.equal(result.pains.length, 5)
+    assert.equal(result.truncated, true)
+    assert.equal(result.limits!.returned_rows, 5)
+    assert.equal(result.limits!.omitted_rows, 11)
+    const output = analyticalResult('top_pains', {}, { _lensJson: { label: 'Pains', value: result } }) as any
+    assert.equal(output._lensJson.value.limits.omitted_rows, 11)
+    const all = await topPains({ ...window, compare: 'none', max: 50 })
+    assert.equal(all.limits!.omitted_rows, 0)
+    assert.equal(all.truncated, false)
+})

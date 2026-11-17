@@ -259,3 +259,29 @@ test('proxy analytics and batched members share the PostHog concurrency gate thr
  const response=await result;assert.equal(fetched,2);assert.equal(JSON.parse(response.text).length,2)
  for(const release of releases)release()
 })
+
+
+test('proxy classifies static docs by request id across JSON and SSE batches; calls keep privacy', async t => {
+    const docs = { content: [{ type: 'text', text: '"date_from":"-180d", "minimum":-2147483648' }] }
+    const data = { content: [{ type: 'text', text: 'Jane Doe ENV|01|C88|user3 jane@example.com paid 250000' }] }
+    let sse = false
+    t.mock.method(globalThis, 'fetch', async () => {
+        const replies = [3, 4, 5].map(id => ({ jsonrpc: '2.0', id, result: id === 5 ? data : docs }))
+        return sse ? new Response(replies.map(r => 'data: ' + JSON.stringify(r) + '\n\n').join(''), { headers: { 'content-type': 'text/event-stream' } }) : Response.json(replies)
+    })
+    for (sse of [false, true]) {
+        const res = await invoke([call('info query-lifecycle', 3), call('schema query-paths', 4), call('call read-data-schema {}', 5)])
+        const replies = sse ? res.text.split('\n').filter(l => l.startsWith('data:')).map(l => JSON.parse(l.slice(5))) : JSON.parse(res.text)
+        assert.deepEqual(replies[0].result, docs); assert.deepEqual(replies[1].result, docs)
+        assert.doesNotMatch(JSON.stringify(replies[2]), /ENV|jane@|250000/)
+    }
+})
+
+test('duplicate batch ids cannot let a data call inherit the static-doc exception', async t => {
+    const result = { content: [{ type: 'text', text: 'ENV|01|C88|user3 jane@example.com paid 250000' }] }
+    t.mock.method(globalThis, 'fetch', async () => Response.json([{ id: 3, result }, { id: 3, result }]))
+    for (const requests of [[call('tools'), call('call read-data-schema {}')], [call('call read-data-schema {}'), call('tools')]]) {
+        const res = await invoke(requests)
+        assert.doesNotMatch(res.text, /ENV|jane@|250000/)
+    }
+})

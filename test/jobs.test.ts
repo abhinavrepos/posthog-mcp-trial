@@ -142,3 +142,23 @@ test('per-person detached analyses default to 8',()=>{
     try { const db=new DatabaseSync(':memory:'), r=new JobRunner(db); assert.equal((r as unknown as {perUser:number}).perUser,8); r.close(); db.close() }
     finally { process.env.LENS_JOBS_PER_USER=saved }
 })
+
+test('quick restart eventually fails abandoned leases and identical resubmits run', async () => {
+ let now=100000
+ const db=new DatabaseSync(':memory:'),a=new JobRunner(db,{now:()=>now}),p=pending()
+ const original=a.start('alice','slow',{},'r',()=>p)
+ await new Promise<void>(r=>setImmediate(r))
+ // Transfer the lease to a dead instance without graceful shutdown.
+ db.prepare("UPDATE analysis_jobs SET owner_instance='dead' WHERE id=?").run(original.id)
+ const b=new JobRunner(db,{now:()=>now})
+ try {
+  assert.equal(b.get('alice',original.id,'r').status,'working')
+  const joined=b.start('alice','slow',{},'r',()=>pending())
+  assert.equal(joined.id,original.id)
+  now+=90001;b.prune()
+  assert.equal(b.get('alice',original.id,'r').status,'failed')
+  await joined.done
+  const next=b.start('alice','slow',{},'r',()=>({promise:Promise.resolve(42)}))
+  assert.notEqual(next.id,original.id);assert.equal(await next.done,42)
+ } finally {a.close();b.close();db.close()}
+})

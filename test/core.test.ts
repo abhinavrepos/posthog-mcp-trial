@@ -165,7 +165,7 @@ describe('misc', () => {
     test('clip links need a valid, unexpired signature', async () => {
         const { createHmac } = await import('node:crypto')
         const exp = String(Math.floor(NOW.getTime() / 1000) + 60)
-        const sig = createHmac('sha256', 's3cret').update(`a.mp4.${exp}`).digest('base64url')
+        const sig = createHmac('sha256', 's3cret').update(`a.mp4.${exp}.0`).digest('base64url')
         assert.equal(verifyClipLink('a.mp4', exp, sig, 's3cret', NOW.getTime()), true)
         assert.equal(verifyClipLink('b.mp4', exp, sig, 's3cret', NOW.getTime()), false)
         assert.equal(verifyClipLink('a.mp4', exp, sig, 's3cret', NOW.getTime() + 120_000), false)

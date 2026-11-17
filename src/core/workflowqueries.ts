@@ -1,3 +1,4 @@
+import { historyLimits } from './historycoverage.ts'
 import { ToolInputError } from './toolinputerror.ts'
 import { comparisonWindow, type ComparisonOptions } from './comparison.ts'
 // Bounded queries for the pure workflow reader. PMs do not configure definitions.
@@ -55,12 +56,15 @@ function labels(sessions: Awaited<ReturnType<typeof workflowSessions>>['sessions
 
 export async function discoverWorkflows(q: Window & { limit?: number }) {
     const { historyDiscovery, analysisMeta } = await import('./analysishistory.ts')
-    const historical = historyDiscovery(q, q.limit)
+    const historical = historyDiscovery(q, Number.MAX_SAFE_INTEGER)
     const data = historical ? { sessions: [], sessions_selected: 0, rows_read: 0, truncated: false } : await workflowSessions(q)
+    // Count eligible ranked chains before applying the response limit.
+    const ranked = historical ?? discoverWorkflowChains(data.sessions, required(), { names: labels(data.sessions), window: q, limit: Number.MAX_SAFE_INTEGER })
+    const discovered = ranked.slice(0, q.limit ?? 15)
     return { window: { from: q.from.toISOString(), to: q.to.toISOString() }, client: q.clientId,
         ...analysisMeta(q, true),
-        discovered: historical ?? discoverWorkflowChains(data.sessions, required(), { names: labels(data.sessions), window: q, limit: q.limit }),
-        sessions_selected: data.sessions_selected, rows_read: data.rows_read, truncated: data.truncated,
+        discovered, total_workflows: ranked.length, limits: historyLimits(discovered.length, ranked.length - discovered.length),
+        sessions_selected: data.sessions_selected, rows_read: data.rows_read, truncated: data.truncated || discovered.length < ranked.length,
         note: 'Names use dialog titles and the most common confirmed submit/success-message template; ids encode only the ordered dialog codes. No setup needed. Chains of 2–4 contiguous dialog opens, consecutive repeats collapsed; search/menu navigation or 10 minutes idle starts a new episode. At least 2 distinct sessions; ranked by sessions × clients. Contained chains are removed when a longer chain has at least 80% of their session support. Outcomes count occurrences, separately completed and queued (accepted); either counts as done here. Durations end at the first matching outcome message. History combines unpruned daily candidates with exact distinct identities and exact duration distributions; sessions_selected and rows_read describe live reads (zero for history). Live reads page every selected session and event, bounded to the window plus one day on either side. Starts belong to this window. Longer sessions can be partial.' }
 }
 
@@ -151,11 +155,12 @@ export async function workflowCompletionReport(q: Window & { definition: Workflo
         const span = spans.get(e.session_id)
         if (span) e.replay_url = replayUrl(e.session_id, Math.max(0, (Date.parse(e.at) - Date.parse(span.start)) / 1000 - 10))
     }
+    const comparisonNote = !requestedBaseline ? 'Comparison disabled.' : +previous.to - +previous.from === +q.to - +q.from ? 'Previous window has equal length.' : `Previous window spans ${(+previous.to - +previous.from) / 86400000} days; current window spans ${(+q.to - +q.from) / 86400000} days.`
     const result = { workflow: definition, window: { from: q.from.toISOString(), to: q.to.toISOString() }, previous_window: { from: previous.from.toISOString(), to: previous.to.toISOString() },
         ...analysisMeta(q, true), comparison:{requested:requestedBaseline,status:q.compare==='none'?'none':comparable?'complete':'unavailable',reason:comparable?'Complete periods':'Baseline or current history incomplete; comparison omitted; no live baseline read'},
         overall: { now: now.overall, before: before.overall, trend: comparable ? trend(now.overall, before.overall) : null }, clients, clients_rest: rest(),
         sessions_selected: data.sessions_selected, rows_read: data.rows_read, truncated: data.truncated,
-        note: 'One start per episode opening the first dialog in the window. Funnel requires dialog opens in order, allowing other dialogs between steps. Done requires all steps and a matching submit/outcome in that episode; queued is separate from completed. Ad hoc workflows require completed. Failures count error submits; retries repeat the same dialog/button within 5 minutes after an error, before done. Dropout is the last reached step among abandoned episodes. Durations end at the outcome message. Full selected sessions can finish after the window; abandonment means no observed done before the episode ended. Sessions still active may change. Previous window has equal length. History evaluates compact daily episode statistics, combining all attempts with exact durations; sessions_selected and rows_read describe live reads (zero for history). Live reads page all selected sessions and events with a one-day margin at both window edges; longer sessions may be partial. Client rows show at most eight clients ranked by attempts across both periods; clients_rest contains totals for the rest. Replay links are for the person only.' }
+        note: 'One start per episode opening the first dialog in the window. Funnel requires dialog opens in order, allowing other dialogs between steps. Done requires all steps and a matching submit/outcome in that episode; queued is separate from completed. Ad hoc workflows require completed. Failures count error submits; retries repeat the same dialog/button within 5 minutes after an error, before done. Dropout is the last reached step among abandoned episodes. Durations end at the outcome message. Full selected sessions can finish after the window; abandonment means no observed done before the episode ended. Sessions still active may change. ' + comparisonNote + ' History evaluates compact daily episode statistics, combining all attempts with exact durations; sessions_selected and rows_read describe live reads (zero for history). Live reads page all selected sessions and events with a one-day margin at both window edges; longer sessions may be partial. Client rows show at most eight clients ranked by attempts across both periods; clients_rest contains totals for the rest. Replay links are for the person only.' }
     while (clients.length && JSON.stringify(result).length >= 29500) { clients.pop(); result.clients_rest = rest() }
     return result
 

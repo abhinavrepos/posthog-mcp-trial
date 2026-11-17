@@ -59,12 +59,12 @@ const STYLE = `.top{display:flex;justify-content:space-between;align-items:cente
 .grp{font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600;margin:16px 0 0}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:8px 40px}
 .sw{appearance:none;-webkit-appearance:none;width:42px!important;height:24px;min-height:0!important;padding:0!important;border-radius:999px;background:var(--line-strong);position:relative;cursor:pointer;flex:none;margin:0;border:0!important;transition:background .15s}
-.sw::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:var(--card);box-shadow:0 1px 2px var(--line);transition:left .15s}
+.sw::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:var(--card);box-shadow:0 1px 2px var(--line);transition:transform .15s}
 .sw:checked{background:var(--accent)}
-.sw:checked::after{left:21px}
+.sw:checked::after{transform:translateX(18px)}
 .sw:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.sw:disabled{opacity:.5;cursor:default}
-.off-area{opacity:.75}
+.sw:disabled{opacity:.65;cursor:not-allowed}
+.off-area{color:var(--muted)}
 .card .find{align-items:center;margin:0 0 16px}
 .stats{color:var(--muted);font-size:13px;margin:12px 0 0;padding-top:12px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px 24px}
 table.cn{width:100%;table-layout:fixed;border-collapse:collapse}
@@ -80,10 +80,10 @@ table.cn input{width:100%;min-width:0;margin:0}
 .find>div{width:280px;max-width:100%}
 .find input{width:100%;max-width:none}
 main{min-width:0}
-main h1{font-size:24px;line-height:32px;font-weight:650;margin:0}
+main h1{font-size:24px;line-height:32px;font-weight:600;margin:0}
 main .page-head{margin-bottom:24px;align-items:center}
 main .page-head p{margin:4px 0 0;font-size:14px;line-height:20px}
-main h2{font-size:16px;line-height:24px;font-weight:600;margin:0 0 12px}
+main h2{font-size:15px;line-height:24px;font-weight:600;margin:0 0 12px}
 main h3{font-size:14px;line-height:20px;font-weight:600;margin:0 0 8px}
 main input:not([type=checkbox]):not([type=radio]),main select{height:36px;min-height:36px;padding:7px 10px;font-size:13px;line-height:20px;max-width:100%;box-sizing:border-box}
 main button,main .btn{min-height:36px;font-size:13px;line-height:20px;white-space:nowrap;word-break:normal;overflow-wrap:normal}
@@ -168,8 +168,8 @@ function codenamesPage(v: Viewer): string {
     const on = anonymiseOn()
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Codenames · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}${STYLE}</style></head>
 <body>${headerHtml(v, 'Chat')}<main class="narrow">
-<div class="top"><h1>Codenames</h1><span class="badge ${on ? 'ok' : ''}">${esc(privacyMode())} mode</span></div>
-<p class="sub">${on ? 'Copilot only knows clients by codename. Ask about a client using its codename.' : 'Numbered client codenames for private mode.'}</p>
+<div class="top page-head"><div><h1>Codenames</h1>
+<p class="sub">${on ? 'Copilot only knows clients by codename. Ask about a client using its codename.' : 'Numbered client codenames for private mode.'}</p></div><span class="badge ${on ? 'ok' : ''}">${esc(privacyMode())} mode</span></div>
 ${on ? '<div class="alert" role="note">Names entered directly into Copilot are still sent to AI. Use codenames and start a new chat after enabling privacy.</div>' : ''}
 <div class="find"><span id="client-count">Loading clients…</span><div><label class="sr-only" for="find">Find a client</label><input id="find" type="search" placeholder="Find a client or codename"></div></div>
 <table class="cn"><caption class="sr-only">Who is who</caption><colgroup><col style="width:34%"><col style="width:46%"><col style="width:20%"></colgroup><thead><tr><th scope="col">Codename</th><th scope="col">Client</th><th scope="col"><span class="sr-only">Copy</span></th></tr></thead><tbody id="rows"><tr><td colspan="3">Loading…</td></tr></tbody></table>

@@ -5,7 +5,7 @@ const shift = (s: string) => new Date(Date.parse(s)+86400000).toISOString().slic
 export function historyCoverage(from: string, to: string, days: DayObservation[], through: string | null, dataset = 'task_history') {
     const ranges: { from: string; to_exclusive: string; reason: DayStatus; detail: string; retryable: boolean }[] = []
     for (const d of days) {
-        const detail = d.detail || ({ complete: 'Finalized retained daily statistics', pending: 'Day has not been fully processed', truncated: 'Ingestion hit a safety cap', source_expired: 'Source returned fewer sessions than previously retained; retained evidence was preserved', before_tracking: 'Before the first observed project event', query_failed: 'Source query failed; retry required' }[d.status])
+        const detail = d.detail || ({ complete: 'Finalized retained daily statistics', pending: 'Day has not been fully processed', truncated: 'Ingestion hit a safety cap', source_expired: 'Source returned fewer sessions or events than previously retained; retained evidence was preserved', before_tracking: 'Before the first observed project event', query_failed: 'Source query failed; retry required' }[d.status])
         const prev = ranges.at(-1)
         if (prev && prev.reason === d.status && prev.detail === detail && prev.to_exclusive === d.day) prev.to_exclusive = shift(d.day)
         else ranges.push({ from: d.day, to_exclusive: shift(d.day), reason: d.status, detail, retryable: ['pending','query_failed','truncated'].includes(d.status) })

@@ -138,7 +138,7 @@ async function serveClip(req: IncomingMessage, res: ServerResponse, url: URL) {
     const name = decodeURIComponent(url.pathname.slice('/clips/'.length))
     if (name !== basename(name) || !/^[A-Za-z0-9-]+_\d+-\d+\.mp4$/.test(name)) return send(res, 404, 'not found')
     if (!loadAccess().allow_share_links) return send(res, 403, 'Clip sharing is disabled.')
-    if (!verifyClipLink(name, url.searchParams.get('exp'), url.searchParams.get('sig'))) return send(res, 403, 'This clip link is invalid or has expired.')
+    if (!verifyClipLink(name, url.searchParams.get('exp'), url.searchParams.get('sig'), config.service.clipLinkSecret, Date.now(), url.searchParams.get('c') === '1')) return send(res, 403, 'This clip link is invalid or has expired.')
     const file = join(config.clip.outDir, name)
     if (!existsSync(file)) return send(res, 404, 'not found')
     // c=1: with the comments burned in, as they are now (a link shared before an edit shows the edit).

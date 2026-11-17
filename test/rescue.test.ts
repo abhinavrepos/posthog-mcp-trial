@@ -68,7 +68,7 @@ test('slower includes exactly 30 percent and exactly ten seconds, excludes eithe
     put(baseline.from, attempts(baseline.from, 12, 12, 20)) // median 25
     put(window.from, durations(window.from, [...Array(4).fill(10), ...Array(6).fill(30), ...Array(2).fill(90)])) // median 35
     reason = (await queue()).clients[0].reasons[0]
-    assert.equal(reason.kind, 'slower'); assert.equal(reason.now - reason.before, 10)
+    assert.equal(reason.kind, 'slower'); assert.ok(reason.now !== undefined && reason.before !== undefined); assert.equal(reason.now - reason.before, 10)
     put(window.from, durations(window.from, [...Array(5).fill(10), ...Array(6).fill(30), 90])) // median 32.5
     assert.ok(!(await kinds()).includes('slower'), '30 percent higher but less than ten seconds')
 })
@@ -227,10 +227,13 @@ test('signal-only clients merge into rescue with exact weights, metadata and saf
     tasksDb.prepare('INSERT INTO errors_daily VALUES (?,?,?,?,?,?,?)').run(window.to, 'SIGNAL', 'DlgClose', 'save', 'Rate missing', 10, 5) // a different error, so the close one stays concentrated at month-ends
     tasksDb.prepare('INSERT INTO user_daily VALUES (?,?,?,?,?)').run(window.to, 'SIGNAL', 'private-person@secret.example', 1, 0)
     forgetAnswers()
-    const c = (await queue()).clients.find(c => c.client === 'SIGNAL')!
+    const q = await queue(), c = q.clients.find(c => c.client === 'SIGNAL')!
     assert.deepEqual(c.reasons.map(r => r.kind), ['giving_up', 'recurring_close_error'].sort())
     assert.equal(c.score, 6, 'two weight-three signals with no task baseline')
-    assert.ok(c.reasons.find(r => r.kind === 'recurring_close_error')!.next_close_start)
+    const close = c.reasons.find(r => r.kind === 'recurring_close_error')!
+    assert.ok(close.next_close_start)
+    assert.deepEqual(q.signal_windows?.recurring_close_error, { recent: { from: shift(window.to, -179), to: window.to }, baseline: null })
+    assert.equal(close.now, undefined); assert.equal(close.before, undefined)
     assert.doesNotMatch(JSON.stringify(await queue()), /private-person|secret.example|"users":\[/)
     tasksDb.exec('DELETE FROM errors_daily; DELETE FROM user_daily'); forgetAnswers()
 })

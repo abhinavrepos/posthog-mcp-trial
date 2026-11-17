@@ -89,3 +89,19 @@ test('late render rejection is observed, mapped once, and never recorded', async
     assert.equal(result, undefined)
     fail(Error('late failure')); await turn(); assert.equal(errors, 1)
 })
+
+test('web and MCP submissions share the pending cap and overflow maps to busy', async () => {
+    const limiter = createClipQueue<Clip>(() => new Promise(() => {}))
+    for (let i = 0; i < 20; i++) limiter.run(String(i), String(i))
+    const entry = { id: 'overflow', state: 'queued', owner: 'web', session_id: 'web', start_s: 0, length_s: 30, info: {}, created_at: Date.now() } as ReplayJob
+    const queue = [entry]
+    createReplayWorker(queue, {
+        render: req => limiter.run(req.sessionId), store: () => { throw Error('must not store') }, audit: () => {}, prune: () => {},
+    })()
+    assert.equal(entry.state, 'failed'); assert.match(entry.error!, /clip queue is full/)
+    assert.equal(queue.length, 0)
+    const {toolError}=await import('../src/mcp/toolerror.ts')
+    await assert.rejects(waitForReplayClip({sessionId:'mcp',startOffsetS:0,durationS:30},'mcp',{
+        render: req => limiter.run(req.sessionId), record: async () => { assert.fail('must not record') }, backgroundError: () => {},
+    }), error => { assert.equal(toolError(error,'get_replay_link','test').kind,'busy'); return true })
+})

@@ -58,7 +58,7 @@ test('attempt timings read each session around its own last submit, not across t
     assert.equal(reads[0].to, new Date(+last + DAY).toISOString())
 })
 
-test('an unknown screen names the screens there are and where app dialogs belong', async () => {
+test('an unknown screen in an app deployment points to dialogs, not to the demo web screens', async () => {
     const { McpServer } = await import('@modelcontextprotocol/sdk/server/mcp.js')
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js')
     const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js')
@@ -69,7 +69,9 @@ test('an unknown screen names the screens there are and where app dialogs belong
     await server.connect(a); await client.connect(b)
     const r = await client.callTool({ name: 'screen_usage', arguments: { screen: 'DlgTask01' } }) as { isError?: boolean; content: { text: string }[] }
     assert.equal(r.isError, true)
-    assert.match(r.content[0].text, /Screens: Dashboard, Invoices/)
+    // The built-in web screens are demo data; listing them sent agents the wrong way (graded run r39).
+    assert.doesNotMatch(r.content[0].text, /Dashboard, Invoices/)
+    assert.match(r.content[0].text, /web page paths starting with \//)
     assert.match(r.content[0].text, /dialog_friction or aggregate_events/)
     await client.close(); await server.close()
 })

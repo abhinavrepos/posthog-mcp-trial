@@ -41,16 +41,20 @@ function maskEmailsIn(token: string, staff: Set<string>): string {
 
 const PERSON_COLUMN = /^(?:distinct_?id|person(?:_?id)?|user(?:_?id|name|_?email)?|email|who)$/i
 const MONEY_COLUMN = /amount|notional|cash|price|pnl|p&l|balance|cost|revenue|nominal|principal|exposure|mtm|market.?value|\bvalue\b/i
+const DURATION_COLUMN = /^(?:(?:avg\.?|average|median|p\d{2})[ _]+)?(?:conversion[ _]+)?(?:time|duration)(?:[ _]+(?:seconds?|minutes?|hours?|ms|s))?$/i
+const durationCell = (s: string) => /^(?:-|[-+]?\d+(?:\.\d+)?|(?:\d+(?:\.\d+)?\s*(?:ms|s|m|h|d|w)\s*)+)$/i.test(s.trim())
+const releaseLabel = (v: unknown) => (typeof v === 'string' || typeof v === 'number') && /^(?:Reval )?\d{1,2}\.\d{1,2}(?:\.\d{1,3})?(?:-[a-z]{1,8}\d{0,3})?$/i.test(String(v))
 const HEADER_CELL = /^[A-Za-z_$][\w $().%&/-]{0,60}$/
 // PostHog insight tables (trends, funnels, retention, lifecycle) start with one of these; their cells are results.
 const INSIGHT_FIRST = /^(?:date|metric|cohort|period|day|week|month|step|breakdown|series)$/i
 // SQL columns named like counts, rates or times. Unknown names stay under the prose amount rule (5+ digits masked).
-const COUNT_COLUMN = /(?:^|_)(?:count|cnt|n|num|total|events?|sessions?|users?|persons?|people|clients?|dau|wau|mau|visits?|views?|opens?|attempts?|errors?|toasts?|rate|ratio|pct|percent(?:age)?|share|conversion|dropoff|drop_off|retention|returning|new|resurrecting|dormant|days?|weeks?|months?|date|time|duration|median|avg|average|p\d{2}|rank|step|level|version)(?:$|_|s$)/i
+const COUNT_COLUMN = /(?:^|_)(?:count|cnt|n|num|total|events?|sessions?|users?|persons?|people|clients?|dau|wau|mau|visits?|views?|opens?|attempts?|errors?|toasts?|rate|ratio|pct|percent(?:age)?|share|conversion|dropoff|drop_off|retention|retained|returning|new|resurrecting|dormant|days?|weeks?|months?|date|time|duration|median|avg|average|p\d{2}|rank|step|level|version)(?:$|_|s$)/i
 /** Column-aware masking of pipe tables (see the call site). Each table row is finished here and wrapped by keep(),
  * so later passes leave counts, dates and durations ("2h 43m") alone. Non-table lines are returned unchanged. */
 function pipeTables(s: string, keep: (v: string) => string, staff: Set<string>, scrub: (v: string) => string): string {
     const lines = s.split('\n')
     let header: string[] | null = null, insight = false
+    const eventNames = new Set(Object.values(appEvents()?.events || {}))
     const masked = (cell: string) => cell.includes('@') ? maskEmailsIn(cell, staff) : cell
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i]!
@@ -58,8 +62,9 @@ function pipeTables(s: string, keep: (v: string) => string, staff: Set<string>, 
         const cells = line.split('|')
         const next = lines[i + 1]?.split('|')
         if (!header) {
-            // A header names its columns and is followed by a row with at least as many cells.
-            if (cells.length >= 2 && cells.every(c => HEADER_CELL.test(c.trim())) && next && next.length >= cells.length) { header = cells; insight = INSIGHT_FIRST.test(cells[0]!.trim()); lines[i] = keep(cells.map(c => scrub(c)).join('|')) }
+            // Empty results have only a header; require known dimensions/metrics so a bare user id cannot qualify.
+            const empty = /^(?:date|month|event|plan|metric|cohort|period|day|week|step|breakdown|series)$/i.test(cells[0]!.trim()) && cells.slice(1).every(c => COUNT_COLUMN.test(c.trim()) || PERSON_COLUMN.test(c.trim()) || MONEY_COLUMN.test(c.trim()) || eventNames.has(c.trim()))
+            if (cells.length >= 2 && cells.every(c => HEADER_CELL.test(c.trim())) && (empty || next && next.length >= cells.length)) { header = cells; insight = INSIGHT_FIRST.test(cells[0]!.trim()); lines[i] = keep(cells.map(c => scrub(c)).join('|')) }
             continue
         }
         let row = cells
@@ -70,7 +75,8 @@ function pipeTables(s: string, keep: (v: string) => string, staff: Set<string>, 
             let best = -1, score = -1
             for (let j = 0; j + extra < cells.length; j++) {
                 const run = cells.slice(j, j + extra + 1)
-                if (!run.every(Boolean)) continue
+                // A duration or prose cell with spaces cannot be a component of the pipe-delimited login.
+                if (!run.every(p => p && !/\s/.test(p))) continue
                 const sc = run.filter(p => /[A-Za-z]/.test(p)).length * 2 + (PERSON_COLUMN.test(header[j]!.trim()) ? 1 : 0)
                 if (sc > score) { score = sc; best = j }
             }
@@ -82,7 +88,8 @@ function pipeTables(s: string, keep: (v: string) => string, staff: Set<string>, 
             const name = header![j]!.trim()
             if (cell === '[person]') return cell
             if (PERSON_COLUMN.test(name)) return '[person]'
-            if (!MONEY_COLUMN.test(name) && (insight || COUNT_COLUMN.test(name))) return scrub(masked(cell))
+            if (MONEY_COLUMN.test(name) && /\d/.test(cell)) return '<amount>'
+            if (!MONEY_COLUMN.test(name) && (insight || COUNT_COLUMN.test(name) || DURATION_COLUMN.test(name) && durationCell(cell))) return scrub(masked(cell))
             // Money-like and unnamed columns: the prose amount rule, applied to this cell now.
             return maskAmounts(scrub(masked(cell)))
         }).join('|'))
@@ -150,27 +157,30 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
         return maskAmounts(s.split(/(\[person\]|<amount>|\[withheld\]|\[client\])/g).map((part, i) => i % 2 ? part : scrubWith(tokens, part)).join('')).replace(/\uE000v(\d+)\uE001/g, (_, index) => versions[Number(index)] || '')
     }
     const walk = (v: unknown, key = ''): unknown => {
-        if (/^(user|user_?id|distinct_?id|user_?email|person_?id)$/i.test(key.split('.').at(-1) || '') && v != null) return '[person]'
+        if (PERSON_COLUMN.test(key.split('.').at(-1) || '') && v != null) return '[person]'
         if (key === 'owner' && typeof v === 'string' && staff.has(v.toLowerCase())) return v
         // Under a money-like field everything with a digit is money, nested values included ({"amount":"250k"},
         // {"amount":{"major":250,"zeros":3}}).
         // "value" alone is too generic ({"property":"browser","value":"Chrome 120"}): only a bare number there.
         const field = key.split('.').at(-1) || ''   // properties.value, person.properties.amount
         if (/^trade_?ids?$/i.test(field)) return v
+        // A find_trade paging cursor ("<first seen>|<session id>") is not a Reval user id (ENV|01|C88|user3), even
+        // though both use "|": masked, the agent could not ask for the next page.
+        if (/^(?:next_)?cursor$/i.test(field) && typeof v === 'string' && /^[^|]{1,40}\|[\w.:-]{1,120}$/.test(v) && Number.isFinite(Date.parse(v.slice(0, v.indexOf('|'))))) return v
         // Releases ("Reval 26.3", "26.3.1") are labels, not money: the amount pass read "26.3" as cash.
-        if (/^(?:app_?)?version$|_version$/i.test(field) && (typeof v === 'string' || typeof v === 'number')) return v
+        if (/^(?:app_?)?version$|_version$/i.test(field) && releaseLabel(v)) return v
         if (/^(client|client_?code|client_?id)$/i.test(field) && (typeof v === 'string' || typeof v === 'number')) return v
         if (/^value$/i.test(field) && (typeof v === 'number' || typeof v === 'string' && /^[-+]?\d[\d., ]*$/.test(v))) return '<amount>'
-        if (/(?:notional|amount|cash|balance|price)/i.test(field)) {
+        if (MONEY_COLUMN.test(field) && !/^value$/i.test(field)) {
             // Numbers and digit-bearing text are money; anything else still goes through walk(), so identity
             // fields nested under a money field ({"amount":{"user_id":...}}) are masked as people.
-            const money = (x: unknown, k = key): unknown => typeof x === 'number' ? '<amount>' : typeof x === 'string' ? (/\d/.test(x) ? '<amount>' : walk(x, k))
+            const money = (x: unknown, k = key): unknown => typeof x === 'number' ? '<amount>' : typeof x === 'string' ? (/\d/.test(x) ? '<amount>' : text(x))
                 : Array.isArray(x) ? x.map((y) => money(y, k)) : x && typeof x === 'object'
-                    ? Object.fromEntries(Object.entries(x).map(([n, y]) => [text(n), /^(user|user_?id|distinct_?id|user_?email|person_?id|users)$/i.test(n) ? walk(y, n) : money(y, n)])) : x
+                    ? Object.fromEntries(Object.entries(x).map(([n, y]) => [text(n), (PERSON_COLUMN.test(n) || /^users$/i.test(n)) ? walk(y, n) : money(y, n)])) : x
             if (typeof v === 'string' || typeof v === 'number' || (v && typeof v === 'object')) return money(v)
         }
+        if (typeof v === 'string' && COUNT_COLUMN.test(field) && !MONEY_COLUMN.test(field) && /^[-+]?\d[\d., ]*%?$/.test(v)) return scrubWith(tokens, v)
         if (typeof v === 'string') return text(v)
-        if (typeof v === 'number' && /(?:notional|amount|cash|balance|price|value)/i.test(field)) return '<amount>'
         if (/^users$/i.test(key) && Array.isArray(v)) return v.map(x => typeof x === 'string' || typeof x === 'number' ? '[person]' : walk(x))
         if (Array.isArray(v)) return v.map(x => walk(x, key))
         if (v && typeof v === 'object') {
@@ -186,8 +196,15 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
                 const jobNote = k === 'note' && (v as { status?: unknown }).status === 'running' && 'job_id' in v && x === JOB_HANDLE_NOTE
                 // A filter echo on an app version ({dimension:'app_version', value:'Reval 26.3'}) is a release label.
                 if (k === 'value' && typeof (v as { dimension?: unknown }).dimension === 'string' && /version/i.test((v as { dimension: string }).dimension)
-                    && (typeof x === 'string' || Array.isArray(x) && x.every(y => typeof y === 'string'))) { out[text(k)] = x; continue }
-                const key = text(k), safe = !jobNote && (k === 'note' && ('owner' in v || 'status' in v) || k === 'text' && 'kind' in v && v.kind === 'note') && x != null ? '[withheld]' : walk(x, k)
+                    && (typeof x === 'string' || Array.isArray(x))) {
+                    const label = (y: unknown) => releaseLabel(y) ? y : walk(y, k)
+                    out[text(k)] = Array.isArray(x) ? x.map(label) : label(x); continue
+                }
+                // Only the operational block has exactly these fields and processing states; action/team notes stay private.
+                const processing = Object.keys(v).length === 3 && 'data_through' in v && 'status' in v && 'note' in v
+                    && (v.data_through === null || typeof v.data_through === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.data_through))
+                    && ['processed', 'includes_unprocessed_days', 'unknown'].includes(String(v.status))
+                const key = text(k), safe = !jobNote && !processing && (k === 'note' && ('owner' in v || 'status' in v) || k === 'text' && 'kind' in v && v.kind === 'note') && x != null ? '[withheld]' : walk(x, k)
                 // Masked survey labels can coincide; retain their combined answer count.
                 out[key] = typeof out[key] === 'number' && typeof safe === 'number' ? out[key] + safe : safe
             }

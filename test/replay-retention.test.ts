@@ -354,3 +354,42 @@ test('the admin page shows the retention card, says deletion is permanent, and i
     for (const text of ['Session replay retention', 'does not bring deleted recordings back', 'ret-confirm', 'Event data is not affected']) assert.ok(page.text.includes(text), text)
     for (const s of page.text.matchAll(/<script>([\s\S]*?)<\/script>/g)) assert.doesNotThrow(() => new Script(s[1]!))
 })
+
+for (const next of [null, 30]) test(`a live setting change to ${next ?? 'off'} stops deletions and clip cleanup without an error`, async () => {
+    setDays(14)
+    ph.sessions = sessions(3)
+    const clip = storeTestClip('live-change', '2026-10-01T00:00:00Z')
+    ph.failDelete = () => { setDays(next); return undefined }
+    const r = await R.runReplayRetention(deps())
+    assert.equal(r.deleted, 1)
+    assert.equal(r.error, undefined); assert.equal(r.failed, 0)
+    assert.match(r.reason!, next === null ? /disabled/ : /increased/)
+    assert.equal(r.clips_deleted, 0); assert.ok(getClip(clip))
+    assert.equal(runs()[0]!.reason, r.reason)
+})
+
+test('a setting change during retry backoff stops the next delete attempt', async () => {
+    setDays(14); ph.sessions = sessions(1); ph.failDelete = () => 503
+    const r = await R.runReplayRetention({ ...deps(), sleep: async () => { setDays(null) } })
+    assert.equal(ph.attempts.get('s000'), 1)
+    assert.equal(r.error, undefined); assert.equal(r.failed, 0); assert.match(r.reason!, /disabled/)
+})
+
+test('a setting change after an empty listing prevents clip cleanup', async () => {
+    setDays(14)
+    const clip = storeTestClip('empty-change', '2026-10-01T00:00:00Z')
+    const r = await R.runReplayRetention({ ...deps(), query: async () => { setDays(30); return [] } })
+    assert.match(r.reason!, /increased/); assert.equal(r.error, undefined); assert.ok(getClip(clip))
+})
+
+test('weekly bounded rescans catch late arrivals behind the persistent watermark', async () => {
+    setDays(14); ph.sessions = sessions(2)
+    await R.runReplayRetention(deps())
+    ph.sessions.push({ id: 'late', start: '2026-09-01 00:00:00.000000' })
+    assert.equal((await R.runReplayRetention(deps({}, new Date('2026-11-21T10:30:00Z')))).deleted, 0)
+    const r = await R.runReplayRetention(deps({ LENS_REPLAY_RETENTION_MAX_PER_RUN: '1' }, new Date('2026-11-22T10:30:00Z')))
+    assert.equal(r.deleted, 1); assert.equal(r.capped, true); assert.equal(ph.deletes.at(-1), 'late')
+    const resumed = await R.runReplayRetention(deps({}, new Date('2026-11-22T10:30:00Z')))
+    assert.equal(resumed.already_gone, 2); assert.equal(resumed.error, undefined)
+    assert.equal(ph.queries.at(-1)!.values.after_id, 'late')
+})

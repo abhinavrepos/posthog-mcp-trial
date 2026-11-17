@@ -1,5 +1,6 @@
 import { ToolInputError } from '../core/toolinputerror.ts'
 export { ToolInputError } from '../core/toolinputerror.ts'
+import { ClipQueueError } from '../core/clip-queue.ts'
 import { JobCapError, JobQueueError } from '../core/jobs.ts'
 import { errorDiagnostic } from '../core/errordiagnostics.ts'
 import { posthogPublicMessage, posthogFailure, posthogUsageError } from './posthog-error.ts'
@@ -15,7 +16,7 @@ export function toolError(error: unknown, tool: string, id: string = toolCorrela
     if(posthogPublicMessage(raw)) {kind=posthogUsageError(raw) ? 'validation' : /memory|timed out|time limit/.test(raw) ? 'capacity' : 'unavailable';message=raw}
     else if(tool==='posthog_exec' && /memory limit|too much data|code:\s*241|timeout|timed out/i.test(raw)) {kind='capacity';message=posthogFailure(error).message}
     else if(error instanceof RateLimitError) {kind='rate_limit';message=raw}
-    else if(error instanceof JobCapError || error instanceof JobQueueError) {kind='busy';message=error.message}
+    else if(error instanceof JobCapError || error instanceof JobQueueError || error instanceof ClipQueueError) {kind='busy';message=error.message}
     else if(raw === 'Unknown or expired job id.') {kind='not_found';message=raw}
     else if(raw === 'Privacy or access settings changed. Submit the tool again.') {kind='privacy_changed';message=raw}
     else if(error instanceof z.ZodError) {

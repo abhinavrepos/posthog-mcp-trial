@@ -273,7 +273,7 @@ for (const variant of ['canonical', 'query order', 'extra parameter', 'encoded f
  const { createHmac } = await import('node:crypto')
  const name = 'attack_0-10.mp4'
  const exp = String(Math.floor(Date.now()/1000)+3600)
- const sig = createHmac('sha256',secret).update(`${name}.${exp}`).digest('base64url')
+ const sig = createHmac('sha256',secret).update(`${name}.${exp}.0`).digest('base64url')
  const original = `https://lens.example/clips/${name}?exp=${exp}&sig=${sig}`
  const url = new URL(original, 'https://lens.example')
  assert.ok(L.verifyClipLink(name,url.searchParams.get('exp'),url.searchParams.get('sig'),secret))

@@ -84,10 +84,10 @@ ol.steps li::marker{color:var(--muted);font-weight:600}
 .f code{padding:5px 8px;border-radius:6px;overflow-wrap:anywhere;font-size:13px;background:var(--hover)}
 main td{padding-top:12px;padding-bottom:12px;vertical-align:middle}
 main{min-width:0}
-main h1{font-size:24px;line-height:32px;font-weight:650;margin:0}
+main h1{font-size:24px;line-height:32px;font-weight:600;margin:0}
 main .page-head{margin-bottom:24px;align-items:center}
 main .page-head p{margin:4px 0 0;font-size:14px;line-height:20px}
-main h2{font-size:16px;line-height:24px;font-weight:600;margin:0 0 12px}
+main h2{font-size:15px;line-height:24px;font-weight:600;margin:0 0 12px}
 main h3{font-size:14px;line-height:20px;font-weight:600;margin:0 0 8px}
 main input:not([type=checkbox]):not([type=radio]),main select{height:36px;min-height:36px;padding:7px 10px;font-size:13px;line-height:20px;max-width:100%;box-sizing:border-box}
 main button,main .btn{min-height:36px;font-size:13px;line-height:20px;white-space:nowrap;word-break:normal;overflow-wrap:normal}
@@ -116,7 +116,7 @@ main h1{font-size:24px}
 }
 </style></head>
 <body>${headerHtml(v, 'Chat')}<main class="narrow">
-<div class="page-head"><h1>Connect GitHub Copilot</h1></div><div class="card">
+<div class="page-head"><div><h1>Connect GitHub Copilot</h1><p>Connect your personal Lens key to Copilot.</p></div></div><div class="card">
 <p class="small">Privacy mode: <b>${privacyMode()}</b></p><div class="policy" role="note" aria-labelledby="policy-title"><p id="policy-title"><b>Approved apps only.</b></p>${policy.apps.length === 1 && policy.apps[0] === DEFAULT_CHAT_APPS[0] ? '<p>Use GitHub Copilot with your ION Microsoft enterprise account.</p>' : `<p>Connect your key only to:</p><ul>${policy.apps.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`}${policy.note ? `<p>${esc(policy.note)}</p>` : ''}</div>${anonymiseOn() ? '<div class="info" role="note"><p><b>Client names are hidden from AI.</b> Copilot sees each client\'s codename, never its name or code. Ask about a client by its codename, and do not type client names into chat. <a href="/replays/codenames">Look up codenames</a>.</p></div>' : ''}
 <p class="small muted">Your key is shown once and inherits your Lens access.${ph ? ' PostHog commands are included in this one Lens server.' : ''}${canSurvey(surveyRole, 'edit') ? ' You can create, edit and stop surveys in Copilot; launch them from Surveys.' : role ? ` Survey access: ${esc(role)}.` : ''}</p>
 <ol class="steps">

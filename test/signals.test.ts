@@ -142,7 +142,7 @@ test('median active-day gap of exactly three days qualifies', async () => {
     assert.equal(s?.evidence.median_gap_days, 3)
 })
 
-test('all four client signals merge into rescue with prescribed weights and no user identities', async () => {
+test('all four rescue signals retain their own dates, null scalar placeholders, weights and privacy', async () => {
     const { rescueQueue } = await import('../src/core/rescue.ts')
     const window = {from:shift(to,-27),to},baseline={from:shift(to,-55),to:shift(to,-28)}
     for (const [seed,kind,weight] of [
@@ -156,6 +156,19 @@ test('all four client signals merge into rescue with prescribed weights and no u
         const client=result.clients.find(c=>c.client==='ACME')!
         assert.ok(client,kind); assert.ok(client.reasons.some(r=>r.kind===kind),kind)
         assert.equal(client.score,weight)
+        const reason = client.reasons.find(r => r.kind === kind)!
+        const recentDays = kind === 'recurring_close_error' ? 180 : kind === 'work_moving_out' ? 28 : 14
+        const baselineDays = kind === 'work_moving_out' ? 84 : 56
+        const recent = { from: shift(to, 1 - recentDays), to }
+        const end = shift(recent.from, kind === 'key_person_gap' ? -2 : -1)
+        // Stated once per answer (signal_windows), not on each reason, so long queues fit the answer budget.
+        const w = result.signal_windows?.[kind]
+        assert.deepEqual(w?.recent, recent)
+        assert.deepEqual(w?.baseline, kind === 'recurring_close_error' ? null : { from: shift(end, 1 - baselineDays), to: end })
+        assert.equal(reason.now, undefined); assert.equal(reason.before, undefined)
+        const source = (await signals()).find(s => s.kind === kind)!
+        assert.deepEqual(w?.recent, source.recent_window)
+        assert.deepEqual(w?.baseline, source.baseline_window)
         assert.doesNotMatch(JSON.stringify(result),/private-person|secret.example/)
         if(kind==='recurring_close_error') assert.match(client.next_step,/Invalid date.*2026-06-26/)
     }

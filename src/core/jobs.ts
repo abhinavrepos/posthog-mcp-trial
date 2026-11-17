@@ -44,8 +44,7 @@ export class JobRunner {
         if(!columns.has('detached')) db.exec('ALTER TABLE analysis_jobs ADD COLUMN detached INTEGER NOT NULL DEFAULT 0')
         if(!columns.has('owner_instance')) db.exec('ALTER TABLE analysis_jobs ADD COLUMN owner_instance TEXT')
         if(!columns.has('lease_expires')) db.exec('ALTER TABLE analysis_jobs ADD COLUMN lease_expires INTEGER')
-        db.prepare("UPDATE analysis_jobs SET status='failed', error='Server restarted before this job completed. Submit the tool again.', updated=? WHERE status='working' AND coalesce(lease_expires,0) < ?").run(this.now(), this.now()-60000)
-        this.heartbeat = setInterval(() => this.renewLease(), 15000); this.heartbeat.unref()
+        this.heartbeat = setInterval(() => { this.renewLease(); this.prune() }, 15000); this.heartbeat.unref()
         this.timer = setInterval(() => this.prune(), options.pruneMs ?? 60000); this.timer.unref()
         this.prune()
     }
@@ -167,6 +166,8 @@ export class JobRunner {
         return this.db.prepare('SELECT * FROM analysis_jobs WHERE owner=? AND revision=? AND expires>? ORDER BY created DESC LIMIT 100').all(owner, revision, this.now()) as unknown as JobRow[]
     }
     prune(): void {
+        this.db.prepare("UPDATE analysis_jobs SET status='failed', error='Server restarted before this job completed. Submit the tool again.', updated=? WHERE status='working' AND coalesce(lease_expires,0) < ? AND (owner_instance IS NULL OR owner_instance != ?)").run(this.now(), this.now()-60000, this.instanceId)
+
         for (const [id, a] of this.active) {
             const row = this.db.prepare('SELECT expires FROM analysis_jobs WHERE id=?').get(id)
             if (!row || Number(row.expires) <= this.now()) { a.cancel?.(); this.finish(id, 'cancelled', undefined, 'Job expired.') }

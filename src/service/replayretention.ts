@@ -18,6 +18,7 @@ import { deleteClip, listClips } from './replays.ts'
 
 export const RETENTION_KEY = 'replay_retention_days'
 const WATERMARK = 'replay_retention_watermark' // last recording handled: { start, id }
+const RESCAN = 'replay_retention_rescan_at' // beginning of the last bounded full scan
 const STATE = 'replay_retention_state' // { last_day, failures, retry_at, claim_at }
 export const MIN_DAYS = 7
 export const MAX_DAYS = 3650
@@ -142,13 +143,14 @@ async function confirmProject(d: Deps, key: string): Promise<string | undefined>
     }
 }
 
-type DeleteResult = 'deleted' | 'gone' | { error: string }
+type DeleteResult = 'deleted' | 'gone' | 'stopped' | { error: string }
 const retryable = (status: number) => status === 429 || status >= 500
-async function deleteRecording(d: Deps, key: string, sessionId: string): Promise<DeleteResult> {
+async function deleteRecording(d: Deps, key: string, sessionId: string, stopped: () => boolean): Promise<DeleteResult> {
     const url = `${config.posthog.host}/api/projects/${config.posthog.projectId}/session_recordings/${encodeURIComponent(sessionId)}/`
     let last = ''
     for (let attempt = 0; attempt < 3; attempt++) {
         if (attempt) await d.sleep(1000 * 2 ** attempt)
+        if (stopped()) return 'stopped'
         try {
             const res = await d.fetch(url, { method: 'DELETE', headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(30_000) })
             await res.body?.cancel()
@@ -231,7 +233,18 @@ export async function runReplayRetention(deps: Partial<Deps> = {}): Promise<RunR
             result.error = `not deleting: ${problem}`
             return result
         }
+        const stopped = () => {
+            const current = retentionDays()
+            if (current === null) result.reason = 'retention disabled'
+            else if (current > days) result.reason = 'retention days increased'
+            return !!result.reason
+        }
         let mark = watermark()
+        const now = d.now().getTime()
+        if (now - getSetting<number>(RESCAN, 0) >= 7 * DAY) {
+            mark = NO_MARK
+            if (!env.dryRun) { setSetting(WATERMARK, mark); setSetting(RESCAN, now) }
+        }
         let handled = 0
         outer: while (handled < env.maxPerRun) {
             const want = Math.min(env.batch, env.maxPerRun - handled)
@@ -240,9 +253,11 @@ export async function runReplayRetention(deps: Partial<Deps> = {}): Promise<RunR
             catch (e) { result.error = `listing failed (${(e as { status?: number }).status ?? (e as Error).name})`; break }
             if (!batch.length) break
             for (const rec of batch) {
+                if (stopped()) break outer
                 handled++
                 if (env.dryRun) { result.would_delete = (result.would_delete ?? 0) + 1; mark = rec; continue }
-                const r = await deleteRecording(d, env.apiKey, rec.id)
+                const r = await deleteRecording(d, env.apiKey, rec.id, stopped)
+                if (r === 'stopped') break outer
                 if (typeof r === 'object') { result.failed++; result.error = r.error; break outer }
                 if (r === 'deleted') result.deleted++
                 else result.already_gone++
@@ -252,18 +267,22 @@ export async function runReplayRetention(deps: Partial<Deps> = {}): Promise<RunR
             if (batch.length < want) break // last page
             await d.sleep(250) // a breath between batches for PostHog
         }
-        result.capped = !result.error && handled >= env.maxPerRun
+        result.capped = !result.reason && !result.error && handled >= env.maxPerRun
         // The clip cache follows the same cutoff. Saved clips stay until someone unsaves them.
+        if (stopped()) return result
         const plan = clipPlan(cutoff)
         result.clips_kept_saved = plan.kept_saved
         if (env.dryRun) { result.would_delete ??= 0; result.clips_would_delete = plan.delete.length }
-        else if (!result.error) for (const name of plan.delete) if (deleteClip(name)) result.clips_deleted++
+        else if (!result.error) for (const name of plan.delete) {
+            if (stopped()) break
+            if (deleteClip(name)) result.clips_deleted++
+        }
         return result
     } finally {
         busy = false
         const counts = { days, cutoff: result.cutoff, dry_run: result.dry_run, deleted: result.deleted, already_gone: result.already_gone, failed: result.failed,
             ...(env.dryRun ? { would_delete: result.would_delete ?? 0, clips_would_delete: result.clips_would_delete ?? 0 } : {}),
-            capped: !!result.capped, clips_deleted: result.clips_deleted, clips_kept_saved: result.clips_kept_saved, ...(result.error ? { error: result.error } : {}) }
+            capped: !!result.capped, clips_deleted: result.clips_deleted, clips_kept_saved: result.clips_kept_saved, ...(result.reason ? { reason: result.reason } : {}), ...(result.error ? { error: result.error } : {}) }
         audit('system', 'replay_retention.run', counts)
         d.log(env.dryRun ? 'replay retention dry run' : 'replay retention run', counts)
     }

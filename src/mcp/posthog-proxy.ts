@@ -2,7 +2,7 @@ import { errorDiagnostic } from '../core/errordiagnostics.ts'
 import { toolLimiter } from './ratelimit.ts'
 import { writeToolAudit } from './toolaudit.ts'
 import type { ChatCaller } from '../service/access.ts'
-import { isPosthogQuery, posthogQueryGate, posthogQueryContext } from './posthog-query.ts'
+import { isPosthogMetadata, isPosthogQuery, posthogQueryGate, posthogQueryContext } from './posthog-query.ts'
 import { posthogFailure, posthogPublicMessage } from './posthog-error.ts'
 import { toolError } from './toolerror.ts'
 import { randomUUID } from 'node:crypto'
@@ -207,7 +207,8 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
         // Notifications (progress, log messages) carry text too: their params are cleaned like answers.
         for (const key of ['result', 'error', 'params']) if (key in safe) {
             const metadata = key === 'result' && (Array.isArray(safe[key]?.tools) || Array.isArray(safe[key]?.prompts))
-            const answer = (metadata ? metadataSafetyWith : safetyWith)(safe[key], tokens, staff)
+            const staticDocs = key === 'result' && !safe[key]?.isError && metadataIds.get(v.id)
+            const answer = staticDocs ? safe[key] : (metadata ? metadataSafetyWith : safetyWith)(safe[key], tokens, staff)
             safe[key] = anonFor('posthog') ? guardResponse(answer, 'posthog_cleaned') : answer
         }
         return safe
@@ -224,6 +225,7 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
         const m = /^(data: *)(.*?)(\r?)$/.exec(line)!
         try { return `${m[1]}${JSON.stringify(out(JSON.parse(m[2])))}${m[3]}` } catch { return cleanText(anonFor('posthog') ? hideClients(line).text : line) }
     }
+    const metadataIds = new Map<unknown, boolean>()
     const records: {id:unknown; tool:string; keys:string[]; correlation:string; started:number; release?:()=>void; error?:string; chars:number}[] = []
     const analytics = (item:Rpc) => isPosthogQuery(item.params?.name === 'exec' ? item.params.arguments?.command : `call ${item.params?.name} ${JSON.stringify(item.params?.arguments || {})}`)
     let gateRelease: (()=>void)|undefined
@@ -260,6 +262,8 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
                 }
                 const refusal = commandRefusal(item, options.name)
                 if (refusal) { if(record)record.error='privacy_refused'; refusals.push(refusal); return [] }
+                // A duplicate batch id cannot safely identify a static-doc answer.
+                if (object(item) && item.id != null) metadataIds.set(item.id, !metadataIds.has(item.id) && item.method === 'tools/call' && item.params?.name === 'exec' && isPosthogMetadata(item.params.arguments?.command))
                 if (!anon) return [item]
                 const a = anonRefusal(item, options.name)
                 if (a.refusal) { if(record)record.error='privacy_refused'; refusals.push(a.refusal); return [] }
@@ -427,7 +431,8 @@ async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'u
         const notified = await request({ jsonrpc: '2.0', method: 'notifications/initialized' })
         if (!notified.ok) { await read(notified, 0) }
         await notified.body?.cancel()
-        const result = safetyWith(await read(await request(call), 2), await identityTokens(), staffEmails())
+        const raw = await read(await request(call), 2)
+        const result = isPosthogMetadata(command) ? raw : safetyWith(raw, await identityTokens(), staffEmails())
         return guardResponse(result, 'posthog_cleaned')
     } catch (error) {
         if (error instanceof Error && posthogPublicMessage(error.message)) throw error

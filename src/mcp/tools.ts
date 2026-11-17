@@ -2,7 +2,7 @@ import { ToolInputError } from '../core/toolinputerror.ts'
 import { ingestMessages } from '../core/ingestmessages.ts'
 import { McpError } from '@modelcontextprotocol/sdk/types.js'
 import { errorDiagnostic } from '../core/errordiagnostics.ts'
-import { isPosthogQuery, posthogQueryContext } from './posthog-query.ts'
+import { isPosthogMetadata, isPosthogQuery, posthogQueryContext } from './posthog-query.ts'
 import { isPublicToolError, publicToolError } from './publicerror.ts'
 import { randomUUID, createHash } from 'node:crypto'
 import { isMainThread } from 'node:worker_threads'
@@ -11,6 +11,7 @@ import { toolError, argumentExample } from './toolerror.ts'
 import { toolLimiter } from './ratelimit.ts'
 import { writeToolAudit } from './toolaudit.ts'
 import { toolContext, auditClient, requestedToolWindow } from '../core/toolcontext.ts'
+import { guardResponse } from './anonymise.ts'
 import { privacyMode } from '../core/anonymise.ts'
 import { installJobTools, createJobDispatch, JobAnswer, JOB_TOOLS, jobBacked, type JobOptions } from './jobtools.ts'
 import { privacyCurrent, PRIVACY_CHANGED, privacyKey, withPrivacy } from '../core/anonymise.ts'
@@ -80,7 +81,10 @@ function screenPath(screen?: string): string | undefined {
     if (screen.startsWith('/')) return screen
     const m = resolveScreen(screen)[0]
     // Name the screens there are, and where app dialogs belong: a bare refusal left agents guessing.
-    if (!m) throw new ToolInputError(`No screen matches. Screens: ${SCREENS.slice(0, 12).map((x) => x.name).join(', ')}, or a path starting with /.${appEvents() ? ` For ${appEvents()!.app} dialogs (e.g. ${screen}) use dialog_friction or aggregate_events with a dialog filter.` : ''}`)
+    // With an app event map (Reval) the built-in web screens are demo data: listing them sent agents the wrong way.
+    if (!m) throw new ToolInputError(appEvents()
+        ? `No screen matches. screen_usage covers web page paths starting with /. For ${appEvents()!.app} dialogs (e.g. ${screen}) use dialog_friction or aggregate_events with a dialog filter.`
+        : `No screen matches. Screens: ${SCREENS.slice(0, 12).map((x) => x.name).join(', ')}, or a path starting with /.`)
     return m.path
 }
 
@@ -296,6 +300,8 @@ export function wrapTools(server: McpServer, insights = false, caller?: ToolCall
                         errorKind='tool_error'
                         return safeResult({...value,content:[...(Array.isArray(value.content)?value.content:[]),{type:'text',text:`Correlation id: ${correlation}`}]})
                     }
+                    // Static PostHog docs are server-authored; data-returning calls still use every safety pass.
+                    if(outputName==='posthog_exec' && isPosthogMetadata(outputArgs.command)) return guardResponse(output)
                     const final=await safeResult(applyDetail(outputName,analyticalResult(outputName,outputArgs,output,outputWindow),detail))
                     return jobId ? runningHandle(final,jobId) : final
                 })
@@ -764,7 +770,7 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             inputSchema: { days: z.number().int().min(1).max(1500).default(7).describe('How many days of data to look at.') },
             outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
-        async ({ days }) => json(`${app} events (last ${days} days):`, await describeAppEvents(days, clientSource()))
+        async ({ days }) => json(`${app} event vocabulary:`, await describeAppEvents(days, clientSource()))
     )
     server.registerTool(
         'session_story',

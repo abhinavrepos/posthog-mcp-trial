@@ -68,3 +68,16 @@ test('settings clamp invalid and out-of-range values', () => {
     assert.equal(clipInteger('0', 5, 8), 1)
     assert.equal(clipInteger('999', 5, 8), 8)
 })
+
+test('shared admission caps pending flights atomically and still admits duplicates', async () => {
+    const f = fixture({ concurrency: 1 })
+    const pending = Array.from({ length: 20 }, (_, i) => f.queue.run(String(i)))
+    assert.equal(f.queue.run('0'), pending[0])
+    await assert.rejects(async () => f.queue.run('overflow'), /clip queue is full/)
+    await turn()
+    await f.finish('0')
+    const replacement = f.queue.run('replacement')
+    for (let i = 1; i < 20; i++) await f.finish(String(i))
+    await f.finish('replacement')
+    await Promise.all([...pending, replacement])
+})

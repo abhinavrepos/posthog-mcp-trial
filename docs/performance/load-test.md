@@ -146,3 +146,15 @@ The 30-question Sonnet agent regression (one PM, latest code) was refused with `
 ## Follow-up: detached analyses per person raised to 8
 
 In the multi-year agent baseline, an agent started four long analyses, gave up waiting, and moved on. The four abandoned jobs then refused the PM's next question ("4 analyses are already running for you"). Abandoned jobs still finish (and `aggregate_events` long windows now finish rather than fail), so the per-person cap only needs headroom: `LENS_JOBS_PER_USER` defaults to 8, matching `LENS_MCP_CONCURRENT_CALLS`. Total work stays bounded by the 64-job queue and two workers; with five people that is at most 40 detached jobs.
+
+## Re-run on 2026-11-17 (after the audit fixes)
+
+Same harness and lab (1-year history, 150 clients, simulated PostHog), five-minute admission windows instead of eight (`--minutes=5`). Server RSS was visible this time.
+
+| PM users | Physical calls | Business operations | Errors | First answer, slowest tool | Probe p95 | Max active jobs | Max RSS |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 5 | 109 | 71 | 0 | 20.06 s | 129 ms | 5 | 5.0 GB |
+| 10 | 182 | 74 | 0 | 20.12 s | 135 ms | 10 | 5.6 GB |
+| 20 | 357 | 106 | 0 | 20.11 s | 218 ms | 20 | 5.1 GB |
+
+No rate-limit, busy or queue-full refusals. One aggregate_events operation was unfinished at the 20-user cutoff (censored, not an error). Heavy analyses answer with a job handle at about 20 s, as designed; their completion p95 at 20 users was 94–133 s. RSS includes the analysis worker threads: size the host for about 6 GB for Lens alone.

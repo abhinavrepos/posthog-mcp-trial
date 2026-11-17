@@ -1,3 +1,4 @@
+import { isPosthogMetadata } from './posthog-query.ts'
 import { aiSafety, aiMetadataSafety } from '../core/aisafety.ts'
 // The one place every MCP message passes when client anonymisation is on (src/core/anonymise.ts): Lens's
 // own server over HTTP and stdio (guardTransport), and the PostHog proxy (guardRequest/guardResponse).
@@ -129,11 +130,14 @@ function withoutMedia(v: unknown): unknown {
 /** Wraps a connected transport (HTTP or stdio): both directions go through the guard. */
 export function guardTransport(t: Transport, registry?: Registry, onToolRefusal?: (tool:string,argumentKeys:string[],result:unknown)=>unknown): void {
     const send = t.send.bind(t)
+    const metadataIds = new Map<unknown, boolean>()
     t.send = async (message, options) => {
         const safe = { ...message } as Rpc
+        const staticDocs = metadataIds.get(safe.id)
+        metadataIds.delete(safe.id)
         for (const key of ['result', 'error', 'params']) if (key in safe) {
             const metadata = key === 'result' && (Array.isArray(safe[key]?.tools) || Array.isArray(safe[key]?.prompts))
-            safe[key] = await (metadata ? aiMetadataSafety(safe[key]) : aiSafety(safe[key]))
+            if (!(staticDocs && key === 'result' && !safe[key]?.isError)) safe[key] = await (metadata ? aiMetadataSafety(safe[key]) : aiSafety(safe[key]))
         }
         return send(guardResponse(safe as JSONRPCMessage), options)
     }
@@ -163,6 +167,8 @@ export function guardTransport(t: Transport, registry?: Registry, onToolRefusal?
             }
             void send(g.answer as JSONRPCMessage); return
         }
+        // Duplicate in-flight ids are ambiguous: neither answer may bypass privacy.
+        if(incoming.method && incoming.id != null) metadataIds.set(incoming.id, !metadataIds.has(incoming.id) && incoming.method==='tools/call' && incoming.params?.name==='posthog_exec' && isPosthogMetadata(incoming.params.arguments?.command))
         onmessage(g.msg as JSONRPCMessage, extra)
     })
 }

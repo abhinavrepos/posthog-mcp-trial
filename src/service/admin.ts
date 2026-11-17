@@ -350,10 +350,10 @@ main> .access-help{padding:4px 0 20px;border-bottom:1px solid var(--line)}
 #people td b{overflow-wrap:normal;word-break:normal}.people-table :is(th,td):nth-child(6){padding-left:8px;padding-right:8px}.people-table :is(th,td):last-child{padding-left:8px;padding-right:16px}
 .revoked-toggle input{width:auto;margin:0}
 main{min-width:0}
-main h1{font-size:24px;line-height:32px;font-weight:650;margin:0}
+main h1{font-size:24px;line-height:32px;font-weight:600;margin:0}
 main .page-head{margin-bottom:24px;align-items:center}
 main .page-head p{margin:4px 0 0;font-size:14px;line-height:20px}
-main h2{font-size:16px;line-height:24px;font-weight:600;margin:0 0 12px}
+main h2{font-size:15px;line-height:24px;font-weight:600;margin:0 0 12px}
 main h3{font-size:14px;line-height:20px;font-weight:600;margin:0 0 8px}
 main input:not([type=checkbox]):not([type=radio]),main select{height:36px;min-height:36px;padding:7px 10px;font-size:13px;line-height:20px;max-width:100%;box-sizing:border-box}
 main button,main .btn{min-height:36px;font-size:13px;line-height:20px;white-space:nowrap;word-break:normal;overflow-wrap:normal}

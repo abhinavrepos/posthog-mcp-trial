@@ -190,3 +190,42 @@ test('reading a processed day again never replaces its history with a smaller Po
     assert.equal((db.prepare('SELECT sessions FROM task_ingest WHERE day = ?').get(day) as { sessions: number }).sessions, 5)
     assert.match(String((db.prepare('SELECT value FROM task_state WHERE key = ?').get('analysis_unavailable:' + day) as { value: string }).value), /"sessions_now":0/)
 })
+
+test('snapshot pruning keeps every active consumer pinned until success or failure', async () => {
+    snapshotFetch(JSON.stringify(['w', { data: 'x'.repeat(600) }]))
+    let releaseFirst!: () => void, releaseSecond!: () => void
+    const first = new Promise<void>(r => { releaseFirst = r }), second = new Promise<void>(r => { releaseSecond = r })
+    let file = '', started = 0
+    const a = C.withSnapshotsFile('active', async input => { file = input; started++; await first })
+    const b = C.withSnapshotsFile('active', async () => { started++; await second; throw Error('render failed') })
+    const failed = assert.rejects(b, /render failed/)
+    while (started < 2) await new Promise<void>(r => setImmediate(r))
+    const cache = join(dir, 'cache', 'snapshots'), other = join(cache, 'new.jsonl')
+    writeFileSync(other, 'x'.repeat(800))
+    C.pruneCache(cache, other); assert.ok(existsSync(file))
+    releaseFirst(); await a
+    C.pruneCache(cache, other); assert.ok(existsSync(file))
+    releaseSecond(); await failed
+    C.pruneCache(cache, other); assert.equal(existsSync(file), false)
+})
+
+test('a render joining an unpinned snapshot fetch acquires protection before pruning', async () => {
+    snapshotFetch(JSON.stringify(['w', { data: 'x'.repeat(600) }]))
+    const fetchSnapshot=globalThis.fetch
+    let fetching=false, releaseFetch!: () => void, releaseRender!: () => void
+    const downloading=new Promise<void>(r=>{releaseFetch=r}), rendering=new Promise<void>(r=>{releaseRender=r})
+    globalThis.fetch=async (...args)=>{
+        if (String(args[0]).includes('snapshots') && !String(args[0]).includes('blob_v2=true')) {fetching=true;await downloading}
+        return fetchSnapshot(...args)
+    }
+    const warming=C.snapshotsFile('joining')
+    while(!fetching)await new Promise<void>(r=>setImmediate(r))
+    let input=''
+    const render=C.withSnapshotsFile('joining',async file=>{input=file;await rendering})
+    releaseFetch();await warming
+    while(!input)await new Promise<void>(r=>setImmediate(r))
+    const cache=join(dir,'cache','snapshots'),other=join(cache,'later.jsonl')
+    writeFileSync(other,'x'.repeat(800))
+    try {C.pruneCache(cache,other);assert.ok(existsSync(input))}
+    finally {releaseRender();await render}
+})

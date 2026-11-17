@@ -15,7 +15,7 @@ export const RESCUE_STATUSES = ['open', 'contacted', 'in_progress', 'resolved', 
 export type RescueStatus = typeof RESCUE_STATUSES[number]
 export type ReasonKind = 'missing' | 'users_lost' | 'failing' | 'slower' | 'dropped' | 'activity_drop' | 'worse_since_snoozed' | 'peer_gap' | 'not_established' | SignalKind
 const weights: Record<ReasonKind, number> = { peer_gap: 1, not_established: 2, key_person_gap: 4, work_moving_out: 3, recurring_close_error: 3, giving_up: 3, missing: 5, users_lost: 4, failing: 3, slower: 2, dropped: 2, activity_drop: 3, worse_since_snoozed: 0 }
-export interface RescueReason { kind: ReasonKind; text: string; task_id?: string; task_name?: string; now: number; before: number;
+export interface RescueReason { kind: ReasonKind; text: string; task_id?: string; task_name?: string; now?: number; before?: number;
     evidence?: Record<string, number | number[]>; last_seen?: string; dialog?: string; template?: string; next_close_start?: string }
 export interface RescueAction { owner: string | null; status: RescueStatus; note: string | null; due: string | null;
     snooze_until: string | null; score_at_snooze: number | null; updated_by: string; updated_at: string; reasons_at_action?: string | null; acted_on?: string | null }
@@ -24,7 +24,7 @@ export interface RescueClient { client: string; client_name: string; level: 'urg
     next_step: string; recovery?: 'recovered' | 'still_failing' | 'awaiting_evidence'; recovery_text?: string; action?: RescueAction }
 export interface RescueParams { compare?:'previous'|'none'; compare_with?:Window; window?: Window; baseline?: Window; min_attempts?: number; include_snoozed?: boolean }
 export interface RescueQueue { coverage: Coverage; window: Window; baseline: Window; data_through: string | null;
-    observed_usage?: {client:string;attempts:number;done:number}[]; clients: RescueClient[]; recovered?: RescueClient[]; hidden_snoozed: number; note: string }
+    observed_usage?: {client:string;attempts:number;done:number}[]; signal_windows?: SignalWindows; clients: RescueClient[]; recovered?: RescueClient[]; hidden_snoozed: number; note: string }
 const shift = (s: string, n: number) => new Date(Date.parse(s) + n * 86400000).toISOString().slice(0, 10)
 const today = () => new Date().toISOString().slice(0, 10)
 const moved = (w: Window): Window => ({ from: shift(w.from, -7), to: shift(w.to, -7) })
@@ -55,7 +55,10 @@ function nextStep(r: RescueReason): string {
         default: return 'Check in with the client: overall use fell.'
     }
 }
-async function compute(window: Window, baseline: Window, min: number): Promise<RescueClient[]> {
+// Each signal kind has one recent/baseline window for every client (all end at `to`): stated once per answer,
+// not on every reason, so a long queue still fits the answer budget.
+type SignalWindows = Partial<Record<SignalKind, { recent: Window; baseline: Window | null }>>
+async function compute(window: Window, baseline: Window, min: number, windows: SignalWindows = {}): Promise<RescueClient[]> {
     const now = new Map((await periodAggregates(window)).map(r => [JSON.stringify([r.client, r.task_id]), r]))
     // A baseline of another length (28 days against two years) is compared per day: raw totals flagged every
     // client as "use fell". Counts are scaled to the window's length; rates and medians need no scaling.
@@ -93,8 +96,10 @@ async function compute(window: Window, baseline: Window, min: number): Promise<R
     for (const r of regular) { const list = users.get(r.client) || []; list.push(r); users.set(r.client, list) }
     for (const signal of (await clientSignals({ to: window.to })).signals) {
         const c = clients.get(signal.client) || { reasons: [], before: 0, now: 0 }
-        const { kind, text, evidence, task_id, dialog, template, next_close_start } = signal
-        c.reasons.push({ kind, text, evidence, now: 0, before: 0, task_id, dialog, template, next_close_start,
+        const { kind, text, evidence, task_id, dialog, template, next_close_start, recent_window, baseline_window } = signal
+        windows[kind] ??= { recent: recent_window, baseline: baseline_window }
+        // No now/before: a signal is measured over its own windows (signal_windows), not the queue's; see evidence.
+        c.reasons.push({ kind, text, evidence, task_id, dialog, template, next_close_start,
             ...(task_id ? { task_name: tasks.get(task_id) || dialog || task_id.slice(2) } : {}) })
         clients.set(signal.client, c)
     }
@@ -124,7 +129,7 @@ async function compute(window: Window, baseline: Window, min: number): Promise<R
         if (c.before * scale >= RESCUE.activity_min && c.now <= c.before * scale * (1 - RESCUE.activity_drop))
             c.reasons.push({ kind: 'activity_drop', text: `Overall use fell: ${c.now} attempts, from ${scaled(c.before)}${per}`, now: c.now, before: scaled(c.before) })
         if (!c.reasons.length) continue
-        c.reasons.sort((a, b) => weights[b.kind] - weights[a.kind] || b.before - a.before || (a.task_id || '').localeCompare(b.task_id || ''))
+        c.reasons.sort((a, b) => weights[b.kind] - weights[a.kind] || (b.before ?? 0) - (a.before ?? 0) || (a.task_id || '').localeCompare(b.task_id || ''))
         const score = c.reasons.reduce((sum, r) => sum + weights[r.kind], 0) * Math.log2(2 + c.before)
         // Urgent at 40 weighted volume points, or any missing task together with lost regular users.
         const urgent = score >= RESCUE.urgent || c.reasons.some(r => r.kind === 'missing') && c.reasons.some(r => r.kind === 'users_lost')
@@ -150,16 +155,17 @@ async function answer(p: RescueParams): Promise<RescueQueue> {
     if (!Number.isInteger(min) || min < 1 || min > 100000) throw new ToolInputError('min_attempts must be an integer from 1 to 100000')
     const current=coverage(window), previousCoverage=coverage(baseline)
     const cover={...current,complete:current.complete && previousCoverage.complete && p.compare!=='none',comparison:{requested:baseline,status:p.compare==='none'?'none':current.complete && previousCoverage.complete?'complete':'unavailable',reason:p.compare==='none'?'Comparison disabled':current.complete && previousCoverage.complete?'Both periods complete':'Comparisons require complete current and baseline periods; omitted'},baseline:previousCoverage}
-    const base = { coverage: cover, window, baseline, data_through: through, hidden_snoozed: 0, note: 'Ranked from processed task history. Review the evidence with the account team.' }
+    const base = { coverage: cover, window, baseline, data_through: through, hidden_snoozed: 0, note: 'Ranked from processed task history. Review the evidence with the account team. Signal reasons (key_person_gap, work_moving_out, giving_up, recurring_close_error) are measured over their own inclusive UTC windows in signal_windows, not the queue window; they have no now/before, use their evidence.' }
     if (!cover.complete) return { ...base, clients: [], observed_usage:query<{client:string;attempts:number;done:number}>(`SELECT client,sum(attempts) attempts,sum(done) done FROM task_daily WHERE day BETWEEN ? AND ? AND day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= 'analysis_unavailable:' AND key < 'analysis_unavailable;') GROUP BY client ORDER BY attempts DESC LIMIT 150`,window.from,window.to),note:base.note+' Comparison omitted; observed_usage includes only covered days and has no decline flags.' }
-    const clients = await compute(window, baseline, min), pw = moved(window), pb = moved(baseline)
+    const signal_windows: SignalWindows = {}
+    const clients = await compute(window, baseline, min, signal_windows), pw = moved(window), pb = moved(baseline)
     // An incomplete earlier comparison cannot be evidence of worsening or recovery.
     const previous = coverage(pw, pb).complete ? new Map((await compute(pw, pb, min)).map(c => [c.client, c.score])) : null
     for (const c of clients) {
         const old = previous?.get(c.client)
         c.trend = old === undefined ? 'new' : c.score > old + 1e-9 ? 'worse' : c.score < old - 1e-9 ? 'better' : 'same'
     }
-    return { ...base, clients, ...(!previous ? { note: base.note + ' Earlier comparison is incomplete; trend is new until a prior flag is available.' } : {}) }
+    return { ...base, signal_windows, clients, ...(!previous ? { note: base.note + ' Earlier comparison is incomplete; trend is new until a prior flag is available.' } : {}) }
 }
 export async function rescueQueue(p: RescueParams = {}): Promise<RescueQueue> {
     const { include_snoozed, ...params } = p

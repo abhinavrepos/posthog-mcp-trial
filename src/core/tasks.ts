@@ -747,28 +747,35 @@ export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits
     const values = { from: day, to: shift(day, 1), scan_from: shift(day, -1), scan_to: shift(day, 2), events: [reg.events.screen, reg.events.interaction] }
     // Sessions whose first Reval event is on this day (a session from the evening before is not this day's).
     const startedToday = `SELECT $session_id FROM events WHERE timestamp >= {scan_from} AND timestamp < {to} AND event IN {events} AND $session_id != ''
-            GROUP BY $session_id HAVING min(timestamp) >= {from} AND min(timestamp) < {to}`
+            GROUP BY $session_id HAVING min(timestamp) >= {from} AND min(timestamp) < {to} ORDER BY $session_id LIMIT ${MAX_SESSIONS}`
     const ids = await q(`SELECT $session_id AS sid, min(timestamp) AS first_ts, argMin(toFloat(properties.$time), timestamp) AS first_ctime FROM events
             WHERE timestamp >= {scan_from} AND timestamp < {to} AND event IN {events} AND $session_id != ''
             GROUP BY sid HAVING first_ts >= {from} AND first_ts < {to} ORDER BY sid LIMIT ${MAX_SESSIONS}`, values)
+    const firsts = new Map(ids.map(r => [String(r.sid), r]))
+    const last_sid = String(ids.at(-1)?.sid || '')
     let truncated = ids.length >= MAX_SESSIONS
     const sessions: Step[][] = [], clientNames = new Map<string, string>(), dialogCounts = new Map<string, Map<string, number>>()
     const by = new Map<string, RawEvent[]>()
     let events = 0, sid = '', ts = values.from, uuid = ''
     while (ids.length && events < MAX_EVENTS) {
-        const range = `timestamp >= {from} AND timestamp < {scan_to} AND event IN {events} AND $session_id IN (${startedToday})`
+        const range = `timestamp >= {from} AND timestamp < {scan_to} AND event IN {events} AND $session_id <= {last_sid} AND $session_id IN (${startedToday})`
         const keys = await q(`SELECT $session_id AS sid, timestamp AS ts, toString(uuid) AS event_uuid FROM events
                 WHERE ${range} AND ($session_id, timestamp, toString(uuid)) > ({sid}, {ts}, {uuid})
-                ORDER BY $session_id, timestamp, toString(uuid) LIMIT ${EVENT_PAGE}`, { ...values, sid, ts, uuid })
+                ORDER BY $session_id, timestamp, toString(uuid) LIMIT ${EVENT_PAGE}`, { ...values, last_sid, sid, ts, uuid })
         if (!keys.length) break
         const end = keys.at(-1)!
         const rows = await q(`SELECT ${columns(reg)}, toString(uuid) AS event_uuid, ${P.clientName} AS client_name FROM events
                 WHERE ${range} AND ($session_id, timestamp, toString(uuid)) > ({sid}, {ts}, {uuid})
                 AND ($session_id, timestamp, toString(uuid)) <= ({end_sid}, {end_ts}, {end_uuid}) LIMIT ${EVENT_PAGE * 2}`,
-            { ...values, sid, ts, uuid, end_sid: String(end.sid), end_ts: String(end.ts), end_uuid: String(end.event_uuid) })
+            { ...values, last_sid, sid, ts, uuid, end_sid: String(end.sid), end_ts: String(end.ts), end_uuid: String(end.event_uuid) })
         // The same order as the keys: session, then time (PostHog's own format, to the microsecond), then id.
         // An event that arrived between the two reads lies inside the range and is simply included.
-        const page = rows.sort((a, b) => cmp(String(a.sid), String(b.sid)) || cmp(String(a.ts), String(b.ts)) || cmp(String(a.event_uuid), String(b.event_uuid)))
+        // New sessions can arrive between reads; only admitted sessions have recording offsets.
+        const page = rows.filter(row => {
+            if (firsts.has(String(row.sid))) return true
+            truncated = true
+            return false
+        }).sort((a, b) => cmp(String(a.sid), String(b.sid)) || cmp(String(a.ts), String(b.ts)) || cmp(String(a.event_uuid), String(b.event_uuid)))
         events += page.length
         for (const row of page) {
             const e = toRaw(row)
@@ -787,7 +794,7 @@ export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits
         if (events >= MAX_EVENTS) truncated = true
     }
     for (const ev of by.values()) sessions.push(toSteps(ev, reg))
-    const attempts = extractAttempts(sessions, reg), firsts = new Map(ids.map((r) => [String(r.sid), r]))
+    const attempts = extractAttempts(sessions, reg)
     const sessionFirst = new Map(sessions.filter((s) => s.length).map((s) => [s[0].raw.sid, s[0]]))
     for (const a of attempts) {
         a.day = day
@@ -811,11 +818,11 @@ export async function ingestDay(day: string, query: TaskQuery = taskQuery, waits
     const dialogNames = new Map([...dialogCounts].map(([d, c]) => [d, [...c].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0]]))
     // Tasks can finish the following day, so that entire scan window must have elapsed at the start.
     // A day processed before can be read again (the friction/workflow backfill re-reads every kept day). If
-    // PostHog now has fewer sessions for it (its retention or a deletion), keep what Lens already has: storing
+    // PostHog now has fewer sessions or events for it (its retention or a deletion), keep what Lens already has: storing
     // the smaller read would wipe good history. The day is left out of the new analyses, which say so.
-    const prior = one<{ sessions: number; finalized: number }>('SELECT sessions, finalized FROM task_ingest WHERE day = ?', day)
-    if (prior?.finalized && ids.length < prior.sessions) {
-        state('analysis_unavailable:' + day, JSON.stringify({ sessions_before: prior.sessions, sessions_now: ids.length }))
+    const prior = one<{ sessions: number; events: number; finalized: number }>('SELECT sessions, events, finalized FROM task_ingest WHERE day = ?', day)
+    if (prior?.finalized && (ids.length < prior.sessions || events < prior.events)) {
+        state('analysis_unavailable:' + day, JSON.stringify({ sessions_before: prior.sessions, sessions_now: ids.length, events_before: prior.events, events_now: events }))
         return
     }
     run('DELETE FROM task_state WHERE key IN (?,?)', 'query_failed:'+day, 'analysis_unavailable:'+day)

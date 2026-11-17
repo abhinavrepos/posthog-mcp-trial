@@ -26,7 +26,10 @@ export function analyticalResult(name:string,args:unknown,result:unknown, reques
     let block:Record<string,unknown>
     if(value?.coverage && typeof value.coverage==='object' && 'requested' in value.coverage) block=value.coverage as Record<string,unknown>
     else if(retained.has(name)) block=coverage(window) as unknown as Record<string,unknown>
-    else block={requested:{from:parsed.from.toISOString(),to_exclusive:parsed.to.toISOString(),timezone:'UTC'},answered:[{from:parsed.from.toISOString(),to_exclusive:parsed.to.toISOString()}],status:'source_observed',datasets:[{name,source:'posthog_live_or_retained_objects',covered_ranges:[{from:parsed.from.toISOString(),to_exclusive:parsed.to.toISOString()}],missing_ranges:[],detail:'Successful source query covers the requested timestamps; source retention and historical object availability are not independently verified.'}],comparison:{status:'none'},freshness:{data_through:dataThrough(),computed_at:new Date().toISOString()}}
+    else block={requested:{from:parsed.from.toISOString(),to_exclusive:parsed.to.toISOString(),timezone:'UTC'},answered:[{from:parsed.from.toISOString(),to_exclusive:parsed.to.toISOString()}],status:'source_observed',datasets:[{name,source:'posthog_live_or_retained_objects',covered_ranges:[{from:parsed.from.toISOString(),to_exclusive:parsed.to.toISOString()}],missing_ranges:[],detail:'Successful source query covers the answered timestamps; source retention and historical object availability are not independently verified.'}],comparison:{status:'none'},freshness:{data_through:dataThrough(),computed_at:new Date().toISOString()}}
+    // Vocabulary may answer only a bounded fallback; retain the original request separately.
+    const requestedWindow=value?.requested_window as {from:string;to:string}|undefined
+    if(requestedWindow) block={...block,requested:{from:requestedWindow.from,to_exclusive:requestedWindow.to,timezone:'UTC'}}
     if(name==='client_experience' && value?.usage) block={...block,comparison:(value.usage as {comparison:unknown}).comparison}
     const arrays=value ? Object.values(value).filter(Array.isArray) : []
     const rows=arrays.reduce((n,a)=>n+a.length,0)

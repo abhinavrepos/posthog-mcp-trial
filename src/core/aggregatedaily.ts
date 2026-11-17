@@ -49,10 +49,14 @@ export async function ingestAggregateDaily(db: DatabaseSync, day: string, query:
     // A finalized task day is evidence of a lower bound, even after upstream retention.
     const hasIngest = db.prepare("SELECT 1 FROM sqlite_master WHERE name='task_ingest'").get()
     const prior = hasIngest ? db.prepare('SELECT sessions,events,finalized FROM task_ingest WHERE day=?').get(day) : undefined
-    if (prior?.finalized) {
-        const sessions = new Set(rows.flatMap(r => (r.sessions as string[]).filter(Boolean)))
-        const events = rows.reduce((sum,r) => sum + Number(r.n), 0)
-        if (sessions.size < Number(prior.sessions) || events < Number(prior.events)) {
+    if (prior?.finalized && (Number(prior.sessions) > 0 || Number(prior.events) > 0)) {
+        // Task evidence owns two days of events for sessions starting here, not one event day.
+        const counts = await query(`SELECT count() AS events, uniqExact($session_id) AS sessions FROM events
+            WHERE timestamp >= {from} AND timestamp < {scan_to} AND event IN {events} AND $session_id IN (
+                SELECT $session_id FROM events WHERE timestamp >= {scan_from} AND timestamp < {to} AND event IN {events} AND $session_id != ''
+                GROUP BY $session_id HAVING min(timestamp) >= {from} AND min(timestamp) < {to} ORDER BY $session_id LIMIT 100000)`,
+            { from: day, to: new Date(Date.parse(day)+DAY).toISOString().slice(0,10), scan_from: new Date(Date.parse(day)-DAY).toISOString().slice(0,10), scan_to: new Date(Date.parse(day)+2*DAY).toISOString().slice(0,10), events: [reg.events.screen, reg.events.interaction] })
+        if (Number(counts[0]?.sessions || 0) < Number(prior.sessions) || Number(counts[0]?.events || 0) < Number(prior.events)) {
             db.prepare('DELETE FROM aggregate_dimension_daily WHERE day=?').run(day)
             db.prepare('INSERT OR REPLACE INTO aggregate_dimension_skipped VALUES (?,?)').run(day,'source_expired')
             return false
@@ -69,7 +73,15 @@ function periodOf(day: string, bucket: string): string {
     if (bucket === 'year') return day.slice(0,4)+'-01-01'
     return day
 }
+function readSnapshot<T>(db: DatabaseSync, read: () => T): T {
+    db.exec('BEGIN')
+    try { const result = read(); db.exec('COMMIT'); return result }
+    catch (e) { db.exec('ROLLBACK'); throw e }
+}
 export function dailyAggregate(db: DatabaseSync, q: DailyQuery) {
+    return readSnapshot(db, () => aggregateSnapshot(db, q))
+}
+function aggregateSnapshot(db: DatabaseSync, q: DailyQuery) {
     if (+q.from % DAY || +q.to % DAY || +q.from >= +q.to) return undefined
     const lo=q.from.toISOString().slice(0,10), hi=q.to.toISOString().slice(0,10)
     const count=Number(db.prepare('SELECT count(*) n FROM aggregate_dimension_daily WHERE day>=? AND day<?').get(lo,hi)!.n)
@@ -138,6 +150,9 @@ export function dailyAggregate(db: DatabaseSync, q: DailyQuery) {
 }
 /** Vocabulary uses the same exact grains. A full-coverage check prevents silent partial counts. */
 export function dailyVocabulary(db: DatabaseSync, from: Date, to: Date) {
+    return readSnapshot(db, () => vocabularySnapshot(db, from, to))
+}
+function vocabularySnapshot(db: DatabaseSync, from: Date, to: Date) {
     const lo=from.toISOString().slice(0,10),hi=to.toISOString().slice(0,10)
     if(Number(db.prepare('SELECT count(*) n FROM aggregate_dimension_daily WHERE day>=? AND day<?').get(lo,hi)!.n)!==(+to-+from)/DAY)return undefined
     const reg=required(), events=new Map<string,number>(), clients=new Map<string,number>(), values=new Map<string,Map<string,number>>()

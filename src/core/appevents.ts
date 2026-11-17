@@ -1,3 +1,4 @@
+import { historyLimits } from './historycoverage.ts'
 import { ToolInputError } from './toolinputerror.ts'
 import { requestedToolWindow } from './toolcontext.ts'
 import { privacyMode } from './anonymise.ts'
@@ -947,7 +948,9 @@ export interface Vocabulary {
     clients: { client: string; events: number }[]
     undescribed_properties?: string[]
     how_to_query: string[]
-    window: string
+    window: { from: string; to: string }
+    requested_window: { from: string; to: string }
+    note: string
 }
 
 /** What the app's events are and hold, from the vocabulary and the last days of data. */
@@ -1034,8 +1037,10 @@ export async function describeAppEvents(days = 7, clientSource = ''): Promise<Vo
             `Errors: ${prop(reg, 'dialog')} IN (${reg.dialogs.messages.map((d) => `'${d}'`).join(', ')}); notices: IN (${reg.dialogs.notices.map((d) => `'${d}'`).join(', ')}). Messages carry no dialog of their own: the attempt just before them in the session is what failed.`,
             `Always bound queries by timestamp; event IN ('${reg.events.screen}', '${reg.events.interaction}').`,
         ],
-        window: bounded ? `Requested last ${days} days; vocabulary counts cover only ${from.toISOString()} to ${to.toISOString()} (at most 7 recent days). Daily dimension rollups do not cover this whole window.`
-            : unprocessed ? `Counts cover ${from.toISOString().slice(0, 10)} to ${through} from Lens's daily history; the last ${unprocessed} day${unprocessed === 1 ? '' : 's'} of the requested window ${unprocessed === 1 ? 'is' : 'are'} not processed yet (data through ${through}).` : `last ${days} days`,
+        window: { from: from.toISOString(), to: to.toISOString() },
+        requested_window: { from: requested.from.toISOString(), to: requested.to.toISOString() },
+        note: bounded ? `Requested ${requested.from.toISOString()} to ${requested.to.toISOString()}; vocabulary counts cover only ${from.toISOString()} to ${to.toISOString()} (at most 7 recent days). Daily dimension rollups do not cover this whole window.`
+            : unprocessed ? `Counts cover ${from.toISOString().slice(0, 10)} to ${through} from Lens's daily history; the last ${unprocessed} day${unprocessed === 1 ? '' : 's'} of the requested window ${unprocessed === 1 ? 'is' : 'are'} not processed yet (data through ${through}).` : `Counts cover only ${from.toISOString()} to ${to.toISOString()} (UTC, end exclusive).`,
     }
 }
 
@@ -1276,6 +1281,9 @@ export interface PainsReport {
     window: { from: string; to: string }
     pains: (Pain & { replay_url?: string })[]
     clients_needing_attention: { client: string; signals: string[] }[]
+    limits?: ReturnType<typeof historyLimits>
+    total_pains?: number
+    truncated?: boolean
     note: string
 }
 
@@ -1294,11 +1302,14 @@ export async function topPains(q: { from: Date; to: Date; max?: number } & Compa
         clientSignalsReport({ ...q, limit: 50 }),
     ])
     const comparable = !!before
-    const pains = rankPains(now.dialogs, before?.dialogs || [], q.max ?? 5)
+    const ranked = rankPains(now.dialogs, before?.dialogs || [], Number.MAX_SAFE_INTEGER)
+    const pains = ranked.slice(0, q.max ?? 5)
     if(!comparable) for(const p of pains) { p.trend='unavailable';p.headline=p.headline.replace(/;.*$/, '') }
     const spans = await recordingSpans(pains.flatMap((p) => (p.example ? [p.example.session_id] : []))).catch(() => new Map())
     return {
         window: now.window,
+        total_pains: ranked.length, truncated: pains.length < ranked.length,
+        limits: historyLimits(pains.length, ranked.length - pains.length),
         source: now.source === 'history' ? 'history' : 'live',
         coverage: {...nowCoverage, comparison:{requested:baseline,status:q.compare==='none'?'none':comparable?'complete':'unavailable',reason:comparable?`Complete baseline (${before!.source})`:q.compare==='none'?'Comparison disabled':`Baseline not available: ${baselineReason || 'not covered'}`}, baseline:beforeCoverage }, data_through: now.data_through,
         pains: pains.map((p) => {

@@ -80,8 +80,8 @@ export function systemHtml(v: Viewer): string {
 .banner p{margin:2px 0 0;color:var(--muted);font-size:13px}
 .banner.ok{background:var(--good-bg)}
 .banner.ok .big{background:var(--good)}
-.banner.warn{background:var(--down-bg)}
-.banner.warn .big{background:var(--down)}
+.banner.warn{background:var(--warn-bg)}
+.banner.warn .big{background:var(--warn)}
 .banner.down{background:var(--down-bg)}
 .banner.down .big{background:var(--down)}
 .charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px}
@@ -97,8 +97,8 @@ export function systemHtml(v: Viewer): string {
 .st{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;white-space:nowrap}
 .st i{font-style:normal;width:16px;height:16px;border-radius:50%;display:grid;place-items:center;color:var(--card);font-size:10px}
 .st.ok{color:var(--good)}
-.st.warn{color:var(--down)}
-.st.warn i{background:var(--down)}
+.st.warn{color:var(--warn)}
+.st.warn i{background:var(--warn)}
 .st.down{color:var(--down)}
 .st.down i{background:var(--down)}
 .st.info{color:var(--muted)}
@@ -128,7 +128,7 @@ main .ghost{border-color:transparent;color:var(--ink)}
 .banner>div{min-width:0}
 .tile{min-width:0;background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px 20px}
 .section-details[open]>summary{margin-bottom:20px}
-.section-details .card{border:0;margin:0}
+.section-details .card{border:1px solid var(--line);margin:0}
 .charts,.split{gap:16px 32px}
 details summary{cursor:pointer}
 .tools{display:flex;justify-content:space-between;flex-wrap:wrap;align-items:center;margin-bottom:8px;gap:16px}
@@ -136,10 +136,10 @@ details summary{cursor:pointer}
 .svc{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:4px 12px;align-items:center;border-top:1px solid var(--line);font-size:14px;padding:10px 0}
 .table-wrap{min-width:0}
 main{min-width:0}
-main h1{font-size:24px;line-height:32px;font-weight:650;margin:0}
+main h1{font-size:24px;line-height:32px;font-weight:600;margin:0}
 main .page-head{margin-bottom:24px;align-items:center}
 main .page-head p{margin:4px 0 0;font-size:14px;line-height:20px}
-main h2{font-size:16px;line-height:24px;font-weight:600;margin:0 0 12px}
+main h2{font-size:15px;line-height:24px;font-weight:600;margin:0 0 12px}
 main h3{font-size:14px;line-height:20px;font-weight:600;margin:0 0 8px}
 main input:not([type=checkbox]):not([type=radio]),main select{height:36px;min-height:36px;padding:7px 10px;font-size:13px;line-height:20px;max-width:100%;box-sizing:border-box}
 main button,main .btn{min-height:36px;font-size:13px;line-height:20px;white-space:nowrap;word-break:normal;overflow-wrap:normal}
@@ -154,7 +154,7 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .tabs .tab-link,.tabs .tab-link0{color:var(--muted);text-decoration:none;font-weight:500;padding:8px 12px;border-bottom:2px solid transparent}
 .tabs :is([aria-current],[aria-selected=true]){color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
 .banner{display:flex;border:0;border-radius:0;background:transparent;align-items:flex-start;padding:0 0 24px;margin-bottom:16px;gap:12px}
-.banner h1{margin:0;font-size:24px;line-height:32px}
+.banner h2{margin:0;font-size:24px;line-height:32px}
 .banner .big{font-weight:700;border-radius:50%;display:grid;place-items:center;flex:none;color:var(--card);background:var(--muted);width:28px;height:28px;font-size:16px;margin-top:2px}
 #problems>.card{padding:16px 24px;margin-bottom:24px}
 #problems h2{margin-bottom:8px}
@@ -168,8 +168,8 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .section-details{border-bottom:1px solid var(--line);padding:14px 0}
 .section-details>summary{cursor:pointer;font-size:14px;line-height:20px;font-weight:600}
 .containers-card{margin-top:24px}
-.containers-card>.tools{display:block}
-.container-controls{display:flex;align-items:center;gap:12px;margin-top:16px}
+.containers-card>.tools{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.container-controls{display:flex;align-items:center;gap:12px;margin-top:0}
 .container-controls input{flex:1;width:auto;max-width:none;min-width:0}
 .container-controls .view-control{flex:none;margin:0}
 .containers-table th:nth-child(5){width:180px}
@@ -182,7 +182,7 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .view-control{position:relative}
 .view-control[open]>.tools{position:absolute;right:0;z-index:2;min-width:220px;background:var(--card);border:1px solid var(--line);padding:12px}
 .machine-details{margin:0 0 16px}
-.tile b{display:block;font-variant-numeric:tabular-nums;font-size:26px;line-height:32px;font-weight:650;letter-spacing:-.02em;margin:6px 0 2px;white-space:normal}
+.tile b{display:block;font-variant-numeric:tabular-nums;font-size:26px;line-height:32px;font-weight:600;letter-spacing:-.02em;margin:6px 0 2px;white-space:normal}
 .containers-table .badge{white-space:nowrap;font-size:11px}
 @media (max-width:640px){.tools input{max-width:none}
 th.r,td.r{display:none}
@@ -206,7 +206,7 @@ th,td{padding:7px 4px}
 .st{white-space:normal}
 .banner{padding:12px;gap:10px}
 .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
-.banner h1{font-size:24px}
+.banner h2{font-size:24px}
 
 .containers-table .st{white-space:nowrap}
 }
@@ -216,7 +216,8 @@ th,td{padding:7px 4px}
 }
 </style></head>
 <body>${headerHtml(v, 'System')}<main class="wide">
-<div class="banner" id="banner"><span class="big" id="b-icon" aria-hidden="true">…</span><div><h1 id="b-head" role="status" aria-live="polite">Checking…</h1><p id="b-sub"></p></div></div>
+<div class="page-head"><div><h1>System</h1><p>Service health, ingestion and server activity.</p></div></div>
+<div class="banner" id="banner"><span class="big" id="b-icon" aria-hidden="true">…</span><div><h2 id="b-head" role="status" aria-live="polite">Checking…</h2><p id="b-sub"></p></div></div>
 <div id="problems"></div><div id="problems-pager"></div>
 <div id="tiles"></div>
 <details class="section-details"><summary>Trends</summary><div class="charts">

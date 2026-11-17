@@ -77,11 +77,11 @@ export function liveHtml(v: Viewer): string {
 :root{--act:var(--muted);--idle:var(--line-strong);--grid:var(--line);--axis:var(--faint);--live:var(--ok)}
 .table-wrap:has(#now-rows .empty-state,#list .empty-state) td.empty-state{border-bottom:0}
 
-.now{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}#now-sub{flex:1;min-width:220px;font-size:14px}#now-updated{margin-left:auto;text-align:right}.hero{font-size:36px;font-weight:650;line-height:1}
+.now{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}#now-sub{flex:1;min-width:220px;font-size:14px}#now-updated{margin-left:auto;text-align:right}.hero{font-size:36px;font-weight:600;line-height:1}
 .pulse{width:12px;height:12px;border-radius:50%;background:var(--live);flex:none}.pulse.off{background:var(--axis);animation:none}
 .filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin:4px 0 16px}.filters>div,.filters>div.grow{min-width:0;flex:1 1 0}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
-.tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;min-height:112px;min-width:0}.tile span{display:block;font-size:12px;line-height:16px;font-weight:500;color:var(--muted)}.tile b{display:block;font-size:28px;line-height:32px;font-weight:650;letter-spacing:-.02em;margin-top:8px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;min-height:112px;min-width:0}.tile span{display:block;font-size:12px;line-height:16px;font-weight:500;color:var(--muted)}.tile b{display:block;font-size:28px;line-height:32px;font-weight:600;letter-spacing:-.02em;margin-top:8px}
 .tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
 .seg{display:flex;gap:2px;height:8px;width:100%;margin-top:8px}.seg i{display:block;height:8px;border-radius:999px}.seg .a{background:var(--act)}.seg .i{background:var(--idle)}
 td .seg{width:90px;margin:0;display:inline-flex;vertical-align:middle}
@@ -98,7 +98,7 @@ td .seg{width:90px;margin:0;display:inline-flex;vertical-align:middle}
 th.sort{cursor:pointer;user-select:none}th.sort:hover{color:var(--ink)}th .arr{font-size:10px;margin-left:3px}
 tr.click{cursor:pointer}tr.click:hover td{background:var(--bg)}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--live);margin-right:6px}
-.loading{opacity:.55;transition:opacity .2s}.pill{display:inline-flex;gap:6px;align-items:center;background:var(--chip);border-radius:999px;padding:3px 10px;font-size:13px}
+.loading{cursor:progress}.pill{display:inline-flex;gap:6px;align-items:center;background:var(--chip);border-radius:999px;padding:3px 10px;font-size:13px}
 .pill button{padding:0 4px;border:0;background:none;color:var(--accent);font-size:15px;line-height:1}
 details.how summary{cursor:pointer;font-weight:500}details.how li{margin:4px 0}
 .tl-head{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}.tl-nav{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
@@ -108,9 +108,9 @@ details.how summary{cursor:pointer;font-weight:500}details.how li{margin:4px 0}
 .tlbtn{padding:3px 9px;font-size:13px}#tl-pick{min-height:34px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .live-settings{align-self:flex-end;min-width:0;padding:0;flex:0 0 auto}.live-settings>summary{display:flex;align-items:center;min-height:36px;padding:7px 12px;border:1px solid var(--control);border-radius:var(--r-sm)}.live-settings[open]{flex-basis:100%}.live-settings>div{max-width:260px;margin-top:12px}.heat-scroll{overflow-x:auto;max-width:100%}.heat{min-width:640px}.tiles{gap:16px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}.tl-facts{gap:6px 20px}
 @media(max-width:600px){.hero{font-size:30px}.now{gap:10px}#now-sub{min-width:0;flex-basis:180px}.live-settings{flex-basis:100%;padding:0}.tl-nav{gap:4px}.tl-nav input[type=date]{max-width:145px}.tl-facts{gap:4px 14px}}
-#chart-title{margin-bottom:4px}#chart-title+p{margin:0 0 16px}.chart-empty{height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center}#list tbody td{vertical-align:middle}#sessions td.small,#sessions td.num{white-space:nowrap}#list tbody td.small,#list tbody td:has(>.seg){white-space:nowrap}#list tbody button.ghost{min-height:28px;padding:0;font-weight:500;text-align:left;white-space:nowrap}#list tbody button.ghost:hover{background:transparent;color:var(--accent);text-decoration:underline}#list thead button.ghost{min-height:24px;padding:0;font-size:12px;line-height:20px;font-weight:500;color:var(--muted)}#list-csv{font-size:13px;font-weight:500;min-height:32px;padding:5px 10px}#list-note{margin:12px 0 0}#list-note:empty,#live-status:empty{display:none}
+#chart-title{margin-bottom:4px}#chart-title+p{margin:0 0 16px}.chart-empty{height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center}#list tbody td{vertical-align:middle}#sessions td.small,#sessions td.num{white-space:nowrap}#list tbody td.small,#list tbody td:has(>.seg){white-space:nowrap}#list tbody button.ghost{min-height:28px;padding:0;font-weight:500;text-align:left;white-space:nowrap}#list tbody button.ghost:hover{background:transparent;color:var(--accent);text-decoration:underline}#list thead button.ghost{min-height:24px;padding:0;font-size:12px;line-height:20px;font-weight:600;letter-spacing:.025em;color:var(--muted)}#list-csv{font-size:13px;font-weight:500;min-height:32px;padding:5px 10px}#list-note{margin:12px 0 0}#list-note:empty,#live-status:empty{display:none}
 </style></head>
-<body>${headerHtml(v, 'Live')}<main class="wide"><h1>Live activity</h1><p id="live-status" class="small" aria-live="polite"></p>
+<body>${headerHtml(v, 'Live')}<main class="wide"><div class="page-head"><div><h1>Live activity</h1><p>Current activity and active time across clients.</p></div></div><p id="live-status" class="small" aria-live="polite"></p>
 
 <div class="card"><h2>In the app now</h2><div class="now"><span aria-hidden="true" class="pulse off" id="pulse"></span><span class="hero" id="now-count">–</span><span class="muted" aria-live="polite" id="now-sub">Loading…</span><span id="now-updated" class="small muted"></span></div>
 <div class="table-wrap"><table><thead><tr><th scope="col">Client</th><th scope="col">Person</th><th scope="col">Last action</th><th scope="col">In the app since</th><th scope="col" class="num">Today in the app</th><th scope="col" class="num">Today active</th><th scope="col">Actions</th></tr></thead><tbody id="now-rows"></tbody></table><div id="now-pager"></div></div></div>

@@ -54,3 +54,18 @@ test('rescue output reads the selected privacy mode', async () => {
         forgetAnswers(); setAnonymise(previous)
     }
 })
+
+test('known names match case-insensitively while preserving original surrounding text', () => {
+    assert.equal(scrubWith(sort(['Jane Smith', 'jo']), 'ASK JANE SMITH or jane smith Today'), 'ASK [person] or [person] Today')
+    assert.equal(scrubWith(['jo'], 'JO'), '[person]')
+    assert.equal(scrubWith(['Jane Smith'], 'İ ASK JANE SMITH Today'), 'İ ASK [person] Today')
+})
+
+test('case-insensitive name matches need whole words; same-case matches behave as before', async () => {
+    const { scrubWith } = await import('../src/core/rescueprivacy.ts')
+    const tokens = ['Jane Smith', 'admin', 'mark']
+    assert.equal(scrubWith(tokens, 'Error for JANE SMITH: invalid date'), 'Error for [person]: invalid date')
+    assert.equal(scrubWith(tokens, 'Open the Admin page'), 'Open the [person] page')
+    assert.equal(scrubWith(tokens, 'Administrators and the Market'), 'Administrators and the Market')
+    assert.equal(scrubWith(tokens, 'bookmark saved'), 'book[person] saved') // exact case: unchanged behaviour
+})

@@ -280,7 +280,15 @@ describe('bounded workflow queries', () => {
             const q = JSON.parse(String(init.body)).query
             return q.query.includes('GROUP BY sid') ? response([...new Set(rows.map((r) => r.sid))].map((sid) => ({ sid }))) : response(rows)
         }))
+        const limited = await discoverWorkflows(win)
+        assert.equal(limited.discovered.length, 15)
+        assert.equal(limited.total_workflows, 16)
+        assert.equal(limited.limits.omitted_rows, 1)
+        assert.equal(limited.limits.returned_rows, 15)
+        assert.equal(limited.truncated, true)
         const all = await discoverWorkflows({ ...win, limit: 50 })
+        assert.equal(all.limits.omitted_rows, 0)
+        assert.equal(all.truncated, false)
         const w = await completionWorkflow({ ...win, workflow: all.discovered[15].name })
         assert.deepEqual(w.dialogs, all.discovered[15].dialogs)
         await assert.rejects(completionWorkflow({ ...win, workflow: 'missing' }), /No discovered workflow/)
@@ -294,4 +302,18 @@ describe('bounded workflow queries', () => {
         }))
         await assert.rejects(completionWorkflow({ ...win, workflow: "Start → Finish → Save → 'Trade Id … Updated'" }), /Ambiguous workflow/)
     })
+})
+
+
+test('completion note follows resolved unequal, equal and disabled comparison windows', async (t) => {
+    t.mock.method(globalThis, 'fetch', counted(async () => response([])))
+    const current = { from: new Date('2026-04-01'), to: new Date('2026-07-01'), definition: workflow }
+    const explicit = await workflowCompletionReport({ ...current, compare_with: { from: new Date('2026-01-01'), to: new Date('2026-04-01') } })
+    assert.match(explicit.note, /Previous window spans 90 days; current window spans 91 days/)
+    assert.doesNotMatch(explicit.note, /equal length/)
+    const equal = await workflowCompletionReport(current)
+    assert.match(equal.note, /Previous window has equal length/)
+    const disabled = await workflowCompletionReport({ ...current, compare: 'none' })
+    assert.match(disabled.note, /Comparison disabled/)
+    assert.doesNotMatch(disabled.note, /equal length/)
 })

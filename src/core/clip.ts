@@ -127,6 +127,15 @@ export const pendingRenders = () => { const s = renders.stats(); return s.queued
 
 /** The recording's snapshots as a cached JSONL file (also read by replaynet.ts). */
 const snapshotFlights = new Map<string, Promise<string>>()
+const snapshotUses = new Map<string, { count: number; files: Set<string> }>()
+/** Pin before fetching: another fetch can prune before an awaiting renderer resumes. */
+export async function withSnapshotsFile<T>(sessionId: string, use: (file: string) => Promise<T>): Promise<T> {
+    let active = snapshotUses.get(sessionId)
+    if (!active) { active = { count: 0, files: new Set() }; snapshotUses.set(sessionId, active) }
+    active.count++
+    try { return await use(await snapshotsFile(sessionId)) }
+    finally { if (!--active.count) snapshotUses.delete(sessionId) }
+}
 export function snapshotsFile(sessionId: string): Promise<string> {
     let flight = snapshotFlights.get(sessionId)
     if (!flight) {
@@ -153,6 +162,7 @@ async function fetchSnapshotsFile(sessionId: string): Promise<string> {
         rmSync(file, { force: true })
         throw new PostHogError('Recording too large for snapshot cache', 413)
     }
+    snapshotUses.get(sessionId)?.files.add(file)
     pruneCache(dir, file)
     return file
 }
@@ -167,7 +177,7 @@ export function pruneCache(dir: string, protectedFile: string): void {
     for (const x of files) {
         if (x.f === protectedFile) continue
         total += x.size
-        if (total > config.clip.maxCacheMb * 1024 * 1024) rmSync(x.f, { force: true })
+        if (total > config.clip.maxCacheMb * 1024 * 1024 && ![...snapshotUses.values()].some(use => use.files.has(x.f))) rmSync(x.f, { force: true })
     }
 }
 
@@ -209,31 +219,32 @@ async function renderUnqueued(req: ClipRequest): Promise<Clip> {
     const cached = cachedClip(req)
     if (cached) return cached
     const t0 = Date.now()
-    const input = await snapshotsFile(req.sessionId)
-    const { r, pool, html } = await getEngine()
-    const work = join(config.clip.cacheDir, 'render', name.replace(/\.mp4$/, ''))
-    return withRenderWork(work, async () => {
-        const out = await r.rasterizeFile(pool, html, input, work, {
-            start_offset_s: start,
-            end_offset_s: end,
-            playback_speed: 1,
-            skip_inactivity: false,
-            show_metadata_footer: true,
-            recording_fps: 12,
-            output_format: 'mp4',
+    return withSnapshotsFile(req.sessionId, async input => {
+        const { r, pool, html } = await getEngine()
+        const work = join(config.clip.cacheDir, 'render', name.replace(/\.mp4$/, ''))
+        return withRenderWork(work, async () => {
+            const out = await r.rasterizeFile(pool, html, input, work, {
+                start_offset_s: start,
+                end_offset_s: end,
+                playback_speed: 1,
+                skip_inactivity: false,
+                show_metadata_footer: true,
+                recording_fps: 12,
+                output_format: 'mp4',
+            })
+            moveFile(join(work, 'video.mp4'), file)
+            return {
+                session_id: req.sessionId,
+                file,
+                name,
+                start_offset_s: start,
+                end_offset_s: end,
+                video_duration_s: Number(out.video_duration_s ?? end - start),
+                size_bytes: statSync(file).size,
+                render_s: (Date.now() - t0) / 1000,
+                cached: false,
+            }
         })
-        moveFile(join(work, 'video.mp4'), file)
-        return {
-            session_id: req.sessionId,
-            file,
-            name,
-            start_offset_s: start,
-            end_offset_s: end,
-            video_duration_s: Number(out.video_duration_s ?? end - start),
-            size_bytes: statSync(file).size,
-            render_s: (Date.now() - t0) / 1000,
-            cached: false,
-        }
     })
 }
 

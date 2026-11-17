@@ -79,6 +79,9 @@ test('existing signed links stop streaming when sharing is disabled and resume w
         assert.equal(streamed - before, enabled ? 1 : 0)
         if (!enabled) assert.equal(result, 403)
     }
+    url.searchParams.set('c', '1')
+    assert.equal(await handler({ headers: {} }, {}, url), 403)
+    url.searchParams.delete('c')
     url.searchParams.set('sig', 'bad')
     assert.equal(await handler({ headers: {} }, {}, url), 403)
 })
@@ -142,4 +145,19 @@ test('MCP recording tools enforce insights and partition cached session stories'
             if(!insights) assert.doesNotMatch(JSON.stringify(result),/recording timing/)
         } finally {await client.close();await server.close()}
     }
+})
+
+
+test('clip signatures bind comment visibility and generated comment links validate', () => {
+    const previous = config.service.clipLinkSecret
+    config.service.clipLinkSecret = 'comment-signature-test'
+    try {
+        for (const comments of [false, true]) {
+            const url = new URL(clipUrl('session_0-30.mp4', Date.now(), comments), 'http://test')
+            assert.equal(url.searchParams.get('c') === '1', comments)
+            const verify = (c: boolean) => verifyClipLink('session_0-30.mp4', url.searchParams.get('exp'), url.searchParams.get('sig'), config.service.clipLinkSecret, Date.now(), c)
+            assert.equal(verify(comments), true)
+            assert.equal(verify(!comments), false)
+        }
+    } finally { config.service.clipLinkSecret = previous }
 })

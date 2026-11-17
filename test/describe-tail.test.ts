@@ -27,8 +27,36 @@ test('a window ending after the processed history is answered from the rollups, 
     })
     // Requested through 2026-01-13 (exclusive): 3 days past the history, which ends on 2026-01-10.
     const window = { from: new Date(first), to: new Date(first + 13 * DAY), label: 'test', precision: 'range' as const }
-    const v = await toolContext.run({ window, clients: new Set(), correlationId: 'x' }, () => describeAppEvents(13)) as unknown as { events: { name: string; count: number }[]; window: string }
+    const v = await toolContext.run({ window, clients: new Set(), correlationId: 'x' }, () => describeAppEvents(13))
     assert.deepEqual(v.events.map((e) => [e.name, e.count]), [[reg.events.screen, 1000]])
-    assert.match(v.window, /Counts cover 2026-01-01 to 2026-01-10 from Lens's daily history; the last 3 days of the requested window are not processed yet/)
+    assert.match(v.note, /Counts cover 2026-01-01 to 2026-01-10 from Lens's daily history; the last 3 days of the requested window are not processed yet/)
+    assert.deepEqual(v.window, { from: window.from.toISOString(), to: new Date(first + 10 * DAY).toISOString() })
+    assert.deepEqual(v.requested_window, { from: window.from.toISOString(), to: window.to.toISOString() })
     assert.ok(!live.some((b) => /GROUP BY event/.test(b)), 'no live event count')
+})
+
+
+test('seven-day vocabulary fallback retains answered and requested dates through history and concise output', async (t) => {
+    const { analyticalResult } = await import('../src/mcp/historyresult.ts')
+    const { applyDetail } = await import('../src/mcp/structured.ts')
+    const queries: string[] = []
+    t.mock.method(globalThis, 'fetch', async (_u: unknown, init: RequestInit) => {
+        queries.push(String(init.body))
+        return new Response(JSON.stringify({ columns: [], results: [] }))
+    })
+    const window = { from: new Date('2026-04-01'), to: new Date('2026-07-01'), label: 'Q2', precision: 'range' as const }
+    const v = await toolContext.run({ window, clients: new Set(), correlationId: 'fallback' }, () => describeAppEvents(91))
+    assert.deepEqual(v.window, { from: '2026-06-24T00:00:00.000Z', to: '2026-07-01T00:00:00.000Z' })
+    assert.deepEqual(v.requested_window, { from: window.from.toISOString(), to: window.to.toISOString() })
+    assert.match(v.note, /counts cover only.*at most 7 recent days/)
+    assert.ok(queries.some(q => q.includes('2026-06-24T00:00:00.000Z')))
+    for (const detail of ['full', 'concise'] as const) {
+        const result = applyDetail('describe_app_events', analyticalResult('describe_app_events', {}, { _lensJson: { label: 'Vocabulary', value: v } }, window), detail) as any
+        const out = result._lensJson.value
+        assert.deepEqual(out.window, { from: '2026-06-24', to: '2026-06-30' })
+        assert.deepEqual(out.requested_window, v.requested_window)
+        assert.equal(out.coverage.requested.from, window.from.toISOString())
+        assert.equal(out.coverage.answered[0].from, v.window.from)
+        assert.match(out.note, /counts cover only/)
+    }
 })

@@ -195,7 +195,7 @@ test('ingest: one session query, 50,000-event keyset pages with timestamp ties, 
         if (sql.includes('{end_sid}')) {
             // the wide read: a bounded range, never sorted by ClickHouse; rows come back in any order
             rowQueries++
-            assert.doesNotMatch(sql, /ORDER BY/, 'wide rows are not sorted in ClickHouse')
+            assert.doesNotMatch(sql, /ORDER BY \$session_id, timestamp/, 'wide rows are not sorted in ClickHouse')
             assert.deepEqual([values.end_sid, values.end_uuid], [ids[0].sid, page1.at(-1)!.event_uuid])
             return [...page1].reverse()
         }
@@ -425,4 +425,39 @@ test('summary counts accepted and empty submits without treating other families 
     assert.equal(s.users[0].user, 'ENV|01|ACME|alice')
     assert.equal(s.users[0].completed, 2); assert.equal(s.clients[0].productive_done, 2)
     assert.equal(s.ops[0].accepted, 1); assert.equal(s.ops[1].empty, 1); assert.equal(s.ops[2].completed, 1)
+})
+
+test('finalized rereads with the same sessions and fewer events preserve all retained evidence', async () => {
+    reset()
+    const d = day(3)
+    storeAttempts(d, [attempt(d)], { sessions: 1, events: 2, analysisSessions: [] })
+    const {storeAggregateDaily}=await import('../src/core/aggregatedaily.ts')
+    storeAggregateDaily(tasksDb,d,[])
+    const tables=['task_ingest','task_attempts','task_daily','task_paths_daily','task_users_daily','analysis_days','aggregate_dimension_daily']
+    const retained = tables.map(table=>tasksDb.prepare(`SELECT * FROM ${table} WHERE day=?`).all(d))
+    await ingestDay(d, async sql => sql.includes('first_ctime') ? [{ sid: 'sid', first_ts: `${d}T10:00:00Z`, first_ctime: 0 }] : [])
+    assert.deepEqual(tables.map(table=>tasksDb.prepare(`SELECT * FROM ${table} WHERE day=?`).all(d)), retained)
+    assert.equal(tasksDb.prepare('SELECT events FROM task_ingest WHERE day=?').get(d)!.events, 2)
+    assert.match(String(tasksDb.prepare('SELECT value FROM task_state WHERE key=?').get('analysis_unavailable:'+d)!.value), /"events_now":0/)
+    const {coverage}=await import('../src/core/tasks.ts')
+    const disclosure=JSON.stringify(coverage({from:d,to:d}))
+    assert.match(disclosure,/source_expired/); assert.match(disclosure,/sessions or events/)
+})
+
+test('session cap bounds both event pages to the deterministic admitted session set', async () => {
+    reset()
+    const d = day(3), ids = Array.from({ length: 100000 }, (_, i) => ({ sid: `s${String(i).padStart(6,'0')}`, first_ts: `${d}T10:00:00Z`, first_ctime: 0 }))
+    const rows=[raw(0,'DlgSave'),submit(1),reply(2)].map((r,i)=>({...r,sid:ids.at(-1)!.sid,ts:`${d}T10:00:0${i}Z`,event_uuid:String(i)}))
+    let pages = 0
+    await ingestDay(d, async (sql, values) => {
+        if (sql.includes('first_ctime')) return ids
+        pages++
+        assert.match(sql, /\$session_id <= \{last_sid\}/)
+        assert.match(sql, /ORDER BY \$session_id LIMIT 100000\)/)
+        assert.equal(values!.last_sid, ids.at(-1)!.sid)
+        return rows
+    })
+    assert.equal(pages, 2)
+    assert.equal(tasksDb.prepare('SELECT attempts FROM task_ingest WHERE day=?').get(d)!.attempts, 1)
+    assert.equal(tasksDb.prepare('SELECT truncated FROM task_ingest WHERE day=?').get(d)!.truncated, 1)
 })

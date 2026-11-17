@@ -172,3 +172,54 @@ test('session ids and replay links keep their digits; amounts next to them are s
     assert.equal(out.replay_url, `https://posthog.test/project/1/replay/${sid}?t=40`)
     assert.equal(out.text, `Session ${sid} failed: balance <amount>`)
 })
+
+test('financial and identity columns share masking across objects, SQL cells and pipe tables', () => {
+    setAnonymise({ mode: 'standard' })
+    const amounts = ['revenue', 'cost', 'pnl', 'exposure', 'principal', 'mtm', 'market_value']
+    const people = ['username', 'person', 'email', 'who', 'user_email', 'distinct_id']
+    const counts = ['count', 'events', 'sessions', 'users_count']
+    const columns = [...amounts, ...people, ...counts]
+    const values = [...amounts.map(() => 123.45), ...people.map(() => 'unlisted-person'), ...counts.map(() => 250000)]
+    const safe = [...amounts.map(() => '<amount>'), ...people.map(() => '[person]'), ...counts.map(() => 250000)]
+    assert.deepEqual(safetyWith(Object.fromEntries(columns.map((c, i) => [c, values[i]])), []), Object.fromEntries(columns.map((c, i) => [c, safe[i]])))
+    assert.deepEqual(safetyWith({ columns, results: [values] }, []).results, [safe])
+    assert.equal(safetyWith(columns.join('|') + '\n' + values.join('|'), []), columns.join('|') + '\n' + safe.join('|'))
+    assert.deepEqual(safetyWith({ columns: counts, results: [counts.map(() => '250000')] }, []).results, [counts.map(() => '250000')])
+})
+
+test('only valid release labels bypass filtering in version fields and filter echoes', () => {
+    setAnonymise({ mode: 'standard' })
+    for (const label of ['26.3', '26.3.1', 'Reval 26.3', '26.3-rc1']) {
+        assert.equal(safetyWith({ app_version: label }, []).app_version, label)
+        assert.deepEqual(safetyWith({ dimension: 'app_version', value: [label] }, []).value, [label])
+    }
+    assert.equal(safetyWith({ revenue: 'Unavailable' }, []).revenue, 'Unavailable')
+    const leak = '26.3 alice@client.example owes USD 250000'
+    const mixed = safetyWith({ dimension: 'app_version', value: ['26.3', leak] }, []).value
+    assert.equal(mixed[0], '26.3'); assert.doesNotMatch(mixed[1], /alice|250000/)
+    for (const out of [safetyWith({ version: leak }, []), safetyWith({ dimension: 'app_version', value: leak }, []), safetyWith({ dimension: 'app_version', value: [leak] }, [])]) {
+        assert.doesNotMatch(JSON.stringify(out), /alice|250000/)
+        assert.match(JSON.stringify(out), /\[person\]/)
+        assert.match(JSON.stringify(out), /<amount>/)
+    }
+})
+
+test('a find_trade paging cursor survives standard mode; a user id in a cursor field does not', () => {
+    const cursor = '2026-10-03 08:12:01.123|0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b'
+    const out = safetyWith({ next_cursor: cursor, sessions: [{ user: 'ENV|01|C88|user3' }] }, ['ENV|01|C88|user3', 'user3'])
+    assert.equal(out.next_cursor, cursor)
+    assert.equal(out.sessions[0].user, '[person]')
+    assert.equal(safetyWith({ next_cursor: 'ENV|01|C88|user3' }, ['ENV|01|C88|user3']).next_cursor, '[person]')
+})
+
+test('operational processing notes survive structured and transport passes; action and team notes stay withheld', () => {
+    const note = 'Rolling windows end at the last fully processed day; source coverage is disclosed separately.'
+    const processing = { data_through: '2026-11-13', status: 'processed', note }
+    assert.deepEqual(safetyWith({ coverage: { processing } }, []), { coverage: { processing } })
+    assert.deepEqual(JSON.parse(safetyWith(JSON.stringify({ coverage: { processing } }), [])), { coverage: { processing } })
+    for (const action of [{ status: 'processed', note }, { ...processing, owner: 'PM' }, { ...processing, data_through: 'customer' }])
+        assert.equal(safetyWith(action, []).note, '[withheld]')
+    assert.equal(safetyWith({ kind: 'note', text: note }, []).text, '[withheld]')
+    const dirty = { ...processing, note: 'Jane Doe jane@example.com ENV|01|C88|user3 paid 250000' }
+    assert.doesNotMatch(safetyWith(dirty, ['Jane Doe']).note, /Jane Doe|jane@|ENV|250000/)
+})

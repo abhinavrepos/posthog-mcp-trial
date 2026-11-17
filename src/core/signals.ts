@@ -2,7 +2,7 @@ import { ToolInputError } from './toolinputerror.ts'
 // Explainable client signals from processed history. Identities never leave this module.
 import { cached, coverage, dataThrough, tasksDb, validDay } from './tasks.ts'
 import { config } from './config.ts'
-import type { Coverage } from './taskstypes.ts'
+import type { Coverage, Window } from './taskstypes.ts'
 
 export const SIGNALS = {
     key_share: .30, key_weeks: 6, key_gap_days: 3, key_min_users: 3, key_recent_days: 14,
@@ -15,6 +15,7 @@ export const SIGNALS = {
 export type SignalKind = 'key_person_gap' | 'work_moving_out' | 'recurring_close_error' | 'giving_up'
 export interface Signal {
     kind: SignalKind; client: string; client_name: string; text: string; weight: number
+    recent_window: Window; baseline_window: Window | null
     evidence: Record<string, number | number[]>
     tasks?: string[]
     next_close_start?: string
@@ -79,7 +80,7 @@ function compute(p: { to?: string; client?: string }): ClientSignals {
         return s
     }
     const out: Signal[] = []
-    const add = (kind: SignalKind, client: string, text: string, weight: number, evidence: Signal['evidence'], extra: Partial<Signal> = {}) =>
+    const add = (kind: SignalKind, client: string, text: string, weight: number, evidence: Signal['evidence'], extra: Partial<Signal> & Pick<Signal, 'recent_window' | 'baseline_window'>) =>
         out.push({ kind, client, client_name: safe(names.get(client) || client || 'Unknown client'), text: safe(text), weight, evidence, ...extra })
     if (keyReady) {
         const end = shift(to, -SIGNALS.key_recent_days - 1), begin = shift(end, 1 - SIGNALS.key_baseline_days), recent = shift(to, 1 - SIGNALS.key_recent_days)
@@ -105,7 +106,7 @@ function compute(p: { to?: string; client?: string }): ClientSignals {
                     WHERE u.client = ? AND u.user IN (?, ?) AND u.day BETWEEN ? AND ? GROUP BY u.task_id ORDER BY count(*) DESC, u.task_id LIMIT 3`, client, user, user.split(config.properties.distinctIdSeparator).at(-1) || '', begin, end).map(r => safe(r.name))
                 const drop = 1 - c.recent / (c.completed / SIGNALS.key_baseline_days * SIGNALS.key_recent_days)
                 add('key_person_gap', client, `One person did ${pct(u.completed / c.completed)}% of their completed work; no activity from them for 14+ days and completed work is down ${pct(drop)}%.`, SIGNALS.key_weight,
-                    { share: u.completed / c.completed, baseline_completed: c.completed, recent_completed: c.recent, active_weeks: weeks.size, median_gap_days: median, inactive_days: 14 }, { tasks })
+                    { share: u.completed / c.completed, baseline_completed: c.completed, recent_completed: c.recent, active_weeks: weeks.size, median_gap_days: median, inactive_days: 14 }, { tasks, recent_window: { from: recent, to }, baseline_window: { from: begin, to: end } })
             }
         }
     }
@@ -123,7 +124,7 @@ function compute(p: { to?: string; client?: string }): ClientSignals {
             const drop = b?.done ? 1 - n.done / SIGNALS.export_recent_days / (b.done / SIGNALS.export_baseline_days) : 0
             if (n.exports < SIGNALS.export_min || n.days < SIGNALS.export_days || !atLeast(ns, bs + SIGNALS.export_share_delta) || !atLeast(ns, bs * SIGNALS.export_share_ratio) || (!atLeast(drop, SIGNALS.export_done_drop) && n.after_error < SIGNALS.export_after_error)) continue
             add('work_moving_out', n.client, `Exports went from ${pct(bs)}% to ${pct(ns)}% of their work ${atLeast(drop, SIGNALS.export_done_drop) ? `while completed work fell ${pct(drop)}%` : `and ${n.after_error} exports came right after an error`}.`, SIGNALS.export_weight,
-                { baseline_share: bs, recent_share: ns, exports: n.exports, export_days: n.days, completed_drop: drop, export_after_error: n.after_error })
+                { baseline_share: bs, recent_share: ns, exports: n.exports, export_days: n.days, completed_drop: drop, export_after_error: n.after_error }, { recent_window: { from: recent, to }, baseline_window: { from: begin, to: shift(recent, -1) } })
         }
     }
     const errors = query<{ day: string; client: string; dialog: string; op: string; template: string; chains: number; unrecovered: number }>(`SELECT * FROM errors_daily WHERE day BETWEEN ? AND ?${suffix}`, from, to, ...args)
@@ -148,7 +149,7 @@ function compute(p: { to?: string; client?: string }): ClientSignals {
         const dialogs = new Map(query<{ dialog: string; name: string }>('SELECT * FROM dialog_names').map(r => [r.dialog, r.name]))
         for (const g of groups.values()) if (g.months.size >= SIGNALS.close_months && concentrated(g)) { const { row, months } = g
             add('recurring_close_error', row.client, `The same error at ${months.size} month-ends: "${row.template}" on ${dialogs.get(row.dialog) || row.dialog}`, SIGNALS.close_weight,
-                { months: [...months].sort(), month_count: months.size }, { next_close_start: nextClose(to), task_id: safe(`t_${row.dialog}`), dialog: safe(row.dialog), template: safe(row.template) }) }
+                { months: [...months].sort(), month_count: months.size }, { recent_window: { from, to }, baseline_window: null, next_close_start: nextClose(to), task_id: safe(`t_${row.dialog}`), dialog: safe(row.dialog), template: safe(row.template) }) }
     }
     if (givingReady) {
         const recent = shift(to, 1 - SIGNALS.giving_recent_days), begin = shift(recent, -SIGNALS.giving_baseline_days)
@@ -163,7 +164,7 @@ function compute(p: { to?: string; client?: string }): ClientSignals {
             add('giving_up', client, `After an error, users gave up ${s.nu} of ${s.nc} times (was ${s.bu} of ${s.bc}).`, SIGNALS.giving_weight,
                 { unrecovered: s.nu, chains: s.nc, baseline_unrecovered: s.bu, baseline_chains: s.bc }, (() => {
                     const row = errors.filter(r => r.client === client && r.day >= recent).sort((a,b) => b.unrecovered - a.unrecovered || a.dialog.localeCompare(b.dialog))[0]
-                    return row ? { task_id: safe(`t_${row.dialog}`), dialog: safe(row.dialog) } : {}
+                    return { recent_window: { from: recent, to }, baseline_window: { from: begin, to: shift(recent, -1) }, ...(row ? { task_id: safe(`t_${row.dialog}`), dialog: safe(row.dialog) } : {}) }
                 })())
     }
     return { coverage: cover, to, signals: out.sort((a, b) => b.weight - a.weight || a.client.localeCompare(b.client) || a.kind.localeCompare(b.kind)) }
