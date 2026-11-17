@@ -18,8 +18,11 @@ export class JobQueueError extends Error {
     constructor() { super('Analysis queue is full. Retry later.') }
 }
 const integerOption = (value: number, fallback: number, minimum: number) => Number.isFinite(value) ? Math.max(minimum, Math.floor(value)) : fallback
+const sqliteBusy = (error: unknown) => [5, 6].includes(Number((error as { errcode?: number })?.errcode) & 255)
+const skipBusy = (work: () => void) => { try { work() } catch (error) { if (!sqliteBusy(error)) throw error } }
 export class JobRunner {
-    private active = new Map<string, { resolve: (v: unknown) => void; work: () => JobWork; cancel?: () => void; running: boolean; independent: boolean }>()
+    private active = new Map<string, { resolve: (v: unknown) => void; work: () => JobWork; cancel?: () => void; running: boolean; independent: boolean; retry?: NodeJS.Timeout }>()
+    private closed = false
     private timer: NodeJS.Timeout
     private heartbeat: NodeJS.Timeout
     readonly instanceId = randomBytes(16).toString('hex')
@@ -44,8 +47,8 @@ export class JobRunner {
         if(!columns.has('detached')) db.exec('ALTER TABLE analysis_jobs ADD COLUMN detached INTEGER NOT NULL DEFAULT 0')
         if(!columns.has('owner_instance')) db.exec('ALTER TABLE analysis_jobs ADD COLUMN owner_instance TEXT')
         if(!columns.has('lease_expires')) db.exec('ALTER TABLE analysis_jobs ADD COLUMN lease_expires INTEGER')
-        this.heartbeat = setInterval(() => { this.renewLease(); this.prune() }, 15000); this.heartbeat.unref()
-        this.timer = setInterval(() => this.prune(), options.pruneMs ?? 60000); this.timer.unref()
+        this.heartbeat = setInterval(() => skipBusy(() => { this.renewLease(); this.prune() }), 15000); this.heartbeat.unref()
+        this.timer = setInterval(() => skipBusy(() => this.prune()), options.pruneMs ?? 60000); this.timer.unref()
         this.prune()
     }
     private now: () => number
@@ -104,10 +107,10 @@ export class JobRunner {
             const active = this.active.get(id)
             if (!active) {
                 p = new Promise(resolve => {
-                    const poll = setInterval(() => {
+                    const poll = setInterval(() => skipBusy(() => {
                         const row = this.db.prepare('SELECT * FROM analysis_jobs WHERE id=?').get(id) as unknown as JobRow | undefined
                         if (!row || row.expires <= this.now() || row.status !== 'working') { clearInterval(poll); this.foreignPolls.delete(id); this.waiters.delete(id); resolve(row?.status === 'completed' ? this.result(row) : undefined) }
-                    },100)
+                    }),100)
                     this.foreignPolls.set(id,{timer:poll,resolve})
                     poll.unref()
                 })
@@ -134,15 +137,31 @@ export class JobRunner {
     private finish(id: string, status: JobStatus, result?: unknown, error?: string, metadata?: Record<string, unknown>): void {
         const a = this.active.get(id)
         if (!a) return // cancelled/expired work cannot resurrect a job
-        this.db.prepare("UPDATE analysis_jobs SET status=?,updated=?,result=?,error=? WHERE id=? AND status='working'")
-            .run(status, this.now(), result === undefined ? null : gzipSync(Buffer.from(JSON.stringify(result))), error ?? null, id)
-        if (metadata) {
-            const row = this.db.prepare('SELECT context FROM analysis_job_context WHERE id=?').get(id)
-            if (row) this.db.prepare('UPDATE analysis_job_context SET context=? WHERE id=?').run(JSON.stringify({...JSON.parse(String(row.context)), ...metadata}), id)
+        if (a.retry && status !== 'cancelled' && !this.closed) return // cancellation awaiting persistence wins over a late worker reply
+        clearTimeout(a.retry)
+        a.retry = undefined
+        try {
+            // Publish the result and its safety metadata together; a busy commit must leave neither visible.
+            this.db.exec('SAVEPOINT analysis_job_finish')
+            try {
+                this.db.prepare("UPDATE analysis_jobs SET status=?,updated=?,result=?,error=? WHERE id=? AND status='working'")
+                    .run(status, this.now(), result === undefined ? null : gzipSync(Buffer.from(JSON.stringify(result))), error ?? null, id)
+                if (metadata) {
+                    const row = this.db.prepare('SELECT context FROM analysis_job_context WHERE id=?').get(id)
+                    if (row) this.db.prepare('UPDATE analysis_job_context SET context=? WHERE id=?').run(JSON.stringify({...JSON.parse(String(row.context)), ...metadata}), id)
+                }
+                this.db.exec('RELEASE analysis_job_finish')
+            } catch (error) { this.db.exec('ROLLBACK TO analysis_job_finish; RELEASE analysis_job_finish'); throw error }
+        } catch (failure) {
+            if (!sqliteBusy(failure)) throw failure
+            // Keep the completed value until SQLite can accept it. Never reject an unobserved .then().
+            if (!this.closed) { a.retry = setTimeout(() => { a.retry = undefined; this.finish(id, status, result, error, metadata) }, 100); return }
+            // Shutdown cannot keep retrying against a database its caller is about to close. The lease
+            // recovery path will mark an unwritten terminal state failed after restart.
         }
         this.active.delete(id); this.waiters.delete(id)
         a.resolve(result ?? { isError: true, content: [{ type: 'text', text: error || 'Job cancelled or expired.' }] })
-        setImmediate(() => this.pump())
+        if (!this.closed) setImmediate(() => this.pump())
     }
     get(owner: string, id: string, revision: string): JobRow {
         const row = this.db.prepare('SELECT * FROM analysis_jobs WHERE id=? AND owner=? AND expires>?').get(id, owner, this.now()) as unknown as JobRow | undefined
@@ -176,6 +195,7 @@ export class JobRunner {
         this.db.exec('DELETE FROM analysis_job_context WHERE id NOT IN (SELECT id FROM analysis_jobs)')
     }
     close(): void {
+        this.closed = true
         clearInterval(this.timer); clearInterval(this.heartbeat)
         for(const {timer,resolve} of this.foreignPolls.values()) { clearInterval(timer); resolve(undefined) }
         this.foreignPolls.clear(); this.waiters.clear()

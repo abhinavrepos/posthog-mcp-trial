@@ -45,7 +45,10 @@ export function analyticalResult(name:string,args:unknown,result:unknown, reques
         if(!v || typeof v!=='object')return
         for(const [key,child] of Object.entries(v)) {
             if(['coverage','limits','days','unprocessed'].includes(key))continue
-            if(Array.isArray(child)) candidates.push({path:path+key,list:child})
+            // find_trade's cursor already points past this entire page. Keep its session rows,
+            // reducing their nested evidence instead, or the next page silently skips sessions.
+            if(name==='find_trade' && !path && key==='sessions' && Array.isArray(child)) child.forEach((row,i)=>walk(row,`sessions[${i}].`))
+            else if(Array.isArray(child)) candidates.push({path:path+key,list:child})
             else walk(child,path+key+'.')
         }
     }

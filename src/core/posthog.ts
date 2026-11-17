@@ -22,17 +22,32 @@ export class PostHogError extends Error {
     }
 }
 
+// When PostHog stops answering, every call waited its full timeout (and retried), holding the few read slots
+// for minutes and stalling every PM (outage drill 2026-11-17: one question took 6 minutes to fail). After
+// three timeouts in a row with no answer in between, fail fast for 30 s, then let calls probe again.
+// Any answer, even an error status, resets the count, so one heavy query timing out does not trip it.
+const BREAKER_TIMEOUTS = 3, BREAKER_OPEN_MS = 30_000
+let consecutiveTimeouts = 0, breakerOpenUntil = 0
+export function resetPosthogBreaker(): void { consecutiveTimeouts = 0; breakerOpenUntil = 0 }
 async function api<T>(path: string, init: RequestInit = {}, timeoutMs = 30_000): Promise<T> {
     requirePosthog()
-    const res = await fetch(`${config.posthog.host}${path}`, {
-        ...init,
-        headers: {
-            authorization: `Bearer ${config.posthog.personalApiKey}`,
-            'content-type': 'application/json',
-            ...init.headers,
-        },
-        signal: AbortSignal.timeout(timeoutMs),
-    } as RequestInit)
+    if (Date.now() < breakerOpenUntil) throw new PostHogError('PostHog is not answering: Lens paused calls to it for 30 s', 503)
+    let res: Response
+    try {
+        res = await fetch(`${config.posthog.host}${path}`, {
+            ...init,
+            headers: {
+                authorization: `Bearer ${config.posthog.personalApiKey}`,
+                'content-type': 'application/json',
+                ...init.headers,
+            },
+            signal: AbortSignal.timeout(timeoutMs),
+        } as RequestInit)
+    } catch (error) {
+        if ((error as { name?: string })?.name === 'TimeoutError' && ++consecutiveTimeouts >= BREAKER_TIMEOUTS) breakerOpenUntil = Date.now() + BREAKER_OPEN_MS
+        throw error
+    }
+    consecutiveTimeouts = 0
     if (!res.ok) {
         const body = await res.text().catch(() => '')
         let detail = body.slice(0, 300)
@@ -41,7 +56,9 @@ async function api<T>(path: string, init: RequestInit = {}, timeoutMs = 30_000):
         } catch {}
         throw new PostHogError(`PostHog ${init.method || 'GET'} ${path.split('?')[0]} → ${res.status}: ${detail}`, res.status)
     }
-    return (await res.json()) as T
+    const text = await res.text()
+    try { return JSON.parse(text) as T }
+    catch { throw new PostHogError(`PostHog ${init.method || 'GET'} ${path.split('?')[0]} → ${res.status}: unreadable answer (not JSON)`, 502) }
 }
 
 const projectPath = (p: string) => `/api/projects/${config.posthog.projectId}${p}`

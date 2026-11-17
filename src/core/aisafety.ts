@@ -17,6 +17,8 @@ export function staffEmails(): Set<string> {
     return emails
 }
 const LOCAL = /[\p{L}\p{N}._%+-]/u
+// Decode whole UTF-8 byte runs for identity matching; malformed URL escapes remain harmless text.
+const decodeEscapes = (s: string) => s.replace(/(?:%[0-9a-f]{2})+/gi, run => Buffer.from(run.replaceAll('%', ''), 'hex').toString('utf8'))
 // local@domain.tld inside one token: the local part is the run of address characters before each @ (found by
 // walking back, never a regex anchored at the end), the domain must hold a dot. Staff addresses stay.
 function maskEmailsIn(token: string, staff: Set<string>): string {
@@ -101,6 +103,7 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
     if (privacyMode() === 'open') return value
     tokens = tokens.filter(t => !staff.has(t.toLowerCase()))
     const sep = config.properties.distinctIdSeparator
+    const scrubText = (s: string) => s.split(/(\[person\]|<amount>|\[withheld\]|\[client\])/g).map((part, i) => i % 2 ? part : scrubWith(tokens, part)).join('')
     const text = (s: string): string => {
         // The private-use characters this pass uses as placeholders mean nothing in real text: drop them,
         // so input cannot forge a placeholder.
@@ -127,9 +130,12 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
         s = protectCodenameTokens(s, keep)
         // Decode for matching, including links that encode an address more than once.
         s = s.replace(/[^\s<>"'`]+/g, token => {
-            let decoded = token
-            for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(decoded); i++) decoded = decoded.replace(/%([0-9a-f]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
-            return decoded.includes('@') || !!sep && decoded.includes(sep) || scrubWith(tokens, decoded) !== decoded ? decoded : token
+            let decoded = token.replace(/\?[^#]*/, query => query.replaceAll('+', ' '))
+            for (let i = 0; i < 3 && /%[0-9a-f]{2}/i.test(decoded); i++) decoded = decodeEscapes(decoded)
+            const scrubbed = scrubText(decoded)
+            // Mask before URL protection: decoding a full name can introduce a space inside a link.
+            if (scrubbed !== decoded) return /^https?:\/\/.*\/replay\//.test(decoded) ? `${config.service.publicUrl}/replays` : scrubbed
+            return decoded.includes('@') || !!sep && decoded.includes(sep) ? decoded : token
         })
         s = s.replace(/https?:\/\/[^\s<>"'`]+/g, url => /\/replay\//.test(url) && (url.includes('@') || !!sep && url.includes(sep) || scrubWith(tokens, url) !== url) ? `${config.service.publicUrl}/replays` : url)
         // PostHog answers with pipe tables (a header row, then rows with the same number of cells). Reval distinct
@@ -148,14 +154,14 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
         // A link keeps its path, but query values that look like money are masked (?notional=250000);
         // id-like parameters (t, id, session, version...) keep their digits so links still work; so does a clip file
         // name (?clip=<session>_<start>-<end>.mp4): a session id with 5+ digits in a row was masked and the link died.
-        s = s.replace(/https?:\/\/[^\s<>"'`]+/g, (url) => keep(url.replace(/([?&])([^=&#]+)=([^&#]*)/g, (m, sep, k, v) =>
-            /(?:^|_)(?:id|uuid|t|ts|time|session|sid|page|p|v|ver|version)$/i.test(k) || k === 'clip' && /^[\w-]+_\d+-\d+\.mp4$/.test(decodeURIComponent(v)) || maskAmounts(v) === v ? m : `${sep}${k}=<amount>`)))
+        s = s.replace(/https?:\/\/[^\s<>"'`]+/g, (url) => keep(scrubText(url.replace(/([?&])([^=&#]+)=([^&#]*)/g, (m, sep, k, v) =>
+            /(?:^|_)(?:id|uuid|t|ts|time|session|sid|page|p|v|ver|version)$/i.test(k) || k === 'clip' && /^[\w-]+_\d+-\d+\.mp4$/.test(decodeEscapes(v)) || maskAmounts(v) === v ? m : `${sep}${k}=<amount>`))))
         s = s.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, keep)
         s = s.replace(/\b\d{1,2}(?:\.\d{1,2}){2}\b/g, keep)
         // A release named after the app ("Reval 26.3") is a label, like 26.3.1 above; the amount pass read 26.3 as cash.
         const app = appEvents()?.app
         if (app) s = s.replace(new RegExp(String.raw`\b${app.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \d{1,2}\.\d{1,2}(?:\.\d{1,3})?\b`, 'gi'), keep)
-        return maskAmounts(s.split(/(\[person\]|<amount>|\[withheld\]|\[client\])/g).map((part, i) => i % 2 ? part : scrubWith(tokens, part)).join('')).replace(/\uE000v(\d+)\uE001/g, (_, index) => versions[Number(index)] || '')
+        return maskAmounts(scrubText(s)).replace(/\uE000v(\d+)\uE001/g, (_, index) => versions[Number(index)] || '')
     }
     const walk = (v: unknown, key = ''): unknown => {
         if (PERSON_COLUMN.test(key.split('.').at(-1) || '') && v != null) return '[person]'

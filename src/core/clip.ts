@@ -246,12 +246,17 @@ export function renderClip(req: ClipRequest, owner?: string, onStart?: () => voi
     return renders.run(JSON.stringify(normalized), owner, onStart)
 }
 
-function cachedClip(req: ClipRequest): Clip | undefined {
+function cachedClip(req: ClipRequest, range?: ClipRequest): Clip | undefined {
     const name = clipName(req), file = join(config.clip.outDir, name)
     if (!existsSync(file) || !existsSync(file + '.json')) return undefined
     try {
         const meta = JSON.parse(readFileSync(file + '.json', 'utf8'))
         if (meta.version !== 2) return undefined // Old renders may include content past the requested end.
+        // A tail-clamped render is reusable only after checking the current session length.
+        // Live recordings can grow past the end that was known when this file was made.
+        const expectedEnd = req.startOffsetS + req.durationS
+        if (meta.end < expectedEnd - 0.002 && !range) return undefined
+        if (range && Math.abs(meta.end - (range.startOffsetS + range.durationS)) > 0.002) return undefined
         const duration = mp4Duration(file)
         return { session_id: req.sessionId, file, name, start_offset_s: meta.start, end_offset_s: meta.start + duration,
             video_duration_s: duration, size_bytes: statSync(file).size, render_s: 0, cached: true }
@@ -266,7 +271,7 @@ async function renderUnqueued(req: ClipRequest): Promise<Clip> {
     const range = await clipRange(req)
     const start = range.startOffsetS, end = start + range.durationS
     // Re-checked inside the queue: an identical request may have finished while this one waited.
-    const cached = cachedClip(req)
+    const cached = cachedClip(req, range)
     if (cached) return cached
     const t0 = Date.now()
     return withSnapshotsFile(req.sessionId, async input => {

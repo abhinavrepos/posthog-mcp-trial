@@ -171,6 +171,11 @@ export function parseTimeWindow(text: string, now: Date = new Date(), tzIn?: str
     const today = localDate(now, tz)
     const tzLabel = tz === 'UTC' ? 'UTC' : tz
     const dayStart = (y: number, m: number, d: number) => zoned(y, m, d, 0, 0, tz)
+    // Move calendar dates before converting to UTC: a local day can be 23 or 25 hours.
+    const daysBack = (n: number) => {
+        const d = new Date(Date.UTC(today.y, today.m, today.d - n))
+        return { y: d.getUTCFullYear(), m: d.getUTCMonth(), d: d.getUTCDate() }
+    }
     const window = (from: Date, to: Date, label: string, precision: TimeWindow['precision']): TimeWindow => ({
         from,
         to: to > now ? now : to,
@@ -195,8 +200,7 @@ export function parseTimeWindow(text: string, now: Date = new Date(), tzIn?: str
     let day: { y: number; m: number; d: number } | undefined
     let dayLabel = ''
     if (/\byesterday\b|\blast night\b/.test(t)) {
-        const y = localDate(new Date(now.getTime() - DAY), tz)
-        day = y
+        day = daysBack(1)
         dayLabel = 'yesterday'
     } else if (/\b(today|this (morning|afternoon|evening)|tonight|earlier|just now|right now)\b/.test(t)) {
         day = today
@@ -226,8 +230,7 @@ export function parseTimeWindow(text: string, now: Date = new Date(), tzIn?: str
             const target = WEEKDAYS.indexOf(m[1])
             let back = (today.dow - target + 7) % 7
             if (back === 0 && /\blast\b/.test(m[0])) back = 7
-            const dd = localDate(new Date(now.getTime() - back * DAY), tz)
-            day = dd
+            day = daysBack(back)
             dayLabel = back === 0 ? 'today' : m[1][0].toUpperCase() + m[1].slice(1)
         }
     }
@@ -237,7 +240,10 @@ export function parseTimeWindow(text: string, now: Date = new Date(), tzIn?: str
         const base = day || today
         let at = zoned(base.y, base.m, base.d, clock.h, clock.min, tz)
         // "at 3pm" with no day and 3pm still ahead of us means yesterday.
-        if (!day && at > now) at = new Date(at.getTime() - DAY)
+        if (!day && at > now) {
+            const previous = daysBack(1)
+            at = zoned(previous.y, previous.m, previous.d, clock.h, clock.min, tz)
+        }
         const hh = String(clock.h).padStart(2, '0')
         const mm = String(clock.min).padStart(2, '0')
         const label = `${day ? dayLabel + ' ' : ''}around ${hh}:${mm} ${tzLabel}`
@@ -249,11 +255,11 @@ export function parseTimeWindow(text: string, now: Date = new Date(), tzIn?: str
         if (part) {
             const [h0, h1] = PARTS[part]
             const from = zoned(day.y, day.m, day.d, h0, 0, tz)
-            const to = new Date(zoned(day.y, day.m, day.d, 0, 0, tz).getTime() + h1 * 3_600_000)
+            const to = zoned(day.y, day.m, day.d, h1, 0, tz)
             return window(from, to, `${dayLabel} ${part} (${tzLabel})`, 'part-of-day')
         }
         const from = dayStart(day.y, day.m, day.d)
-        return window(from, new Date(from.getTime() + DAY), `${dayLabel} (${tzLabel})`, 'day')
+        return window(from, dayStart(day.y, day.m, day.d + 1), `${dayLabel} (${tzLabel})`, 'day')
     }
 
     if (text.trim()) throw new ToolInputError(`Invalid time window. Use period: ${PERIODS.join(', ')}; or from/to YYYY-MM-DD, e.g. 2024-11-01 to 2025-11-30.`)

@@ -876,7 +876,9 @@ export async function runIngest(opts: { days?: string[]; maxBackfill?: number } 
         let days = opts.days
         if (!days) {
             days = [today(), shift(today(), -1)]
-            const processed = new Set(all<{ day: string }>("SELECT day FROM task_ingest WHERE truncated = 0 AND finalized = 1 AND (day IN (SELECT day FROM analysis_days) OR 'analysis_unavailable:' || day IN (SELECT key FROM task_state))").map((r) => r.day))
+            // A dimension query can fail after the task day commits. Keep that day retryable,
+            // including after a restart, unless a later scan confirmed that the source expired.
+            const processed = new Set(all<{ day: string }>("SELECT day FROM task_ingest WHERE truncated = 0 AND finalized = 1 AND ((day IN (SELECT day FROM analysis_days) AND 'query_failed:' || day NOT IN (SELECT key FROM task_state)) OR 'analysis_unavailable:' || day IN (SELECT key FROM task_state))").map((r) => r.day))
             let remaining = opts.maxBackfill ?? config.tasks.backfillDaysPerRun
             for (let i = 2; i < config.tasks.historyDays && remaining > 0; i++) {
                 const d = shift(today(), -i)

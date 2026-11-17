@@ -105,7 +105,7 @@ export async function aggregateEvents(q: AggregateQuery) {
     let rollupNote = clampNote
     try { const rolled = dailyAggregate(tasksDb, q); if (rolled) return rolled }
     catch(e) { if (!(e instanceof RollupBudgetError)) throw e; rollupNote = ' ' + e.message }
-    if (tasksDb.prepare("SELECT 1 FROM aggregate_dimension_skipped WHERE day>=? AND day<? AND reason='source_expired' LIMIT 1").get(q.from.toISOString().slice(0,10),q.to.toISOString().slice(0,10))) {
+    if (tasksDb.prepare("SELECT 1 FROM aggregate_dimension_skipped WHERE day>=? AND day<=? AND reason='source_expired' LIMIT 1").get(q.from.toISOString().slice(0,10),new Date(+q.to - 1).toISOString().slice(0,10))) {
         // A live query cannot reconstruct expired history either.
         return {window:{from:q.from.toISOString(),to:q.to.toISOString()},metrics,group_by:groups,bucket,filters,totals:{},rows:[],groups_omitted:0,queries:0,seconds:0,source:'history',coverage:{requested:{from:q.from.toISOString(),to_exclusive:q.to.toISOString(),timezone:'UTC'},answered:[],status:'unavailable',reason:'source_expired',detail:'PostHog source has fewer sessions or events than retained task evidence.'},note:'Exact dimension counts are unavailable because the source expired.'}
     }

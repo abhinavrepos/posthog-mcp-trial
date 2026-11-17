@@ -206,7 +206,7 @@ export async function rescueQueue(p: RescueParams = {}): Promise<RescueQueue> {
 export class RescueInputError extends ToolInputError {}
 /** view: the period the person is looking at when snoozing, so the score kept for "worse since snoozed"
  * is the one they saw (default: the default view). */
-export async function setRescueAction(client: string, change: Record<string, unknown>, by: string, view: Omit<RescueParams, 'include_snoozed'> = {}): Promise<RescueAction> {
+export async function setRescueAction(client: string, change: Record<string, unknown>, by: string, view: Omit<RescueParams, 'include_snoozed'> = {}, attempt = 0): Promise<RescueAction> {
     if (typeof client !== 'string' || !client.trim() || client.length > 256) throw new RescueInputError('Give a client id of 1–256 characters')
     if (!change || typeof change !== 'object' || Array.isArray(change)) throw new RescueInputError('Give an action object')
     if (!Object.keys(change).length || Object.keys(change).some(k => !['owner', 'status', 'note', 'due', 'snooze_until'].includes(k))) throw new RescueInputError('Give owner, status, note, due or snooze_until')
@@ -222,10 +222,18 @@ export async function setRescueAction(client: string, change: Record<string, unk
     const score = merged.status !== 'expected' ? null : old?.status === 'expected' && old.snooze_until === merged.snooze_until ? old.score_at_snooze : (await rescueQueue({ ...view, include_snoozed: true })).clients.find(c => c.client === client)?.score ?? 0
     const capture = !old?.acted_on && ['contacted', 'in_progress', 'resolved'].includes(String(merged.status))
     const reasons = capture ? (await rescueQueue({ ...view, include_snoozed: true })).clients.find(c => c.client === client)?.reasons.filter(r => r.kind !== 'worse_since_snoozed').map(({ kind, task_id }) => ({ kind, ...(task_id ? { task_id } : {}) })) || [] : null
-    tx(() => {
+    const saved = tx(() => {
+        // History reads above yield. Recompute against a newer action rather than overwriting
+        // another person's edits; the write lock also protects this check across processes.
+        if (JSON.stringify(one<RescueAction>('SELECT * FROM rescue_actions WHERE client=?', client)) !== JSON.stringify(old)) return false
         run(`INSERT OR REPLACE INTO rescue_actions (client,owner,status,note,due,snooze_until,score_at_snooze,updated_by,updated_at,reasons_at_action,acted_on) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, client, (merged.owner as string)?.toLowerCase() || null, merged.status as string,
             merged.note as string | null, merged.due as string || null, merged.snooze_until as string || null, score, by, new Date().toISOString(), capture ? JSON.stringify(reasons) : old?.reasons_at_action || null, capture ? today() : old?.acted_on || null)
         audit(by, 'rescue.updated', { client, ...change })
+        return true
     })
+    if (!saved) {
+        if (attempt >= 4) throw new RescueInputError('Someone else is editing this client right now. Try again in a moment.')
+        return setRescueAction(client, change, by, view, attempt + 1)
+    }
     return rescuePrivacy(one<RescueAction>('SELECT * FROM rescue_actions WHERE client=?', client)!)
 }

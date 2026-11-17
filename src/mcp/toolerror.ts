@@ -19,6 +19,9 @@ export function toolError(error: unknown, tool: string, id: string = toolCorrela
     else if(error instanceof JobCapError || error instanceof JobQueueError || error instanceof ClipQueueError) {kind='busy';message=error.message}
     else if(raw === 'Unknown or expired job id.') {kind='not_found';message=raw}
     else if(raw === 'Privacy or access settings changed. Submit the tool again.') {kind='privacy_changed';message=raw}
+    else if(raw.startsWith('Server restarted before this job completed')) {kind='restarted';message='Lens restarted before this job finished, so it has no result. Call the original tool again with the same arguments.'}
+    // A request that got no answer at all: PostHog may be overloaded, so narrowing the window is not the only fix.
+    else if((error as {name?:string})?.name === 'TimeoutError' || /operation was aborted due to timeout/i.test(raw)) {kind='capacity';message='PostHog did not answer in time. Retry once; if it times out again, PostHog is overloaded or the question is heavy: use a narrower window, a coarser bucket, or fewer group_by dimensions.'}
     else if(error instanceof z.ZodError) {
         kind='validation'
         // Never echo input values or unknown property names, which may contain identities.

@@ -11,7 +11,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 
 import { ClipQueueError } from '../core/clip-queue.ts'
-import { cleanRenderWork, pruneCache, renderClip } from '../core/clip.ts'
+import { cleanRenderWork, clipRange, pruneCache, renderClip } from '../core/clip.ts'
 import { addComment, captionedFile, checkComment, commentCounts, cues, DEFAULT_DURATION, deleteComment, DURATIONS, getComment, listComments, MAX_TEXT, removeVariants, toVtt, updateComment, variantOf } from '../core/comments.ts'
 import { config, surveysActive } from '../core/config.ts'
 import { all, db, one, run, tx } from '../core/db.ts'
@@ -86,6 +86,8 @@ export function storeClip(clip: { name: string; session_id: string; start_offset
     const now = new Date().toISOString()
     const file = join(config.clip.outDir, clip.name)
     const bytes = existsSync(file) ? statSync(file).size : 0
+    const previous = getClip(clip.name)
+    if (previous && (previous.start_s !== clip.start_offset_s || previous.end_s !== clip.end_offset_s)) removeVariants(clip.name)
     tx(() => {
         run(
             `INSERT INTO clips (name, session_id, start_s, end_s, client, user, recording_start, download_name, bytes, created_by, created_at, last_requested_at)
@@ -281,6 +283,7 @@ function json(res: ServerResponse, status: number, body: unknown) {
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+    req.setEncoding?.('utf8')
     let data = ''
     for await (const c of req) {
         data += c
@@ -462,8 +465,13 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
             return true
         }
         if (start >= info.duration_s) {
-            json(res, 400, { error: `The recording is only ${formatClock(info.duration_s)} long.` })
-            return true
+            // The recorder pauses on a still page; later session events can extend the clip range.
+            try { await clipRange({ sessionId: input.sessionId, startOffsetS: start, durationS: length }) }
+            catch (e) {
+                if ((e as { status?: number }).status !== 400) throw e
+                json(res, 400, { error: `The recording is only ${formatClock(info.duration_s)} long.` })
+                return true
+            }
         }
         const job: ReplayJob = { id: randomUUID(), state: 'queued', owner: viewer.email, session_id: input.sessionId, start_s: Math.floor(start), length_s: length, info, created_at: Date.now() }
         pruneJobs(jobs, Date.now(), 999)

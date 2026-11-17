@@ -53,6 +53,7 @@ function json(res: ServerResponse, status: number, body: unknown) {
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+    req.setEncoding?.('utf8')
     let data = ''
     for await (const c of req) {
         data += c

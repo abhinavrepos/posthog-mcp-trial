@@ -24,6 +24,7 @@ function html(res: ServerResponse, body: string) {
     res.end(body)
 }
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+    req.setEncoding?.('utf8')
     let raw = ''
     for await (const c of req) { raw += c; if (raw.length > 20_000) throw new AnonInputError('Body too large.') }
     try { return JSON.parse(raw || '{}') } catch { throw new AnonInputError('Invalid JSON.') }

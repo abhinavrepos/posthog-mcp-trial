@@ -182,6 +182,37 @@ async function readBody(stream: AsyncIterable<Uint8Array>, limit: number): Promi
     return Buffer.concat(chunks).toString('utf8')
 }
 
+/** A completed JSON-RPC reply ends a call even if its SSE connection stays open. */
+async function readSseReply(body: ReadableStream<Uint8Array>, id: unknown, limit: number): Promise<Rpc | undefined> {
+    const decoder = new StringDecoder('utf8')
+    let pending = '', data: string[] = [], size = 0
+    const line = (text: string): Rpc | undefined => {
+        text = text.replace(/\r$/, '')
+        if (text.startsWith('data:')) data.push(text.slice(5).replace(/^ /, ''))
+        else if (!text && data.length) {
+            const event = data.join('\n'); data = []
+            try {
+                const value = JSON.parse(event)
+                return (Array.isArray(value) ? value : [value]).find(v => v?.id === id && ('result' in v || 'error' in v))
+            } catch { /* Ignore keepalives and non-JSON events. */ }
+        }
+    }
+    // Returning from the iterator cancels the remaining body and releases the upstream socket.
+    for await (const chunk of Readable.fromWeb(body as import('node:stream/web').ReadableStream)) {
+        size += chunk.length
+        if (size > limit) throw new BodyTooLarge()
+        pending += decoder.write(chunk)
+        let end: number
+        while ((end = pending.indexOf('\n')) >= 0) {
+            const reply = line(pending.slice(0, end)); pending = pending.slice(end + 1)
+            if (reply) return reply
+        }
+    }
+    pending += decoder.end()
+    if (pending) line(pending)
+    return line('')
+}
+
 function send(res: ServerResponse, status: number, value: unknown) {
     res.writeHead(status, { 'content-type': 'application/json' })
     res.end(JSON.stringify(value))
@@ -297,14 +328,28 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
             for(const item of items) {
                 const read=async()=>{
                     const response=await request(JSON.stringify(item))
+                    if(response.ok && response.body && item.id != null && response.headers.get('content-type')?.includes('text/event-stream')) {
+                        const reply=await readSseReply(response.body,item.id,limit)
+                        if(!reply) throw posthogFailure('Missing MCP reply')
+                        replies.push(reply)
+                        return
+                    }
                     const raw=response.body ? await readBody(Readable.fromWeb(response.body as import('node:stream/web').ReadableStream),limit) : ''
                     if(!response.ok) throw posthogFailure(raw,response.status,response.headers.get('retry-after'))
                     if(response.headers.get('content-type')?.includes('text/event-stream')) {
                         for(const line of raw.split('\n'))if(line.startsWith('data:')) {try{replies.push(JSON.parse(line.slice(5)))}catch{}}
                     } else if(raw) {const reply=JSON.parse(raw);replies.push(...(Array.isArray(reply)?reply:[reply]))}
                 }
-                if(object(item) && item.method==='tools/call' && analytics(item)) await posthogQueryGate.run(controller.signal,read)
-                else await read()
+                try {
+                    if(object(item) && item.method==='tools/call' && analytics(item)) await posthogQueryGate.run(controller.signal,read)
+                    else await read()
+                } catch(error) {
+                    const record=records.find(r=>r.id===item.id)
+                    const id=record?.correlation || randomUUID()
+                    const mapped=toolError(error instanceof Error && posthogPublicMessage(error.message) ? error : posthogFailure(error), 'posthog_exec', id)
+                    if(record) record.error=mapped.kind
+                    if(item.id != null) refusals.push({jsonrpc:'2.0',id:item.id,result:mapped.result})
+                }
             }
             upstream=new Response(JSON.stringify(replies),{headers:{'content-type':'application/json'}})
         } else {
@@ -468,12 +513,14 @@ async function posthogExecRaw(call: unknown, command: string, options: Pick<Prox
     let session: string | null = null
     const request = (body: unknown, method = 'POST', signal = controller.signal) => upstreamRequest(options.url, options.apiKey, { method, headers, body: method === 'POST' ? JSON.stringify(body) : undefined, signal })
     const read = async (res: Response, id: number): Promise<Rpc> => {
-        const raw = res.body ? await readBody(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), 5_000_000) : ''
-        if (!res.ok) throw posthogFailure(raw, res.status, res.headers.get('retry-after'))
-        const values = res.headers.get('content-type')?.includes('text/event-stream')
-            ? raw.split('\n').filter(l => l.startsWith('data:')).flatMap(l => { try { return [JSON.parse(l.slice(5))] } catch { return [] } })
-            : [JSON.parse(raw)]
-        const reply = values.flat().find(v => v?.id === id)
+        let reply: Rpc | undefined
+        if (res.ok && res.body && res.headers.get('content-type')?.includes('text/event-stream')) reply = await readSseReply(res.body, id, 5_000_000)
+        else {
+            const raw = res.body ? await readBody(Readable.fromWeb(res.body as import('node:stream/web').ReadableStream), 5_000_000) : ''
+            if (!res.ok) throw posthogFailure(raw, res.status, res.headers.get('retry-after'))
+            const value = JSON.parse(raw)
+            reply = (Array.isArray(value) ? value : [value]).find(v => v?.id === id)
+        }
         if (!reply || reply.error || reply.result?.isError) {
             const failure = posthogFailure(reply?.error || reply?.result || 'Missing MCP reply')
             if (id === 2 && failure.message.startsWith('PostHog does not know that command.')) {

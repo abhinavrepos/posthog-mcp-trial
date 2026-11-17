@@ -99,6 +99,7 @@ function savedParams(kind: DashboardKind, raw: unknown) {
     return checked
 }
 async function readJson(req: IncomingMessage) {
+    req.setEncoding?.('utf8')
     let raw = ''
     for await (const c of req) { raw += c; if (raw.length > 20000) bad('Request body is too large.') }
     try { return object(JSON.parse(raw)) } catch (e) { if (e instanceof InputError) throw e; return bad('Send valid JSON.') }

@@ -16,6 +16,7 @@ function json(res: ServerResponse, status: number, body: unknown) {
     res.end(JSON.stringify(body))
 }
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+    req.setEncoding?.('utf8')
     let raw = ''
     for await (const c of req) {
         raw += c
