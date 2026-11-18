@@ -201,7 +201,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         return json({ candidates: await d.findTasks(query) })
     }))
     reg('task_map', { outputSchema: ANALYSIS_OUTPUT,
-        description: `Which ${appEvents()?.app || 'app'} clients stopped doing tasks they used to do, do them less, take longer or fail more? Client task map: a recent period against the one before, per client and task (missing work, dropped, slower, failing, new). For "is ACME still booking hedges?", "which clients are drifting away?". Returns flags with numbers and a link to the live Lens dashboard.`,
+        description: `Which ${appEvents()?.app || 'app'} clients stopped doing tasks they used to do, do them less, take longer or fail more? Client Task Map: a recent period against the one before, per client and task (missing work, dropped, slower, failing, new). For "is ACME still booking hedges?", "which clients are drifting away?". Returns flags with numbers and a link to the live Lens dashboard.`,
         inputSchema: filters,
         annotations: { readOnlyHint: true }
     }, safe(async input => {

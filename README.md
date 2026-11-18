@@ -277,7 +277,7 @@ four people active for 10 minutes (`--minutes 30` for longer). `pnpm live-demo -
 one session with known timings to check the counting: with the default limit, the "Lens
 self-test" client on 2025-10-01 shows 410 s in the app, 160 s active and 250 s idle.
 
-## Rescue queue: who needs someone this week
+## Rescue Queue: who needs someone this week
 
 The second Dashboards tab, and the chat tools `rescue_queue` / `set_rescue_status`. A ranked list of
 clients from Lens's task history (no raw PostHog reads): for each, **urgent** or **watch**, the trend
@@ -382,7 +382,7 @@ must be enabled and configured.
 `/replays/dashboards` (the **Dashboards** tab), and the same answers in chat. PMs ask in chat; the
 dashboards are where they and their team come back to.
 
-- **Client task map** (Dashboard A): for each client and task, attempts, done rate and time now
+- **Client Task Map** (Dashboard A): for each client and task, attempts, done rate and time now
   against an earlier period, with flags: **Missing** (did it before, not at all now), **Dropped**
   (half or less), **Slower** (median up 30% and 10 s or more), **Failing** (done rate down 15 points),
   **New**. Clients that need attention come first; the rest fold away. Clicking a task opens its flow time.

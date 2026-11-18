@@ -11,7 +11,7 @@ import type { FlowTimeParams, TaskMapParams } from './taskstypes.ts'
 
 export type DashboardKind = 'task_map' | 'flow_time' | 'posthog_chart'
 export const DASHBOARD_KINDS: DashboardKind[] = ['task_map', 'flow_time', 'posthog_chart']
-export const KIND_TEXT: Record<DashboardKind, string> = { task_map: 'Client task map', flow_time: 'Flow time', posthog_chart: 'PostHog chart' }
+export const KIND_TEXT: Record<DashboardKind, string> = { task_map: 'Client Task Map', flow_time: 'Flow time', posthog_chart: 'PostHog chart' }
 
 interface DashboardBase {
     id: string

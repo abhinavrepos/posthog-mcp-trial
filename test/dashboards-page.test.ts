@@ -63,7 +63,7 @@ test('access: none is refused in HTML and API; view can use both live views', as
     for (const path of ['', '?view=task_map', '?view=flow_time', '?view=flow_time&task=t_save&client=acme']) {
         const r = await request(path)
         assert.equal(r.status, 200, r.body)
-        assert.match(r.body, /Client task map/)
+        assert.match(r.body, /Client Task Map/)
         assert.match(r.body, /Flow time/)
         if (path.includes('task_map') || path.includes('flow_time')) assert.match(r.body, /data-open="pin-dialog"/)
         scriptsParse(r.body)
@@ -252,9 +252,9 @@ test('rescue is the second tab; role forms, top three reasons, filters, coverage
     for (const v of [viewer(), viewer('share'), viewer('none', 'admin@example.com', true)]) {
         const r = await request('?view=rescue', v, 'GET', undefined, injected)
         assert.equal(r.status, 200); assert.match(r.body, /1 client needs someone/)
-        assert.ok(r.body.indexOf('>Rescue queue</a>') < r.body.indexOf('>Client task map</a>'))
+        assert.ok(r.body.indexOf('>Rescue Queue</a>') < r.body.indexOf('>Client Task Map</a>'))
         assert.match(r.body, /&lt;img src=x onerror=1&gt;/); assert.doesNotMatch(r.body, /<img|<note>|<li>Fourth/)
-        assert.match(r.body, /data-page-list="rescue-pager"/); assert.match(r.body, />Task map<\/a>/)
+        assert.match(r.body, /data-page-list="rescue-pager"/); assert.match(r.body, />Task Map<\/a>/)
         assert.equal(r.body.includes('<form class="rescue-action"'), v.role === 'admin' || v.dashboards === 'share')
         assert.match(r.body, /role="status" aria-live="polite"/); scriptsParse(r.body)
     }
@@ -321,7 +321,7 @@ test('briefing is the first and default view for all dashboard roles; API access
     for(const v of [viewer(),viewer('share'),viewer('none','admin@example.com',true)]) {
         const r = await request('',v,'GET',undefined,injected)
         assert.equal(r.status,200); assert.match(r.body,/<h1>Monday briefing/)
-        assert.ok(r.body.indexOf('>Briefing</a>')<r.body.indexOf('>Rescue queue</a>'))
+        assert.ok(r.body.indexOf('>Briefing</a>')<r.body.indexOf('>Rescue Queue</a>'))
         assert.match(r.body,/silence is not satisfaction/); assert.doesNotMatch(r.body,/<img/)
         assert.equal(r.body.includes('data-review-client='),v.dashboards==='share'||v.role==='admin'); scriptsParse(r.body)
         assert.deepEqual((await request('/api/briefing',v,'GET',undefined,injected)).data,brief)
