@@ -1,9 +1,10 @@
+import { tmpdir } from 'node:os'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 
-const dir = mkdtempSync(join(process.cwd(), '.mcp-request-blockers-'))
+const dir = mkdtempSync(join(tmpdir(), 'lens-mcp-request-blockers-'))
 Object.assign(process.env, { TRIAGE_DB: join(dir, 'main.db'), TASKS_DB: join(dir, 'tasks.db'), APP_EVENTS_FILE: 'config/app-events.reval.json' })
 const { analyticalResult } = await import('../src/mcp/historyresult.ts')
 const { jsonResult } = await import('../src/mcp/result.ts')

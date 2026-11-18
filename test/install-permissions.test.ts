@@ -3,7 +3,12 @@ import { readFileSync, mkdtempSync, mkdirSync, statSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { test } from 'node:test'
+import { existsSync } from 'node:fs'
+import { test as nodeTest } from 'node:test'
+
+// These check the install scripts, which the PostHog Lens image leaves out (deploy/lens/Dockerfile.dockerignore):
+// the kit build runs the tests inside that image, where they skip.
+const test = (name: string, fn: () => void) => nodeTest(name, { skip: !existsSync('deploy/install.sh') && 'install scripts are not in this image' }, fn)
 
 test('installer makes data directories private after assigning ownership', () => {
     const source = readFileSync('deploy/install.sh', 'utf8')

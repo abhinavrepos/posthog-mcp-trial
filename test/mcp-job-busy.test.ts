@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -11,7 +12,7 @@ const exec = promisify(execFile)
 // the real MCP service. Two real SQLite connections reproduce contention without mocking SQLite.
 for (const mode of ['completion', 'commit', 'maintenance', 'heartbeat', 'foreign-poll', 'cancellation', 'shutdown']) {
     test(`MCP jobs survive SQLite busy during ${mode}`, async () => {
-        const dir = mkdtempSync(join(process.cwd(), '.job-busy-'))
+        const dir = mkdtempSync(join(tmpdir(), 'lens-job-busy-'))
         const source = `
             import assert from 'node:assert/strict'
             import { DatabaseSync } from 'node:sqlite'

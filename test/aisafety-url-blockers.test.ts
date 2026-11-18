@@ -1,9 +1,10 @@
+import { tmpdir } from 'node:os'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 
-const dir = mkdtempSync(join(process.cwd(), '.url-blockers-'))
+const dir = mkdtempSync(join(tmpdir(), 'lens-url-blockers-'))
 Object.assign(process.env, { TRIAGE_ENV_FILE: join(dir, 'none'), TRIAGE_DB: join(dir, 'triage.db'), TASKS_DB: join(dir, 'tasks.db') })
 const { safetyWith } = await import('../src/core/aisafety.ts')
 const { setAnonymise } = await import('../src/core/anonymise.ts')

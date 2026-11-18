@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -5,7 +6,7 @@ import { after, test } from 'node:test'
 import { Readable, Writable } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-const dir = mkdtempSync(join(process.cwd(), '.mcp-posthog-blockers-'))
+const dir = mkdtempSync(join(tmpdir(), 'lens-mcp-posthog-blockers-'))
 Object.assign(process.env, { TRIAGE_DB: join(dir, 'main.db'), TASKS_DB: join(dir, 'tasks.db'), APP_EVENTS_FILE: 'config/app-events.reval.json' })
 const { posthogExec, handlePosthogMcp } = await import('../src/mcp/posthog-proxy.ts')
 const { db } = await import('../src/core/db.ts')

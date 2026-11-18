@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { Server, type IncomingMessage, type ServerResponse } from 'node:http'
@@ -6,7 +7,7 @@ import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import { after, mock, test } from 'node:test'
 
-const dir = mkdtempSync(join(process.cwd(), '.growing-replay-'))
+const dir = mkdtempSync(join(tmpdir(), 'lens-growing-replay-'))
 Object.assign(process.env, { TRIAGE_ENV_FILE: join(dir, 'none'), TRIAGE_DB: join(dir, 'triage.db'), TASKS_DB: join(dir, 'tasks.db'), CLIP_CACHE_DIR: join(dir, 'cache'), CLIP_OUT_DIR: join(dir, 'clips'), CHROME_HEADLESS_SHELL: '/mock', POSTHOG_HOST: 'http://posthog.invalid', POSTHOG_PERSONAL_API_KEY: 'test', POSTHOG_PROJECT_ID: '1' })
 const require = createRequire(import.meta.url)
 const bundle = require.resolve('../vendor/rasterizer.cjs'), previous = require.cache[bundle]

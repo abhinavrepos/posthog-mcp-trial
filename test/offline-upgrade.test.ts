@@ -3,7 +3,12 @@ import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'nod
 import { execFileSync, spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test } from 'node:test'
+import { existsSync } from 'node:fs'
+import { test as nodeTest } from 'node:test'
+
+// These check the install scripts, which the PostHog Lens image leaves out (deploy/lens/Dockerfile.dockerignore):
+// the kit build runs the tests inside that image, where they skip.
+const test = (name: string, fn: () => void) => nodeTest(name, { skip: !existsSync('deploy/install.sh') && 'install scripts are not in this image' }, fn)
 
 for (const file of ['deploy/install.sh', 'deploy/offline/no-internet.sh']) {
     test(`${file} quotes systemd paths`, () => {
