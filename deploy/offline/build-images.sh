@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Script 1 of 3: makes the images. Puts everything PostHog Lens needs into your ECR, for a machine without
 # internet. Run it on a machine WITH internet (Ubuntu, x86_64, Docker and the AWS CLI), from a clone of the
-# ticket-triage-amazon-linux branch. The machine without internet then takes every image from ECR and every
+# master branch. The machine without internet then takes every image from ECR and every
 # other file from the kit, with script 2 (fresh-install.sh) or script 3 (upgrade.sh). See SETUP.md.
 #
 #   deploy/offline/build-images.sh            # everything; later runs skip what ECR already has
