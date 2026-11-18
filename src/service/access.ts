@@ -217,14 +217,14 @@ export function setSurveySettings(change: { default_role?: SurveyRole; shared_to
 // ------------------------------------------------------------------ dashboards
 // Dashboard roles, separate from the clip and survey roles:
 //   none   no Dashboards page and no dashboard tools in chat
-//   view   the task map and flow time views, and dashboards shared with them
-//   share  also pin dashboards (from chat or the page) and share them with people
+//   view   see dashboards and pin/manage their own dashboards
+//   share  also share their dashboards with people
 // Admins always have share, and see every pinned dashboard. Others get the default (none unless changed).
 export type DashboardRole = 'none' | 'view' | 'share'
 export const DASHBOARD_ROLES: DashboardRole[] = ['none', 'view', 'share']
 const DASHBOARD_RANK: Record<DashboardRole, number> = { none: 0, view: 1, share: 2 }
 export const canDashboard = (role: DashboardRole | undefined, needed: DashboardRole) => DASHBOARD_RANK[role || 'none'] >= DASHBOARD_RANK[needed]
-export const DASHBOARD_ROLE_TEXT: Record<DashboardRole, string> = { none: 'No access', view: 'See dashboards', share: 'Also pin and share dashboards' }
+export const DASHBOARD_ROLE_TEXT: Record<DashboardRole, string> = { none: 'No access', view: 'See and pin dashboards', share: 'Also share dashboards' }
 const isDashboardRole = (r: unknown): r is DashboardRole => DASHBOARD_ROLES.includes(r as DashboardRole)
 export const defaultDashboardRole = (): DashboardRole => {
     const r = getSetting<string>('dashboard_default_role', 'none')

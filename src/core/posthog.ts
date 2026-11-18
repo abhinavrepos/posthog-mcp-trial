@@ -179,6 +179,13 @@ export async function hogql(query: string, values: Record<string, unknown> = {},
     return (await cachedPosthogRead(readCacheKey('hogql', { query, values, timeoutMs: options.timeoutMs, retries: options.retries }), read, { ttlMs: options.ttlMs })).value
 }
 
+/** Aggregate query nodes use the same read key, queue, timeout and circuit breaker as HogQL. */
+export async function posthogQuery(query: Record<string, unknown>): Promise<unknown> {
+    return readSlot(() => api(projectPath('/query/'), {
+        method: 'POST', body: JSON.stringify({ query, refresh: 'blocking' }),
+    }))
+}
+
 /** The event property names PostHog has seen (needs the property_definition:read scope). */
 export async function propertyDefinitions(): Promise<string[]> {
     const out = await api<{ results: { name: string }[] }>(projectPath('/property_definitions/?type=event&limit=1000'))

@@ -1,5 +1,6 @@
+import { validateChartParams, type PosthogChartParams } from './posthogchart.ts'
 import { ToolInputError } from './toolinputerror.ts'
-// Pinned dashboards: a saved view (client task map or flow time, with its filters) that a person
+// Pinned dashboards: a saved view (task map, flow time or PostHog chart, with its filters) that a person
 // pinned from chat or the Dashboards page, and the people it is shared with. Who may pin, share and
 // open them follows the dashboard roles (service/access.ts). Every change is in the activity log.
 import { randomBytes } from 'node:crypto'
@@ -8,21 +9,24 @@ import { all, one, run, tx } from './db.ts'
 import { audit } from '../service/access.ts'
 import type { FlowTimeParams, TaskMapParams } from './taskstypes.ts'
 
-export type DashboardKind = 'task_map' | 'flow_time'
-export const DASHBOARD_KINDS: DashboardKind[] = ['task_map', 'flow_time']
-export const KIND_TEXT: Record<DashboardKind, string> = { task_map: 'Client task map', flow_time: 'Flow time' }
+export type DashboardKind = 'task_map' | 'flow_time' | 'posthog_chart'
+export const DASHBOARD_KINDS: DashboardKind[] = ['task_map', 'flow_time', 'posthog_chart']
+export const KIND_TEXT: Record<DashboardKind, string> = { task_map: 'Client task map', flow_time: 'Flow time', posthog_chart: 'PostHog chart' }
 
-export interface Dashboard {
+interface DashboardBase {
     id: string
     owner: string
-    kind: DashboardKind
     title: string
-    params: TaskMapParams | FlowTimeParams // saved filters; a window may also be relative, see RelativeWindow
     via: 'chat' | 'page'
     created_at: string
     updated_at: string
     shared_with: string[]
 }
+
+export type Dashboard = DashboardBase & (
+    { kind: 'task_map' | 'flow_time'; params: TaskMapParams | FlowTimeParams } |
+    { kind: 'posthog_chart'; params: PosthogChartParams }
+)
 
 // Pinned views usually mean "the last N days", so a window can be saved as relative and resolved on
 // open: { last_days: 28 } (the window) and the baseline before it.
@@ -35,15 +39,16 @@ const row = (r: Record<string, unknown>): Dashboard => ({
     id: String(r.id), owner: String(r.owner), kind: r.kind as DashboardKind, title: String(r.title), params: JSON.parse(String(r.params)),
     via: r.via === 'chat' ? 'chat' : 'page', created_at: String(r.created_at), updated_at: String(r.updated_at),
     shared_with: all<{ email: string }>('SELECT email FROM dashboard_shares WHERE dashboard_id = ? ORDER BY email', String(r.id)).map((x) => x.email),
-})
+} as Dashboard)
 
-function check(kind: unknown, title: unknown, params: unknown): { kind: DashboardKind; title: string; params: Record<string, unknown> } {
-    if (!DASHBOARD_KINDS.includes(kind as DashboardKind)) throw new ToolInputError('kind must be task_map or flow_time')
+function check(kind: unknown, title: unknown, params: unknown, validateParams = true): { kind: DashboardKind; title: string; params: Record<string, unknown> } {
+    if (!DASHBOARD_KINDS.includes(kind as DashboardKind)) throw new ToolInputError('kind must be task_map, flow_time or posthog_chart')
     const t = String(title ?? '').trim()
     if (!t || t.length > 120) throw new ToolInputError('Give a title of 1-120 characters.')
     if (!params || typeof params !== 'object' || Array.isArray(params)) throw new ToolInputError('params must be an object')
     const text = JSON.stringify(params)
-    if (text.length > 4000) throw new ToolInputError('params too large')
+    if (Buffer.byteLength(text) > (kind === 'posthog_chart' ? 30_000 : 4000)) throw new ToolInputError('params too large')
+    if (kind === 'posthog_chart' && validateParams) validateChartParams(params)
     if (kind === 'flow_time' && typeof (params as { task?: unknown }).task !== 'string') throw new ToolInputError('A flow time dashboard needs a task.')
     return { kind: kind as DashboardKind, title: t, params: params as Record<string, unknown> }
 }
@@ -83,7 +88,7 @@ export function listDashboards(email: string, admin: boolean): Dashboard[] {
 export function updateDashboard(id: string, by: string, admin: boolean, change: { title?: unknown; params?: unknown }): Dashboard {
     const d = getDashboard(id)
     if (!d || !canManage(d, by, admin)) throw new ToolInputError('No such dashboard, or it is not yours to change.')
-    const c = check(d.kind, change.title ?? d.title, change.params ?? d.params)
+    const c = check(d.kind, change.title ?? d.title, change.params ?? d.params, change.params !== undefined)
     tx(() => {
         run('UPDATE dashboards SET title = ?, params = ?, updated_at = ? WHERE id = ?', c.title, JSON.stringify(c.params), new Date().toISOString(), id)
         audit(by, 'dashboard.changed', { dashboard: id, title: c.title })

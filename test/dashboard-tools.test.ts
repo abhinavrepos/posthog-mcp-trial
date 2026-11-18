@@ -58,8 +58,8 @@ test('registered tools follow none, view and share roles', async () => {
             } else assert.deepEqual((await c.client.listTools()).tools.map(t => t.name).sort(), dashboardToolNames(role, 'launch', false).sort(), 'no replay insights without their own grant')
         } finally { await c.close() }
     }
-    assert.equal(dashboardToolNames('view').length, 14)
-    assert.equal(dashboardToolNames('view', 'launch', false).length, 12)
+    assert.equal(dashboardToolNames('view').length, 16)
+    assert.equal(dashboardToolNames('view', 'launch', false).length, 14)
     assert.equal(dashboardToolNames('share').length, DASHBOARD_TOOLS.length)
 })
 
@@ -68,6 +68,7 @@ test('the shared token cannot pin; relative pins stay current and share through 
     assert.match(await call('pin_dashboard', args, {}, false), /own token from the Chat page/)
     const output = JSON.parse(await call('pin_dashboard', args))
     const saved = core.getDashboard(output.dashboard.id)!
+    assert.ok(saved.kind !== 'posthog_chart')
     assert.deepEqual(saved.params.window, { last_days: 28 })
     assert.equal(saved.via, 'chat')
     assert.equal('baseline' in saved.params, false)

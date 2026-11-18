@@ -1,3 +1,5 @@
+import { publicToolError } from './publicerror.ts'
+import { prepareChartParams, readPosthogChart, chartErrorMessage } from '../core/posthogchart.ts'
 import { auditClient, requestedToolWindow } from '../core/toolcontext.ts'
 import { replayMonths } from './historyresult.ts'
 import { clientActivityChanges, compareClientPatterns } from '../core/clientpatterns.ts'
@@ -25,11 +27,11 @@ import { parseTimeWindow, analyticalWindow } from '../core/timewindow.ts'
 import type { FlowTimeParams, TaskMapParams, Window } from '../core/taskstypes.ts'
 import { REPLAY_INSIGHT_TOOLS, type ChatCaller, type DashboardRole } from '../service/access.ts'
 
-export const DASHBOARD_TOOLS = ['client_experience', 'friction_hotspots', 'signal_scorecard', 'client_story', 'client_activity_changes', 'compare_client_patterns', 'handover_pack', 'monday_brief', 'draft_rescue_survey', 'rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'share_dashboard']
+export const DASHBOARD_TOOLS = ['client_experience', 'friction_hotspots', 'signal_scorecard', 'client_story', 'client_activity_changes', 'compare_client_patterns', 'handover_pack', 'monday_brief', 'draft_rescue_survey', 'rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'pin_chart', 'share_dashboard']
 /** Replay insights (client_experience, friction_hotspots) need their own grant from a Lens admin, on top of dashboard access. */
 export const dashboardToolNames = (role: DashboardRole = 'share', surveyRole: SurveyRole = 'launch', insights = true): string[] =>
-    !appEvents() || role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => (t !== 'draft_rescue_survey' || surveysActive() && canSurvey(surveyRole, 'edit')) && (role === 'share' || !['pin_dashboard', 'share_dashboard', 'set_rescue_status'].includes(t)) && (insights || !REPLAY_INSIGHT_TOOLS.includes(t)))
-const realDeps = { clientActivityChanges, compareClientPatterns, scorecard, clientStory, handoverPack, mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
+    role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => (appEvents() || ['pin_chart', 'list_dashboards', 'share_dashboard'].includes(t)) && (t !== 'draft_rescue_survey' || surveysActive() && canSurvey(surveyRole, 'edit')) && (role === 'share' || !['share_dashboard', 'set_rescue_status'].includes(t)) && (insights || !REPLAY_INSIGHT_TOOLS.includes(t)))
+const realDeps = { readPosthogChart, clientActivityChanges, compareClientPatterns, scorecard, clientStory, handoverPack, mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
 type Caller = Pick<ChatCaller, 'who' | 'email' | 'dashboardRole' | 'admin'> & { surveyRole?: SurveyRole; insights?: boolean }
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
 const json = (value: unknown) => jsonResult('', value)
@@ -272,8 +274,24 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
             ...(input.kind === 'task_map' ? { only_flagged: input.only_flagged, ...(input.compare ? {compare:input.compare} : {}), ...(input.compare_with ? {compare_with:input.compare_with} : {}), ...(baseline ? { baseline } : {}) } : {}),
         }
         let dashboard = await d.createDashboard(caller.email, { kind: input.kind, title: input.title, params, via: 'chat' })
-        if (input.share_with) dashboard = await d.shareDashboard(dashboard.id, caller.email, caller.admin, input.share_with)
-        return json({ dashboard, open: page(dashboard.id) })
+        if (input.share_with && (caller.admin || caller.dashboardRole === 'share')) dashboard = await d.shareDashboard(dashboard.id, caller.email, caller.admin, input.share_with)
+        return json({ dashboard, open: page(dashboard.id), ...(input.share_with && !caller.admin && caller.dashboardRole !== 'share' ? { message: 'Saved to your dashboards without sharing. Sharing needs the dashboard share role.' } : {}) })
+    }))
+    reg('pin_chart', {
+        description: 'Pin any PostHog analytics chart to your own Lens dashboard. Pass the same query JSON you gave posthog_exec: the object after call query-trends, query-funnel, query-retention, query-paths, query-lifecycle, query-stickiness or execute-sql, including its kind. Dates move with time unless keep_dates_fixed is true. Runs the query before saving. Sharing needs the dashboard share role; pinning needs your personal chat token.',
+        inputSchema: {
+            title: z.string().trim().min(1).max(120), query: z.record(z.string(), z.unknown()),
+            chart: z.enum(['line', 'bar', 'table']).optional(), keep_dates_fixed: z.boolean().default(false), share_with: emails.optional(),
+        },
+    }, safe(async input => {
+        if (!caller.email) return text('Pinning needs your own token from the Chat page in Lens.')
+        try {
+            const params = prepareChartParams(input.query, input.chart, input.keep_dates_fixed)
+            await d.readPosthogChart(params)
+            let dashboard = await d.createDashboard(caller.email, { kind: 'posthog_chart', title: input.title, params, via: 'chat' })
+            if (input.share_with && (caller.admin || caller.dashboardRole === 'share')) dashboard = await d.shareDashboard(dashboard.id, caller.email, caller.admin, input.share_with)
+            return json({ dashboard, open: page(dashboard.id), ...(input.share_with && !caller.admin && caller.dashboardRole !== 'share' ? { message: 'Saved to your dashboards without sharing. Sharing needs the dashboard share role.' } : {}) })
+        } catch (error) { return publicToolError({ ...text(await chartErrorMessage(error)), isError: true }) }
     }))
     reg('share_dashboard', {
         description: 'Replace the full list of people a dashboard is shared with; only its owner or an admin may do this.',

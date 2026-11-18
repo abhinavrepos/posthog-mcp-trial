@@ -65,10 +65,10 @@ test('access: none is refused in HTML and API; view can use both live views', as
         assert.equal(r.status, 200, r.body)
         assert.match(r.body, /Client task map/)
         assert.match(r.body, /Flow time/)
-        assert.doesNotMatch(r.body, /data-open="pin-dialog"/)
+        if (path.includes('task_map') || path.includes('flow_time')) assert.match(r.body, /data-open="pin-dialog"/)
         scriptsParse(r.body)
     }
-    assert.equal((await request('/api/pins', viewer(), 'POST', {})).status, 403)
+    assert.equal((await request('/api/pins', viewer(), 'POST', {})).status, 400)
     assert.equal((await request('/api/people')).status, 403)
 })
 

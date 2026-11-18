@@ -1,8 +1,12 @@
+import { prepareChartParams, validateChartParams, readPosthogChart, chartErrorMessage, ChartError } from '../core/posthogchart.ts'
+import { posthogChartHtml, POSTHOG_CHART_CLIENT } from './posthogchart.ts'
+import { aiSafety } from '../core/aisafety.ts'
+import { ToolInputError } from '../core/toolinputerror.ts'
 import { analyticalWindow } from '../core/timewindow.ts'
 import { clientExperience, type ClientExperience } from '../core/experience.ts'
 import { scorecard } from '../core/scorecard.ts'
 import { clientStory, handoverPack, type ClientStory } from '../core/story.ts'
-// Dashboard pages use the task-history contract; no PostHog queries live here.
+// Dashboard pages use task history or privacy-filtered aggregate PostHog reads.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { mondayBrief, GRID_COLUMNS, type MondayBrief } from '../core/briefing.ts'
 import { draftRescueSurvey } from '../core/rescuesurveys.ts'
@@ -16,7 +20,7 @@ import { can, canSurvey, canDashboard, canUseDashboards, canSeeReplayInsights, t
 import { PAGE_CSS, headerHtml, APP_NAME, PAGER_JS } from './replays.ts'
 
 const ROOT = '/replays/dashboards'
-const defaults = { scorecard, clientStory, handoverPack, mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, taskMap, flowTime, findTasks, ingestStatus }
+const defaults = { readPosthogChart, scorecard, clientStory, handoverPack, mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, taskMap, flowTime, findTasks, ingestStatus }
 type Deps = typeof defaults
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 const num = (n: number) => n.toLocaleString('en-US')
@@ -101,7 +105,7 @@ function savedParams(kind: DashboardKind, raw: unknown) {
 async function readJson(req: IncomingMessage) {
     req.setEncoding?.('utf8')
     let raw = ''
-    for await (const c of req) { raw += c; if (raw.length > 20000) bad('Request body is too large.') }
+    for await (const c of req) { raw += c; if (Buffer.byteLength(raw) > 30_000) bad('Request body is too large.') }
     try { return object(JSON.parse(raw)) } catch (e) { if (e instanceof InputError) throw e; return bad('Send valid JSON.') }
 }
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -110,7 +114,8 @@ function json(res: ServerResponse, status: number, body: unknown) {
 function html(res: ServerResponse, status: number, v: Viewer, body: string) {
     res.writeHead(status, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
     res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Dashboards · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}${CSS}</style></head><body>${headerHtml(v, 'Dashboards')}<main class="wide"><div id="message" role="alert"></div><div id="action-status" role="status" aria-live="polite"></div>${body}</main><script>${PAGER_JS}
-${CLIENT}</script></body></html>`)
+${CLIENT}
+${POSTHOG_CHART_CLIENT}</script></body></html>`)
 }
 export async function handleDashboards(req: IncomingMessage, res: ServerResponse, url: URL, v: Viewer, injected: Partial<Deps> = defaults): Promise<boolean> {
     const deps = { ...defaults, ...injected }
@@ -120,6 +125,17 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
         if (api) {
             const method = req.method || 'GET'
             if (method === 'GET') {
+                const dataMatch = /^([0-9a-f]{12})\/data$/.exec(path)
+                if (dataMatch) {
+                    const chart = getDashboard(dataMatch[1])
+                    if (!chart || chart.kind !== 'posthog_chart') throw new HttpError(404, 'Chart not found.')
+                    if (!canOpen(chart, v.email, admin)) throw new HttpError(403, 'This dashboard has not been shared with you.')
+                    try {
+                        const data = await deps.readPosthogChart(chart.params)
+                        json(res, 200, { ...data, html: posthogChartHtml(chart.params, data.result, data.updated_at) })
+                    } catch (error) { json(res, 502, { error: await chartErrorMessage(error) }) }
+                    return true
+                }
                 if (path === 'story' || path === 'handover-pack') {
                     const client = text(url.searchParams.get('client'), 'client', 256)
                     json(res, 200, path === 'story' ? await deps.clientStory({ client, weeks: integer(url.searchParams.get('weeks') ?? '26', 1, 209, 'Weeks') }) : { markdown: await deps.handoverPack(client) }); return true
@@ -159,12 +175,19 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
                 json(res, 200, pin); return true
             }
             if ((path === 'pins' && method === 'POST') || (match && ['PATCH', 'DELETE', 'POST'].includes(method))) {
-                if (!share || (pin && !canManage(pin, v.email, admin))) throw new HttpError(403, 'Only the owner or an admin with dashboard share access can change this dashboard.')
+                if (pin && !canManage(pin, v.email, admin)) throw new HttpError(403, 'Only the owner or an admin can change this dashboard.')
+                if (match?.[2] === 'share' && !share) throw new HttpError(403, 'Sharing needs the dashboard share role.')
                 // PATCH is checked here too; the outer router guards POST and DELETE.
                 if (req.headers['x-clip-page'] !== '1') throw new HttpError(403, 'A page request header is required.')
                 if (path === 'pins') {
                     const b = await readJson(req)
-                    if (b.kind !== 'task_map' && b.kind !== 'flow_time') bad('Kind must be task_map or flow_time.')
+                    if (b.kind === 'posthog_chart') {
+                        const p = object(b.params)
+                        const params = prepareChartParams(p.query, p.chart as import('../core/posthogchart.ts').PosthogChartParams['chart'], b.keep_dates_fixed === true)
+                        await deps.readPosthogChart(params)
+                        json(res, 201, createDashboard(v.email, { kind: b.kind, title: text(b.title, 'title', 120), params, via: 'page' })); return true
+                    }
+                    if (b.kind !== 'task_map' && b.kind !== 'flow_time') bad('Kind must be task_map, flow_time or posthog_chart.')
                     json(res, 201, createDashboard(v.email, { kind: b.kind, title: text(b.title, 'title', 120), params: savedParams(b.kind as DashboardKind, b.params), via: 'page' })); return true
                 }
                 if (pin && match) {
@@ -172,7 +195,7 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
                     if (method === 'PATCH' && !match[2]) {
                         const b = await readJson(req)
                         if (b.title === undefined && b.params === undefined) bad('Give a title or filters to update.')
-                        json(res, 200, updateDashboard(pin.id, v.email, admin, { ...(b.title !== undefined ? { title: text(b.title, 'title', 120) } : {}), ...(b.params !== undefined ? { params: savedParams(pin.kind, b.params) } : {}) })); return true
+                        json(res, 200, updateDashboard(pin.id, v.email, admin, { ...(b.title !== undefined ? { title: text(b.title, 'title', 120) } : {}), ...(b.params !== undefined ? { params: pin.kind === 'posthog_chart' ? validateChartParams(b.params) : savedParams(pin.kind, b.params) } : {}) })); return true
                     }
                     if (method === 'POST' && match[2] === 'share') {
                         const b = await readJson(req)
@@ -187,6 +210,18 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
         const suffix = url.pathname.slice(ROOT.length).replace(/\/$/, ''), pin = suffix ? getDashboard(suffix.slice(1)) : undefined
         if (suffix && !pin) throw new HttpError(404, 'Dashboard not found.')
         if (pin && !canOpen(pin, v.email, admin)) throw new HttpError(403, 'This dashboard has not been shared with you.')
+        if (pin?.kind === 'posthog_chart') {
+            const safePin = { ...pin, title: await aiSafety(pin.title, 'posthog') }
+            const manage = canManage(pin, v.email, admin)
+            let chart: string
+            try {
+                const data = await deps.readPosthogChart(pin.params)
+                chart = posthogChartHtml(pin.params, data.result, data.updated_at)
+            } catch (error) { chart = `<p role="alert">${esc(await chartErrorMessage(error))}</p>` }
+            const context = { id: pin.id, kind: pin.kind, shares: pin.shared_with }
+            html(res, 200, v, `<div id="dashboard-context" data-context="${esc(JSON.stringify(context))}"></div><div class="page-head"><div><h1>${esc(safePin.title)}</h1><p>PostHog chart</p></div><div class="actions">${manage ? `<button class="ghost" type="button" data-open="rename-dialog">Rename</button>${share ? '<button class="ghost" type="button" id="open-share">Share</button>' : ''}<button class="ghost" type="button" data-open="delete-dialog">Delete</button>` : ''}</div></div>${rescueNav('pinned')}<div class="card" id="posthog-chart" data-id="${pin.id}">${chart}</div><p class="muted small" id="chart-refresh-status" role="status" aria-live="polite"></p>${dialogs(safePin, manage, 30, share, false)}`)
+            return true
+        }
         const selected = url.searchParams.get('view') || pin?.kind || 'briefing'
         if (selected === 'scorecard' && !pin) {
             const weeks = integer(url.searchParams.get('weeks') ?? '52',1,209,'Weeks')
@@ -200,7 +235,7 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
             return true
         }
         if (url.searchParams.get('view') === 'pinned' && !pin) {
-            html(res, 200, v, `<div class="page-head"><div><h1>Pinned</h1><p>Saved dashboards and shared views.</p></div></div>${rescueNav('pinned')}${pinsHtml(listDashboards(v.email, admin), v, admin)}`)
+            html(res, 200, v, `<div class="page-head"><div><h1>Pinned</h1><p>Saved dashboards and shared views.</p></div></div>${rescueNav('pinned')}${pinsHtml(await Promise.all(listDashboards(v.email, admin).map(async d => d.kind === 'posthog_chart' ? { ...d, title: await aiSafety(d.title, 'posthog') } : d)), v, admin)}`)
             return true
         }
         if (selected === 'briefing' && !pin) {
@@ -258,20 +293,20 @@ export async function handleDashboards(req: IncomingMessage, res: ServerResponse
         const through = map?.data_through || flow?.data_through || status.last_day
         const building = status.behind_days > 0 || !status.attempts || through == null
         const statusLine = building ? `<p class="history" role="status">Building history: ${esc(num(status.behind_days))} days to go — figures cover ${status.first_day ? date(status.first_day) : 'no processed days yet'} to ${through ? date(through) : 'not yet available'}.</p>` : ''
-        const controls = share ? `<button class="secondary" type="button" data-open="pin-dialog">Pin</button>` : ''
-        const manage = pin && share && canManage(pin, v.email, admin)
+        const controls = canUseDashboards(v) ? `<button class="secondary" type="button" data-open="pin-dialog">Pin</button>` : ''
+        const manage = pin && canManage(pin, v.email, admin)
         const context = { kind, params: filterParams, id: pin?.id, relative: url.searchParams.has('days') ? length(filterParams.window) : url.searchParams.has('from') || url.searchParams.has('to') ? null : pin && 'last_days' in pin.params.window ? (pin.params.window as unknown as { last_days: number }).last_days : null, shares: pin?.shared_with || [] }
         const body = `<div id="dashboard-context" data-context="${esc(JSON.stringify(context))}"></div>
-<div class="page-head"><div><h1>${esc(pin?.title || KIND_TEXT[kind])}</h1><p>${kind === 'task_map' ? 'Client activity and task changes across the selected period.' : 'Completion times and paths for the selected task.'}</p></div><div class="actions">${controls}${manage ? '<details class="dashboard-settings"><summary>Settings</summary><div class="actions"><button class="ghost" type="button" id="save-filters">Save filters</button><button class="ghost" type="button" data-open="rename-dialog">Rename</button><button class="ghost" type="button" id="open-share">Share</button><button class="ghost" type="button" data-open="delete-dialog">Delete</button></div></details>' : ''}</div></div>
+<div class="page-head"><div><h1>${esc(pin?.title || KIND_TEXT[kind])}</h1><p>${kind === 'task_map' ? 'Client activity and task changes across the selected period.' : 'Completion times and paths for the selected task.'}</p></div><div class="actions">${controls}${manage ? `<details class="dashboard-settings"><summary>Settings</summary><div class="actions"><button class="ghost" type="button" id="save-filters">Save filters</button><button class="ghost" type="button" data-open="rename-dialog">Rename</button>${share ? '<button class="ghost" type="button" id="open-share">Share</button>' : ''}<button class="ghost" type="button" data-open="delete-dialog">Delete</button></div></details>` : ''}</div></div>
 <nav class="tabs" aria-label="Dashboard views"><a href="${ROOT}?view=briefing" ${selected === 'briefing' ? 'aria-current="page"' : ''}>Briefing</a><a href="${ROOT}?view=rescue">Rescue queue</a><a href="${ROOT}?view=task_map" ${kind === 'task_map' ? 'aria-current="page"' : ''}>Client task map</a><a href="${ROOT}?view=flow_time" ${kind === 'flow_time' ? 'aria-current="page"' : ''}>Flow time</a><a href="${ROOT}?view=scorecard" ${selected === 'scorecard' ? 'aria-current="page"' : ''}>Scorecard</a><a href="${ROOT}?view=pinned" ${selected === 'pinned' ? 'aria-current="page"' : ''}>Pinned</a></nav>
 ${pin ? `<details class="ownership"><summary>Owner: ${esc(pin.owner)} · Shared with ${num(pin.shared_with.length)}</summary><p>${pin.shared_with.map(esc).join(', ') || 'No one else has access.'}</p></details>` : ''}
 ${statusLine}${filters(kind, filterParams, url, tasks, clients, pin ? 'last_days' in pin.params.window : undefined)}${coreError}
 ${map ? mapHtml(map, url) : flow ? flowHtml(flow) : !params ? `<div class="card flow-empty"><h2>Explore completion time</h2><p>Select a task to view completion times, paths, and replays.</p><div class="actions">${tasks.slice(0, 4).map(t => { const q = new URLSearchParams(url.searchParams); q.set('view', 'flow_time'); q.set('task', t.task_id); return `<a href="${ROOT}?${esc(q)}">${esc(taskName(t.name))}</a>` }).join('')}</div></div>` : ''}
 ${countingHelp(map?.note || flow?.note)}
-${pin ? '' : ''}${share ? dialogs(pin, !!manage, length(filterParams.window)) : ''}`
+${dialogs(pin, !!manage, length(filterParams.window), share)}`
         html(res, 200, v, body)
     } catch (e) {
-        const known = e instanceof HttpError || e instanceof InputError || e instanceof RescueInputError
+        const known = e instanceof HttpError || e instanceof InputError || e instanceof RescueInputError || e instanceof ToolInputError || e instanceof ChartError
         if (!known) console.error('dashboards:', url.pathname, e)
         const status = e instanceof HttpError ? e.status : 400
         const message = known ? (e as Error).message : 'Dashboard history is unavailable. Try again shortly or ask an admin to check history processing.'
@@ -539,13 +574,13 @@ function flowHtml(f: FlowTime) {
 }
 function pinsHtml(pins: Dashboard[], v: Viewer, admin: boolean) {
     const groups = admin ? [['All', pins] as const] : [['Mine', pins.filter(d => d.owner === v.email.toLowerCase())] as const, ['Shared with me', pins.filter(d => d.owner !== v.email.toLowerCase())] as const]
-    return `<section id="pinned" class="card${pins.length ? '' : ' is-empty'}">${!pins.length ? `<h2>No pinned views yet.</h2><p>${admin || canDashboard(v.dashboards, 'share') ? `Pin a <a href="${ROOT}?view=task_map">task map</a> or <a href="${ROOT}?view=flow_time">flow-time view</a> to keep it here.` : 'Ask someone with share access to pin a view.'}</p>` : groups.map(([name, list], index) => ` ${groups.length > 1 ? `<h3>${name}</h3>` : ''}${list.length ? `<div class="table-wrap"><table><thead><tr><th scope="col">Title</th><th scope="col">Kind</th><th scope="col">Owner</th><th scope="col">Shared</th><th scope="col">Updated</th></tr></thead><tbody data-page-list="pins-${index}-pager" data-noun="dashboards">${list.map(d => `<tr><td><a href="${ROOT}/${esc(d.id)}">${esc(d.title)}</a></td><td>${esc(KIND_TEXT[d.kind])}</td><td>${esc(d.owner)}</td><td class="num">${esc(num(d.shared_with.length))}</td><td>${date(d.updated_at)}</td></tr>`).join('')}</tbody></table><div id="pins-${index}-pager"></div></div>` : '<p class="muted">No pinned views yet.</p>'}`).join('')}</section>`
+    return `<section id="pinned" class="card${pins.length ? '' : ' is-empty'}">${!pins.length ? `<h2>No pinned views yet.</h2><p>${canUseDashboards(v) ? `Pin a <a href="${ROOT}?view=task_map">task map</a> or <a href="${ROOT}?view=flow_time">flow-time view</a> to keep it here.` : 'Ask someone with share access to pin a view.'}</p>` : groups.map(([name, list], index) => ` ${groups.length > 1 ? `<h3>${name}</h3>` : ''}${list.length ? `<div class="table-wrap"><table><thead><tr><th scope="col">Title</th><th scope="col">Kind</th><th scope="col">Owner</th><th scope="col">Shared</th><th scope="col">Updated</th></tr></thead><tbody data-page-list="pins-${index}-pager" data-noun="dashboards">${list.map(d => `<tr><td><a href="${ROOT}/${esc(d.id)}">${esc(d.title)}</a></td><td>${esc(KIND_TEXT[d.kind])}</td><td>${esc(d.owner)}</td><td class="num">${esc(num(d.shared_with.length))}</td><td>${date(d.updated_at)}</td></tr>`).join('')}</tbody></table><div id="pins-${index}-pager"></div></div>` : '<p class="muted">No pinned views yet.</p>'}`).join('')}</section>`
 }
-function dialogs(pin: Dashboard | undefined, manage: boolean, days: number) {
+function dialogs(pin: Dashboard | undefined, manage: boolean, days: number, share = true, pinView = true) {
     const close = '<button class="ghost" type="button" data-close>Cancel</button>'
-    return `<dialog id="pin-dialog" role="dialog" aria-modal="true" aria-labelledby="pin-heading"><form id="pin-form"><h2 id="pin-heading">Pin this view</h2><label>Title<input name="title" aria-label="Dashboard title" maxlength="120" required value="${esc(pin?.title || '')}"></label><label><input type="radio" name="dates" aria-label="Keep the dates fixed" value="fixed" checked>Keep the dates fixed</label><label><input type="radio" name="dates" aria-label="Use a moving period" value="relative">Use a moving period</label><div id="moving-period" hidden><label>Number of days<input name="days" type="number" min="1" max="1500" value="${days}" aria-label="Number of days"></label><p class="muted">Compares with the previous period of the same length.</p></div><div class="actions">${close}<button class="primary" type="submit">Pin</button></div></form></dialog>
+    return `${pinView ? `<dialog id="pin-dialog" role="dialog" aria-modal="true" aria-labelledby="pin-heading"><form id="pin-form"><h2 id="pin-heading">Pin this view</h2><label>Title<input name="title" aria-label="Dashboard title" maxlength="120" required value="${esc(pin?.title || '')}"></label><label><input type="radio" name="dates" aria-label="Keep the dates fixed" value="fixed" checked>Keep the dates fixed</label><label><input type="radio" name="dates" aria-label="Use a moving period" value="relative">Use a moving period</label><div id="moving-period" hidden><label>Number of days<input name="days" type="number" min="1" max="1500" value="${days}" aria-label="Number of days"></label><p class="muted">Compares with the previous period of the same length.</p></div><div class="actions">${close}<button class="primary" type="submit">Pin</button></div></form></dialog>` : ''}
 ${manage ? `<dialog id="rename-dialog" role="dialog" aria-modal="true" aria-labelledby="rename-heading"><form id="rename-form"><h2 id="rename-heading">Rename dashboard</h2><label>Title<input name="title" aria-label="Dashboard title" maxlength="120" required value="${esc(pin?.title)}"></label><div class="actions">${close}<button class="primary" type="submit">Save title</button></div></form></dialog>
-<dialog id="share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-heading"><form id="share-form"><h2 id="share-heading">Share dashboard</h2><p class="muted">${num(pin?.shared_with.length || 0)} people have access.</p><label>Find a person<input type="search" id="people-search" aria-label="Find a person"></label><div id="people"></div><div id="people-pager"></div><p id="people-status" role="status" aria-live="polite"></p><details><summary>Add people by email</summary><label>Emails (comma separated)<input name="emails" aria-label="Other emails, separated by commas" placeholder="person@example.com"></label></details><div class="actions">${close}<button class="primary" type="submit">Save sharing</button></div></form></dialog>
+${share ? `<dialog id="share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-heading"><form id="share-form"><h2 id="share-heading">Share dashboard</h2><p class="muted">${num(pin?.shared_with.length || 0)} people have access.</p><label>Find a person<input type="search" id="people-search" aria-label="Find a person"></label><div id="people"></div><div id="people-pager"></div><p id="people-status" role="status" aria-live="polite"></p><details><summary>Add people by email</summary><label>Emails (comma separated)<input name="emails" aria-label="Other emails, separated by commas" placeholder="person@example.com"></label></details><div class="actions">${close}<button class="primary" type="submit">Save sharing</button></div></form></dialog>` : ''}
 <dialog id="delete-dialog" role="dialog" aria-modal="true" aria-labelledby="delete-heading"><form id="delete-form"><h2 id="delete-heading">Delete this dashboard?</h2><p>The saved view and its shares will be removed.</p><div class="actions">${close}<button class="primary" type="submit">Delete</button></div></form></dialog>` : ''}`
 }
 const CSS = `

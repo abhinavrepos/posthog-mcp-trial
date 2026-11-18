@@ -272,7 +272,7 @@ test('core input checks use safe typed validation messages with contract help', 
   [()=>clientActivityChanges({limit:151}),/Invalid silence/],
   [()=>workflowDialogsFromId('private-invalid-id'),/Invalid discovered workflow id/],
   [()=>validateWorkflow({}),/Workflow name must/],
-  [()=>createDashboard('owner',{kind:'private-kind',title:'a',params:{}}),/kind must be task_map or flow_time/],
+  [()=>createDashboard('owner',{kind:'private-kind',title:'a',params:{}}),/kind must be task_map, flow_time or posthog_chart/],
  ]
  for(const [call,expected] of checks) assert.throws(call,e=>{
   assert.ok(e instanceof ToolInputError)

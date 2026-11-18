@@ -377,7 +377,7 @@ export-purpose/open questions. Draft creation records a rescue note. Review and 
 Surveys page using its existing launch safeguard; these actions never launch a survey. Surveys
 must be enabled and configured.
 
-## Dashboards: client task map and flow time
+## Dashboards: task maps, flow time and PostHog charts
 
 `/replays/dashboards` (the **Dashboards** tab), and the same answers in chat. PMs ask in chat; the
 dashboards are where they and their team come back to.
@@ -392,12 +392,36 @@ dashboards are where they and their team come back to.
 - Every view's filters are in its link. **Pin** keeps a view (fixed dates, or "always the last N days")
   at its own link; **Share** picks people from Lens's people or by email. Owners and admins can rename,
   change filters, reshare and delete.
-- **Chat** (MCP): `find_task`, `task_map`, `flow_time`, `list_dashboards`, `pin_dashboard`,
+- **Chat** (MCP): `find_task`, `task_map`, `flow_time`, `list_dashboards`, `pin_dashboard`, `pin_chart`,
   `share_dashboard`. Clients and tasks in plain words ("Treasury 2", "ir swap"); unclear ones come back as
   choices. Each answer has a link to the live view; pinning needs the person's own chat token.
-- **Access**, per person on the admin page: *See dashboards* (views and dashboards shared with them) or
-  *Also pin and share*. Admins always have both and see every pinned dashboard. A default applies to
-  everyone else (*No access* unless changed); the shared chat token gets at most *See dashboards*.
+- **Access**, per person on the admin page: *See and pin dashboards* (`view`) or *Also share dashboards*
+  (`share`). Both can pin and manage their own dashboards. Sharing still requires `share`; a view-role
+  `share_with` request saves privately and says so. Admins can manage all dashboards. The shared chat
+  token can view; pinning and sharing require a personal token.
+
+**PostHog charts.** After building a chart with `posthog_exec`, Copilot can call `pin_chart` with the
+same query node (the JSON object after `call query-trends`, `query-funnel`, `query-retention`,
+`query-paths`, `query-lifecycle`, `query-stickiness` or `execute-sql`). For example:
+
+```json
+{"title":"Page views","query":{"kind":"TrendsQuery","series":[{"kind":"EventsNode","event":"$pageview","math":"total"}],"dateRange":{"date_from":"-30d","date_to":null}},"chart":"line"}
+```
+
+`chart` can be `line`, `bar` or `table`. Dates move by default: absolute aggregate ranges become the
+last N days, and absolute SQL date literals or bound date values become relative placeholders.
+Relative SQL such as `now() - INTERVAL 30 DAY` already moves. Use `keep_dates_fixed: true` to preserve
+the original dates. `share_with` is an optional list of emails. Lens checks the query before saving.
+
+Chart queries use the project read key, read slots, timeouts and circuit breaker. Reads share one
+PostHog call and a bounded five-minute cache. Every response, including a cache hit, gets the current
+Copilot privacy pass. Replay/person-list queries are refused; private mode refuses SQL and follows
+the existing PostHog block/filter setting for aggregate charts. Queries are limited to 20 kB.
+
+The saved page renders series, funnel bars, retention, routes or SQL with an accessible table.
+It shows at most 10 series and 200 table rows, with a notice when truncated. A visible page refreshes
+through its authenticated JSON endpoint every five minutes. Hidden tabs skip refreshes; failed
+refreshes keep the previous chart and timestamp with a quiet notice.
 
 **What a task is.** The dialog where a user submits and gets a good outcome (completed or accepted),
 named after the dialog and its most common finish ("IR Swap → Save → 'Trade Id … Updated'"). An attempt
@@ -410,7 +434,7 @@ file `run/tasks.db`): every 10 minutes it re-reads today and yesterday and catch
 run, newest first, up to 400 days). A day is read in about 7 PostHog queries (one for its sessions, then
 50,000-event pages, each read as its sorted keys first and then its rows unsorted, so ClickHouse
 never sorts wide rows: under 30 MB a query instead of up to 800 MB), retried with growing waits when PostHog is busy or rate-limited, and stored in one
-transaction, so a re-run replaces it. The dashboards read daily summaries (per client, task and path,
+transaction, so a re-run replaces it. The task map and flow-time dashboards read daily summaries (per client, task and path,
 with duration histograms for the median and p90), never raw events, and keep each answer until the
 next stored day. Measured on the test machine: a full Reval-size day (111,808 events, 2,750 sessions)
 in 4.9 s; a 20,000-event day in about 1.5 s; the task map over a year of summaries for 50 clients and
