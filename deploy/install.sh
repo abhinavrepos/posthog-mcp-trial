@@ -465,6 +465,16 @@ posthog_publishes_port() {
     [ "$found" = 1 ]
 }
 
+# The status page is its own Compose project (deploy/status, name: lens-status) and publishes 8090.
+status_publishes_port() {
+    local port="$1" id found=0
+    for id in $(docker ps -q --filter "publish=$port"); do
+        [ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}/{{index .Config.Labels "com.docker.compose.service"}}' "$id")" = lens-status/status ] || return 1
+        found=1
+    done
+    [ "$found" = 1 ]
+}
+
 port_user() {
     local pid; pid="$(ss -Hltnp "sport = :$1" 2>/dev/null | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)"
     [ -n "$pid" ] || { ss -Hltn "sport = :$1" 2>/dev/null | grep -q . && echo "(unknown process)"; return 0; }
@@ -514,8 +524,10 @@ step_check() {
         u="$(port_user "$p")"
         [ -z "$u" ] && continue
         case "$p:$u" in
-            80:*docker-proxy*|443:*docker-proxy*|8090:*docker-proxy*)
+            80:*docker-proxy*|443:*docker-proxy*)
                 posthog_publishes_port "$p" || die "Port $p is published by a container outside this PostHog Compose project" ;;
+            8090:*docker-proxy*)
+                status_publishes_port "$p" || die "Port 8090 is published by a container other than the status page (deploy/status)" ;;
             "$sp":*src/service/server.ts*) ;;                           # the triage service from an earlier run
             *) die "Port $p is already in use by: $u" ;;
         esac
