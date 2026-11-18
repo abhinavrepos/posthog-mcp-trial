@@ -81,17 +81,17 @@ export function liveHtml(v: Viewer): string {
 .pulse{width:12px;height:12px;border-radius:50%;background:var(--live);flex:none}.pulse.off{background:var(--axis);animation:none}
 .filters{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin:4px 0 16px}.filters>div,.filters>div.grow{min-width:0;flex:1 1 0}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
-.tile{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:16px;min-height:112px;min-width:0}.tile span{display:block;font-size:12px;line-height:16px;font-weight:500;color:var(--muted)}.tile b{display:block;font-size:28px;line-height:32px;font-weight:600;letter-spacing:-.02em;margin-top:8px}
+.tile{background:var(--card);box-shadow:var(--shadow);border-radius:var(--r);padding:var(--space-4);min-height:112px;min-width:0}.tile span{display:block;font-size:12px;line-height:16px;font-weight:500;color:var(--muted)}.tile b{display:block;font-size:var(--text-metric);line-height:32px;font-weight:600;letter-spacing:-.02em;margin-top:8px}
 .tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
 .seg{display:flex;gap:2px;height:8px;width:100%;margin-top:8px}.seg i{display:block;height:8px;border-radius:999px}.seg .a{background:var(--act)}.seg .i{background:var(--idle)}
 td .seg{width:90px;margin:0;display:inline-flex;vertical-align:middle}
 .legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--muted);margin:0 0 12px}.legend span{white-space:nowrap}.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 .chart svg{display:block;width:100%;overflow:visible}.chart text{font-size:12px;font-family:inherit;fill:var(--muted);font-variant-numeric:tabular-nums}
-.chart .hit{fill:transparent;cursor:default;outline:none}.chart g.col:hover path,.chart g.col.on path{filter:brightness(1.12)}
+.chart .hit{fill:transparent;cursor:default}.chart .hit:focus-visible{stroke:var(--accent);stroke-width:2px}.chart g.col:hover path,.chart g.col.on path{filter:brightness(1.12)}
 .chart g.col:focus-visible .hit{stroke:var(--accent);stroke-width:1}
 .heat{display:grid;gap:2px;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}.heat div{height:16px;border-radius:3px}
 .heat .lbl{background:none;height:auto;line-height:16px;white-space:nowrap;padding-right:6px}.heat .hd{background:none;height:auto;text-align:left}
-.heat .c{background:var(--bg);outline:none}.heat .c:hover,.heat .c:focus-visible{box-shadow:inset 0 0 0 1.5px var(--ink)}
+.heat .c{background:var(--bg)}.heat .c:hover{box-shadow:inset 0 0 0 1.5px var(--ink)}.heat .c:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .scale{display:flex;align-items:center;gap:3px;font-size:12px;color:var(--muted);margin-top:8px}.scale i{width:16px;height:10px;border-radius:2px;display:inline-block}
 #tip{position:fixed;z-index:10;pointer-events:none;background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.08);padding:8px 10px;font-size:13px;min-width:150px}
 #tip .t{color:var(--muted);margin-bottom:4px}#tip .r{display:flex;align-items:center;gap:8px}#tip .r b{font-variant-numeric:tabular-nums}#tip .k{width:12px;height:2px;border-radius:1px;flex:none}
@@ -104,7 +104,7 @@ details.how summary{cursor:pointer;font-weight:500}details.how li{margin:4px 0}
 .tl-head{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}.tl-nav{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .tl-nav input[type=date]{width:auto;padding:6px 8px}.tl-nav button{padding:6px 11px}.tl-whole{display:flex;gap:5px;align-items:center;margin:0 4px;font-size:13px;color:var(--muted)}.tl-whole input{width:auto}
 .tl-facts{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.tl-facts span{padding:5px 0;font-size:13px;color:var(--muted)}.tl-facts b{color:var(--ink);font-variant-numeric:tabular-nums}
-#tl-chart{outline:none;border-radius:6px}#tl-chart:focus-visible{box-shadow:0 0 0 2px var(--accent)}#tl-chart svg{cursor:crosshair}
+#tl-chart{border-radius:var(--r-sm)}#tl-chart svg{cursor:crosshair}
 .tlbtn{padding:3px 9px;font-size:13px}#tl-pick{min-height:34px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .live-settings{align-self:flex-end;min-width:0;padding:0;flex:0 0 auto}.live-settings>summary{display:flex;align-items:center;min-height:36px;padding:7px 12px;border:1px solid var(--control);border-radius:var(--r-sm)}.live-settings[open]{flex-basis:100%}.live-settings>div{max-width:260px;margin-top:12px}.heat-scroll{overflow-x:auto;max-width:100%}.heat{min-width:640px}.tiles{gap:16px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}.tl-facts{gap:6px 20px}
 @media(max-width:600px){.hero{font-size:30px}.now{gap:10px}#now-sub{min-width:0;flex-basis:180px}.live-settings{flex-basis:100%;padding:0}.tl-nav{gap:4px}.tl-nav input[type=date]{max-width:145px}.tl-facts{gap:4px 14px}}
@@ -113,7 +113,7 @@ details.how summary{cursor:pointer;font-weight:500}details.how li{margin:4px 0}
 <body>${headerHtml(v, 'Live')}<main class="wide"><div class="page-head"><div><h1>Live activity</h1><p>Current activity and active time across clients.</p></div></div><p id="live-status" class="small" aria-live="polite"></p>
 
 <div class="card"><h2>In the app now</h2><div class="now"><span aria-hidden="true" class="pulse off" id="pulse"></span><span class="hero" id="now-count">–</span><span class="muted" aria-live="polite" id="now-sub">Loading…</span><span id="now-updated" class="small muted"></span></div>
-<div class="table-wrap"><table><thead><tr><th scope="col">Client</th><th scope="col">Person</th><th scope="col">Last action</th><th scope="col">In the app since</th><th scope="col" class="num">Today in the app</th><th scope="col" class="num">Today active</th><th scope="col">Actions</th></tr></thead><tbody id="now-rows"></tbody></table><div id="now-pager"></div></div></div>
+<div class="table-wrap" role="region" aria-label="People in the app now" tabindex="0"><table><thead><tr><th scope="col">Client</th><th scope="col">Person</th><th scope="col">Last action</th><th scope="col">In the app since</th><th scope="col" class="num">Today in the app</th><th scope="col" class="num">Today active</th><th scope="col">Actions</th></tr></thead><tbody id="now-rows"></tbody></table><div id="now-pager"></div></div></div>
 
 <div class="filters" id="filters">
 <div><label for="range">Period</label><select id="range"><option value="today">Today</option><option value="yesterday">Yesterday</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="custom">Pick dates…</option></select></div>
@@ -130,19 +130,19 @@ details.how summary{cursor:pointer;font-weight:500}details.how li{margin:4px 0}
 <div class="legend"><span><i aria-hidden="true" style="background:var(--act)"></i>Active</span><span><i aria-hidden="true" style="background:var(--idle)"></i>Idle (app open, no action)</span><span><i aria-hidden="true" style="background:var(--muted);width:2px"></i>An action</span><span><i aria-hidden="true" style="background:var(--ink);width:2px;height:12px"></i>Opened a screen</span></div>
 <div class="chart" id="tl-chart" tabindex="0" aria-label="Timeline of the day. Use the left and right arrow keys to step through the actions."></div>
 <div aria-live="polite" id="tl-pick" class="small muted">Point at the timeline to see what happened. Click a moment to make a clip from it.</div>
-<details><summary class="small" id="tl-list-sum">Every action</summary><div class="table-wrap"><table id="tl-list"></table><div id="tl-list-pager"></div></div><p><button class="ghost hidden" id="tl-more" type="button">Show more</button></p></details>
+<details><summary class="small" id="tl-list-sum">Every action</summary><div class="table-wrap" role="region" aria-label="Timeline actions" tabindex="0"><table id="tl-list"></table><div id="tl-list-pager"></div></div><p><button class="ghost hidden" id="tl-more" type="button">Show more</button></p></details>
 </div>
 
 <div id="report">
 <div class="tiles" id="tiles"></div>
 <div class="card"><h2 id="chart-title">Time in the app</h2><p class="small muted">Total time across all people.</p><div class="legend"><span><i aria-hidden="true" style="background:var(--act)"></i>Active</span><span><i aria-hidden="true" style="background:var(--idle)"></i>Idle</span></div>
 <div class="chart" id="chart"></div><p class="small muted" id="chart-note"></p>
-<details><summary class="small">Show as a table</summary><div class="table-wrap"><table id="chart-table"></table><div id="chart-table-pager"></div></div></details></div>
-<div class="card" id="heat-card"><h2>Active time by hour</h2><p class="small muted">Darker hours have more active time across all people.</p><div class="heat-scroll" tabindex="0" role="region" aria-label="Hourly activity; scroll to see all hours"><div class="heat" id="heat" role="group" aria-label="Active time by hour. Use arrow keys to move between hours."></div></div><div class="scale" id="scale"></div></div>
+<details><summary class="small">Show as a table</summary><div class="table-wrap" role="region" aria-label="Time in the app" tabindex="0"><table id="chart-table"></table><div id="chart-table-pager"></div></div></details></div>
+<div class="card" id="heat-card"><h2>Active time by hour</h2><p class="small muted">Darker hours have more active time across all people.</p><div class="heat-scroll" role="region" aria-label="Activity heat map" tabindex="0" tabindex="0" role="region" aria-label="Hourly activity; scroll to see all hours"><div class="heat" id="heat" role="group" aria-label="Active time by hour. Use arrow keys to move between hours."></div></div><div class="scale" id="scale"></div></div>
 <div class="card"><div class="row" style="align-items:center;margin-bottom:8px"><h2 id="list-title" style="margin:0;flex:1">Clients</h2><span id="who-pill"></span><button class="ghost" id="list-csv" type="button">Download CSV</button></div>
-<div class="table-wrap"><table id="list"></table><div id="list-pager"></div></div><p class="small muted" id="list-note"></p></div>
+<div class="table-wrap" role="region" aria-label="Recent actions" tabindex="0"><table id="list"></table><div id="list-pager"></div></div><p class="small muted" id="list-note"></p></div>
 <div class="card hidden" id="sessions-card"><div class="row" style="align-items:center;margin-bottom:8px"><h2 style="margin:0;flex:1" id="sessions-title">Sessions</h2><button class="ghost" id="sessions-csv" type="button">Download CSV</button></div>
-<div class="table-wrap"><table id="sessions"></table><div id="sessions-pager"></div></div><p class="small"><button class="ghost hidden" id="more" type="button">Show more</button></p></div>
+<div class="table-wrap" role="region" aria-label="Sessions" tabindex="0"><table id="sessions"></table><div id="sessions-pager"></div></div><p class="small"><button class="ghost hidden" id="more" type="button">Show more</button></p></div>
 </div>
 
 <details class="card how"><summary>How this works</summary><ul class="small">

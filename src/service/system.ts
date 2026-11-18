@@ -84,14 +84,15 @@ export function systemHtml(v: Viewer): string {
 .banner.warn .big{background:var(--warn)}
 .banner.down{background:var(--down-bg)}
 .banner.down .big{background:var(--down)}
-.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px}
+.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:var(--space-4);margin-bottom:var(--space-4)}
 .charts .card,.split .card{margin:0;min-width:0}
+.charts>.card{padding:var(--space-4);background:var(--card);box-shadow:var(--shadow)}
 .charts h2,.split h2{margin-top:0}
 .chart{position:relative}
 .chart svg{display:block;max-width:100%}
 .note{color:var(--muted);font-size:13px;padding:30px 0;text-align:center}
 .tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--card);font-size:12px;padding:4px 8px;border-radius:6px;white-space:nowrap;transform:translate(-50%,-110%);z-index:2}
-.split{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px}
+.split{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:var(--space-4);margin-bottom:var(--space-4)}
 .svc:first-of-type{border-top:0}
 .svc .d{color:var(--muted);font-size:12.5px;text-align:right}
 .st{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;white-space:nowrap}
@@ -136,10 +137,8 @@ details summary{cursor:pointer}
 .svc{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:4px 12px;align-items:center;border-top:1px solid var(--line);font-size:14px;padding:10px 0}
 .table-wrap{min-width:0}
 main{min-width:0}
-main h1{font-size:24px;line-height:32px;font-weight:600;margin:0}
 main .page-head{margin-bottom:24px;align-items:center}
 main .page-head p{margin:4px 0 0;font-size:14px;line-height:20px}
-main h2{font-size:15px;line-height:24px;font-weight:600;margin:0 0 12px}
 main h3{font-size:14px;line-height:20px;font-weight:600;margin:0 0 8px}
 main input:not([type=checkbox]):not([type=radio]),main select{height:36px;min-height:36px;padding:7px 10px;font-size:13px;line-height:20px;max-width:100%;box-sizing:border-box}
 main button,main .btn{min-height:36px;font-size:13px;line-height:20px;white-space:nowrap;word-break:normal;overflow-wrap:normal}
@@ -149,10 +148,6 @@ main .pager button{min-height:32px;padding:5px 10px;border:1px solid var(--line-
 main .pager select{height:32px;min-height:32px}
 main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 #people-msg:empty,#outcome-msg:empty,#audit-msg:empty,#keys-msg:empty,#msg:empty{display:none}
-.tabs{overflow-x:auto;max-width:100%}
-.tabs :is(button,a){white-space:nowrap;flex-shrink:0}
-.tabs .tab-link,.tabs .tab-link0{color:var(--muted);text-decoration:none;font-weight:500;padding:8px 12px;border-bottom:2px solid transparent}
-.tabs :is([aria-current],[aria-selected=true]){color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
 .banner{display:flex;border:0;border-radius:0;background:transparent;align-items:flex-start;padding:0 0 24px;margin-bottom:16px;gap:12px}
 .banner h2{margin:0;font-size:24px;line-height:32px}
 .banner .big{font-weight:700;border-radius:50%;display:grid;place-items:center;flex:none;color:var(--card);background:var(--muted);width:28px;height:28px;font-size:16px;margin-top:2px}
@@ -196,7 +191,6 @@ th,td{padding:7px 4px}
 .svc .d{grid-column:1/-1;grid-row:2;text-align:left}
 .tile b{font-size:21px}
 .card{padding:12px}
-.card>.table-wrap{margin-left:-12px;margin-right:-12px}.card>.table-wrap :is(th,td):first-child{padding-left:12px}.card>.table-wrap :is(th,td):last-child{padding-right:12px}
 .tools input{width:100%;min-width:0}
 .tools select{width:100%}
 .containers-table th:nth-child(2){width:32%}
@@ -234,7 +228,7 @@ th,td{padding:7px 4px}
 <details class="section-details"><summary>Database and Lens activity</summary><div class="split"><div class="card" id="clickhouse"></div><div class="card" id="lens"></div></div>
 </details>
 <div class="card containers-card"><div class="tools"><h2 id="c-title">Containers</h2><div class="container-controls"><input id="find" type="search" placeholder="Find a container" aria-label="Find a container"><details class="view-control"><summary>View</summary><div class="tools"><select id="view" aria-label="Container view"><option value="all">All containers · problems first</option><option value="mem_bytes">Top 5 by memory</option><option value="cpu_pct">Top 5 by CPU</option></select></div></details></div></div>
-<div class="table-wrap"><table class="containers-table"><thead><tr><th scope="col">Status</th><th scope="col">Container</th><th scope="col" class="r">Running</th><th scope="col" class="n">CPU</th><th scope="col" class="n">Memory</th><th scope="col" class="n">Restarts</th></tr></thead><tbody id="rows"><tr><td colspan="6">Loading containers…</td></tr></tbody></table></div><div id="containers-pager"></div></div>
+<div class="table-wrap" role="region" aria-label="Containers" tabindex="0"><table class="containers-table"><thead><tr><th scope="col">Status</th><th scope="col">Container</th><th scope="col" class="r">Running</th><th scope="col" class="n">CPU</th><th scope="col" class="n">Memory</th><th scope="col" class="n">Restarts</th></tr></thead><tbody id="rows"><tr><td colspan="6">Loading containers…</td></tr></tbody></table></div><div id="containers-pager"></div></div>
 <details class="section-details"><summary>Recent changes</summary><div id="changes">Loading recent changes…</div><div id="changes-pager"></div></details>
 <details class="section-details"><summary>About this server</summary><div id="about"></div><details class="nums"><summary>How this works</summary><p class="small muted">Only counts and machine figures are read, never event or replay content. CPU and memory history restarts with the status service.</p></details></details>
 <p class="small muted">Refreshes every 15 seconds.</p>

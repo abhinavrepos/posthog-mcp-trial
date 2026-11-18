@@ -68,12 +68,12 @@ function connectHtml(v: Viewer): string {
 table{width:100%;table-layout:fixed}
 td,th{overflow-wrap:anywhere}
 .srv h3{margin:0 0 6px;font-size:15px}
-.policy{border:1px solid var(--err);background:var(--err-bg);color:var(--err);border-radius:8px;padding:12px 16px;margin:0 0 16px}
+.policy{background:var(--chip);border-radius:var(--r);padding:var(--space-3) var(--space-4);margin:0 0 var(--space-4)}
 .policy p{margin:0}
 .policy ul{margin:4px 0;padding-left:20px}
-.info{background:var(--hover);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:12px 16px;margin:0 0 16px}
+.info{border-left:2px solid var(--line-strong);padding:var(--space-2) var(--space-4);margin:0 0 var(--space-4)}
 .info p{margin:0}
-main .card+.card{margin-top:24px}
+main .card+.card{margin-top:var(--space-4)}
 main .ghost{border-color:transparent;color:var(--ink)}
 ol.steps{margin:20px 0 0;padding-left:24px}
 ol.steps li{margin:0;padding:0 0 20px 8px;line-height:20px}
@@ -85,10 +85,8 @@ ol.steps li::marker{color:var(--muted);font-weight:600}
 .f code{padding:5px 8px;border-radius:6px;overflow-wrap:anywhere;font-size:13px;background:var(--hover)}
 main td{padding-top:12px;padding-bottom:12px;vertical-align:middle}
 main{min-width:0}
-main h1{font-size:24px;line-height:32px;font-weight:600;margin:0}
 main .page-head{margin-bottom:24px;align-items:center}
 main .page-head p{margin:4px 0 0;font-size:14px;line-height:20px}
-main h2{font-size:15px;line-height:24px;font-weight:600;margin:0 0 12px}
 main h3{font-size:14px;line-height:20px;font-weight:600;margin:0 0 8px}
 main input:not([type=checkbox]):not([type=radio]),main select{height:36px;min-height:36px;padding:7px 10px;font-size:13px;line-height:20px;max-width:100%;box-sizing:border-box}
 main button,main .btn{min-height:36px;font-size:13px;line-height:20px;white-space:nowrap;word-break:normal;overflow-wrap:normal}
@@ -98,10 +96,6 @@ main .pager button{min-height:32px;padding:5px 10px;border:1px solid var(--line-
 main .pager select{height:32px;min-height:32px}
 main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 #people-msg:empty,#outcome-msg:empty,#audit-msg:empty,#keys-msg:empty,#msg:empty{display:none}
-.tabs{overflow-x:auto;max-width:100%}
-.tabs :is(button,a){white-space:nowrap;flex-shrink:0}
-.tabs .tab-link,.tabs .tab-link0{color:var(--muted);text-decoration:none;font-weight:500;padding:8px 12px;border-bottom:2px solid transparent}
-.tabs :is([aria-current],[aria-selected=true]){color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
 #revoked-box{margin-top:16px}
 #rows button.ghost{color:var(--err);font-weight:500}
 main table th:last-child,#rows td:last-child{text-align:right}
@@ -113,7 +107,6 @@ main table th:last-child,#rows td:last-child{text-align:right}
 main th,main td{padding-left:3px;padding-right:3px;font-size:13px}
 main td button{padding:6px 3px}
 ol.steps li{padding-left:2px}
-main h1{font-size:24px}
 }
 </style></head>
 <body>${headerHtml(v, 'Chat')}<main class="narrow">
@@ -126,7 +119,7 @@ main h1{font-size:24px}
 <li>Start a new chat: <span>“Which clients need attention this month?”</span></li>
 </ol>
 </div>
-<div class="card"><h2>Your keys</h2><div class="table-wrap"><table><colgroup><col style="width:24%"><col style="width:29%"><col style="width:29%"><col style="width:18%"></colgroup><thead><tr><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div><div id="keys-pager"></div><p id="keys-msg" class="small" aria-live="polite"></p>
+<div class="card"><h2>Your keys</h2><div class="table-wrap" role="region" aria-label="Your keys" tabindex="0"><table><colgroup><col style="width:24%"><col style="width:29%"><col style="width:29%"><col style="width:18%"></colgroup><thead><tr><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div><div id="keys-pager"></div><p id="keys-msg" class="small" aria-live="polite"></p>
 <details id="revoked-box" hidden><summary class="small muted" id="revoked-sum"></summary><ul id="revoked" class="small muted"></ul></details>
 </div>
 </main>

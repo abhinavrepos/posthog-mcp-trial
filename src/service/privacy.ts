@@ -81,10 +81,8 @@ table.cn input{width:100%;min-width:0;margin:0}
 .find>div{width:280px;max-width:100%}
 .find input{width:100%;max-width:none}
 main{min-width:0}
-main h1{font-size:24px;line-height:32px;font-weight:600;margin:0}
 main .page-head{margin-bottom:24px;align-items:center}
 main .page-head p{margin:4px 0 0;font-size:14px;line-height:20px}
-main h2{font-size:15px;line-height:24px;font-weight:600;margin:0 0 12px}
 main h3{font-size:14px;line-height:20px;font-weight:600;margin:0 0 8px}
 main input:not([type=checkbox]):not([type=radio]),main select{height:36px;min-height:36px;padding:7px 10px;font-size:13px;line-height:20px;max-width:100%;box-sizing:border-box}
 main button,main .btn{min-height:36px;font-size:13px;line-height:20px;white-space:nowrap;word-break:normal;overflow-wrap:normal}
@@ -94,10 +92,6 @@ main .pager button{min-height:32px;padding:5px 10px;border:1px solid var(--line-
 main .pager select{height:32px;min-height:32px}
 main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 #people-msg:empty,#outcome-msg:empty,#audit-msg:empty,#keys-msg:empty,#msg:empty{display:none}
-.tabs{overflow-x:auto;max-width:100%}
-.tabs :is(button,a){white-space:nowrap;flex-shrink:0}
-.tabs .tab-link{margin-left:0;color:var(--muted);text-decoration:none;font-weight:500;padding:8px 12px;border-bottom:2px solid transparent}
-.tabs :is([aria-current],[aria-selected=true]){color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
 .card>.top{align-items:flex-start}
 .card>.top>label.set{margin:0;min-height:24px}
 .set>span:first-child,.set label{font-size:13px;line-height:20px;font-weight:500;color:var(--ink)}
@@ -132,28 +126,43 @@ table.cn td{display:block;border:0;padding:0;min-width:0;height:auto;min-height:
 /** Keep both Admin entry points in the same navigation order. */
 export function adminTabs(privacy = false): string {
     const sections = [['people', 'People'], ['outcomes', 'Client outcomes'], ['chat', 'Chat keys'], ['clips', 'Clips'], ['activity', 'Activity']]
-    return `<div class="tabs"${privacy ? '' : ' role="tablist" aria-label="Admin sections"'}>${sections.map(([id, label]) => privacy ? `<a class="tab-link" href="/replays/admin#${id}">${label}</a>` : `<button class="tab-link" type="button" role="tab" data-tab="${id}">${label}</button>`).join('')}<a class="tab-link"${privacy ? ' aria-current="page"' : ''} href="/replays/admin/privacy">Client privacy</a></div>`
+    const privacyLink = `<a class="tab-link"${privacy ? ' aria-current="page"' : ''} href="/replays/admin/privacy">Client privacy</a>`
+    if (privacy) {
+        return `<div class="tabs" role="navigation" aria-label="Admin sections">${sections.map(([id, label]) => `<a class="tab-link" href="/replays/admin#${id}">${label}</a>`).join('')}${privacyLink}</div>`
+    }
+    const tabs = sections.map(([id, label], i) => `<button class="tab-link" type="button" role="tab" id="t-${id}" data-tab="${id}" aria-controls="tab-${id}" aria-selected="${i === 0}" tabindex="${i === 0 ? 0 : -1}">${label}</button>`).join('')
+    return `<div class="tabs"><div class="tab-group" role="tablist" aria-label="Admin sections">${tabs}</div>${privacyLink}</div>`
 }
 
 function adminPage(v: Viewer): string {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Client privacy · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}${STYLE}main{min-width:960px}input[type=number]{width:120px}#preview{white-space:pre-wrap;max-height:300px;overflow:auto}</style></head><body>${headerHtml(v, 'Admin')}<main>
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Client privacy · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}${STYLE}
+.privacy-page,.privacy-page :is(.card,p){overflow-wrap:anywhere}
+.privacy-page .table-wrap table{min-width:600px}
+.privacy-page :is(.table-wrap,#preview,.row)+p{margin-top:var(--space-4)}
+.privacy-page .row label{margin:0;min-width:0}
+.privacy-page .row label:first-child{flex:1 1 160px;max-width:260px}
+.privacy-page input[type=number]{width:120px}
+.privacy-page .row button{align-self:end}
+#preview{white-space:pre-wrap;max-height:300px;overflow:auto}
+#preview:empty{display:none}
+</style></head><body>${headerHtml(v, 'Admin')}<main id="main" class="privacy-page">
 <div class="page-head"><div><h1>Admin</h1><p>Privacy for AI</p></div></div>${adminTabs(true)}
 <section class="card"><h2>Privacy mode: <span id="current"></span></h2><p>One setting covers Lens tools, ticket triage and PostHog results. Replay access stays the same in all modes.</p>
-<table><thead><tr><th>Mode</th><th>Client names/codes</th><th>Client users’ emails/names/IDs</th><th>Cash amounts</th><th>Trade IDs</th><th>PostHog SQL</th></tr></thead><tbody>
+<div class="table-wrap" role="region" aria-label="Privacy modes" tabindex="0"><table><thead><tr><th>Mode</th><th>Client names/codes</th><th>Client users’ emails/names/IDs</th><th>Cash amounts</th><th>Trade IDs</th><th>PostHog SQL</th></tr></thead><tbody>
 <tr><td><label><input type="radio" name="mode" value="open"> Open</label></td><td>Real</td><td>Visible</td><td>Visible</td><td>Visible</td><td>Allowed</td></tr>
 <tr><td><label><input type="radio" name="mode" value="standard"> Standard (default)</label></td><td>Real</td><td>Masked</td><td>Masked</td><td>Visible</td><td>Allowed; results masked</td></tr>
-<tr><td><label><input type="radio" name="mode" value="private"> Private</label></td><td>Numbered codenames</td><td>Masked</td><td>Masked</td><td>Visible</td><td>Refused</td></tr></tbody></table>
+<tr><td><label><input type="radio" name="mode" value="private"> Private</label></td><td>Numbered codenames</td><td>Masked</td><td>Masked</td><td>Visible</td><td>Refused</td></tr></tbody></table></div>
 <p class="small muted">Open shows what the source still retains. Data stored already generalised, such as message templates, stays generalised. Names typed directly into chat are sent to AI; in private mode use codenames.</p>
 <div id="private"><label>Other PostHog data <select id="posthog"><option value="block">Block data</option><option value="filter">Filter results</option></select></label> <label><input type="checkbox" id="round"> Round counts</label><p class="small muted">Filtering is best effort; transformed or encoded client names may evade it. Block data permits docs only.</p></div></section>
 <section class="card"><h2>Numbered codenames</h2><p>Immutable ranks keep labels stable. Initial ranks are shuffled. Individual codename edits are removed; real-name aliases remain editable below.</p>
-<label>Prefix <input id="prefix" maxlength="40"></label> <label>Start <input id="start" type="number" min="0" step="1"></label> <button id="show">Preview mapping</button> <button id="apply" disabled>Apply preview</button><pre id="preview"></pre><p class="small muted">Old codenames stop resolving. A scheme that reassigns a current or retired label is refused.</p>
-<table><thead><tr><th>Client</th><th>Codename</th><th>Real-name aliases</th><th></th></tr></thead><tbody id="clients"></tbody></table></section>
+<div class="row"><label>Prefix <input id="prefix" maxlength="40"></label> <label>Start <input id="start" type="number" min="0" step="1"></label> <button id="show" class="secondary">Preview mapping</button> <button id="apply" disabled>Apply preview</button></div><pre id="preview" role="region" aria-label="Codename mapping preview" tabindex="0"></pre><p class="small muted">Old codenames stop resolving. A scheme that reassigns a current or retired label is refused.</p>
+<div class="table-wrap" role="region" aria-label="Client codename aliases" tabindex="0"><table><thead><tr><th>Client</th><th>Codename</th><th>Real-name aliases</th><th></th></tr></thead><tbody id="clients"></tbody></table></div></section>
 <section class="card"><h2>Privacy audit</h2><div id="audit"></div></section><p id="msg" role="status"></p></main><script>
 const $=id=>document.getElementById(id);let state,preview;
 async function api(path,body){const r=await fetch('/replays/admin/privacy/api/'+path,{method:body?'POST':'GET',headers:{'content-type':'application/json','x-clip-page':'1'},body:body?JSON.stringify(body):undefined});const d=await r.json();if(!r.ok)throw Error(d.error);return d}
 const attempt=f=>async()=>{try{await f();$('msg').textContent='Saved.'}catch(e){$('msg').textContent=e.message}};
 async function load(){state=await api('state');const s=state.settings;$('current').textContent=s.mode;document.querySelectorAll('[name=mode]').forEach(e=>e.checked=e.value===s.mode);$('private').hidden=s.mode!=='private';$('posthog').value=s.posthog;$('round').checked=s.round;$('prefix').value=state.numbering.prefix;$('start').value=state.numbering.start;
-$('clients').replaceChildren();for(const c of state.clients){const tr=document.createElement('tr');for(const text of [c.name||c.client,c.codename]){const td=document.createElement('td');td.textContent=text;tr.append(td)}const td=document.createElement('td'),input=document.createElement('input');input.value=c.aliases.join(', ');input.setAttribute('aria-label','Real-name aliases for '+(c.name||c.client));td.append(input);tr.append(td);const acts=document.createElement('td'),save=document.createElement('button');save.textContent='Save aliases';save.onclick=attempt(async()=>{await api('codename',{client:c.client,aliases:input.value});await load()});acts.append(save);tr.append(acts);$('clients').append(tr)}
+$('clients').replaceChildren();for(const c of state.clients){const tr=document.createElement('tr');for(const text of [c.name||c.client,c.codename]){const td=document.createElement('td');td.textContent=text;tr.append(td)}const td=document.createElement('td'),input=document.createElement('input');input.value=c.aliases.join(', ');input.setAttribute('aria-label','Real-name aliases for '+(c.name||c.client));td.append(input);tr.append(td);const acts=document.createElement('td'),save=document.createElement('button');save.textContent='Save aliases';save.className='secondary';save.onclick=attempt(async()=>{await api('codename',{client:c.client,aliases:input.value});await load()});acts.append(save);tr.append(acts);$('clients').append(tr)}
 $('audit').replaceChildren();for(const row of state.audit){const p=document.createElement('p');p.className='small';p.textContent=row.t+' · '+row.who+' · '+row.action+' · '+row.details;$('audit').append(p)}}
 document.querySelectorAll('[name=mode]').forEach(e=>e.onchange=attempt(async()=>{await api('settings',{mode:e.value});await load()}));
 for(const k of ['posthog','round'])$(k).onchange=attempt(async()=>{await api('settings',{[k]:k==='round'?$(k).checked:$(k).value});await load()});
@@ -168,7 +177,7 @@ load().catch(e=>$('msg').textContent=e.message);
 function codenamesPage(v: Viewer): string {
     const on = anonymiseOn()
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Codenames · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}${STYLE}</style></head>
-<body>${headerHtml(v, 'Chat')}<main class="narrow">
+<body>${headerHtml(v, 'Chat')}<main class="narrow" id="main">
 <div class="top page-head"><div><h1>Codenames</h1>
 <p class="sub">${on ? 'Copilot only knows clients by codename. Ask about a client using its codename.' : 'Numbered client codenames for private mode.'}</p></div><span class="badge ${on ? 'ok' : ''}">${esc(privacyMode())} mode</span></div>
 ${on ? '<div class="alert" role="note">Names entered directly into Copilot are still sent to AI. Use codenames and start a new chat after enabling privacy.</div>' : ''}

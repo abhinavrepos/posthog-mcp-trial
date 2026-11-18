@@ -24,7 +24,8 @@ const COLORS = ['#4263a6', '#b56538', '#41806a', '#9861a0', '#857333', '#447e91'
 const ROW_CAP = 200
 
 function table(headers: string[], rows: unknown[][], caption: string): string {
-    return `<div class="table-wrap"><table><caption>${esc(caption)} (chart alternative)</caption><thead><tr>${headers.map(h => `<th scope="col">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.slice(0, ROW_CAP).map(row => `<tr>${headers.map((_, i) => `<td>${esc(label(row[i]))}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${Math.max(1, headers.length)}">No results in this period.</td></tr>`}</tbody></table></div>${rows.length > ROW_CAP ? `<p class="muted">Showing the first ${ROW_CAP} rows.</p>` : ''}`
+    const numeric = headers.map((_, i) => rows.some(row => typeof row[i] === 'number') && rows.every(row => typeof row[i] === 'number' || row[i] === '–' || row[i] == null))
+    return `<div class="table-wrap" role="region" aria-label="${esc(caption)}" tabindex="0"><table><caption>${esc(caption)} (chart alternative)</caption><thead><tr>${headers.map((h, i) => `<th scope="col"${numeric[i] ? ' class="num"' : ''}>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.slice(0, ROW_CAP).map(row => `<tr>${headers.map((_, i) => `<td${numeric[i] ? ' class="num"' : ''}>${esc(label(row[i]))}</td>`).join('')}</tr>`).join('') || `<tr><td colspan="${Math.max(1, headers.length)}">No results in this period.</td></tr>`}</tbody></table></div>${rows.length > ROW_CAP ? `<p class="muted">Showing the first ${ROW_CAP} rows.</p>` : ''}`
 }
 
 /** Only receives results after the server's privacy pass; all labels are still HTML escaped. */
@@ -56,7 +57,7 @@ export function posthogChartHtml(params: PosthogChartParams, raw: unknown, updat
                 const path = s.data.map((v, i) => { if (v === null) { pen = false; return '' } const part = `${pen ? 'L' : 'M'}${x(i)} ${y(v)}`; pen = true; return part }).join(' ')
                 return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2"/>` + s.data.map((v, i) => v === null ? '' : `<circle cx="${x(i)}" cy="${y(v)}" r="3" fill="${color}"><title>${esc(`${s.name} · ${s.dates[i] ?? i + 1}: ${v}`)}</title></circle>`).join('')
             }).join('')
-            body += `<svg class="story-chart" viewBox="0 0 710 230" role="img" aria-label="PostHog ${params.chart === 'bar' ? 'bar' : 'line'} chart; values in the table below"><line x1="70" x2="680" y1="${y(0)}" y2="${y(0)}" stroke="var(--line)"/><text x="5" y="25">${esc(max)}</text><text x="5" y="195">${esc(min)}</text>${marks}<text x="70" y="222">${esc(sets[0]?.dates[0] ?? 'Start')}</text><text x="680" y="222" text-anchor="end">${esc(sets[0]?.dates.at(-1) ?? 'End')}</text></svg><p class="muted">${sets.map((s, i) => `<span style="color:${COLORS[i]}">● ${esc(s.name)}</span>`).join(' · ')}</p>`
+            body += `<svg class="story-chart" viewBox="0 0 710 230" role="img" aria-label="PostHog ${params.chart === 'bar' ? 'bar' : 'line'} chart; values in the table below"><line x1="70" x2="680" y1="${y(0)}" y2="${y(0)}" stroke="var(--line)"/><text x="5" y="25">${esc(max)}</text><text x="5" y="195">${esc(min)}</text>${marks}<text x="70" y="222">${esc(sets[0]?.dates[0] ?? 'Start')}</text><text x="680" y="222" text-anchor="end">${esc(sets[0]?.dates.at(-1) ?? 'End')}</text></svg><p class="muted chart-legend">${sets.map((s, i) => `<span><i aria-hidden="true" style="background:${COLORS[i]}"></i>${esc(s.name)}</span>`).join('')}</p>`
         }
         body += table(['Period', 'Series', 'Count'], rows, 'PostHog series')
     } else if (kind === 'FunnelsQuery') {

@@ -351,10 +351,8 @@ main> .access-help{padding:4px 0 20px;border-bottom:1px solid var(--line)}
 #people td b{overflow-wrap:normal;word-break:normal}.people-table :is(th,td):nth-child(6){padding-left:8px;padding-right:8px}.people-table :is(th,td):last-child{padding-left:8px;padding-right:16px}
 .revoked-toggle input{width:auto;margin:0}
 main{min-width:0}
-main h1{font-size:24px;line-height:32px;font-weight:600;margin:0}
 main .page-head{margin-bottom:24px;align-items:center}
 main .page-head p{margin:4px 0 0;font-size:14px;line-height:20px}
-main h2{font-size:15px;line-height:24px;font-weight:600;margin:0 0 12px}
 main h3{font-size:14px;line-height:20px;font-weight:600;margin:0 0 8px}
 main input:not([type=checkbox]):not([type=radio]),main select{height:36px;min-height:36px;padding:7px 10px;font-size:13px;line-height:20px;max-width:100%;box-sizing:border-box}
 main button,main .btn{min-height:36px;font-size:13px;line-height:20px;white-space:nowrap;word-break:normal;overflow-wrap:normal}
@@ -364,10 +362,6 @@ main .pager button{min-height:32px;padding:5px 10px;border:1px solid var(--line-
 main .pager select{height:32px;min-height:32px}
 main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 #people-msg:empty,#outcome-msg:empty,#audit-msg:empty,#keys-msg:empty,#msg:empty{display:none}
-.tabs{overflow-x:auto;max-width:100%}
-.tabs :is(button,a){white-space:nowrap;flex-shrink:0}
-.tabs .tab-link{margin-left:0;color:var(--muted);text-decoration:none;font-weight:500;padding:8px 12px;border-bottom:2px solid transparent}
-.tabs :is([aria-current],[aria-selected=true]){color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
 .person-meta>.badge{display:block;width:max-content;max-width:100%;margin-top:4px}
 .identity-name{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .people-table th:nth-child(6){white-space:nowrap}
@@ -441,7 +435,7 @@ main input,main select{min-width:0}
 <body>${headerHtml(v, 'Admin')}<main><div class="page-head"><div><h1>Admin</h1><p>Who can use Lens, and what it keeps.</p></div></div>
 ${adminTabs()}
 
-<div class="tabpanel" role="tabpanel" id="tab-people" data-panel="people">
+<div class="tabpanel" role="tabpanel" aria-labelledby="t-people" id="tab-people" data-panel="people">
 <div class="card"><h2>People</h2><p class="small muted">Changes to access save automatically.</p><div class="people-toolbar"><div><label for="people-filter">Find a person</label><input id="people-filter" type="search" placeholder="Name or email"></div><details class="add-person"><summary>Add a person</summary><div class="toolbar"><div><label for="new-email">PostHog email</label><input id="new-email" type="email" placeholder="name@company.com"></div>
 <div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-system"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-insights"><input id="new-insights" type="checkbox"> Replay insights</label></div><div style="flex:0"><label for="new-surveys">Surveys</label><select id="new-surveys"></select></div><div style="flex:0"><label for="new-dashboards">Dashboards</label><select id="new-dashboards"></select></div><div style="flex:0"><button type="button" id="add">Add person</button></div></div></details></div>
 <p id="people-msg" class="small" aria-live="polite"></p>
@@ -469,10 +463,10 @@ ${adminTabs()}
 <li>Clips attached to Jira tickets follow Jira's permissions. Share links work for anyone who has them until they expire, so turn them off below if you need tighter control.</li></ul></details>
 
 </div>
-<div class="tabpanel" role="tabpanel" id="tab-outcomes" data-panel="outcomes">
-<section class="card"><h2>Client outcomes</h2><p class="small muted">Clients that left, shrank, renewed or stayed. The Scorecard checks which warnings came first.</p><form id="outcome-form" class="toolbar"><div><label for="outcome-client">Client</label><input id="outcome-client" name="client" required maxlength="256" list="outcome-clients" placeholder="Find a client"><datalist id="outcome-clients">${knownClients().map(c=>`<option value="${e(c.client)}">${e(c.name)}</option>`).join('')}</datalist></div><div><label for="outcome-kind">Outcome</label><select id="outcome-kind" name="outcome">${OUTCOMES.map(o=>`<option value="${o}">${o === 'contracted' ? 'Reduced' : o.charAt(0).toUpperCase()+o.slice(1)}</option>`).join('')}</select></div><div><label for="outcome-date">Decision date</label><input id="outcome-date" name="decided_on" type="date" required></div><div><label for="outcome-note">Note (optional)</label><input id="outcome-note" name="note" maxlength="500"></div><button type="submit">Save outcome</button></form><p id="outcome-msg" role="status" aria-live="polite"></p><div class="table-wrap"><table><colgroup><col style="width:25%"><col style="width:16%"><col style="width:18%"><col style="width:25%"><col style="width:16%"></colgroup><caption>Recorded client outcomes</caption><thead><tr><th>Client</th><th>Outcome</th><th>Decision date</th><th>Note</th><th>Actions</th></tr></thead><tbody id="outcome-rows"></tbody></table></div></section>
+<div class="tabpanel" role="tabpanel" aria-labelledby="t-outcomes" hidden id="tab-outcomes" data-panel="outcomes">
+<section class="card"><h2>Client outcomes</h2><p class="small muted">Clients that left, shrank, renewed or stayed. The Scorecard checks which warnings came first.</p><form id="outcome-form" class="toolbar"><div><label for="outcome-client">Client</label><input id="outcome-client" name="client" required maxlength="256" list="outcome-clients" placeholder="Find a client"><datalist id="outcome-clients">${knownClients().map(c=>`<option value="${e(c.client)}">${e(c.name)}</option>`).join('')}</datalist></div><div><label for="outcome-kind">Outcome</label><select id="outcome-kind" name="outcome">${OUTCOMES.map(o=>`<option value="${o}">${o === 'contracted' ? 'Reduced' : o.charAt(0).toUpperCase()+o.slice(1)}</option>`).join('')}</select></div><div><label for="outcome-date">Decision date</label><input id="outcome-date" name="decided_on" type="date" required></div><div><label for="outcome-note">Note (optional)</label><input id="outcome-note" name="note" maxlength="500"></div><button type="submit">Save outcome</button></form><p id="outcome-msg" role="status" aria-live="polite"></p><div class="table-wrap" role="region" aria-label="Recorded client outcomes" tabindex="0"><table><colgroup><col style="width:25%"><col style="width:16%"><col style="width:18%"><col style="width:25%"><col style="width:16%"></colgroup><caption>Recorded client outcomes</caption><thead><tr><th>Client</th><th>Outcome</th><th>Decision date</th><th>Note</th><th>Actions</th></tr></thead><tbody id="outcome-rows"></tbody></table></div></section>
 </div>
-<div class="tabpanel" role="tabpanel" id="tab-chat" data-panel="chat">
+<div class="tabpanel" role="tabpanel" aria-labelledby="t-chat" hidden id="tab-chat" data-panel="chat">
 <div class="card"><div class="chat-head"><h2>Chat keys</h2>
 <details class="settings"><summary>Copilot settings</summary>
 <p class="small muted">Briefing delivery: ${config.briefing.webhook ? `on (${e(config.briefing.kind)}, ${e(config.briefing.day)} at ${e(config.briefing.hour)}:00 UTC)` : 'off'} · Last sent: ${e(briefingDeliveryStatus().last_sent || 'never')}</p>
@@ -485,10 +479,10 @@ ${adminTabs()}
 <label for="chat-note">Warning shown under the list</label><textarea id="chat-note" rows="2" style="width:100%;box-sizing:border-box"></textarea>
 <div><button type="button" id="chat-policy-save">Save approved apps</button></div><p id="chat-policy-msg" class="small" aria-live="polite"></p>
 </details></div><p class="small muted">Revoking a key stops its chat access immediately.</p><div class="token-toolbar"><label class="revoked-toggle small"><input type="checkbox" id="show-revoked"> <span id="show-revoked-text">Show revoked keys</span></label><span id="active-key-count" class="small muted"></span></div>
-<div class="table-wrap"><table><colgroup><col style="width:27%"><col style="width:17%"><col style="width:23%"><col style="width:23%"><col style="width:10%"></colgroup><thead><tr><th scope="col">Person</th><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="tokens"><tr><td colspan="5">Loading tokens…</td></tr></tbody></table></div><div id="tokens-pager"></div></div>
+<div class="table-wrap" role="region" aria-label="Chat keys" tabindex="0"><table><colgroup><col style="width:27%"><col style="width:17%"><col style="width:23%"><col style="width:23%"><col style="width:10%"></colgroup><thead><tr><th scope="col">Person</th><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="tokens"><tr><td colspan="5">Loading tokens…</td></tr></tbody></table></div><div id="tokens-pager"></div></div>
 
 </div>
-<div class="tabpanel" role="tabpanel" id="tab-clips" data-panel="clips">
+<div class="tabpanel" role="tabpanel" aria-labelledby="t-clips" hidden id="tab-clips" data-panel="clips">
 <div class="card" id="retention-card"><h2>Session replay retention</h2>
 <p class="small muted">How many days of session replays PostHog keeps. Every day, recordings that started before midnight UTC that many days ago are deleted in PostHog, with Lens clips made from them. Saved clips stay until someone unsaves them. Event data is not affected.</p>
 <p class="small"><b>Deleting cannot be undone.</b> Lowering the number deletes more recordings. Raising it later, or turning it off, does not bring deleted recordings back.</p>
@@ -501,12 +495,12 @@ ${adminTabs()}
 <p id="ret-status" class="small muted"></p><p id="ret-msg" class="small" aria-live="polite"></p></div>
 <div class="card"><h2>Clips</h2><p class="small muted" id="space"></p>
 <div class="toolbar"><div><label for="clip-filter">Show</label><select id="clip-filter"><option value="">All clips</option><option value="saved">Saved only</option><option value="expiring">Deleted within 3 days</option></select></div></div>
-<div class="table-wrap"><table><thead><tr><th scope="col">Clip</th><th scope="col">Who has it</th><th scope="col">Size</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="clips"><tr><td colspan="5">Loading clips…</td></tr></tbody></table></div><div id="clips-pager"></div></div>
+<div class="table-wrap" role="region" aria-label="Clips" tabindex="0"><table><thead><tr><th scope="col">Clip</th><th scope="col">Who has it</th><th scope="col">Size</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="clips"><tr><td colspan="5">Loading clips…</td></tr></tbody></table></div><div id="clips-pager"></div></div>
 
 </div>
-<div class="tabpanel" role="tabpanel" id="tab-activity" data-panel="activity">
+<div class="tabpanel" role="tabpanel" aria-labelledby="t-activity" hidden id="tab-activity" data-panel="activity">
 <div class="card"><h2>Activity</h2><p id="audit-msg" class="small" aria-live="polite"></p><div class="toolbar"><div><label for="filter">Search activity</label><input id="filter" placeholder="Person, action or clip"></div><span class="small muted">Activity is retained for one year.</span></div>
-<div class="table-wrap"><table><colgroup><col style="width:15%"><col style="width:32%"><col style="width:19%"><col style="width:34%"></colgroup><thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">What</th><th scope="col">Details</th></tr></thead><tbody id="audit"><tr><td colspan="4">Loading activity…</td></tr></tbody></table></div><div class="audit-footer"><div id="audit-pager"></div><button type="button" id="audit-more" class="ghost" hidden>Load next 300 entries</button></div></div>
+<div class="table-wrap" role="region" aria-label="Admin activity" tabindex="0"><table><colgroup><col style="width:15%"><col style="width:32%"><col style="width:19%"><col style="width:34%"></colgroup><thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">What</th><th scope="col">Details</th></tr></thead><tbody id="audit"><tr><td colspan="4">Loading activity…</td></tr></tbody></table></div><div class="audit-footer"><div id="audit-pager"></div><button type="button" id="audit-more" class="ghost" hidden>Load next 300 entries</button></div></div>
 </div>
 </main>
 <script>
