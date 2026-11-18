@@ -45,6 +45,7 @@ test('configured properties, paths, Lens dimensions and live values share one di
     assert.match(full, /DlgSyntheticLive/)
     assert.doesNotMatch(compact, /DlgSyntheticLive/)
     assert.match(compact, /User is part 4/)
+    assert.match(compact, /never by part 4 alone/) // part 4 alone counted 7 people, not 900 (final check 2026-11-18)
     assert.match(compact, /Client is part 3/)
     assert.match(compact, /timestamp \(UTC/)
     assert.match(compact, /Client clock, epoch seconds/)

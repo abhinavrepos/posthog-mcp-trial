@@ -26,7 +26,7 @@ Reval data dictionary
 
 Columns: event, timestamp (UTC; use end-exclusive ranges), distinct_id, person_id; session: $session_id / properties.$session_id. Person fields: person.properties.*.
 
-distinct_id format: ENV|01|C123|user1; separator "|". User is part 4 (1-based).
+distinct_id format: ENV|01|C123|user1; separator "|". User is part 4 (1-based), numbered within the client (user1 exists in every client): count people by the whole distinct_id or person_id, never by part 4 alone.
 
 Client is part 3 (1-based) of distinct_id: splitByChar('|', distinct_id)[3]; Lens client dimension uses this instead of the property.
 
