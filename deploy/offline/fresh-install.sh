@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Script 2 of 3: a FRESH install of PostHog and PostHog Lens, from the images build-images.sh (script 1)
 # put in your registry. For a machine with no PostHog yet; a machine that runs PostHog takes upgrade.sh
-# (script 3). This file is all the machine needs: everything else comes from the registry. README.md has more.
+# (script 3). This file is all the machine needs: everything else comes from the registry. SETUP.md has the steps.
 #
 #   sudo bash fresh-install.sh                  # the kit build-images.sh made it for (or the newest in ECR)
 #   sudo bash fresh-install.sh <kit tag>        # another kit, e.g. 685049943753-92fb46e1

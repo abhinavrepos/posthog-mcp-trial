@@ -1,11 +1,11 @@
 // End-to-end check of a deployed Lens: every page as admin and viewer (errors, labels, layout at 1280/1024/390 px),
 // Copilot address and personal chat keys (MCP, PostHog through Lens), Live, Surveys (results, launch safeguard),
 // the PostHog survey lock, Dashboards (task map, flow time, pins and sharing), pagination and System.
-// See scripts/e2e/README.md.
+// Run with scripts/e2e/run.sh.
 import { mkdirSync, readFileSync } from 'node:fs'
 import puppeteer from 'puppeteer'
 
-const env = (k: string, d?: string) => { const v = process.env[k] ?? d; if (v === undefined) { console.error(`Set ${k} (see scripts/e2e/README.md)`); process.exit(2) } return v }
+const env = (k: string, d?: string) => { const v = process.env[k] ?? d; if (v === undefined) { console.error(`Set ${k} (see scripts/e2e/run.sh)`); process.exit(2) } return v }
 const S = env('E2E_OUT', 'e2e-out')
 const LENS = env('LENS_URL', 'http://127.0.0.1:8080'), PH = env('POSTHOG_URL', 'http://127.0.0.1')
 const pw = (process.env.E2E_PASSWORD ?? readFileSync(env('E2E_PASSWORD_FILE'), 'utf8')).trim()

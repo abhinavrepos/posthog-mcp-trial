@@ -1,7 +1,7 @@
 // End-to-end check of "how is <client> doing" on a deployed Lens, with the replay lab's recordings
 // (scripts/replay-lab: personas with known behaviour, planted trade values): Lens reads the replays by
 // itself, Copilot's client_experience answers each lab client as it behaved, nothing planted comes out,
-// and the Client story page shows the same. See scripts/e2e/README.md.
+// and the Client story page shows the same.
 import { readFileSync } from 'node:fs'
 import puppeteer from 'puppeteer'
 

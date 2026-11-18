@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -107,12 +107,12 @@ test('custom maps and missing maps never invent Reval properties or identity pos
     assert.doesNotMatch(custom, /dialog_id|PageView|DlgTask35|ENV\|01/)
 })
 
-test('committed human dictionary is generated from the same source', () => {
-    const result = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/data-dictionary.ts', '--check'], {
+test('the dictionary script prints the full dictionary', () => {
+    const result = spawnSync(process.execPath, ['--import', 'tsx', 'scripts/data-dictionary.ts'], {
         cwd: new URL('..', import.meta.url), env: { ...process.env, TRIAGE_ENV_FILE: '/dev/null' }, encoding: 'utf8',
     })
     assert.equal(result.status, 0, result.stderr || result.stdout)
-    assert.match(readFileSync(new URL('../docs/data-dictionary.md', import.meta.url), 'utf8'), /properties.dialog_id/)
+    assert.match(result.stdout, /properties.dialog_id/)
 })
 
 test('describe_app_events returns the full dictionary in its structured data', async (t) => {

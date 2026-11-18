@@ -3,11 +3,11 @@
 // both modes, are called the way an agent would, and every byte that comes back is searched for any client
 // name, other name or code. Also: real names and codes are refused, codenames work, links open the client,
 // and with the setting off everything is as before. The setting is put back as it was at the end.
-// See scripts/e2e/README.md.
+// Run with scripts/e2e/run.sh.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import puppeteer from 'puppeteer'
 
-const env = (k: string, d?: string) => { const v = process.env[k] ?? d; if (v === undefined) { console.error(`Set ${k} (see scripts/e2e/README.md)`); process.exit(2) } return v }
+const env = (k: string, d?: string) => { const v = process.env[k] ?? d; if (v === undefined) { console.error(`Set ${k} (see scripts/e2e/run.sh)`); process.exit(2) } return v }
 const S = env('E2E_OUT', 'e2e-out')
 const LENS = env('LENS_URL', 'http://127.0.0.1:8080')
 const pw = (process.env.E2E_PASSWORD ?? readFileSync(env('E2E_PASSWORD_FILE'), 'utf8')).trim()

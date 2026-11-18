@@ -1,5 +1,5 @@
 import { deleteReplayCache } from '../core/clip.ts'
-// Rolling session-replay retention (docs/replay-retention.md).
+// Rolling session-replay retention.
 //
 // An admin sets replay_retention_days on the admin page (off by default: nothing is ever deleted). Once a
 // day the job deletes the PostHog recordings that started before the cutoff (UTC midnight today minus N

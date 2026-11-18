@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Script 3 of 3: UPGRADES a machine that already runs PostHog to the images build-images.sh (script 1) put
 # in your registry, keeping all its data. A machine with no PostHog yet takes fresh-install.sh (script 2).
-# This file is all the machine needs: everything else comes from the registry. README.md has more.
+# This file is all the machine needs: everything else comes from the registry. SETUP.md has the steps.
 #
 #   sudo bash upgrade.sh                  # the kit build-images.sh made it for (or the newest in ECR)
 #   sudo bash upgrade.sh <kit tag>        # another kit, e.g. 685049943753-92fb46e1

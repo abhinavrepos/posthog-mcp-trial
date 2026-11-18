@@ -41,7 +41,7 @@
 # check, addresses, app, posthog_mcp, settings, service, status, mcp and doctor run every time, so changed
 # answers (and a new image) take effect.
 #
-# Images: on a machine without internet, unpack the kit first (deploy/offline/README.md): it brings
+# Images: on a machine without internet, unpack the kit first (SETUP.md): it brings
 # deploy/offline/ecr.env, and every image then comes from your ECR, PostHog's source, the GeoIP database
 # and Docker Compose from the kit. Nothing is downloaded from the internet.
 # At the end it prints (and saves) everything you need: addresses, logins, where each secret is, the
