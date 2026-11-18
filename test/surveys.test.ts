@@ -636,12 +636,28 @@ describe('saving after a create that timed out', () => {
         return calls
     }
     const spec = { ...base, name: 'Colour test 01: light theme (default)', look: { theme: 'light' as const } }
+    const earlier = () => { const b = compileSurvey(spec, { reg }).body as Record<string, any>; return { questions: b.questions, appearance: b.appearance, conditions: b.conditions } }
     test('a Lens draft of that name made minutes ago is the earlier attempt: it is updated, not duplicated', async (t) => {
-        const calls = setup(t, { id: 's-1', name: spec.name, start_date: null, created_at: new Date(Date.now() - 60_000).toISOString(), conditions: { lensChain: { managedBy: 'lens' } as never } })
+        const calls = setup(t, { id: 's-1', name: spec.name, start_date: null, created_at: new Date(Date.now() - 60_000).toISOString(), ...earlier() })
         const { saveSurvey } = await import('../src/core/surveys.ts')
         const out = await saveSurvey(spec, { reg })
         assert.equal(out.survey?.id, 's-1')
-        assert.deepEqual(calls.map((c) => c.split('?')[0]), ['POST ', 'GET ', 'PATCH s-1/'])
+        assert.deepEqual(calls.map((c) => c.split('?')[0]), ['POST ', 'GET '])
+    })
+    test('PostHog re-orders JSON keys when it stores a survey: still recognised as the earlier attempt', async (t) => {
+        const rev = (v: any): any => Array.isArray(v) ? v.map(rev) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).reverse().map((k) => [k, rev(v[k])])) : v
+        const calls = setup(t, { id: 's-3', name: spec.name, start_date: null, created_at: new Date(Date.now() - 60_000).toISOString(), ...rev(earlier()) })
+        const { saveSurvey } = await import('../src/core/surveys.ts')
+        assert.equal((await saveSurvey(spec, { reg })).survey?.id, 's-3')
+        assert.ok(!calls.some((c) => c.startsWith('PATCH')), 'returned as it is, not rewritten')
+    })
+    test('someone else\'s new draft of the same name is never overwritten', async (t) => {
+        const other = earlier(); other.questions = [{ type: 'open', question: 'Something else entirely?' }]
+        const calls = setup(t, { id: 's-2', name: spec.name, start_date: null, created_at: new Date(Date.now() - 60_000).toISOString(), ...other })
+        const { saveSurvey } = await import('../src/core/surveys.ts')
+        const e = await saveSurvey(spec, { reg }).catch((x) => x)
+        assert.match(e.message, /already exists \(survey_id s-2\)/)
+        assert.ok(!calls.some((c) => c.startsWith('PATCH')), 'no PATCH of the other draft')
     })
     test('any other survey of that name is a naming conflict the person can fix, not "PostHog is unavailable"', async (t) => {
         setup(t, { id: 's-old', name: spec.name, start_date: '2026-10-01T00:00:00Z', created_at: '2026-10-01T00:00:00Z', conditions: { lensChain: { managedBy: 'lens' } as never } })
@@ -651,4 +667,42 @@ describe('saving after a create that timed out', () => {
         assert.match(e.message, /already exists \(survey_id s-old\)\. Give this one another name/)
         assert.equal(toolError(e, 'save_survey').kind, 'validation')
     })
+})
+
+test('two saves of one name at once: the one PostHog answers with a 500 is told the name exists, not "unavailable"', async (t) => {
+    invalidateSurveyCache(); t.after(invalidateSurveyCache)
+    const saved = { ...config.posthog }, enabled = config.surveys.enabled
+    Object.assign(config.posthog, { projectId: '1', personalApiKey: 'read-test', surveyApiKey: 'survey-test' }); config.surveys.enabled = true
+    t.after(() => { Object.assign(config.posthog, saved); config.surveys.enabled = enabled })
+    t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => init?.method === 'POST'
+        ? new Response('A server error occurred.', { status: 500 })
+        : Response.json({ results: [{ id: 's-winner', name: 'Race', start_date: null, created_at: new Date().toISOString(), questions: [{ type: 'open', question: 'Other person' }], conditions: { lensChain: { managedBy: 'lens' } } }] }))
+    const { saveSurvey } = await import('../src/core/surveys.ts')
+    const e = await saveSurvey({ ...base, name: 'Race' }, { reg }).catch((x) => x)
+    assert.match(e.message, /already exists \(survey_id s-winner\)/)
+    const { toolError } = await import('../src/mcp/toolerror.ts')
+    assert.equal(toolError(new (await import('../src/core/toolinputerror.ts')).ToolInputError('x'), 'survey_results').kind, 'validation')
+    const { getSurvey } = await import('../src/core/surveys.ts')
+    let bad: any; try { await getSurvey('abc') } catch (x) { bad = x }
+    assert.equal(toolError(bad, 'survey_results').kind, 'validation')
+    assert.match(bad.message, /is not a survey id/)
+})
+
+test('the spec survey_results hands back re-saves to the same survey: every question type, label and option', async () => {
+    const { specOf } = await import('../src/core/surveys.ts')
+    const all: SurveySpec['questions'] = [
+        { type: 'rating', text: 'How easy?', scale: 5, low_label: 'Hard', high_label: 'Easy', description: 'One line more', optional: true },
+        { type: 'rating', text: 'Emoji', scale: 3, emoji: true }, { type: 'rating', text: 'Ten', scale: 10 }, { type: 'nps', text: 'Recommend?' },
+        { type: 'yes_no', text: 'Worked?' }, { type: 'yes_no', text: 'Custom', yes_label: 'Yes it did', no_label: 'Not really' }, { type: 'thumbs', text: 'Thumbs?' },
+        { type: 'open', text: 'Anything else?', optional: true }, { type: 'single', text: 'Hardest?', choices: ['Dates', 'Amounts'], other: true }, { type: 'multiple', text: 'Used?', choices: ['Search', 'Copy', 'Template'] },
+    ]
+    const first = compileSurvey({ ...base, name: 'Round trip', questions: all, reset_on: [{ message_pattern: '^Invalid (date|amount)$' }], within_minutes: 20 }, { reg })
+    assert.deepEqual(errors(first), [])
+    const stored = { id: 's', name: 'Round trip', type: 'popover', created_at: '2026-11-18T00:00:00Z', start_date: null, end_date: null, ...first.body } as unknown as PostHogSurvey
+    const spec = specOf(stored)
+    assert.equal(spec.questions?.length, 10)
+    const again = compileSurvey(spec as SurveySpec, { reg, chainId: (first.body as any).conditions.lensChain.id })
+    assert.deepEqual(errors(again), [])
+    assert.deepEqual((again.body as any).questions, (first.body as any).questions)
+    assert.deepEqual((again.body as any).conditions.lensChain.resetOn, (first.body as any).conditions.lensChain.resetOn)
 })

@@ -230,3 +230,9 @@ test('clip page links keep their file name in standard mode (a session id with 5
     // an amount in another parameter is still masked
     assert.match(safetyWith({ text: 'http://lens.example/x?notional=2500000&clip=a_1-2.mp4' }, []).text, /notional=<amount>/)
 })
+
+test('a regular expression with | is not a distinct id: survey patterns survive the privacy pass', () => {
+    // survey_results hands this spec back for changing the survey; "[person]" in it corrupted the saved step
+    assert.equal(safetyWith('{"message_pattern":"^Invalid (date|amount)$"}', []), '{"message_pattern":"^Invalid (date|amount)$"}')
+    assert.equal(safetyWith('user ENV|01|C07|user4 saw it', []), 'user [person] saw it')
+})

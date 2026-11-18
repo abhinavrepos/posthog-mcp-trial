@@ -163,8 +163,11 @@
         });
     }
     function createMachine() {
-        var states = new Map(), sequence = 0;
+        var states = new Map(), sequence = 0, identity;
         function reset(state) { state.index = 0; state.started = 0; state.pending = 0; }
+        function identify(distinctId) {
+            if (identity !== distinctId) { states.forEach(reset); identity = distinctId; }
+        }
         function earlier(a, b) { return a.launched < b.launched || (a.launched === b.launched && a.surveyId < b.surveyId); }
         // Is this user already in as many earlier limited surveys (not finished yet) as this one allows?
         // Then they wait: the next time they do the steps after finishing one, they get this survey.
@@ -180,13 +183,14 @@
             return holding >= state.chain.limit;
         }
         return {
+            identify: identify,
             setSurveys: function (surveys) {
                 try {
                     if (!Array.isArray(surveys)) return;
                     var next = new Map();
                     for (var survey of surveys) {
                         try {
-                            if (!object(survey) || !survey.start_date || survey.end_date !== null) continue;
+                            if (!object(survey) || survey.archived || !survey.start_date || survey.end_date !== null) continue;
                             var raw = survey.conditions && survey.conditions.lensChain;
                             var chain = normalizeChain(raw);
                             if (!chain || next.has(chain.id)) continue; // One event for a shared id; first valid definition wins.
@@ -207,6 +211,7 @@
             consume: function (event, now, distinctId, seen) {
                 var completed = [];
                 try {
+                    identify(distinctId);
                     if (!object(event) || typeof event.event !== 'string' || !finite(now) ||
                         event.event[0] === '$' || event.event.indexOf('lens_chain:') === 0) return completed;
                     states.forEach(function (state, id) {
@@ -352,9 +357,10 @@
                         var started = Date.now();
                         function poll() {
                             try {
+                                machine.identify(instance.get_distinct_id());
                                 if (!machine.pending(completion.id, completion.token)) return;
                                 var elapsed = Date.now() - started;
-                                if (elapsed > completion.ready.maxWaitMs) { machine.finish(completion.id, completion.token); return; }
+                                if (completion.ready.maxWaitMs > 0 && elapsed > completion.ready.maxWaitMs) { machine.finish(completion.id, completion.token); return; }
                                 if (isReady(root, completion.ready)) {
                                     // Finish before capture: it can synchronously invoke eventCaptured again.
                                     if (!machine.finish(completion.id, completion.token)) return;

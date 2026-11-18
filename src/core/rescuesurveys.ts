@@ -1,6 +1,6 @@
 import { rememberClientSurvey } from './surveylocal.ts'
 import { rescueQueue, setRescueAction, RescueInputError, type RescueParams } from './rescue.ts'
-import { saveSurvey, type SurveySpec } from './surveys.ts'
+import { saveSurvey, SurveyNameConflictError, type SurveySpec } from './surveys.ts'
 import { surveysActive } from './config.ts'
 import { tasksDb } from './tasks.ts'
 
@@ -34,7 +34,7 @@ export async function draftRescueSurvey(client: string, by: string, injected: Pa
     for (let n = 0; !result; n++) {
         if (n) spec.name = `${base} · ${day}${n > 1 ? ` ${time}` : ''}${n > 2 ? ` (${n - 1})` : ''}`
         try { result = await d.saveSurvey(spec, { clientIds: [client] }) }
-        catch (e) { if (n >= 20 || !/already a survey with this name/i.test(String((e as Error)?.message))) throw e }
+        catch (e) { if (n >= 20 || !(e instanceof SurveyNameConflictError || /already a survey with this name/i.test(String((e as Error)?.message)))) throw e }
     }
     if (!result.survey) throw new RescueInputError('Could not create draft: ' + result.compiled.problems.map(p => p.text).join('; '))
     rememberClientSurvey(result.survey.id, spec.name, [client], 'draft')

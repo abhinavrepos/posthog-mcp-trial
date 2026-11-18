@@ -483,7 +483,7 @@ export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: 
             submitButtonText: look.submit_label, placeholder: look.placeholder, displayThankYouMessage: !!look.thank_you,
             thankYouMessageHeader: look.thank_you || undefined, thankYouMessageDescription: look.thank_you_text || undefined, surveyPopupDelaySeconds: 0,
         },
-        ...(spec.max_responses ? { responses_limit: spec.max_responses } : {}),
+        responses_limit: spec.max_responses ?? null, // null clears a limit removed in a change
     }
     return { body, chain, problems }
 }
@@ -495,7 +495,7 @@ export interface PostHogSurvey {
     name: string
     description?: string
     type: string
-    questions: { id?: string; type: string; question: string; choices?: string[]; scale?: number; display?: string; lowerBoundLabel?: string; upperBoundLabel?: string; optional?: boolean }[]
+    questions: { id?: string; type: string; question: string; choices?: string[]; hasOpenChoice?: boolean; scale?: number; display?: string; lowerBoundLabel?: string; upperBoundLabel?: string; optional?: boolean; description?: string }[]
     conditions: { events?: { values?: { name: string }[]; repeatedActivation?: boolean }; url?: string; seenSurveyWaitPeriodInDays?: number; lensChain?: LensChain } | null
     appearance: Record<string, unknown> | null
     start_date: string | null
@@ -548,19 +548,25 @@ async function loadSurveys(): Promise<PostHogSurvey[]> {
     let path = '?limit=100'
     for (let i = 0; i < 20 && path; i++) {
         const page = await surveyApi<{ results: PostHogSurvey[]; next: string | null }>(path)
-        out.push(...page.results)
+        out.push(...(Array.isArray(page.results) ? page.results : []).map(normalSurvey))
         path = page.next ? `?${new URL(page.next).searchParams.toString()}` : ''
     }
     return out
 }
 
+// PostHog's answer as Lens reads it: lists are lists, so a survey changed by hand or by an older Lens never breaks a page.
+function normalSurvey(s: PostHogSurvey): PostHogSurvey {
+    if (!s || typeof s !== 'object' || typeof s.id !== 'string') throw new PostHogError('PostHog returned a survey Lens cannot read', 502)
+    return { ...s, name: String(s.name ?? ''), questions: Array.isArray(s.questions) ? s.questions : [], created_at: String(s.created_at ?? '') }
+}
+
 export const getSurvey = (id: string): Promise<PostHogSurvey> => {
     checkId(id)
-    return cachedSurvey(['get', id], () => surveyApi<PostHogSurvey>(`${id}/`))
+    return cachedSurvey(['get', id], async () => normalSurvey(await surveyApi<PostHogSurvey>(`${id}/`)))
 }
 
 function checkId(id: string): string {
-    if (!/^[0-9a-f-]{8,64}$/i.test(id)) throw new Error(`"${id}" is not a survey id`)
+    if (!/^[0-9a-f-]{8,64}$/i.test(id)) throw new ToolInputError(`"${String(id).slice(0, 80)}" is not a survey id. list_surveys gives each survey's id.`)
     return id
 }
 
@@ -570,18 +576,36 @@ function checkId(id: string): string {
 // draft of the same name made in the last 15 minutes is that earlier attempt: update it. Any other same-named
 // survey is a plain naming conflict the person can fix.
 const RECENT_CREATE_MS = 15 * 60_000
+export class SurveyNameConflictError extends ToolInputError {}
+// The same survey as this save (its questions, steps, audience and look), not someone else's of the same name.
+// PostHog stores JSON with its keys re-ordered, so compare with sorted keys.
+const canonical = (v: unknown): unknown => Array.isArray(v) ? v.map(canonical) : v && typeof v === 'object'
+    ? Object.fromEntries(Object.keys(v as object).sort().filter((k) => (v as Record<string, unknown>)[k] !== undefined).map((k) => [k, canonical((v as Record<string, unknown>)[k])])) : v
+function sameContent(existing: PostHogSurvey, body: Record<string, unknown>): boolean {
+    const chain = (body.conditions as { lensChain?: LensChain } | undefined)?.lensChain
+    const key = (questions: unknown, c: Partial<LensChain> | undefined, appearance: unknown) => JSON.stringify(canonical({
+        questions: (Array.isArray(questions) ? questions : []).map((q) => { const { id: _id, ...rest } = q as Record<string, unknown>; return rest }),
+        steps: c?.steps, labels: c?.labels, audience: c?.audience, resetOn: c?.resetOn, withinSeconds: c?.withinSeconds, appearance,
+    }))
+    return key(existing.questions, existing.conditions?.lensChain, existing.appearance) === key(body.questions, chain, body.appearance)
+}
 async function createSurvey(body: Record<string, unknown>): Promise<PostHogSurvey> {
     try { return await surveyApi<PostHogSurvey>('', { method: 'POST', body: JSON.stringify(body) }) }
     catch (error) {
-        const timedOut = (error as { name?: string })?.name === 'TimeoutError'
+        // A timeout or a 5xx leaves the outcome unknown: two saves of one name at once get a 500 from PostHog's
+        // unique-name check, not the 400, so look before answering either way.
+        const timedOut = (error as { name?: string })?.name === 'TimeoutError' || error instanceof PostHogError && (error.status ?? 0) >= 500
         const duplicate = error instanceof PostHogError && error.status === 400 && /already a survey with this name/i.test(error.message)
         if (!timedOut && !duplicate) throw error
         const name = String(body.name)
         const page = await surveyApi<{ results: PostHogSurvey[] }>(`?search=${encodeURIComponent(name)}&limit=100`).catch(() => ({ results: [] as PostHogSurvey[] }))
         const same = page.results.find((x) => x.name === name && !x.archived)
-        if (same && same.conditions?.lensChain?.managedBy === 'lens' && !same.start_date && Date.now() - Date.parse(same.created_at) < RECENT_CREATE_MS)
-            return surveyApi<PostHogSurvey>(`${encodeURIComponent(same.id)}/`, { method: 'PATCH', body: JSON.stringify(body) })
-        if (duplicate) throw new ToolInputError(`A survey named "${name}" already exists${same ? ` (survey_id ${same.id})` : ''}. Give this one another name, or change that one with save_survey and its survey_id.`)
+        if (same && same.conditions?.lensChain?.managedBy === 'lens' && !same.start_date && Date.now() - Date.parse(same.created_at) < RECENT_CREATE_MS
+            && sameContent(same, body)) {
+            invalidateSurveyCache()
+            return same // the very survey this save sent: nothing to rewrite, its question ids stay
+        }
+        if (duplicate || same) throw new SurveyNameConflictError(`A survey named "${name}" already exists${same ? ` (survey_id ${same.id})` : ''}. Give this one another name, or change that one with save_survey and its survey_id.`)
         throw error
     }
 }
@@ -592,16 +616,28 @@ export async function saveSurvey(spec: SurveySpec, opts: { id?: string; clientId
     if (opts.id) {
         old = await surveyApi<PostHogSurvey>(`${checkId(opts.id)}/`)
         chainId = old.conditions?.lensChain?.managedBy === 'lens' ? old.conditions.lensChain.id : undefined
-        if (!chainId) throw new Error(`Survey ${opts.id} was not made by Lens; change it in PostHog, or make a new one here.`)
+        if (!chainId) throw new ToolInputError(`Survey ${opts.id} was not made by Lens; change it in PostHog, or make a new one here.`)
+        if (old.archived) throw new ToolInputError(`"${old.name}" is archived. Make a new survey instead (you can start from this one's spec with a new name).`)
     }
     const compiled = compileSurvey(spec, { chainId, clientIds: opts.clientIds, reg: opts.reg })
     if (compiled.problems.some((p) => p.level === 'error')) return { compiled }
-    // A question that kept its place and type keeps its id, so its earlier answers stay with it.
+    // Match unchanged questions before handling wording edits at the same position. Otherwise
+    // reordering or inserting a question moves existing answer IDs onto different questions.
     if (old) {
-        const qs = compiled.body.questions as { type: string; id?: string }[]
+        const qs = compiled.body.questions as { type: string; question: string; id?: string }[]
+        const previous = old.questions || []
+        const used = new Set<number>()
+        const matches = qs.map((q) => {
+            const at = previous.findIndex((was, i) => !used.has(i) && was.type === q.type && was.question === q.question)
+            if (at >= 0) used.add(at)
+            return at
+        })
         qs.forEach((q, i) => {
-            const was = old!.questions?.[i]
-            if (was?.id && was.type === q.type) q.id = was.id
+            const at = matches[i] >= 0 ? matches[i] : !used.has(i) && previous[i]?.type === q.type ? i : -1
+            if (at >= 0) {
+                used.add(at)
+                if (previous[at].id) q.id = previous[at].id
+            }
         })
     }
     const survey = opts.id
@@ -676,6 +712,27 @@ export function kindOf(q: PostHogSurvey['questions'][number]): string {
     return { single_choice: 'single', multiple_choice: 'multiple' }[q.type] || q.type
 }
 
+/** A PostHog question back as the Lens question that makes it, so changing a survey keeps labels, emoji,
+ * "optional", "Other" and descriptions (the spec used to have no questions at all). The inverse of compileSurvey. */
+export function questionSpecOf(raw: PostHogSurvey['questions'][number]): QuestionSpec {
+    const q = raw
+    const base = { text: String(q.question ?? ''), ...(q.description ? { description: q.description } : {}), ...(q.optional ? { optional: true } : {}) }
+    const kind = kindOf(q)
+    if (kind === 'nps') return { type: 'nps', ...base }
+    if (kind === 'thumbs') return { type: 'thumbs', ...base }
+    if (q.type === 'rating') return {
+        type: 'rating', ...base, scale: ([3, 5, 7, 10].includes(Number(q.scale)) ? Number(q.scale) : 5) as 3 | 5 | 7 | 10, ...(q.display === 'emoji' ? { emoji: true } : {}),
+        ...(q.lowerBoundLabel !== undefined && q.lowerBoundLabel !== 'Not at all' ? { low_label: q.lowerBoundLabel } : {}),
+        ...(q.upperBoundLabel !== undefined && q.upperBoundLabel !== 'Very much' ? { high_label: q.upperBoundLabel } : {}),
+    }
+    if (kind === 'yes_no') return { type: 'yes_no', ...base, ...(q.choices![0] !== 'Yes' ? { yes_label: q.choices![0] } : {}), ...(q.choices![1] !== 'No' ? { no_label: q.choices![1] } : {}) }
+    if (q.type === 'single_choice' || q.type === 'multiple_choice') {
+        const choices = Array.isArray(q.choices) ? q.choices : []
+        return { type: q.type === 'single_choice' ? 'single' : 'multiple', ...base, choices: q.hasOpenChoice ? choices.slice(0, -1) : choices, ...(q.hasOpenChoice ? { other: true } : {}) }
+    }
+    return { type: 'open', ...base }
+}
+
 /** PostHog's appearance back as Lens look fields (only those set). */
 export function lookOf(a: Record<string, unknown>): LookSpec {
     const key = <T extends string>(m: Record<T, string>, v: unknown) => (Object.entries(m) as [T, string][]).find(([, x]) => x === v)?.[0]
@@ -703,19 +760,20 @@ export function viewOf(s: PostHogSurvey): SurveyView {
         status: statusOf(s),
         made_by_lens: lens,
         ...(lens ? { chain_id: c!.id } : {}),
-        steps: lens ? c!.labels || [] : (s.conditions?.events?.values || []).map((v) => `Event ${v.name}`),
-        reset_on: lens ? c!.resetLabels || [] : [],
+        // A survey saved by an older Lens, or changed by hand, may miss parts of its chain: never let one survey break the list.
+        steps: lens ? (Array.isArray(c!.labels) ? c!.labels : []) : (Array.isArray(s.conditions?.events?.values) ? s.conditions!.events!.values! : []).map((v) => `Event ${v?.name}`),
+        reset_on: lens && Array.isArray(c!.resetLabels) ? c!.resetLabels : [],
         ...(lens && c!.withinSeconds ? { within_minutes: Math.round(c!.withinSeconds / 6) / 10 } : {}),
-        clients: lens && c!.audience?.clients ? c!.audience.clients : 'all',
+        clients: lens && Array.isArray(c!.audience?.clients) ? c!.audience!.clients : 'all',
         sample_percent: lens ? c!.audience?.sample ?? 100 : 100,
         ...(lens && c!.maxPerUser ? { pacing: { per_user: c!.maxPerUser, gap_hours: c!.gapHours ?? 24, quiet_days_after_close: c!.quietDaysAfterClose ?? 7 } } : {}),
         ...(s.conditions?.url ? { url_contains: s.conditions.url } : {}),
-        waits_for_page: lens ? c!.ready.documentComplete : false,
+        waits_for_page: lens ? c!.ready?.documentComplete !== false : false,
         show: s.schedule === 'always' ? 'every_time' : 'once',
         days_between_surveys: s.conditions?.seenSurveyWaitPeriodInDays ?? 0,
         ...(s.responses_limit ? { max_responses: s.responses_limit } : {}),
-        questions: (s.questions || []).map((q) => ({ id: q.id, type: kindOf(q), text: q.question, ...(q.choices ? { choices: q.choices } : {}), ...(q.scale ? { scale: q.scale } : {}) })),
-        look: lookOf(a),
+        questions: (Array.isArray(s.questions) ? s.questions : []).map((q) => ({ id: q.id, type: kindOf(q), text: q.question, ...(q.choices ? { choices: q.choices } : {}), ...(q.scale ? { scale: q.scale } : {}) })),
+        look: lookOf(a && typeof a === 'object' ? a : {}),
         ...(s.start_date ? { started: s.start_date } : {}),
         ...(s.end_date ? { stopped: s.end_date } : {}),
         created: s.created_at,
@@ -762,14 +820,15 @@ export function specOf(s: PostHogSurvey): Partial<SurveySpec> {
     return {
         name: v.name,
         description: v.description,
-        steps: c?.steps.map(raw) || [],
-        ...(c?.resetOn ? { reset_on: c.resetOn.map(raw) } : {}),
+        questions: (Array.isArray(s.questions) ? s.questions : []).map(questionSpecOf),
+        steps: Array.isArray(c?.steps) ? c!.steps.map(raw) : [],
+        ...(Array.isArray(c?.resetOn) ? { reset_on: c!.resetOn!.map(raw) } : {}),
         ...(v.within_minutes ? { within_minutes: v.within_minutes } : {}),
         ...(v.clients !== 'all' ? { clients: v.clients } : {}),
         ...(v.sample_percent < 100 ? { sample_percent: v.sample_percent } : {}),
         ...(v.url_contains ? { url_contains: v.url_contains } : {}),
         wait_for_page: v.waits_for_page,
-        ...(c ? { max_wait_seconds: c.ready.maxWaitMs / 1000 } : {}),
+        ...(c?.ready?.maxWaitMs !== undefined ? { max_wait_seconds: c.ready.maxWaitMs / 1000 } : {}),
         show: v.show,
         days_between_surveys: v.days_between_surveys,
         ...(v.max_responses ? { max_responses: v.max_responses } : {}),

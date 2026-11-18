@@ -197,6 +197,10 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .tabs .tab-link,.tabs .tab-link0{color:var(--muted);text-decoration:none;font-weight:500;padding:8px 12px;border-bottom:2px solid transparent}
 .tabs :is([aria-current],[aria-selected=true]){color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
 .toolbar h1{font-size:24px;line-height:32px;margin:0}
+.status-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.status-tabs button{font:inherit;font-size:13px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+.status-tabs button[aria-pressed="true"]{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+.status-tabs .n{color:inherit;opacity:.7;margin-left:4px}
 .list .item{display:block;width:100%;text-align:left;white-space:normal;cursor:pointer;color:var(--ink);font:inherit;border:0;border-radius:0;border-bottom:1px solid var(--line);margin:0;background:transparent;padding:12px;line-height:20px}
 .list .item>.chip{display:block;width:max-content;margin:0 0 6px;padding:0}
 .list .item b{display:block;overflow-wrap:anywhere;font-size:14px;font-weight:600}
@@ -256,7 +260,7 @@ th,td{padding:8px 3px;font-size:12px}
 <body>${headerHtml(v, 'Surveys')}<main class="wide" id="main">
 <div class="toolbar page-head"><div><h1>Surveys</h1><p>Survey activity, results and launch options.</p></div><select id="days" aria-label="Survey counts period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></div>
 <div class="layout"><section>
-<p id="page-msg" class="small" role="status" aria-live="polite"></p><div class="list" id="list"><p class="empty">Loading…</p></div><div id="list-pager"></div>
+<p id="page-msg" class="small" role="status" aria-live="polite"></p><div class="status-tabs" id="status-tabs" role="group" aria-label="Show surveys by status"></div><div class="list" id="list"><p class="empty">Loading…</p></div><div id="list-pager"></div>
 <p class="small"><a href="/replays/connect">Create a survey in chat</a></p><details><summary>How this works</summary><p class="small muted">Your survey role: ${SURVEY_ROLE_TEXT[v.role === 'admin' ? 'launch' : v.surveys || 'none']}.</p><p class="small muted">Make or change surveys in chat. Describe who should see it, when it appears and what to ask. New surveys stay as drafts until launched.</p></details></section>
 <section id="detail"><div class="card"><p class="empty">Choose a survey to see results and launch options.</p></div></section>
 </div></main>
@@ -287,9 +291,14 @@ const STATUS={running:'Running',draft:'Draft',stopped:'Stopped',archived:'Archiv
 let LIST=[],current=null,listRequest=0,busy=false
 const listPager=makePager({mount:$('list-pager'),noun:'surveys',size:25,draw:renderList})
 async function loadList(){const request=++listRequest;try{const d=await api('/replays/surveys/api/list?days='+$('days').value);if(request!==listRequest)return;LIST=d.surveys;drawList();$('page-msg').setAttribute('role','status');$('page-msg').textContent=LIST.some(s=>s.freshness)?'Showing cached survey counts while they refresh.':'';
-  const want=location.hash.slice(1)||(LIST[0]&&LIST[0].id);if(want&&want!==current)await show(want);else if(!LIST.length){current=null;$('detail').innerHTML='<div class="card"><p class="empty">No surveys yet. <a href="/replays/connect">Set up chat</a> to make your first survey.</p></div>'}}
+  const want=location.hash.slice(1)||(shown()[0]&&shown()[0].id);if(want&&want!==current)await show(want);else if(!LIST.length){current=null;$('detail').innerHTML='<div class="card"><p class="empty">No surveys yet. <a href="/replays/connect">Set up chat</a> to make your first survey.</p></div>'}}
   catch(e){if(request!==listRequest)return;if(!LIST.length)$('list').innerHTML='<p class="empty">Surveys could not load.</p>';$('page-msg').setAttribute('role','alert');$('page-msg').textContent=e.message+' Change the period to try again.'}}
-function drawList(){const active=document.activeElement,id=active&&active.dataset.id;listPager.set(LIST,true);if(id){const b=Array.from($('list').querySelectorAll('.item')).find(b=>b.dataset.id===id);if(b)b.focus()}}
+const TABS=[['all','All'],['running','Running'],['draft','Drafts'],['stopped','Stopped']]
+let FILTER=(()=>{const f=new URLSearchParams(location.search).get('status');return TABS.some(t=>t[0]===f)?f:'all'})()
+function drawTabs(){$('status-tabs').innerHTML=TABS.map(([k,label])=>{const n=k==='all'?LIST.length:LIST.filter(s=>s.status===k).length;return '<button type="button" data-status="'+k+'" aria-pressed="'+(FILTER===k)+'">'+label+'<span class="n">'+n+'</span></button>'}).join('')
+  $('status-tabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{FILTER=b.dataset.status;const q=new URLSearchParams(location.search);if(FILTER==='all')q.delete('status');else q.set('status',FILTER);history.replaceState(null,'',location.pathname+(q.toString()?'?'+q:'')+location.hash);drawList();const first=$('status-tabs').querySelector('[data-status="'+FILTER+'"]');if(first)first.focus()})}
+const shown=()=>FILTER==='all'?LIST:LIST.filter(s=>s.status===FILTER)
+function drawList(){drawTabs();const active=document.activeElement,id=active&&active.dataset.id;const list=shown();listPager.set(list,true);if(!list.length&&LIST.length)$('list').innerHTML='<p class="empty">'+(FILTER==='draft'?'No drafts. New surveys made in chat start here until someone launches them.':'No '+esc(STATUS[FILTER]||FILTER).toLowerCase()+' surveys.')+'</p>';if(id){const b=Array.from($('list').querySelectorAll('.item')).find(b=>b.dataset.id===id);if(b)b.focus()}}
 function renderList(items){$('list').innerHTML=items.map(s=>'<button type="button" class="item" data-id="'+esc(s.id)+'" aria-current="'+(s.id===current)+'" aria-controls="detail"><span class="chip '+esc(s.status)+'">'+esc(STATUS[s.status]||s.status)+'</span><b>'+esc(s.name)+'</b><small>'+(s.freshness?'<span title="Counts are from a few minutes ago and are refreshing">Refreshing</span> · ':'')+num(s.shown)+' shown · '+num(s.answered)+' answered'+(s.clients==='all'?' · every client':' · '+esc(s.clients.slice(0,3).join(', '))+(s.clients.length>3?' +'+(s.clients.length-3):''))+'</small></button>').join('')||'<p class="empty">No surveys yet. Make your first survey in chat.</p>'
   $('list').querySelectorAll('.item').forEach(b=>b.onclick=()=>{location.hash=b.dataset.id})}
 window.onhashchange=()=>{const id=location.hash.slice(1);if(id&&id!==current)show(id)}

@@ -144,7 +144,9 @@ export function safetyWith<T>(value: T, tokens: string[], staff = new Set<string
         // amount masking, everything else (counts, dates, rates) is protected from the amount pass. A row with more
         // cells than its header holds a distinct id inside one cell: that run of cells becomes [person].
         if (sep === '|') s = pipeTables(s, keep, staff, (x) => scrubWith(tokens, x))
-        s = s.replace(/[^\s<>"'`]+/g, t => sep && t.includes(sep) && t.split(sep).length >= 2 && t.split(sep).every(Boolean) ? '[person]' : t)
+        // A regular expression ("^Invalid (date|amount)$" in a survey step) is not a distinct id: masking it corrupted
+        // the pattern that survey_results hands back for changing the survey (survey check, 2026-11-18).
+        s = s.replace(/[^\s<>"'`]+/g, t => sep && t.includes(sep) && t.split(sep).length >= 2 && t.split(sep).every(Boolean) && !(sep === '|' && /[()[\]^$*+?{}\\]/.test(t)) ? '[person]' : t)
         // Emails in linear time: one regex over the text retries from every position of a long run without an
         // @ (quadratic: 200,000 digits took minutes). Only tokens with an @ are scanned, split at each @.
         s = s.replace(/[^\s<>"'`]+/g, (t) => (t.includes('@') ? maskEmailsIn(t, staff) : t))
