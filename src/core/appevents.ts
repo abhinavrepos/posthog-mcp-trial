@@ -178,6 +178,8 @@ export function maskAmounts(text: string): string {
         const suffixed = /[0-9](?:e[+-]?[0-9]+| ?(?:k|m|mn|bn|million|thousand|billion)\b)/i.test(trimmed)
         const bareLong = /(?:^|[^0-9.,'])[0-9]{5,}(?:$|[^0-9.,'])/.test(` ${trimmed} `)
         if (!money && !suffixed && !bareLong && MEASURE.test(after)) return token
+        // A ratio as Lens writes it (contrast 4.5:1): small, and the ":1" says it is not money.
+        if (!money && !suffixed && /^[0-9]{1,2}(?:\.[0-9]{1,2})?$/.test(trimmed) && /^:1(?![0-9.,])/.test(after)) return token
         // An integer count (457189 or 457,189; never 250,000.00 or −250000) followed by a unit, or by "of <count> <unit>",
         // is a count Lens wrote, unless a money word comes just before it.
         if (!money && !suffixed && /^(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)$/.test(trimmed) && (MEASURE.test(after) || OF_MEASURE.test(after))

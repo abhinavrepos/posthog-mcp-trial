@@ -439,7 +439,13 @@ export function compileSurvey(spec: SurveySpec, opts: { chainId?: string; reg?: 
     if (!(theme in THEMES)) e('look.theme', 'theme must be light or dark')
     const look: Look = { ...(THEMES[theme as 'light'] || THEMES.light), ...(Object.fromEntries(Object.entries(given).filter(([, v]) => v !== undefined)) as Partial<Look>) }
     for (const k of ['background', 'text', 'text_subtle', 'button', 'button_text', 'rating', 'rating_active', 'input_background', 'input_text', 'border'] as const) {
-        if (!COLOR.test(String(look[k]))) e(`look.${k}`, `"${look[k]}" is not a colour like #0b5cad (solid colours only)`)
+        if (/^\s*(?:rgb|hsl)a?\(/i.test(String(look[k]))) e(`look.${k}`, 'rgb() and hsl() colours are not supported: give a solid colour as #rrggbb, like #0b5cad')
+        else if (!COLOR.test(String(look[k]))) e(`look.${k}`, `"${look[k]}" is not a colour like #0b5cad (solid colours only)`)
+    }
+    // One spelling for PostHog: #fff and #FFAA00 become #ffffff and #ffaa00 (its renderer reads six-digit colours).
+    for (const k of ['background', 'text', 'text_subtle', 'button', 'button_text', 'rating', 'rating_active', 'input_background', 'input_text', 'border'] as const) {
+        const v = String(look[k])
+        if (COLOR.test(v)) look[k] = (v.length === 4 ? '#' + [...v.slice(1)].map((c) => c + c).join('') : v).toLowerCase()
     }
     if (!POSITIONS.includes(look.position)) e('look.position', `position must be one of ${POSITIONS.join(', ')} (right = bottom right)`)
     if (!(Number.isInteger(look.max_width) && look.max_width >= 280 && look.max_width <= 600)) e('look.max_width', 'give 280 to 600 pixels')
@@ -559,7 +565,28 @@ function checkId(id: string): string {
 }
 
 /** Saves a new draft, or changes an existing survey (its chain keeps its id, so a running one keeps working). */
-export async function saveSurvey(spec: SurveySpec, opts: { id?: string; clientIds?: string[] } = {}): Promise<{ survey?: PostHogSurvey; compiled: Compiled }> {
+// A create that timed out may still have been saved by PostHog: the retry then hit "There is already a survey with
+// this name", reported as "PostHog is unavailable" forever (survey check on a real PostHog, 2026-11-18). A Lens
+// draft of the same name made in the last 15 minutes is that earlier attempt: update it. Any other same-named
+// survey is a plain naming conflict the person can fix.
+const RECENT_CREATE_MS = 15 * 60_000
+async function createSurvey(body: Record<string, unknown>): Promise<PostHogSurvey> {
+    try { return await surveyApi<PostHogSurvey>('', { method: 'POST', body: JSON.stringify(body) }) }
+    catch (error) {
+        const timedOut = (error as { name?: string })?.name === 'TimeoutError'
+        const duplicate = error instanceof PostHogError && error.status === 400 && /already a survey with this name/i.test(error.message)
+        if (!timedOut && !duplicate) throw error
+        const name = String(body.name)
+        const page = await surveyApi<{ results: PostHogSurvey[] }>(`?search=${encodeURIComponent(name)}&limit=100`).catch(() => ({ results: [] as PostHogSurvey[] }))
+        const same = page.results.find((x) => x.name === name && !x.archived)
+        if (same && same.conditions?.lensChain?.managedBy === 'lens' && !same.start_date && Date.now() - Date.parse(same.created_at) < RECENT_CREATE_MS)
+            return surveyApi<PostHogSurvey>(`${encodeURIComponent(same.id)}/`, { method: 'PATCH', body: JSON.stringify(body) })
+        if (duplicate) throw new ToolInputError(`A survey named "${name}" already exists${same ? ` (survey_id ${same.id})` : ''}. Give this one another name, or change that one with save_survey and its survey_id.`)
+        throw error
+    }
+}
+
+export async function saveSurvey(spec: SurveySpec, opts: { id?: string; clientIds?: string[]; reg?: AppEvents } = {}): Promise<{ survey?: PostHogSurvey; compiled: Compiled }> {
     let chainId: string | undefined
     let old: PostHogSurvey | undefined
     if (opts.id) {
@@ -567,7 +594,7 @@ export async function saveSurvey(spec: SurveySpec, opts: { id?: string; clientId
         chainId = old.conditions?.lensChain?.managedBy === 'lens' ? old.conditions.lensChain.id : undefined
         if (!chainId) throw new Error(`Survey ${opts.id} was not made by Lens; change it in PostHog, or make a new one here.`)
     }
-    const compiled = compileSurvey(spec, { chainId, clientIds: opts.clientIds })
+    const compiled = compileSurvey(spec, { chainId, clientIds: opts.clientIds, reg: opts.reg })
     if (compiled.problems.some((p) => p.level === 'error')) return { compiled }
     // A question that kept its place and type keeps its id, so its earlier answers stay with it.
     if (old) {
@@ -579,7 +606,7 @@ export async function saveSurvey(spec: SurveySpec, opts: { id?: string; clientId
     }
     const survey = opts.id
         ? await surveyApi<PostHogSurvey>(`${encodeURIComponent(opts.id)}/`, { method: 'PATCH', body: JSON.stringify(compiled.body) })
-        : await surveyApi<PostHogSurvey>('', { method: 'POST', body: JSON.stringify(compiled.body) })
+        : await createSurvey(compiled.body)
     rememberSurvey(survey)
     return { survey, compiled }
 }

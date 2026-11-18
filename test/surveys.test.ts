@@ -603,3 +603,52 @@ describe('shared survey read caches', () => {
         assert.equal(peak, 1)
     })
 })
+
+// Colour check through MCP on a real PostHog (2026-11-18): every look was stored as asked; these three were not right.
+test('survey colours: short hex is stored as six digits, rgb() gets a plain answer, contrast warnings keep their numbers', async () => {
+    const { maskAmounts } = await import('../src/core/appevents.ts')
+        const short = compileSurvey({ ...base, look: { background: '#FFF', text: '#000', button: '#0A6' } } as never, { reg })
+    const a = (short.body as { appearance: Record<string, string> }).appearance
+    assert.deepEqual([a.backgroundColor, a.textColor, a.submitButtonColor], ['#ffffff', '#000000', '#00aa66'])
+    const rgb = compileSurvey({ ...base, look: { background: 'rgb(10,20,30)' } } as never, { reg })
+    assert.match(rgb.problems.find((p) => p.where === 'look.background')!.text, /rgb\(\) and hsl\(\) colours are not supported/)
+    const low = compileSurvey({ ...base, look: { text: '#cccccc' } } as never, { reg })
+    const warning = low.problems.find((p) => p.where === 'look')!.text
+    assert.match(warning, /contrast 1\.6:1; under 4\.5:1/)
+    assert.equal(maskAmounts(warning), warning)
+    assert.equal(maskAmounts('Limit 4.5:1 EUR'), 'Limit 4.5:<amount>') // the money part stays masked
+})
+
+describe('saving after a create that timed out', () => {
+    const setup = (t: TestContext, existing: Partial<PostHogSurvey> | undefined) => {
+        invalidateSurveyCache(); t.after(invalidateSurveyCache)
+        const saved = { ...config.posthog }, enabled = config.surveys.enabled
+        Object.assign(config.posthog, { projectId: '1', personalApiKey: 'read-test', surveyApiKey: 'survey-test' })
+        config.surveys.enabled = true
+        t.after(() => { Object.assign(config.posthog, saved); config.surveys.enabled = enabled })
+        const calls: string[] = []
+        t.mock.method(globalThis, 'fetch', async (url: unknown, init?: RequestInit) => {
+            const method = init?.method || 'GET'; calls.push(method + ' ' + String(url).split('/surveys/')[1])
+            if (method === 'POST') return Response.json({ type: 'validation_error', detail: 'There is already a survey with this name.' }, { status: 400 })
+            if (method === 'GET') return Response.json({ results: existing ? [existing] : [] })
+            return Response.json({ ...existing, ...JSON.parse(String(init!.body)) })
+        })
+        return calls
+    }
+    const spec = { ...base, name: 'Colour test 01: light theme (default)', look: { theme: 'light' as const } }
+    test('a Lens draft of that name made minutes ago is the earlier attempt: it is updated, not duplicated', async (t) => {
+        const calls = setup(t, { id: 's-1', name: spec.name, start_date: null, created_at: new Date(Date.now() - 60_000).toISOString(), conditions: { lensChain: { managedBy: 'lens' } as never } })
+        const { saveSurvey } = await import('../src/core/surveys.ts')
+        const out = await saveSurvey(spec, { reg })
+        assert.equal(out.survey?.id, 's-1')
+        assert.deepEqual(calls.map((c) => c.split('?')[0]), ['POST ', 'GET ', 'PATCH s-1/'])
+    })
+    test('any other survey of that name is a naming conflict the person can fix, not "PostHog is unavailable"', async (t) => {
+        setup(t, { id: 's-old', name: spec.name, start_date: '2026-10-01T00:00:00Z', created_at: '2026-10-01T00:00:00Z', conditions: { lensChain: { managedBy: 'lens' } as never } })
+        const { saveSurvey } = await import('../src/core/surveys.ts')
+        const { toolError } = await import('../src/mcp/toolerror.ts')
+        const e = await saveSurvey(spec, { reg }).catch((x) => x)
+        assert.match(e.message, /already exists \(survey_id s-old\)\. Give this one another name/)
+        assert.equal(toolError(e, 'save_survey').kind, 'validation')
+    })
+})
