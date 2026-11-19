@@ -38,7 +38,7 @@
 #     none of them play, and those older than 30 days disappear.
 #
 # Phases (each records when it finished; running again continues where it stopped):
-#   1 check      versions, volumes, free disk, MinIO image, that events have stopped; asks about replays
+#   1 check      versions, volumes, free disk, MinIO image, whether events are still arriving; asks about replays
 #   2 before     counts of everything that must survive (events per day, persons, replays, files, rows)
 #   3 backup     pg_dumpall, the install's files, and (unless SKIP_VOLUME_BACKUP=1) every data volume,
 #                each checked against its volume, then checksummed
@@ -201,7 +201,7 @@ p_storage() { tr '\r' '\n' < "$1" | grep -E '\] [0-9]+% \|' | tail -1 | sed -E '
 # ---------------------------------------------------------------- phases
 phase_about() {
     case "$1" in
-        check) echo "versions, volumes, disk, MinIO image, events stopped" ;;
+        check) echo "versions, volumes, disk, MinIO image, live events" ;;
         before) echo "counting everything that must survive" ;;
         backup) echo "backing up; PostHog is stopped from here until phase start" ;;
         source) echo "PostHog source at the pinned commit" ;;
@@ -439,10 +439,13 @@ if phase check; then
     a=$(dc exec -T clickhouse clickhouse-client -q "SELECT count() FROM posthog.events WHERE _timestamp > now() - INTERVAL 10 MINUTE" < /dev/null)
     sleep 30
     b=$(dc exec -T clickhouse clickhouse-client -q "SELECT count() FROM posthog.events WHERE _timestamp > now() - INTERVAL 10 MINUTE" < /dev/null)
-    # ALLOW_LIVE=1: the apps keep sending and what arrives meanwhile may be lost. Remembered, so a run that
-    # continues later compares the same way (phases postgres and verify then accept more rows than phase before).
-    if [ "$b" -gt "$a" ]; then say "events are still arriving: stop the apps sending them first"; [ "${ALLOW_LIVE:-0}" = 1 ] || exit 1; fi
-    [ "${ALLOW_LIVE:-0}" != 1 ] || remember live yes
+    # Apps may keep sending during the upgrade: it does not wait for them to stop. Events that arrive while
+    # PostHog is down may be lost (unless the apps retry). Remembered, so a run that continues later compares
+    # the same way (phases postgres and verify then accept more rows than phase before).
+    if [ "$b" -gt "$a" ] || [ "${ALLOW_LIVE:-0}" = 1 ]; then
+        say "events are still arriving: the upgrade goes ahead; the final check allows for rows that arrive meanwhile"
+        remember live yes
+    fi
     recordings=$(dc exec -T clickhouse clickhouse-client -q "SELECT uniqExact(session_id) FROM posthog.session_replay_events" < /dev/null)
     if [ -z "$minio_vol" ]; then remember replays copy
     elif [ -z "$(recall replays)" ]; then
@@ -457,7 +460,7 @@ if phase check; then
         echo
         echo "SKIP_VOLUME_BACKUP=1: only Postgres is backed up. ClickHouse (events, replay metadata), ZooKeeper and"
         echo "the other volumes are not, so only a VM snapshot can undo the upgrade."
-        confirm "Is there a snapshot of this machine, taken with events stopped?" || { echo "Take one, or run without SKIP_VOLUME_BACKUP."; exit 1; }
+        confirm "Is there a snapshot of this machine?" || { echo "Take one, or run without SKIP_VOLUME_BACKUP."; exit 1; }
     fi
     echo
     say "Plan:"
