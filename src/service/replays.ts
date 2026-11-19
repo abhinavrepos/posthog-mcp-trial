@@ -19,10 +19,11 @@ import { clipUrl } from '../core/links.ts'
 import { replayUrl } from '../core/posthog.ts'
 import { recordingInfo, type RecordingInfo } from '../core/recording-info.ts'
 import { downloadName, formatClock, HourlyLimit, parseReplayInput, parseStartTime } from '../core/replay-input.ts'
-import { audit, can, canSeeSystem, canUseDashboards, canUseSurveys, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
+import { audit, can, canSeeReplayInsights, canSeeSystem, canUseDashboards, canUseSurveys, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
 import { handleAdmin } from './admin.ts'
 import { codenameRedirect, handlePrivacy } from './privacy.ts'
 import { handleLive, liveHtml } from './live.ts'
+import { handleWatch, watchHtml } from './watch.ts'
 import { handleSystem } from './system.ts'
 import { handleSurveys } from './surveyspage.ts'
 import { canConnect, handleConnect } from './connect.ts'
@@ -399,6 +400,11 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         res.end(loginHtml('Surveys'))
         return true
     }
+    if (p === '/replays/watch' || p === '/replays/watch/') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
+        res.end(!viewer ? loginHtml('Watchlist') : can(viewer.role, 'watch') && canSeeReplayInsights(viewer) ? watchHtml(viewer) : noWatchHtml(viewer))
+        return true
+    }
     if (p === '/replays/live' || p === '/replays/live/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
         res.end(!viewer ? loginHtml('Live') : can(viewer.role, 'watch') ? liveHtml(viewer) : noAccessHtml(viewer))
@@ -421,6 +427,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         return true
     }
     if (p.startsWith('/replays/live/')) return handleLive(req, res, url, viewer)
+    if (p.startsWith('/replays/watch/')) return handleWatch(req, res, url, viewer)
     const need = (role: Role): boolean => {
         if (can(viewer.role, role)) return true
         json(res, 403, { error: `This needs the "${ROLE_TEXT[role]}" role. Ask an admin.` })
@@ -634,7 +641,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
 }
 
 // ------------------------------------------------------------------ pages
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
+export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 
 // The Lens shell and page templates share the same theme and component tokens.
 const CSS = `:root{
@@ -796,12 +803,13 @@ return{set(list,keep){items=list||[];if(!keep)page=0;draw()},redraw:draw,get pag
 
 export const APP_NAME = config.app.name
 export const APP_TAG = config.app.tag
-export type Section = 'Replay clips' | 'Live' | 'Dashboards' | 'Surveys' | 'Chat' | 'System' | 'Admin'
+export type Section = 'Replay clips' | 'Watchlist' | 'Live' | 'Dashboards' | 'Surveys' | 'Chat' | 'System' | 'Admin'
 
 /** The header on every page: the product name, the sections this person may open, and sign out. */
 // Line icons (24px grid, 1.75 stroke), inline so the app needs nothing from the internet.
 const ICON: Record<string, string> = {
     'Replay clips': '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/>',
+    Watchlist: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
     Live: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
     Dashboards: '<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
     Surveys: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/>',
@@ -827,6 +835,7 @@ keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeou
     const tabs = (
         [
             ['Replay clips', '/replays', 'watch'],
+            ['Watchlist', '/replays/watch', 'watchlist'],
             ['Live', '/replays/live', 'watch'],
             ['Dashboards', '/replays/dashboards', 'dashboards'],
             ['Surveys', '/replays/surveys', 'surveys'],
@@ -835,7 +844,7 @@ keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeou
             ['Admin', '/replays/admin', 'admin'],
         ] as const
     )
-        .filter(([, , need]) => (need === 'system' ? canSeeSystem(v) : need === 'surveys' ? surveysActive() && canUseSurveys(v) : need === 'dashboards' ? !!appEvents() && canUseDashboards(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need as Role)))
+        .filter(([, , need]) => (need === 'watchlist' ? can(v.role, 'watch') && canSeeReplayInsights(v) : need === 'system' ? canSeeSystem(v) : need === 'surveys' ? surveysActive() && canUseSurveys(v) : need === 'dashboards' ? !!appEvents() && canUseDashboards(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need as Role)))
         .map(([name, href]) => `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${icon(name)}<span>${name}</span></a>`)
         .join('')
     const initials = (v.name || v.email).split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('')
@@ -854,6 +863,13 @@ export function loginHtml(section: Section = 'Replay clips'): string {
 <script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('go');if(b.disabled)return;b.disabled=true;document.getElementById('msg').textContent='Signing in…';
 try{const r=await fetch('/replays/login',{method:'POST',headers:{'content-type':'application/json','x-clip-page':'1'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('pw').value})});
 const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Sign in failed.');location.href=location.pathname+location.search}catch(err){document.getElementById('msg').textContent=err.message}finally{b.disabled=false}}</script></body></html>`
+}
+
+function noWatchHtml(v: Viewer): string {
+    if (!can(v.role, 'watch')) return noAccessHtml(v)
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Watchlist · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
+<body>${headerHtml(v, 'Watchlist')}<main style="max-width:560px"><div class="card"><h1 style="font-size:24px;margin-bottom:12px">Request access to the Watchlist</h1>
+<p class="small muted">Signed in as <b>${esc(v.email)}</b>.</p><p>The Watchlist shows how people worked, step by step, from replays. Ask a Lens admin for replay insights on the admin page.</p></div></main></body></html>`
 }
 
 function noAccessHtml(v: Viewer): string {

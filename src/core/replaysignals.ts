@@ -24,10 +24,10 @@ export function safeName(s: unknown): string | undefined {
     if (!normalized.trim() || normalized.length > 40 || /\s/.test(normalized.trim()) || /\p{Nd}{3}|\p{Sc}|USD|EUR|GBP|CAD|CHF|JPY|@|\p{Nd}[.,]\p{Nd}/iu.test(normalized)) return undefined
     return normalized.trim()
 }
-const nameToken = (s: string) => s.normalize('NFKC').replace(/\p{Cf}/gu, '').toLowerCase().replace(/[^a-z0-9]/g, '')
-const structuralNames = new Set('save submit ok cancel close apply preview search run delete add edit next back refresh export banner alert error toast menu grid row dialog tab modal'.split(' '))
-const htmlTags = new Set('a button input select textarea label div span form table tr td th ul li ol section article header footer nav main aside p h1 h2 h3 h4 h5 h6 img svg dialog details summary option fieldset legend iframe canvas video audio body html head'.split(' '))
-const keys = ['data-field', 'data-action', 'name', 'id', 'aria-label', 'role', 'type', 'data-testid', 'data-dialog'] as const
+export const nameToken = (s: string) => s.normalize('NFKC').replace(/\p{Cf}/gu, '').toLowerCase().replace(/[^a-z0-9]/g, '')
+export const structuralNames = new Set('save submit ok cancel close apply preview search run delete add edit next back refresh export banner alert error toast menu grid row dialog tab modal'.split(' '))
+export const htmlTags = new Set('a button input select textarea label div span form table tr td th ul li ol section article header footer nav main aside p h1 h2 h3 h4 h5 h6 img svg dialog details summary option fieldset legend iframe canvas video audio body html head'.split(' '))
+export const NAME_KEYS = ['data-field', 'data-action', 'name', 'id', 'aria-label', 'role', 'type', 'data-testid', 'data-dialog'] as const
 interface NodeInfo { tag: string; attrs: Record<string, string>; parent?: number; error: boolean; hidden: boolean; errorClass: boolean }
 
 /** Process in browser time order; only sanitized structure survives extraction. */
@@ -62,7 +62,7 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
         const original = nodes.get(id)
         let n = original
         for (let depth = 0; n && depth <= 4; depth++, n = n.parent === undefined ? undefined : nodes.get(n.parent)) {
-            for (const k of keys.slice(0, 6)) { const known = n.attrs[k] ? knownNames.get(nameToken(n.attrs[k])) : undefined; if (known) return field ? `field:${known}` : `${original?.tag || 'element'}#${known}` }
+            for (const k of NAME_KEYS.slice(0, 6)) { const known = n.attrs[k] ? knownNames.get(nameToken(n.attrs[k])) : undefined; if (known) return field ? `field:${known}` : `${original?.tag || 'element'}#${known}` }
         }
         if (field) return 'field'
         if (original?.tag === 'button' || original?.attrs.role === 'button') return 'button'
@@ -90,7 +90,7 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
     }
     const attrs = (raw: any): Record<string, string> => {
         const result: Record<string, string> = {}
-        for (const k of keys) { const v = safeName(raw?.[k]); if (v) result[k] = v }
+        for (const k of NAME_KEYS) { const v = safeName(raw?.[k]); if (v) result[k] = v }
         return result
     }
     // Success toasts are effects, but their class alone is not evidence of an error.
@@ -187,7 +187,7 @@ export function signalsFromReplay(jsonl: string, recordingDurationMs?: number, o
             for (const a of d.adds || []) add(a.node, a.parentId)
             for (const a of d.attributes || []) {
                 const n = nodes.get(a.id); if (!n) continue
-                for (const k of keys) if (Object.hasOwn(a.attributes || {}, k)) { delete n.attrs[k]; const v = safeName(a.attributes[k]); if (v) n.attrs[k] = v }
+                for (const k of NAME_KEYS) if (Object.hasOwn(a.attributes || {}, k)) { delete n.attrs[k]; const v = safeName(a.attributes[k]); if (v) n.attrs[k] = v }
                 if (Object.hasOwn(a.attributes || {}, 'class')) n.errorClass = errorClass(a.attributes)
                 n.error = isError(n.attrs.role, n.errorClass)
                 for (const k of ['hidden', 'aria-hidden', 'style']) if (Object.hasOwn(a.attributes || {}, k)) {

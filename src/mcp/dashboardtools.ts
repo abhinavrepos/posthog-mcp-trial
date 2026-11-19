@@ -26,11 +26,12 @@ import { resolveClient } from '../core/resolve.ts'
 import { parseTimeWindow, analyticalWindow } from '../core/timewindow.ts'
 import type { FlowTimeParams, TaskMapParams, Window } from '../core/taskstypes.ts'
 import { REPLAY_INSIGHT_TOOLS, type ChatCaller, type DashboardRole } from '../service/access.ts'
+import { registerWatchTools, WATCH_TOOLS, WATCH_WRITE_TOOLS } from './watchtools.ts'
 
-export const DASHBOARD_TOOLS = ['client_experience', 'friction_hotspots', 'signal_scorecard', 'client_story', 'client_activity_changes', 'compare_client_patterns', 'handover_pack', 'monday_brief', 'draft_rescue_survey', 'rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'pin_chart', 'share_dashboard']
+export const DASHBOARD_TOOLS = ['client_experience', 'friction_hotspots', ...WATCH_TOOLS, 'signal_scorecard', 'client_story', 'client_activity_changes', 'compare_client_patterns', 'handover_pack', 'monday_brief', 'draft_rescue_survey', 'rescue_queue', 'set_rescue_status', 'find_task', 'task_map', 'flow_time', 'list_dashboards', 'pin_dashboard', 'pin_chart', 'share_dashboard']
 /** Replay insights (client_experience, friction_hotspots) need their own grant from a Lens admin, on top of dashboard access. */
 export const dashboardToolNames = (role: DashboardRole = 'share', surveyRole: SurveyRole = 'launch', insights = true): string[] =>
-    role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => (appEvents() || ['pin_chart', 'list_dashboards', 'share_dashboard'].includes(t)) && (t !== 'draft_rescue_survey' || surveysActive() && canSurvey(surveyRole, 'edit')) && (role === 'share' || !['share_dashboard', 'set_rescue_status'].includes(t)) && (insights || !REPLAY_INSIGHT_TOOLS.includes(t)))
+    role === 'none' ? [] : DASHBOARD_TOOLS.filter(t => (appEvents() || ['pin_chart', 'list_dashboards', 'share_dashboard'].includes(t)) && (t !== 'draft_rescue_survey' || surveysActive() && canSurvey(surveyRole, 'edit')) && (role === 'share' || !['share_dashboard', 'set_rescue_status', ...WATCH_WRITE_TOOLS].includes(t)) && (insights || !REPLAY_INSIGHT_TOOLS.includes(t)))
 const realDeps = { readPosthogChart, clientActivityChanges, compareClientPatterns, scorecard, clientStory, handoverPack, mondayBrief, draftRescueSurvey, saveSurvey, surveysActive, rescueQueue, setRescueAction, rescueClients, taskMap, flowTime, findTasks, ingestStatus, createDashboard, shareDashboard, listDashboards, getDashboard, canManage, resolveClient }
 type Caller = Pick<ChatCaller, 'who' | 'email' | 'dashboardRole' | 'admin'> & { surveyRole?: SurveyRole; insights?: boolean }
 const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] })
@@ -94,6 +95,7 @@ export function registerDashboardTools(server: McpServer, caller: Caller = { who
         if (flagged !== undefined) q.set('only_flagged', String(flagged))
         return `${page()}?${q}`
     }
+    registerWatchTools(reg, caller)
     reg('signal_scorecard', { outputSchema: ANALYSIS_OUTPUT,
         description: 'How did client flags compare with recorded outcomes? Weekly historical sanity check with hits, misses and lead days; never a probability.',
         inputSchema: { weeks: z.number().int().min(1).max(209).optional() }, annotations: { readOnlyHint: true },

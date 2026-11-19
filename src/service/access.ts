@@ -86,7 +86,7 @@ export const canSeeSystem = (v: Pick<Viewer, 'role' | 'system'>) => can(v.role, 
 // How clients' people actually work, read from session replays (src/core/experience.ts): the Client story
 // section and the chat tools client_experience and friction_hotspots. Admins always; anyone else only when
 // an admin ticked "Replay insights" for them. Never through the shared chat token, never by a role change.
-export const REPLAY_INSIGHT_TOOLS = ['client_experience', 'friction_hotspots']
+export const REPLAY_INSIGHT_TOOLS = ['client_experience', 'friction_hotspots', 'watch_highlights', 'session_moments', 'repeated_problems', 'watch_client']
 export function insightPeople(): Map<string, { updated_by: string; updated_at: string }> {
     return new Map(all<{ email: string; updated_by: string; updated_at: string }>('SELECT * FROM replay_insight_people').map((r) => [r.email, r]))
 }

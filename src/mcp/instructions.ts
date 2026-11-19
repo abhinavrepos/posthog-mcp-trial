@@ -25,12 +25,12 @@ ${withPosthog ? `Use ${config.posthog.mcpViaLens && posthogMcpActive() ? 'postho
 
 Client = ${client}.
 Tools; poll jobs: get_job_result:
-- client name/id/email: resolve_client; recent problems: find_client_incidents
-- screen use by clients: screen_usage; who hit an error: error_blast_radius; struggle without errors: find_silent_issues
+- client by name/id/email: resolve_client; problems: find_client_incidents
+- screen_usage; who hit an error: error_blast_radius; silent struggle: find_silent_issues
 - Jira: triage_ticket
-${config.features.jira ? '- releases: list_releases, release_outcomes; one ticket: ticket_evidence; complaints after shipping: client_feedback\n- agreed verdict: record_verdict; ticket link: correct_ticket_link; sync: refresh_releases' : ''}${appEvents() ? `
+${config.features.jira ? '- releases: list_releases, release_outcomes; one ticket: ticket_evidence; complaints: client_feedback\n- record_verdict, correct_ticket_link, refresh_releases' : ''}${appEvents() ? `
 - reval_brief first; dictionary: describe_app_events; top_pains; dialog_friction failures; message_doctor messages; session_story; attempt_timings waits; find_trade ids; client_signals risk; discover_workflows, workflow_completion; counts: aggregate_events` : ''}${dashboards.some(t => t === 'task_map') ? `
-- "how is <client> doing": ${dashboards.includes('client_experience') ? 'client_experience first, then ' : ''}client_story, handover_pack; before churn: client_activity_changes, compare_client_patterns; ${dashboards.includes('friction_hotspots') ? 'screen friction: friction_hotspots; ' : ''}weekly: monday_brief, signal_scorecard; rescue_queue${dashboards.includes('draft_rescue_survey') ? ', draft_rescue_survey' : ''}${dashboards.includes('set_rescue_status') ? ', set_rescue_status' : ''}; tasks: task_map, flow_time, find_task; pins: ${dashboards.filter((t) => /pin|share|list/.test(t)).join(', ') || 'none'}` : appEvents() ? `
+- "how is <client> doing": ${dashboards.includes('client_experience') ? 'client_experience first, then ' : ''}client_story, handover_pack; before churn: client_activity_changes, compare_client_patterns; ${dashboards.includes('friction_hotspots') ? 'screen friction: friction_hotspots; ' : ''}${dashboards.includes('watch_highlights') ? `watched clients: watch_highlights, session_moments, repeated_problems${dashboards.includes('watch_client') ? ', watch_client' : ''}; ` : ''}weekly: monday_brief, signal_scorecard; rescue_queue${dashboards.includes('draft_rescue_survey') ? ', draft_rescue_survey' : ''}${dashboards.includes('set_rescue_status') ? ', set_rescue_status' : ''}; tasks: task_map, flow_time, find_task; pins: ${dashboards.filter((t) => /pin|share|list/.test(t) && !t.startsWith('watch')).join(', ') || 'none'}` : appEvents() ? `
 - dashboards (task map, flow time): this person has no access; a Lens admin grants it` : ''}${dashboards.includes('pin_chart') && !dashboards.includes('task_map') ? `
 - pins: pin_chart, list_dashboards${dashboards.includes('share_dashboard') ? ', share_dashboard' : ''}` : ''}${surveys.length ? `
 - in-app surveys for ${app} users (only here, never PostHog): ${surveys.join(', ')}. Launching: only on the Lens Surveys page, never from chat${surveyRole === 'launch' ? '' : '. More needs a higher survey role (Lens admin)'}` : surveyToolNames().length ? `
