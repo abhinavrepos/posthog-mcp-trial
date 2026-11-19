@@ -38,6 +38,28 @@ pages: an admin grants replay insights, dashboards and surveys per person.
 - Clients can be shown to AI by numbered codename only (Admin → Client privacy).
 - Every sign-in, clip, change of access and chat tool call is written to the audit log.
 
+## When something goes down
+
+The System page (and its status service, `deploy/status`) checks every 15 seconds: each PostHog container
+and health endpoint, whether events and replays are still arriving, the machine (disk, memory, CPU), and
+Lens's own background jobs (task history, replay analysis, Watchlist reader, replay retention, briefing
+delivery, chat pre-warm).
+
+- **Needs attention** says what is down, why, since when, and a first thing to check. A container shows
+  its exit code, an out-of-memory kill, its last failed health check or a restart loop. A health endpoint
+  says whether it refused the connection, timed out or answered with an error. Checks that only failed
+  because ClickHouse is down are grouped under it.
+- **Lens jobs** shows each background job with a plain reason ("PostHog is unreachable", "PostHog refused
+  Lens's API key", "ran out of memory", "PostHog settings are missing: …") and its last success.
+- **Recent changes** is the timeline: when each check went down, when it recovered, and for how long.
+- `GET /healthz` on the status service answers 503 when anything is down, for uptime monitors;
+  `STATUS_ALERT_WEBHOOK` sends Teams or Slack messages when a check stays down and when it recovers.
+- The Lens service log (`logs/service.log`, one JSON object per line) records when a job starts failing,
+  every tenth failure, and when it recovers, and the reason for a crash before the service restarts.
+
+Nothing extra is queried for any of this: jobs report from memory, and the checks are the ones the status
+service already ran.
+
 ## How it is built
 
 ```
