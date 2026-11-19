@@ -13,7 +13,8 @@
 #      registry to registry for linux/amd64, byte for byte (crane copy), and checked by digest. Nothing is
 #      rebuilt. Images with an ECR repository of their own go there (posthog/capture...); the others go into
 #      posthog/services, one tag each (services:cymbal-<digest>...).
-#   2. Ours, built for linux/amd64 from this commit (git archive HEAD: uncommitted changes are left out):
+#   2. Ours, built for linux/amd64 from this commit (git archive HEAD: uncommitted changes are left out), or
+#      from the folder as it is when there is no .git (a downloaded copy):
 #        posthog/node     PostHog's Node image plus PLUGINS_DISABLED_CAPABILITIES (deploy/posthog/node-image)
 #        posthog/lens     PostHog Lens: the service, its MCP tools, Chrome, ffmpeg (deploy/lens/Dockerfile),
 #                         and the status page (deploy/status); its tests run in it before it is pushed
@@ -70,7 +71,39 @@ chmod 700 "$WORK"
 IMAGES_FROM=upstream
 # shellcheck disable=SC1091
 . "$ROOT/deploy/migrate/versions/versions.env"
-COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
+# The source to build. From a git checkout: HEAD (uncommitted changes are left out). From a plain folder (a
+# downloaded copy, or a clone whose .git was removed): the folder's files, minus what .gitignore lists and local
+# files that never belong in an image (keys, caches, outputs). Its id is then a hash of that content, so tags
+# still never change meaning.
+SRC_TAR="$WORK/src.tar"
+if [ -e "$ROOT/.git" ] && git -C "$ROOT" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+    FROM_GIT=1
+    COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
+    git -C "$ROOT" archive --format=tar HEAD >"$SRC_TAR"
+else
+    FROM_GIT=0
+    python3 - "$ROOT" >"$WORK/src.list" <<'PY'
+import fnmatch, os, sys
+root = sys.argv[1]
+ANY = {'node_modules', '.cache', 'clips', 'logs', 'run', '__pycache__', 'e2e-out', '.git'}
+FILES = ['*.log', '.mcp.json', '.secrets.env']
+ANCHORED = {'deploy/status/status.env', 'deploy/offline/ecr.env', 'deploy/offline/images.lock', 'deploy/offline/last-kit.txt', 'deploy/offline/out', 'deploy/offline/kit'}
+TOP_DOT = {'.gitignore', '.env.example'}  # every other dot entry at the top (.aws, .codex...) is local
+out = []
+for d, dirs, files in os.walk(root):
+    rel = os.path.relpath(d, root)
+    rel = '' if rel == '.' else rel + '/'
+    keep = lambda n: n not in ANY and (rel + n) not in ANCHORED and not (rel == '' and n.startswith('.') and n not in TOP_DOT)
+    dirs[:] = sorted(n for n in dirs if keep(n) and not os.path.islink(os.path.join(d, n)))
+    for n in sorted(files):
+        if keep(n) and not any(fnmatch.fnmatch(n, f) for f in FILES):
+            out.append('./' + rel + n)
+sys.stdout.write('\0'.join(sorted(out)) + '\0')
+PY
+    tar -C "$ROOT" --null --no-recursion -T "$WORK/src.list" --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner --format=gnu -cf "$SRC_TAR"
+    COMMIT="$(sha256sum "$SRC_TAR" | cut -c1-40)"
+fi
+mkdir "$WORK/src" && tar -x -C "$WORK/src" -f "$SRC_TAR"
 MCP_UPSTREAM="$(grep -oE 'ghcr\.io/posthog/posthog-mcp@sha256:[0-9a-f]{64}' "$ROOT/deploy/posthog-mcp/docker-compose.yml" | head -1)"
 COMPOSE_VERSION="$(grep -oE '^COMPOSE_STANDALONE_VERSION="v[0-9.]+"' "$ROOT/deploy/posthog/install-posthog-hobby.sh" | cut -d'"' -f2)"
 [ -n "$MCP_UPSTREAM" ] && [ -n "$COMPOSE_VERSION" ] && [ -n "$TARGET_COMMIT" ] || die "Could not read the pinned versions."
@@ -117,7 +150,8 @@ for ref in refs:
 PY
 
 # Our images: name, repository, tag (from the content), how to build.
-tree() { git -C "$ROOT" ls-tree -r HEAD -- "$@" | sha256sum | cut -c1-12; }
+if [ $FROM_GIT = 1 ]; then tree() { git -C "$ROOT" ls-tree -r HEAD -- "$@" | sha256sum | cut -c1-12; }
+else tree() { (cd "$WORK/src" && find "$@" -type f -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum) | sha256sum | cut -c1-12; }; fi
 NODE_TAG="${NODE_BASE_IMAGE##*sha256:}"; NODE_TAG="${NODE_TAG:0:12}-$(tree deploy/posthog/node-image)"
 LENS_TAG="$(tree src scripts vendor test config package.json pnpm-lock.yaml tsconfig.json deploy/lens deploy/status)"
 MINIO_TAG="$(tree deploy/migrate/minio-image)"
@@ -128,7 +162,8 @@ say "${D}build${N} posthog/node:$NODE_TAG  (from $NODE_BASE_IMAGE)"
 say "${D}build${N} posthog/lens:$LENS_TAG  (also runs the status page)"
 say "${D}build${N} posthog/minio:$MINIO_TAG"
 say "${D}build${N} posthog/kit:${COMMIT:0:12}-<hash of the image list>"
-[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] || say "${R}Uncommitted changes: they are NOT in the images (built from commit ${COMMIT:0:12}).${N}"
+[ $FROM_GIT = 0 ] && say "${D}Built from the folder as it is (no git checkout): id ${COMMIT:0:12} is a hash of its content.${N}"
+[ $FROM_GIT = 0 ] || [ -z "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] || say "${R}Uncommitted changes: they are NOT in the images (built from commit ${COMMIT:0:12}).${N}"
 [ $PLAN = 1 ] && exit 0
 
 # ------------------------------------------------------------------ checks and login
@@ -214,7 +249,6 @@ lock_of() { awk -v s="$1" '$1==s {print $2}' "$WORK/images.lock"; }
 
 # ------------------------------------------------------------------ 2. ours
 step "2. Our images, built for linux/amd64 from commit ${COMMIT:0:12}"
-mkdir "$WORK/src" && git -C "$ROOT" archive HEAD | tar -x -C "$WORK/src"
 # repo:tag dockerfile context [test]: builds and pushes unless ECR has the tag. Prints the ECR reference.
 build_push() {
     local ref="$1" dockerfile="$2" context="$3"; shift 3

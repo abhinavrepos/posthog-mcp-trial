@@ -16,7 +16,8 @@ Without internet there is no HTTPS certificate; use the IP address or `http://<n
 
 ## 1. Build the images (build machine)
 
-Images are built from committed code, so commit first.
+Images are built from committed code, so commit first. A copy without git works too (a downloaded zip, or a clone
+whose `.git` folder was removed): the build then takes the folder as it is, leaving out what `.gitignore` lists.
 
 ```bash
 git clone https://github.com/abhinavrepos/posthog-mcp-trial lens && cd lens
