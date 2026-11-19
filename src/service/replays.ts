@@ -788,6 +788,23 @@ body main .card>.row>button.ghost:hover:not(:disabled){background:var(--hover)}
 body main .card>.row>button.ghost:disabled{border-color:var(--disabled-border);background:var(--disabled-bg)}
 .status-panel{padding:12px 16px;margin:0 0 var(--space-4);background:var(--chip);border-radius:var(--r)}.status-panel>p{margin:0}.status-panel>button,.status-panel>details{margin-top:8px}
 
+/* Enterprise polish: quieter chrome, one title rhythm, numbers aligned only where they are compared. */
+:root{--side-bg:#f1f3f6;--chip:#e9edf2;--accent-soft:#e6eefb}
+@media(prefers-color-scheme:dark){:root{--side-bg:#191c22;--chip:#292f38;--accent-soft:#26354d}}
+body{font-feature-settings:normal;font-variant-numeric:normal}
+body :is(table,.kpi .v,.tile b,.num,td.num,th.num,.chip .t,.cm .at,time){font-variant-numeric:tabular-nums}
+body main .page-head h1{font-size:28px;line-height:34px;font-weight:600;letter-spacing:-.02em}
+body main .page-head p{font-size:14px;line-height:20px}
+body main .kpi .l{min-height:16px}body main .kpi .v{margin-top:6px}
+body main thead th,body main thead th button.ghost{letter-spacing:.01em}body main thead th{padding-block:10px}
+body main .tabs{border-radius:8px}body main .tabs :is(a,button){border-radius:6px}
+body main .tabs :is([aria-selected=true],[aria-current=page]){box-shadow:inset 0 0 0 1px var(--line)}
+@media(min-width:900px){
+body header.shell nav .ico{width:18px;height:18px}body header.shell nav a{gap:10px}
+body header.shell nav a[aria-current=page]{box-shadow:inset 2px 0 0 var(--accent)}
+body header.shell .acct>summary::after{content:"";margin-left:auto;flex:none;width:6px;height:6px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(45deg)}
+body header.shell .acct[open]>summary::after{transform:rotate(225deg)}
+}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}`
 
 export const PAGE_CSS = () => CSS
