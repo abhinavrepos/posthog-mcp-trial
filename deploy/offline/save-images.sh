@@ -11,11 +11,9 @@
 #
 # It writes, in OUT [deploy/offline/out]:
 #   posthog-lens-images-<kit>.tar          every image (PostHog's, PostHog Lens, the kit itself), about 15 GB
-#   posthog-lens-images-<kit>.tar.sha256   its checksum
 #
 # On the machine (Docker installed, nothing else), with fresh-install.sh or upgrade.sh from deploy/offline/out:
-#   sha256sum -c posthog-lens-images-<kit>.tar.sha256
-#   sudo docker load -i posthog-lens-images-<kit>.tar
+#   sudo docker load -i posthog-lens-images-<kit>.tar   (docker load rejects a damaged file)
 #   sudo bash fresh-install.sh        (or: sudo bash upgrade.sh)
 # Those scripts find the images under the names lens-offline/<repository>:<tag> and download nothing
 # (IMAGE_SOURCE=local, the default on Ubuntu). docker load keeps tags but not digests, so each image's
@@ -92,18 +90,15 @@ FILE="$OUT/posthog-lens-images-$TAG${SINCE:+-since-$SINCE}.tar"
 say "Writing $FILE (several minutes)"
 docker save -o "$FILE.part" "${NAMES[@]}"
 mv "$FILE.part" "$FILE"
-(cd "$OUT" && sha256sum "$(basename "$FILE")" >"$(basename "$FILE").sha256")
-ok "$(du -h "$FILE" | cut -f1), checksum in $(basename "$FILE").sha256"
+ok "$(du -h "$FILE" | cut -f1)"
 
 cat <<EOF
 
     Carry these to the machine (Ubuntu with Docker; no internet or AWS needed there):
       $FILE
-      $FILE.sha256
       $OUT/fresh-install.sh   (no PostHog there yet)   or   $OUT/upgrade.sh   (PostHog runs there)
 
     On the machine:
-      sha256sum -c $(basename "$FILE").sha256
       sudo docker load -i $(basename "$FILE")
       sudo bash fresh-install.sh $TAG       (or: sudo bash upgrade.sh $TAG)
 EOF

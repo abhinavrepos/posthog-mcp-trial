@@ -28,13 +28,12 @@ deploy/offline/save-images.sh
 
 The build runs the test suite inside the image and stops if a test fails. Copy these to the target:
 
-- `deploy/offline/out/posthog-lens-images-<kit>.tar` and its `.sha256`
+- `deploy/offline/out/posthog-lens-images-<kit>.tar`
 - `deploy/offline/out/fresh-install.sh` (new machine) or `deploy/offline/out/upgrade.sh` (PostHog already there)
 
 ## 2. Install (target machine)
 
 ```bash
-sha256sum -c posthog-lens-images-<kit>.tar.sha256
 sudo docker load -i posthog-lens-images-<kit>.tar     # delete the .tar afterwards
 sudo bash fresh-install.sh                             # asks for the address and the first login's email
 ```
@@ -69,7 +68,6 @@ SINCE=<kit tag on the target> deploy/offline/save-images.sh     # only what chan
 On the target:
 
 ```bash
-sha256sum -c posthog-lens-images-<kit>.tar.sha256
 sudo docker load -i posthog-lens-images-<kit>.tar
 sudo bash upgrade.sh          # shows what will change and asks first; YES=1 to skip the question
 ```
