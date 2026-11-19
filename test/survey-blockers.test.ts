@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import type { PostHogSurvey, SurveySpec } from '../src/core/surveys.ts'
 
-const dir = mkdtempSync(join(process.cwd(), '.survey-blockers-'))
+// The system temp folder: the image runs its tests as a user who cannot write to the app folder.
+const dir = mkdtempSync(join(tmpdir(), 'survey-blockers-'))
 Object.assign(process.env, {
     TRIAGE_DB: join(dir, 'main.db'), TASKS_DB: join(dir, 'tasks.db'),
     APP_EVENTS_FILE: 'config/app-events.reval.json', POSTHOG_HOST: 'http://localhost',
