@@ -103,8 +103,69 @@ test('stale status warns even when the last check was healthy', () => {
     const b = browser()
     b.draw({ level: 'ok', checked_at: new Date(Date.now() - 65_000).toISOString(), checks: [] })
     assert.equal(b.get('banner').className, 'banner warn')
-    assert.match(b.get('b-head').textContent, /checks have stopped/)
-    assert.match(b.get('b-sub').textContent, /Updated 65 s ago/)
+    assert.equal(b.get('b-head').textContent, 'Status data is stale')
+    const snapshot = /^Showing results from the last completed check · Checks completed 6\d s ago · \d\d:\d\d:\d\d UTC$/
+    assert.match(b.get('b-sub').textContent, snapshot)
+    runInContext("connectionError='HTTP 502';freshness()", b.ctx)
+    assert.equal(b.get('b-head').textContent, 'System status is unavailable')
+    assert.match(b.get('b-sub').textContent, snapshot)
+})
+
+test('ClickHouse groups only blocked counts, keeping raw totals and observed times', () => {
+    const b = browser(), now = Date.now()
+    b.draw({ level: 'down', checked_at: new Date(now).toISOString(), checks: [
+        { group: 'Lens', name: 'Triage service', level: 'warn', since: now - 60 * 60_000 },
+        { group: 'PostHog', name: 'Event capture', level: 'down', since: now - 19 * 60_000, detail: 'Health endpoint refused the connection' },
+        { group: 'PostHog', name: 'ClickHouse', level: 'down', since: now - 18 * 60_000 },
+        { group: 'Data arriving', name: 'Events', level: 'down', since: now - 20 * 60_000, detail: 'cannot count: ClickHouse is not answering' },
+        { group: 'Data arriving', name: 'Session replays', level: 'down', since: 'invalid', detail: 'cannot count: ClickHouse is too slow to answer' },
+        { group: 'Data arriving', name: 'Events', level: 'down', detail: 'No new events for 30 minutes' },
+    ] })
+    const problems = b.get('problems').innerHTML
+    assert.equal(b.get('b-head').textContent, '5 checks down · 1 warning')
+    assert.match(problems, /Event capture.*Check the matching container and its listening port.*PostHog · ClickHouse.*18 min at last check/)
+    assert.match(problems, /class="blocked-checks".*Could not verify: Events, Session replays.*20 min at last check.*Session replays.*Start time unavailable.*too slow to answer/)
+    assert.match(problems, /too slow to answer<\/div><\/div><\/div><\/div><\/div><\/div><div class="svc">.*No new events for 30 minutes.*Triage service/)
+})
+
+test('the Lens jobs disclosure separates reasons, last success, and missing status', () => {
+    const b = browser(), triage = { group: 'Lens', name: 'Triage service', level: 'down' }
+    b.draw({ checks: [triage] })
+    assert.match(b.get('jobs').innerHTML, /Job status unavailable · triage health check failed/)
+    b.draw({ checks: [{ ...triage, level: 'ok' }] })
+    assert.match(b.get('jobs').innerHTML, /No job status reported/)
+    b.draw({ checks: [
+        { group: 'Lens jobs', name: '<Watchlist>', level: 'warn', detail: 'PostHog settings are missing: <key> · last success 18 min ago' },
+        { group: 'Lens jobs', name: 'Task history', level: 'info', detail: 'first round not finished yet · no success yet' },
+    ] })
+    assert.equal(b.get('jobs-summary').textContent, 'Lens jobs · 1 warning')
+    assert.match(b.get('jobs').innerHTML, /PostHog settings are missing: &lt;key&gt;<\/div><div class="d">Last successful run · 18 min ago/)
+    assert.match(b.get('jobs').innerHTML, /Waiting for first run.*No successful run yet/)
+    assert.match(b.get('problems').innerHTML, /&lt;Watchlist&gt;.*Ask the Lens administrator to verify the PostHog project ID and API key/)
+})
+
+test('recent changes pair Down intervals beyond the preview and end them at Warning', () => {
+    const b = browser(), at = Date.UTC(2026, 10, 19, 14, 32)
+    const change = (group: string, minutes: number, from: string, level: string) => ({ group, name: 'Worker', at: at + minutes * 60_000, from, level })
+    b.draw({ changes: [change('PostHog', 0, 'ok', 'down'), change('Lens', 25, 'down', 'ok'),
+        change('PostHog', 23, 'warn', 'ok'), change('PostHog', 18, 'down', 'warn')] })
+    const preview = b.get('changes-preview').innerHTML
+    assert.equal((preview.match(/<li>/g) || []).length, 3)
+    assert.match(preview, /Lens · Worker.*Recovered at.*Down start unavailable.*PostHog · Worker.*Recovered at.*Improved to warning at.*14:50 UTC.*went down at.*14:32 UTC.*down for 18 min/)
+    assert.equal((preview.match(/down for/g) || []).length, 1)
+    assert.match(b.get('changes').innerHTML, /Went down at/)
+})
+
+test('inventory diagnostics stay in triage and Disk mirrors its check severity', () => {
+    const b = browser(), disk = { group: 'Machine', name: 'Disk', level: 'warn' }
+    b.draw({ checks: [{ group: 'Containers: posthog', name: 'posthog', level: 'down', detail: 'no containers of this compose project' }, disk] })
+    assert.match(b.get('rows').innerHTML, /No containers found for monitored projects/)
+    assert.match(b.get('problems').innerHTML, /no containers of this compose project.*Review disk usage and retention/)
+    assert.equal(b.get('c-title').textContent, 'All containers (0)')
+    assert.match(b.get('tiles').innerHTML, /class="tile problem"><span>Disk used/)
+    b.draw({ checks: [{ group: 'Containers', name: 'Docker', level: 'down', detail: 'cannot read the container list' }, { ...disk, level: 'down' }] })
+    assert.match(b.get('rows').innerHTML, /Container inventory unavailable/)
+    assert.match(b.get('tiles').innerHTML, /Container inventory unavailable.*class="tile failure"><span>Disk used/)
 })
 
 // Exercise the dependency-free collector with Docker/ClickHouse substitutes, without opening sockets.

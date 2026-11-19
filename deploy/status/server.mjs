@@ -243,7 +243,7 @@ export async function checkHttp() {
                 const ms = Date.now() - t
                 const body = await res.text()
                 const up = c.any ? res.status < 500 : res.status >= 200 && res.status < 400
-                const row = { group: c.group, name: c.name, level: up ? (ms > 3000 ? WARN : OK) : DOWN, detail: `${res.status}, ${ms} ms${up && ms > 3000 ? ' (slow)' : ''}` }
+                const row = { group: c.group, name: c.name, level: up ? (ms > 3000 ? WARN : OK) : DOWN, detail: `Health endpoint returned HTTP ${res.status} in ${ms} ms${up && ms > 3000 ? ' (slow)' : ''}` }
                 // The triage service also says which of its switches are on, and how its background jobs are doing.
                 const jobs = []
                 if (up && c.url.endsWith('/health')) {
@@ -262,8 +262,8 @@ export async function checkHttp() {
             } catch (e) {
                 // Why it is not answering, in words that point at the fix.
                 const code = e.cause?.code || e.code || ''
-                const why = e.name === 'TimeoutError' ? 'no answer in 8 s (overloaded or stuck?)'
-                    : code === 'ECONNREFUSED' ? 'connection refused: the service is not running or not listening'
+                const why = e.name === 'TimeoutError' ? 'Health endpoint did not respond within 8 s'
+                    : code === 'ECONNREFUSED' ? 'Health endpoint refused the connection'
                     : code === 'ENOTFOUND' || code === 'EAI_AGAIN' ? 'name not found: its container is missing or not on this network'
                     : code === 'ECONNRESET' || code === 'UND_ERR_SOCKET' ? 'connection dropped: the service may be restarting'
                     : code === 'EHOSTUNREACH' ? 'host unreachable' : `not answering${code ? ` (${code})` : ''}`

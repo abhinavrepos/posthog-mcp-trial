@@ -150,16 +150,28 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 #people-msg:empty,#outcome-msg:empty,#audit-msg:empty,#keys-msg:empty,#msg:empty{display:none}
 .banner{display:flex;border:0;border-radius:0;background:transparent;align-items:flex-start;padding:0 0 24px;margin-bottom:16px;gap:12px}
 .banner h2{margin:0;font-size:24px;line-height:32px}
-#banner.down{background:var(--card);border:1px solid var(--line);border-inline-start:3px solid var(--err);border-radius:var(--r-sm);padding:10px 14px}
-#banner.down #b-head{font-size:18px;line-height:24px}
+#banner.down,#banner.warn{background:var(--card);border:1px solid var(--line);border-inline-start:3px solid var(--err);border-radius:var(--r-sm);padding:10px 14px}
+#banner.warn{border-inline-start-color:var(--warn)}
+#banner.down #b-head,#banner.warn #b-head{font-size:18px;line-height:24px}
 .banner .big{font-weight:700;border-radius:50%;display:grid;place-items:center;flex:none;color:var(--card);background:var(--muted);width:28px;height:28px;font-size:16px;margin-top:2px}
-#problems>.card{padding:16px 24px;margin-bottom:24px}
+#problems>.card{padding:0;margin-bottom:16px}
 #problems h2{margin-bottom:8px}
-#problems .svc{padding:4px 0;border:0}
+#problems .svc,#jobs .svc{grid-template-columns:88px minmax(0,1fr);gap:12px;align-items:start;padding:8px 0;border:0}
+#problems .svc+.svc,#jobs .svc+.svc{border-top:1px solid var(--line)}
+.check-name{color:var(--ink);font-size:14px;line-height:20px;font-weight:600}
+#problems .svc .d,#jobs .svc .d,.changes-list .d{color:var(--muted);font-size:13px;line-height:18px;text-align:left}
+.observed,.changes-list time,#b-sub{font-variant-numeric:tabular-nums}
+.observed{margin-inline-start:8px;color:var(--muted);font-size:12px;line-height:18px}
+.check-action{margin-top:4px;font-size:13px;line-height:18px}
+.check-action a{color:var(--ink);text-decoration:underline}
+.blocked-checks{margin-top:8px;border-inline-start:1px solid var(--line);padding-inline-start:12px}
+.changes-list{margin:8px 0;padding-inline-start:28px}
+.changes-list li{padding:6px 0}
+.changes-list li+li{border-top:1px solid var(--line)}
 .tiles{display:grid;margin-bottom:14px;margin:0 0 24px;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
 .tile span{display:block;color:var(--muted);font-size:12px;font-weight:500;min-height:16px;line-height:16px}
 .tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px;line-height:16px}
-.tile.problem{border-color:var(--down);background:var(--down-bg)}
+.tile.problem{border-color:var(--warn);background:var(--warn-bg)}
 .tile.problem small{color:var(--warn)}
 .tile.failure{border-color:var(--err);background:var(--err-bg)}
 .section-details{border-bottom:1px solid var(--line);padding:14px 0}
@@ -215,8 +227,10 @@ th,td{padding:7px 4px}
 <div class="page-head"><div><h1>System</h1><p>Service health, ingestion and server activity.</p></div></div>
 <div class="banner" id="banner"><span class="big" id="b-icon" aria-hidden="true">…</span><div><h2 id="b-head" role="status" aria-live="polite">Checking…</h2><p id="b-sub"></p><details id="status-details" hidden><summary>Technical details</summary><p id="status-error"></p></details></div></div>
 <div id="system-results" hidden><div id="problems"></div><div id="problems-pager"></div>
+<details class="section-details"><summary id="jobs-summary">Lens jobs</summary><div id="jobs"></div></details>
 <div id="tiles"></div>
-<details class="section-details"><summary>Trends</summary><div class="charts">
+<section class="section-details"><h2>Recent changes</h2><div id="changes-preview">Loading recent changes…</div><details id="all-changes"><summary>Show all changes</summary><div id="changes"></div><div id="changes-pager"></div></details></section>
+<details class="section-details" id="trends"><summary>Trends</summary><div class="charts">
 <div class="card"><h2>Events per hour, last 24 hours</h2><div class="chart" id="c-events"></div><details class="nums" id="n-events"><summary>Show the numbers</summary><div id="t-events"></div><div id="p-events"></div></details></div>
 <div class="card"><h2>Events per minute, last 60 minutes</h2><div class="chart" id="c-minutes"></div><details class="nums" id="n-minutes"><summary>Show the numbers</summary><div id="t-minutes"></div><div id="p-minutes"></div></details></div>
 <div class="card"><h2>CPU, last hour</h2><div class="chart" id="c-cpu"></div><details class="nums" id="n-cpu"><summary>Show the numbers</summary><div id="t-cpu"></div><div id="p-cpu"></div></details></div>
@@ -231,8 +245,7 @@ th,td{padding:7px 4px}
 </details>
 <div class="card containers-card"><div class="tools"><h2 id="c-title">Containers</h2><div class="container-controls"><input id="find" type="search" placeholder="Find a container" aria-label="Find a container"><details class="view-control"><summary>View</summary><div class="tools"><select id="view" aria-label="Container view"><option value="all">All containers · problems first</option><option value="mem_bytes">Top 5 by memory</option><option value="cpu_pct">Top 5 by CPU</option></select></div></details></div></div>
 <div class="table-wrap" role="region" aria-label="Containers" tabindex="0"><table class="containers-table"><thead><tr><th scope="col">Status</th><th scope="col">Container</th><th scope="col" class="r">Running</th><th scope="col" class="n">CPU</th><th scope="col" class="n">Memory</th><th scope="col" class="n">Restarts</th></tr></thead><tbody id="rows"><tr><td colspan="6">Loading containers…</td></tr></tbody></table></div><div id="containers-pager"></div></div>
-<details class="section-details"><summary>Recent changes</summary><div id="changes">Loading recent changes…</div><div id="changes-pager"></div></details>
-<details class="section-details"><summary>About this server</summary><div id="about"></div><details class="nums"><summary>How this works</summary><p class="small muted">Only counts and machine figures are read, never event or replay content. CPU and memory history restarts with the status service.</p></details></details>
+<details class="section-details" id="about-section"><summary>About this server</summary><div id="about"></div><details class="nums"><summary>How this works</summary><p class="small muted">Only counts and machine figures are read, never event or replay content. CPU and memory history restarts with the status service.</p></details></details>
 <p class="small muted" id="refresh-note">Refreshes every 15 seconds.</p></div>
 </main>
 <script>${PAGER_JS}
@@ -251,13 +264,19 @@ const pct=n=>esc(n==null?'–':(Number(n)<10?Number(n).toFixed(1):Math.round(Num
 const LABEL={ok:'Up',warn:'Warning',down:'Down',info:'Info'},ICON={ok:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>',warn:'!',down:'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>',info:'i'},RANK={down:3,warn:2,ok:1,info:0}
 const st=value=>{const l=Object.hasOwn(LABEL,value)?value:'info';return '<span class="st '+l+'"><i aria-hidden="true">'+(l==='ok'?'':ICON[l])+'</i>'+LABEL[l]+'</span>'}
 const clock=t=>new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})
+const stamp=value=>typeof value==='number'?new Date(value).getTime():typeof value==='string'?Date.parse(value):NaN
+const utc=(t,seconds=false)=>new Date(t).toISOString().slice(11,seconds?19:16)+' UTC'
+const utcDay=t=>new Date(t).toLocaleDateString('en-GB',{day:'numeric',month:'short',timeZone:'UTC'})
+const time=(t,text)=>'<time datetime="'+esc(new Date(t).toISOString())+'">'+esc(text)+'</time>'
+const utcTime=t=>time(t,utcDay(t)+' '+utc(t))
+function duration(ms){const s=Math.floor(ms/1000);if(s<60)return s+' s';if(s<3600)return Math.floor(s/60)+' min';if(s<86400)return Math.floor(s/3600)+' h';return plural(Math.floor(s/86400),'day')}
 const nice=m=>{if(m<=0)return 1;const p=10**Math.floor(Math.log10(m));for(const s of [1,2,5,10])if(s*p>=m)return s*p;return 10*p}
 
 // The same frame for each chart: three quiet grid lines, labels on the left, hover on a wide target.
 let W=560
 const H=190,L=44,R=8,T=8,B=22
 function frame(max,fmt,xlabels){const y=v=>T+(H-T-B)*(1-v/max);let g=''
-  for(const v of [0,max/2,max])g+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+y(v)+'" y2="'+y(v)+'" stroke="var('+(v?'--grid':'--axis')+')"/><text x="'+(L-6)+'" y="'+(y(v)+4)+'" text-anchor="end" font-size="11" fill="var(--muted)">'+fmt(v)+'</text>'
+  for(const v of [0,max/2,max])g+='<line x1="'+L+'" x2="'+(W-R)+'" y1="'+y(v)+'" y2="'+y(v)+'" stroke="var('+(v?'--grid':'--axis')+')"/><text x="'+(L-6)+'" y="'+(y(v)+4)+'" text-anchor="end" font-size="11" fill="var(--muted)">'+esc(fmt(v))+'</text>'
   for(const [x,t,a] of xlabels)g+='<text x="'+x+'" y="'+(H-6)+'" text-anchor="'+a+'" font-size="11" fill="var(--muted)">'+esc(t)+'</text>'
   return {y,g}}
 function hover(box,points){box.onmousemove=e=>{const s=box.querySelector('svg');if(!s)return;const r=s.getBoundingClientRect(),w=+s.getAttribute('width'),x=(e.clientX-r.left)/r.width*w
@@ -274,7 +293,7 @@ function bars(box,data,minute=false,at=Date.now()){W=box.clientWidth||560;if(!da
     pts.push({x:x+bw/2,y:top,text:clock(t)+' · '+num(n)+' events'})})
   box.innerHTML='<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Event counts">'+f.g+b+'</svg>';hover(box,pts)
   numbers(minute?'minutes':'events',slots.slice().reverse().map(s=>[s[0],s[1]]),'Events');
-  if(!minute&&!$('n-events').open)$('t-events').innerHTML='<table><thead><tr><th scope="col">Hour</th><th scope="col" class="n">Events</th></tr></thead><tbody>'+slots.slice().reverse().map(s=>'<tr><td>'+clock(s[0])+'</td><td class="n">'+num(s[1])+'</td></tr>').join('')+'</tbody></table>'}
+  if(!minute&&!$('n-events').open)$('t-events').innerHTML='<table><thead><tr><th scope="col">Hour</th><th scope="col" class="n">Events</th></tr></thead><tbody>'+slots.slice().reverse().map(s=>'<tr><td>'+esc(clock(s[0]))+'</td><td class="n">'+num(s[1])+'</td></tr>').join('')+'</tbody></table>'}
 
 function line(box,hist,idx,name,load=false){W=box.clientWidth||560;const p=(hist||[]).filter(h=>h[idx]!=null);if(p.length<2){numbers(({CPU:'cpu',Memory:'mem',Disk:'disk',Load:'load'})[name],[],name);box.innerHTML='<p class="note">Collecting, this fills in over the next few minutes.</p>';return}
   numbers(({CPU:'cpu',Memory:'mem',Disk:'disk',Load:'load'})[name],p.map(h=>[h[0],load?Number(h[idx]).toFixed(1):pct(h[idx])]),name);
@@ -285,8 +304,8 @@ function line(box,hist,idx,name,load=false){W=box.clientWidth||560;const p=(hist
 const tile=(name,value,sub,problem=false)=>'<div class="tile'+(problem===true?' failure':problem?' problem':'')+'"><span>'+esc(name)+'</span><b>'+esc(value)+'</b>'+(sub?'<small>'+esc(sub)+'</small>':'')+'</div>'
 const pagers={}
 function paged(id,items,noun,draw,keep=true){if(items.length>25||pagers[id]){const mount=$(id+'-pager'),active=document.activeElement,restore=mount.contains?.(active),tag=active?.tagName,text=active?.textContent;if(!pagers[id])pagers[id]=makePager({mount,noun,size:25,draw});pagers[id].set(items,keep);if(restore){const next=[...mount.querySelectorAll('button,select')].find(el=>el.tagName===tag&&(tag==='SELECT'||el.textContent===text)&&!el.disabled);(next||mount.querySelector('button:not(:disabled)'))?.focus()}}else draw(items)}
-function numbers(id,rows,label){const details=$('n-'+id);details.ontoggle=()=>{if(!details.open)return;const draw=slice=>{$('t-'+id).innerHTML='<table><thead><tr><th scope="col">Time</th><th scope="col">'+esc(label)+'</th></tr></thead><tbody>'+slice.map(r=>'<tr><td>'+clock(r[0])+'</td><td>'+esc(r[1])+'</td></tr>').join('')+'</tbody></table>';if(!slice.length)$('t-'+id).innerHTML='<p class="muted">No readings yet. Check again in a few minutes.</p>'};if(!pagers['n-'+id])pagers['n-'+id]=makePager({mount:$('p-'+id),noun:'readings',size:25,draw});pagers['n-'+id].set(rows,true)};if(details.open)details.ontoggle()}
-let containers=[]
+function numbers(id,rows,label){const details=$('n-'+id);details.ontoggle=()=>{if(!details.open)return;const draw=slice=>{$('t-'+id).innerHTML='<table><thead><tr><th scope="col">Time</th><th scope="col">'+esc(label)+'</th></tr></thead><tbody>'+slice.map(r=>'<tr><td>'+esc(clock(r[0]))+'</td><td>'+esc(r[1])+'</td></tr>').join('')+'</tbody></table>';if(!slice.length)$('t-'+id).innerHTML='<p class="muted">No readings yet. Check again in a few minutes.</p>'};if(!pagers['n-'+id])pagers['n-'+id]=makePager({mount:$('p-'+id),noun:'readings',size:25,draw});pagers['n-'+id].set(rows,true)};if(details.open)details.ontoggle()}
+let containers=[],inventoryMessage=''
 const opened=new Set()
 function spark(hist,idx,label){const p=(hist||[]).filter(h=>Number.isFinite(h[idx]));if(p.length<2)return '';const max=Math.max(...p.map(h=>h[idx]),1),t0=p[0][0],dt=Math.max(1,p.at(-1)[0]-t0);return '<svg class="spark" viewBox="0 0 90 24" role="img" aria-label="'+esc(label)+' over the last hour"><path d="'+p.map((h,i)=>(i?'L':'M')+(90*(h[0]-t0)/dt).toFixed(1)+' '+(23-22*h[idx]/max).toFixed(1)).join('')+'" fill="none" stroke="var(--act)" stroke-width="1.5"/></svg>'}
 function uptime(detail){const text=String(detail||''),match=text.match(/(?:up\s+)?(\d+(?:\.\d+)?\s*(?:seconds?|minutes?|hours?|days?|weeks?|[smhdw]))/i),compact=match?match[1].replace(/\s*seconds?/i,'s').replace(/\s*minutes?/i,'m').replace(/\s*hours?/i,'h').replace(/\s*days?/i,'d').replace(/\s*weeks?/i,'w'):text.replace(/,?\s*healthy/i,'').replace(/^up\s+/i,'');return '<span title="'+esc(text)+'">'+esc(compact)+'</span>'+(/\bhealthy\b/i.test(text)?' <span class="badge ok">Healthy</span>':'')}
@@ -296,45 +315,105 @@ function table(keep=true){const active=document.activeElement;const focusedKey=a
     ['Image',c.image],['Started',c.started_at],['OOM killed',c.oom_killed==null?null:String(c.oom_killed)],['Exit code',c.exit_code],
     ['Memory limit',c.mem_limit_bytes?gb(c.mem_limit_bytes)+' ('+pct(c.mem_limit_pct)+' used)':'No limit'],
     ['Network rx / tx',gb(c.network_rx_bytes)+' / '+gb(c.network_tx_bytes)],['Block read / write',gb(c.block_read_bytes)+' / '+gb(c.block_write_bytes)],['PIDs',c.pids]
-  ].map(([k,v])=>'<p>'+esc(k)+': '+esc(v??'–')+'</p>').join('')+(c.health_output?'<pre>Last health check: '+esc(c.health_output)+'</pre>':'')+'</div></details><small>'+esc(c.detail)+'</small></td><td class="r">'+uptime(c.detail)+'</td><td class="n"><span class="metric-inline">'+pct(c.cpu_pct)+spark(c.history,1,'CPU')+'</span></td><td class="n"><span class="metric-inline">'+gb(c.mem_bytes)+spark(c.history,2,'Memory')+'</span>'+'</td><td class="n">'+num(c.restarts)+'</td></tr>'}).join('')||'<tr><td colspan="6" class="muted">No containers match. Change your search or view.</td></tr>'
+  ].map(([k,v])=>'<p>'+esc(k)+': '+esc(v??'–')+'</p>').join('')+(c.health_output?'<pre>Last health check: '+esc(c.health_output)+'</pre>':'')+'</div></details><small>'+esc(c.detail)+'</small></td><td class="r">'+uptime(c.detail)+'</td><td class="n"><span class="metric-inline">'+pct(c.cpu_pct)+spark(c.history,1,'CPU')+'</span></td><td class="n"><span class="metric-inline">'+gb(c.mem_bytes)+spark(c.history,2,'Memory')+'</span>'+'</td><td class="n">'+num(c.restarts)+'</td></tr>'}).join('')||'<tr><td colspan="6" class="muted">'+esc(containers.length?'No containers match. Change your search or view.':inventoryMessage)+'</td></tr>'
   $('rows').querySelectorAll('details').forEach(d=>d.ontoggle=()=>d.open?opened.add(d.dataset.key):opened.delete(d.dataset.key));if(focusedKey)$('rows').querySelectorAll('details').forEach(d=>{if(d.dataset.key===focusedKey)d.querySelector('summary')?.focus()})},keep)}
 $('find').oninput=()=>table(false);$('view').onchange=()=>table(false)
-let lastStatus=null,connectionError=null
-function freshness(){const s=lastStatus;if(connectionError){const at=s?.checked_at||s?.received_at;
+let lastStatus=null,connectionError=null,checkHeading=''
+const snapshotNote='Showing results from the last completed check'
+function freshness(){const s=lastStatus,at=stamp(s?.checked_at||null),age=Number.isFinite(at)?Math.max(0,Math.floor((Date.now()-at)/1000)):null,stale=age!=null&&age>60
+  const completed=age==null?'Waiting for the first check':'Checks completed '+age+' s ago · '+utc(at,true)
+  if(connectionError){
   $('banner').className='banner down';$('b-icon').innerHTML=ICON.down;$('b-head').textContent='System status is unavailable';
-  $('b-sub').textContent='Retrying automatically every 15 seconds.'+(at?' Last updated '+new Date(at).toLocaleString('en-GB',{dateStyle:'medium',timeStyle:'short',timeZone:'UTC'})+' UTC.':'');$('b-sub').title='';
+  $('b-sub').textContent=age==null?'Retrying automatically every 15 seconds.':snapshotNote+' · '+completed;$('b-sub').title='';
   $('refresh-note').hidden=true;$('status-details').hidden=false;$('status-error').textContent=connectionError;return}
-  if(!s)return;const age=s.checked_at?Math.max(0,Math.floor((Date.now()-Date.parse(s.checked_at))/1000)):null,stale=age!=null&&age>60;
-  $('status-details').hidden=true;$('refresh-note').hidden=false;$('banner').className='banner '+(stale?'warn':s.level);$('b-icon').innerHTML=stale?'!':ICON[s.level]||'';
-  const heading=stale?'Status data is stale — checks have stopped':!s.checked_at?'Checking…':s.down?plural(s.down,'problem')+(s.warn?', '+plural(s.warn,'warning'):''):s.warn?'All services operational · '+plural(s.warn,'warning'):'All services operational';if($('b-head').textContent!==heading)$('b-head').textContent=heading
-  $('b-sub').textContent=age==null?'Waiting for the first check':'Updated '+age+' s ago';$('b-sub').title=s.checked_at?new Date(s.checked_at).toLocaleString():''}
+  if(!s)return;const level=stale?'warn':s.level
+  $('status-details').hidden=true;$('refresh-note').hidden=false;$('banner').className='banner '+(Object.hasOwn(ICON,level)?level:'info');$('b-icon').innerHTML=Object.hasOwn(ICON,level)?ICON[level]:''
+  const heading=stale?'Status data is stale':age==null?'Checking…':checkHeading;if($('b-head').textContent!==heading)$('b-head').textContent=heading
+  $('b-sub').textContent=(stale?snapshotNote+' · ':'')+completed;$('b-sub').title=age==null?'':new Date(at).toLocaleString()}
 const pairs=entries=>entries.map(([k,v])=>'<div class="svc"><span>'+esc(k)+'</span><span class="d">'+esc(v??'–')+'</span></div>').join('')
 
 function charts(m){bars($('c-events'),m.events_by_hour,false,m.extras_at||Date.now());bars($('c-minutes'),m.events_by_minute,true,m.extras_at||Date.now());line($('c-disk'),m.history,3,'Disk');line($('c-load'),m.history,4,'Load',true);line($('c-cpu'),m.history,1,'CPU');line($('c-mem'),m.history,2,'Memory')}
 
+const failing=r=>r.level==='down'||r.level==='warn'
+const isClickHouse=r=>r.group==='PostHog'&&r.name==='ClickHouse'
+const blockedByClickHouse=r=>r.group==='Data arriving'&&['Events','Session replays'].includes(r.name)&&['cannot count: ClickHouse is not answering','cannot count: ClickHouse is too slow to answer'].includes(r.detail)
+const sinceOrder=r=>{const since=stamp(r.since);return Number.isFinite(since)?since:Infinity}
+const checkOrder=(a,b)=>RANK[b.level]-RANK[a.level]||sinceOrder(a)-sinceOrder(b)
+const checkCounts=(down,warn)=>down?plural(down,'check')+' down'+(warn?' · '+plural(warn,'warning'):''):warn?plural(warn,'check')+' with '+(warn===1?'a warning':'warnings'):'No failing checks'
+function observed(r,checkedAt){const since=stamp(r.since);return '<span class="observed">'+(!Number.isFinite(since)||since>checkedAt?'Start time unavailable':
+  'Observed since '+utcTime(since)+(Number.isFinite(checkedAt)?' · '+esc(duration(checkedAt-since))+' at last check':''))+'</span>'}
+function checkAction(r){
+  if(r.group==='Lens jobs'&&/^PostHog settings are missing:/.test(r.detail))return '<div class="check-action">Ask the Lens administrator to verify the PostHog project ID and API key</div>'
+  if(!failing(r))return ''
+  if(isClickHouse(r))return '<div class="check-action"><a href="#c-title">Check the ClickHouse container and its last health output</a></div>'
+  if(r.group==='Machine'&&r.name==='Disk')return '<div class="check-action"><a href="#about-section">Review disk usage and retention</a></div>'
+  if(/^Health endpoint (?:refused the connection|did not respond|returned HTTP)/.test(r.detail))return '<div class="check-action"><a href="#c-title">Check the matching container and its listening port</a></div>'
+  return ''
+}
+function checkRow(r,name,detail,meta='',extra=''){return '<div class="svc">'+st(r.level)+'<div><span class="check-name">'+esc(name)+'</span>'+meta+detail+checkAction(r)+extra+'</div></div>'}
+function problemRow(r,checkedAt,children=[]){const name=r.group==='Machine'&&r.name==='Memory'?'Low available memory':r.group+' · '+r.name
+  const blocked=children.length?'<div class="blocked-checks"><div class="d">Could not verify: '+esc(children.map(c=>c.name).join(', '))+'</div>'+children.map(c=>problemRow(c,checkedAt)).join('')+'</div>':''
+  return checkRow(r,name,'<div class="d">'+esc(r.detail??'')+'</div>',observed(r,checkedAt),blocked)}
+function lensJobs(jobs,triage){const down=jobs.filter(r=>r.level==='down').length,warn=jobs.filter(r=>r.level==='warn').length,waiting=jobs.filter(r=>r.level==='info').length
+  const summary=down||warn?down?down+' down'+(warn?' · '+plural(warn,'warning'):''):plural(warn,'warning'):waiting?waiting+' waiting':'All jobs healthy'
+  $('jobs-summary').textContent='Lens jobs'+(jobs.length?' · '+summary:triage&&triage.level!=='ok'?' · Status unavailable':'')
+  $('jobs').innerHTML=jobs.map(r=>{const detail=r.detail||'',last=detail.match(/(?:^| · )(last success .+ ago|no success yet)$/)
+    const reason=r.level==='info'?'Waiting for first run':last?detail.slice(0,last.index):detail
+    const success=last?.[1]==='no success yet'?'No successful run yet':last?.[1]?.replace(/^last success /,'Last successful run · ')
+    return checkRow(r,r.name,(reason?'<div class="d">'+esc(reason)+'</div>':'')+(success?'<div class="d">'+esc(success)+'</div>':''))
+  }).join('')||(triage&&triage.level!=='ok'?'<p class="muted">Job status unavailable · triage health check failed</p>':'<p class="muted">No job status reported</p>')
+}
+function recentChanges(changes){const sorted=changes.slice().sort((a,b)=>(stamp(b.at)||0)-(stamp(a.at)||0)),starts=new Map(),entries=[]
+  for(const c of sorted.reverse()){const key=JSON.stringify([c.group,c.name]),at=stamp(c.at),start=starts.get(key)
+    const ended=c.from==='down'&&c.level!=='down'
+    if(c.level==='down'&&c.from!=='down')starts.set(key,at)
+    if(c.level!=='down')starts.delete(key)
+    const transition=c.level==='down'?'Went down':c.level==='warn'?c.from==='down'?'Improved to warning':'Entered warning':c.level==='ok'?'Recovered':'Changed to '+(Object.hasOwn(LABEL,c.level)?LABEL[c.level]:c.level)
+    const downInterval=ended?(Number.isFinite(start)&&start<=at?' · went down at '+utcTime(start)+' · down for '+esc(duration(at-start)):' · Down start unavailable'):''
+    entries.push('<li><span class="check-name">'+esc(c.group)+' · '+esc(c.name)+'</span><div class="d">'+esc(transition)+(Number.isFinite(at)?' at '+utcTime(at):' · Time unavailable')+downInterval+'</div></li>')
+  }
+  entries.reverse()
+  const list=(slice,start=0)=>slice.length?'<ol class="changes-list" start="'+esc(start+1)+'">'+slice.join('')+'</ol>':'<p class="muted">No changes observed yet. The last 100 transitions are kept until the status service restarts.</p>'
+  $('changes-preview').innerHTML=list(entries.slice(0,3));$('all-changes').hidden=entries.length<=3
+  paged('changes',entries,'changes',(slice,start)=>{$('changes').innerHTML=list(slice,start)})
+}
+
 function draw(s){const rows=s.checks||[],m=s.metrics||{},mc=m.machine||{},byName=g=>rows.filter(r=>r.group===g)
-  const box=rows.filter(r=>r.group.startsWith('Containers')).sort((a,b)=>RANK[b.level]-RANK[a.level]||a.name.localeCompare(b.name));containers=box
-  const counts=containerSummary(box);lastStatus={...s,received_at:new Date().toISOString()};connectionError=null;freshness()
-  const problems=rows.filter(r=>r.level==='down'||r.level==='warn').sort((a,b)=>RANK[b.level]-RANK[a.level])
-  paged('problems',problems,'problems',slice=>{$('problems').innerHTML=slice.length?'<div class="card"><h2>Needs attention</h2>'+slice.map(r=>'<div class="svc"><span>'+(r.group==='Machine'&&r.name==='Memory'?'Low available memory':esc(r.group)+' · '+esc(r.name))+'</span><span class="d">'+esc(r.detail)+'</span>'+st(r.level)+'</div>').join('')+'</div>':''})
+  const dockerError=rows.find(r=>!r.state&&r.group==='Containers'&&r.name==='Docker')
+  const emptyProject=r=>!r.state&&r.group==='Containers: '+r.name
+  const box=rows.filter(r=>r.group.startsWith('Containers')&&r!==dockerError&&!emptyProject(r)).sort((a,b)=>RANK[b.level]-RANK[a.level]||a.name.localeCompare(b.name));containers=box
+  const empty=rows.some(emptyProject),counts=containerSummary(box)
+  inventoryMessage=dockerError?'Container inventory unavailable':empty?'No containers found for monitored projects':'No container status reported'
+  const problems=rows.filter(failing).sort(checkOrder),checkedAt=stamp(s.checked_at||null)
+  checkHeading=checkCounts(problems.filter(r=>r.level==='down').length,problems.filter(r=>r.level==='warn').length)
+  lastStatus=s;connectionError=null;freshness()
+  const clickHouse=problems.find(r=>isClickHouse(r)&&r.level==='down'),blocked=clickHouse?rows.filter(r=>failing(r)&&blockedByClickHouse(r)):[]
+  paged('problems',problems.filter(r=>!blocked.includes(r)),'problems',slice=>{$('problems').innerHTML=slice.length?'<div class="card"><h2>Needs attention</h2>'+slice.map(r=>problemRow(r,checkedAt,r===clickHouse?blocked:[])).join('')+'</div>':''})
+  lensJobs(byName('Lens jobs'),byName('Lens').find(r=>r.name==='Triage service'))
+  recentChanges(s.changes||[])
   const hours=m.events_by_hour,last=hours?hours.filter(h=>h[0]>=Math.floor(Date.now()/3600000)*3600000).reduce((a,h)=>a+h[1],0):null,day=hours?hours.reduce((a,h)=>a+h[1],0):null
   const memUsed=mc.mem_total?mc.mem_total-mc.mem_available:null,disk=mc.disk_total?mc.disk_total-mc.disk_free:null
-  $('tiles').innerHTML='<h2>Infrastructure</h2><div class="tiles">'+[tile('Containers running',counts.running+' of '+counts.expected,([[counts.unhealthy,'unhealthy'],[counts.restarting,'restarting'],[counts.stopped,'stopped']].filter(x=>x[0]).map(x=>x[0]+' '+x[1]).join(' · ')||'all healthy')+(box.length>counts.expected?' · '+(box.length-counts.expected)+' auxiliary excluded':''),counts.problems>0),
-    tile('CPU',pct(mc.cpu_pct),mc.cores?mc.cores+' cores, load '+(mc.load_5??0).toFixed(1):''),tile('Memory',memUsed==null?'–':gb(memUsed),mc.mem_total?'of '+gb(mc.mem_total):'',rows.some(r=>r.group==='Machine'&&r.name==='Memory'&&r.level==='down')?true:rows.some(r=>r.group==='Machine'&&r.name==='Memory'&&r.level==='warn')?'warn':false),
-    tile('Disk used',disk==null?'–':pct(disk/mc.disk_total*100),mc.disk_free!=null?gb(mc.disk_free)+' free of '+gb(mc.disk_total):'')].join('')+'</div><h2>Activity</h2><div class="tiles">'+[    tile('Events this hour',num(last),'Current hour'),tile('Events, 24 hours',num(day),'all event types'),tile('People, 24 hours',num(m.people_24h),'Unique users'),tile('Recordings, 24 hours',num(m.recordings_24h),'Last 24 hours')].join('')+'</div><p class="small muted">Ingestion warnings, last 24 hours: '+num(m.ingestion_warnings_24h)+'</p><details class="machine-details"><summary>Machine details</summary><p>ClickHouse data: '+gb(m.clickhouse_bytes)+'. Swap used: '+gb(mc.swap_used)+' of '+gb(mc.swap_total)+'. Recording metrics are counted, never opened.</p></details>'
+  const machineLevel=name=>{const level=byName('Machine').find(r=>r.name===name)?.level;return level==='down'?true:level==='warn'?'warn':false}
+  const containerNotes=[[counts.unhealthy,'unhealthy'],[counts.restarting,'restarting'],[counts.stopped,'stopped']].filter(x=>x[0]).map(x=>x[0]+' '+x[1])
+  if(box.length&&empty)containerNotes.push('Some monitored projects have no containers')
+  if(!containerNotes.length)containerNotes.push(counts.problems?plural(counts.problems,'container check')+' need'+(counts.problems===1?'s':'')+' attention':'all healthy')
+  if(box.length>counts.expected)containerNotes.push((box.length-counts.expected)+' auxiliary excluded')
+  $('tiles').innerHTML='<h2>Infrastructure</h2><div class="tiles">'+[tile('Containers running',box.length?counts.running+' of '+counts.expected:'–',box.length?containerNotes.join(' · '):inventoryMessage,dockerError||empty||box.some(r=>r.level==='down')?true:counts.problems?'warn':false),
+    tile('CPU',pct(mc.cpu_pct),mc.cores?mc.cores+' cores, load '+(mc.load_5??0).toFixed(1):''),tile('Memory',memUsed==null?'–':gb(memUsed),mc.mem_total?'of '+gb(mc.mem_total):'',machineLevel('Memory')),
+    tile('Disk used',disk==null?'–':pct(disk/mc.disk_total*100),mc.disk_free!=null?gb(mc.disk_free)+' free of '+gb(mc.disk_total):'',machineLevel('Disk'))].join('')+'</div><h2>Activity</h2><div class="tiles">'+[    tile('Events this hour',num(last),'Current hour'),tile('Events, 24 hours',num(day),'all event types'),tile('People, 24 hours',num(m.people_24h),'Unique users'),tile('Recordings, 24 hours',num(m.recordings_24h),'Last 24 hours')].join('')+'</div><p class="small muted">Ingestion warnings, last 24 hours: '+num(m.ingestion_warnings_24h)+'</p><details class="machine-details"><summary>Machine details</summary><p>ClickHouse data: '+gb(m.clickhouse_bytes)+'. Swap used: '+gb(mc.swap_used)+' of '+gb(mc.swap_total)+'. Recording metrics are counted, never opened.</p></details>'
   charts(m)
   const svc=(name,list)=>list.length?'<div class="card"><h2>'+name+'</h2>'+list.map(r=>'<div class="svc"><span>'+esc(r.name)+'</span><span class="d">'+esc(r.detail)+'</span>'+st(r.level)+'</div>').join('')+'</div>':''
   paged('services',rows.filter(r=>['PostHog','Lens','Lens jobs','Data arriving','Machine'].includes(r.group)),'checks',slice=>{$('services').innerHTML=['PostHog','Lens','Lens jobs','Data arriving','Machine'].map(g=>svc(g,slice.filter(r=>r.group===g))).join('')})
   const ch=m.clickhouse||{},lens=s.lens||{},activity=lens.activity,clipDisk=lens.storage
   $('clickhouse').innerHTML='<h2>ClickHouse health</h2>'+pairs([['Version',ch.version],['Uptime',ch.uptime_s==null?null:Math.floor(ch.uptime_s/3600)+' hours'],['Running queries',num(ch.running_queries)],['Merges in progress',num(ch.merges)],['Pending mutations',num(ch.pending_mutations)],['Most active parts in one partition',num(ch.max_partition_parts)]])+'<details><summary>8 biggest tables by bytes on disk</summary>'+((ch.tables||[]).map(t=>'<div class="svc"><span>'+esc(t.database)+'.'+esc(t.table)+'</span><span class="d">'+gb(t.bytes)+' · '+num(t.rows)+' rows</span></div>').join('')||'<p class="muted">Unavailable</p>')+'</details>'
   $('lens').innerHTML='<h2>Lens activity · last 24 hours</h2>'+(activity?pairs([['Sign-ins',num(activity.signins)],['Failed sign-ins',num(activity.failed_signins)],['Clips made',num(activity.clips_made)],['Clips watched',num(activity.clips_watched)],['Clips downloaded',num(activity.clips_downloaded)],['Share links',num(activity.share_links)]])+(activity.truncated?'<p>Audit limit reached; counts are lower bounds.</p>':''):'<p class="muted">Activity unavailable</p>')+'<details><summary>Clip storage</summary>'+(clipDisk?pairs([['Clips',num(clipDisk.clips)],['Storage',gb(clipDisk.bytes)],['Saved clips',num(clipDisk.saved)],['Saved storage',gb(clipDisk.saved_bytes)]]):'<p>Unavailable</p>')+'</details>'
-  paged('changes',s.changes||[],'changes',slice=>{$('changes').innerHTML=slice.map(c=>'<div class="svc"><span>'+esc(c.group)+' · '+esc(c.name)+'</span><span class="d">'+esc(new Date(c.at).toLocaleString())+' · '+esc(LABEL[c.from]||c.from)+' → '+esc(LABEL[c.level]||c.level)+'</span></div>').join('')||'<p class="muted">No changes observed yet. The last 100 transitions are kept until the status service restarts.</p>'})
   const a=s.about||{},dd=m.docker_disk
   $('about').innerHTML=pairs([['PostHog web image',a.posthog_image],['ClickHouse version',a.clickhouse_version],['Docker engine',a.docker_version],['Status service uptime',a.uptime_s==null?null:Math.floor(a.uptime_s/60)+' minutes'],['Check interval',a.interval_s==null?null:a.interval_s+' s'],['Last check duration',a.took_ms==null?null:a.took_ms+' ms'],['Alerts',a.alerts==null?null:a.alerts==='off'?'Off: no webhook in the status page settings':'On ('+a.alerts.format+', after '+a.alerts.after_minutes+' min)'+(a.alerts.last_sent_at?', last sent '+new Date(a.alerts.last_sent_at).toLocaleString():', none sent yet')+(a.alerts.alerting&&a.alerts.alerting.length?', open: '+a.alerts.alerting.join('; '):'')+(a.alerts.last_error?'. Last failure: '+a.alerts.last_error:'')]])+'<details><summary>Docker disk usage · cached 10 minutes</summary>'+(dd?pairs([['Images',gb(dd.images_bytes)],['Containers (writable layers)',gb(dd.containers_bytes)],['Volumes',gb(dd.volumes_bytes)],['Build cache',gb(dd.build_cache_bytes)],['Measured',new Date(dd.at).toLocaleString()]]):'<p>Unavailable</p>')+'</details><p class="small muted">Large counts and table sizes refresh every five minutes. CPU is a share of the whole machine. Histories and recent changes are held in memory.</p>'
   $('c-title').textContent='All containers ('+box.length+')';table()}
 async function tick(){try{const r=await fetch('/replays/system/api',{cache:'no-store'}),d=await r.json().catch(()=>({}));if(r.status===401)return location.reload();if(!r.ok)throw new Error('HTTP '+(d.upstream_status||r.status)+(d.upstream_status?'':d.error?' · '+d.error:''));
   $('system-results').hidden=false;draw(d)}
   catch(e){connectionError=e.message;freshness()}}
-document.querySelector?.('.section-details')?.addEventListener('toggle',function(){if(this.open&&lastStatus)charts(lastStatus.metrics||{})})
+$('trends').ontoggle=function(){if(this.open&&lastStatus)charts(lastStatus.metrics||{})}
+$('problems').onclick=e=>{if(e.target.closest?.('a[href="#about-section"]'))$('about-section').open=true}
 tick();setInterval(tick,15000);setInterval(freshness,1000)
 `

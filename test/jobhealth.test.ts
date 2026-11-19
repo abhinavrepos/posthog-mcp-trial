@@ -1,7 +1,6 @@
 // Lens's background jobs on the System page: plain reasons, a log line when a job starts failing or
 // recovers (not one per round), levels that escalate, and the status service turning them into checks.
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
 import { test } from 'node:test'
 
 import { jobFailed, jobOk, jobStates, plainReason, registerJob, resetJobs } from '../src/core/jobhealth.ts'
@@ -45,25 +44,33 @@ test('levels escalate with failures, recover cleanly, and log only on change', (
     } finally { console.log = orig; resetJobs() }
 })
 
-test('the status service shows each Lens job as its own check, worst first', async () => {
-    const server = createServer((_req, res) => {
-        res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ ok: true, features: { lens_mcp: true }, jobs: [
+test('the status service shows each Lens job as its own check, worst first', async (t) => {
+    const health = 'http://lens.test/health', previous = process.env.STATUS_HTTP
+    const fetch = t.mock.method(globalThis, 'fetch', async (url: string) => {
+        if (url.endsWith('/refused')) throw new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } })
+        if (url.endsWith('/timeout')) throw new DOMException('Timed out', 'TimeoutError')
+        if (url.endsWith('/unavailable')) return new Response('', { status: 503 })
+        assert.equal(url, health)
+        return Response.json({ ok: true, features: { lens_mcp: true }, jobs: [
             { key: 'watchlist', label: 'Watchlist reader', level: 'down', reason: 'PostHog is unreachable (failing for 40 min, 4 rounds)', last_ok_at: new Date(Date.now() - 50 * 60_000).toISOString() },
             { key: 'task_history', label: 'Task history', level: 'ok', reason: null, detail: '412 days processed', last_ok_at: new Date().toISOString() },
-        ] }))
+        ] })
     })
-    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
-    const port = (server.address() as { port: number }).port
-    process.env.STATUS_HTTP = `Lens|Triage service|http://127.0.0.1:${port}/health`
+    process.env.STATUS_HTTP = ['Lens|Triage service|'+health, 'PostHog|Refused|http://lens.test/refused',
+        'PostHog|Timeout|http://lens.test/timeout', 'PostHog|Unavailable|http://lens.test/unavailable'].join(',')
     try {
-        // @ts-expect-error: plain JavaScript module without type declarations
-        const { checkHttp } = await import('../deploy/status/server.mjs')
+        // Load these settings even when another test already imported the collector.
+        const { checkHttp } = await import(new URL('../deploy/status/server.mjs?jobhealth-test', import.meta.url).href)
         const rows = await checkHttp() as { group: string; name: string; level: string; detail: string }[]
-        assert.deepEqual(rows.map((r) => [r.group, r.name, r.level]), [['Lens', 'Triage service', 'ok'], ['Lens jobs', 'Watchlist reader', 'down'], ['Lens jobs', 'Task history', 'ok']])
+        assert.equal(fetch.mock.callCount(), 4)
+        assert.deepEqual(rows.slice(0, 3).map((r) => [r.group, r.name, r.level]), [['Lens', 'Triage service', 'ok'], ['Lens jobs', 'Watchlist reader', 'down'], ['Lens jobs', 'Task history', 'ok']])
+        assert.match(rows[0].detail, /^Health endpoint returned HTTP 200 in \d+ ms$/)
         assert.match(rows[1].detail, /^PostHog is unreachable \(failing for 40 min, 4 rounds\) · last success 50 min ago$/)
         assert.match(rows[2].detail, /^412 days processed · last success \d+ s ago$/)
-    } finally { server.close() }
+        assert.equal(rows[3].detail, 'Health endpoint refused the connection')
+        assert.equal(rows[4].detail, 'Health endpoint did not respond within 8 s')
+        assert.match(rows[5].detail, /^Health endpoint returned HTTP 503 in \d+ ms$/)
+    } finally { if (previous == null) delete process.env.STATUS_HTTP; else process.env.STATUS_HTTP = previous }
 })
 
 test('missing settings are named plainly', () => {
