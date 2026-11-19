@@ -1,5 +1,6 @@
 import { errorDiagnostic } from './errordiagnostics.ts'
 // Opt-in delivery. The persisted slot also acts as a cross-process claim.
+import { jobFailed, jobOk, registerJob } from './jobhealth.ts'
 import { config } from './config.ts'
 import { getSetting, setSetting, tx } from './db.ts'
 import { mondayBrief, type MondayBrief } from './briefing.ts'
@@ -59,15 +60,16 @@ export function createBriefingScheduler(options = config.briefing, injected: Par
                     sent = true; break
                 } catch { d.log(`Briefing delivery failed (attempt ${attempt+1} of 2)` ) }
             }
-            if (sent) setSetting(LAST,now.toISOString())
+            if (sent) { setSetting(LAST,now.toISOString()); jobOk('briefing_delivery', `sent ${day}`) }
             // Keep the claim for this slot after failure, preventing a retry storm on every tick/restart.
-            else setSetting(CLAIM,{day,at:Date.parse(day+'T23:59:59Z')})
-        } catch { d.log('Briefing delivery failed; scheduler will continue') }
+            else { setSetting(CLAIM,{day,at:Date.parse(day+'T23:59:59Z')}); jobFailed('briefing_delivery', new Error('the chat webhook did not accept the briefing')) }
+        } catch (e) { d.log('Briefing delivery failed; scheduler will continue'); jobFailed('briefing_delivery', e) }
         finally { busy = false }
     }
 }
 export function startBriefingDelivery(): () => void {
     if (!config.briefing.webhook) return () => {}
+    registerJob('briefing_delivery', 'Briefing delivery', 7 * 86_400_000)
     const tick = createBriefingScheduler()
     void tick()
     const timer = setInterval(() => { void tick() },60_000)

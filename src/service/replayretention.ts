@@ -11,6 +11,7 @@ import { deleteReplayCache } from '../core/clip.ts'
 // key cannot confirm it reaches the configured project. LENS_REPLAY_RETENTION_DRY_RUN=1 only logs. The first
 // error stops a run; the next try waits (1 h, doubling, at most 24 h). Logs and audit rows hold counts and
 // dates only, never session ids or content.
+import { jobFailed, jobOk, registerJob } from '../core/jobhealth.ts'
 import { config } from '../core/config.ts'
 import { getSetting, setSetting, tx } from '../core/db.ts'
 import { hogql, type Row } from '../core/posthog.ts'
@@ -323,7 +324,9 @@ export function createRetentionScheduler(deps: Partial<Deps> = {}) {
 }
 export function startReplayRetention(): () => void {
     const tick = createRetentionScheduler()
-    const go = () => void tick().catch(() => {})
+    // Only shown once retention is switched on (a run returns a result).
+    const go = () => void tick().then((r) => { if (r === undefined) return; registerJob('replay_retention', 'Replay retention', HOUR); jobOk('replay_retention') })
+        .catch((e) => { registerJob('replay_retention', 'Replay retention', HOUR); jobFailed('replay_retention', e) })
     const first = setTimeout(go, 60_000); first.unref()
     const timer = setInterval(go, HOUR); timer.unref()
     return () => { clearTimeout(first); clearInterval(timer) }

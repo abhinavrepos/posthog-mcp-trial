@@ -1,4 +1,5 @@
 import { ToolInputError } from './toolinputerror.ts'
+import { jobFailed, jobOk, registerJob } from './jobhealth.ts'
 import { isMainThread } from 'node:worker_threads'
 import { ingestOwner } from './ingestowner.ts'
 import { ingestMessages, stored, type Stored } from './ingestmessages.ts'
@@ -912,8 +913,15 @@ export function startTaskHistory(): void {
     if (scheduled) return
     scheduled = true
     useTaskHistoryWorker()
+    registerJob('task_history', 'Task history', config.tasks.intervalMinutes * 60_000)
     const tick = async () => {
-        try { await runIngest() } catch (e) { failure('scheduler', e) }
+        try {
+            await runIngest()
+            // A day that failed is recorded as last_error (cleared at the start of every run).
+            const s = ingestStatus()
+            if (s.last_error) jobFailed('task_history', new Error(s.last_error.replace(/^\d{4}-\d{2}-\d{2}: /, '')))
+            else jobOk('task_history', `${s.days_done} days processed, newest ${s.last_day || 'none yet'}`)
+        } catch (e) { failure('scheduler', e); jobFailed('task_history', e) }
         setTimeout(tick, config.tasks.intervalMinutes * 60_000).unref()
     }
     setTimeout(tick, 15_000).unref()

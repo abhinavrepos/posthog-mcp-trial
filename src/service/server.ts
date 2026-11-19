@@ -6,6 +6,7 @@ import { startBriefingDelivery } from '../core/briefingdelivery.ts'
 //   POST/GET/DELETE /posthog-mcp  PostHog MCP with Lens routing and replay refusal
 //   GET  /status          recent jobs
 //   GET  /replays         the replay clip page (PostHog login), see replays.ts
+import { jobStates, plainReason } from '../core/jobhealth.ts'
 import { startPrewarm } from '../mcp/prewarm.ts'
 import { startReplaySignals } from '../core/experience.ts'
 import { startWatchlist } from '../core/watchlist.ts'
@@ -256,7 +257,8 @@ const server = createServer((req, res) => {
             catch { return send(res, 400, { error: 'invalid request target' }) }
             if (url.pathname === '/healthz') return send(res, 200, 'ok')
             // For the status page: up, and which switches are on. No secrets, no data.
-            if (url.pathname === '/health') return send(res, 200, { ok: true, features: featureState() })
+            // Jobs: name, level and a plain reason only (core/jobhealth.ts); the status service shows them.
+            if (url.pathname === '/health') return send(res, 200, { ok: true, features: featureState(), jobs: jobStates() })
             if (url.pathname === '/favicon.ico') {
                 res.writeHead(204, { 'cache-control': 'max-age=86400' })
                 return res.end()
@@ -298,6 +300,11 @@ for (const [name, value] of Object.entries({ ...(jiraConfigured() ? { JIRA_WEBHO
 }
 
 pruneOldClips()
+// A crash says why in the log before the process ends (the service manager then restarts it). The monitor
+// hook only observes: what happens after an uncaught error is unchanged.
+process.on('uncaughtExceptionMonitor', (err, origin) => log('service crashed', { origin, reason: plainReason(err), error: String((err as Error)?.stack || err).split('\n').slice(0, 6).join(' | ') }))
+process.on('warning', (w) => { if (w.name !== 'ExperimentalWarning') log('node warning', { name: w.name, message: w.message.slice(0, 200) }) })
+
 // The task history behind the dashboards: day by day in the background (core/tasks.ts).
 if (appEvents()) startTaskHistory()
 if (appEvents()) startBriefingDelivery()

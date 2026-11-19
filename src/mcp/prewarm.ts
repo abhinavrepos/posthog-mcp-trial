@@ -4,6 +4,7 @@ import { errorDiagnostic } from '../core/errordiagnostics.ts'
 // in-process MCP client, so they take exactly the path a chat question takes. The answers are kept until
 // the next round, so the first question of the day is answered from memory. LENS_PREWARM_TOOLS lists the
 // tools (comma-separated). A round never overlaps the next; failures are logged and left for chat.
+import { jobFailed, jobOk, registerJob } from '../core/jobhealth.ts'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
@@ -70,13 +71,14 @@ export function startPrewarm(): void {
     startSurveyRefresh()
     if (!tools.length || timer) return
     const keep = (minutes + 5) * 60_000
+    registerJob('prewarm', 'Chat answer pre-warm', minutes * 60_000)
     const round = async () => {
         if (running) return
         running = true
         try {
             log('prewarm round', await prewarmRound(tools, keep))
-
-        } catch (e) { errorDiagnostic(e,'prewarm','upstream') } finally { running = false }
+            jobOk('prewarm')
+        } catch (e) { errorDiagnostic(e,'prewarm','upstream'); jobFailed('prewarm', e) } finally { running = false }
     }
     // First round two minutes after start, so the service and PostHog settle first.
     setTimeout(round, 120_000).unref()

@@ -5,6 +5,7 @@
 // Kept: per session, the steps (structure only: reviewed element names, rounded timings, counts), the
 // client, a hash of the person and when it was recorded. Never kept: coordinates, typed values, screen
 // text, URLs or the person's identity. Replay links are built when asked, from the session id.
+import { jobFailed, jobOk, registerJob } from './jobhealth.ts'
 import { Worker } from 'node:worker_threads'
 import { createHash } from 'node:crypto'
 
@@ -181,7 +182,8 @@ let timer: NodeJS.Timeout | undefined, running = false
 export function startWatchlist(): void {
     if (process.env.WATCHLIST === 'off' || timer) return
     const per = Math.max(1, Math.min(200, Number(process.env.WATCHLIST_PER_RUN) || 30))
-    const round = async () => { if (running) return; running = true; try { await processWatchlist(per) } catch { /* recorded on each client as last_error */ } finally { running = false } }
+    registerJob('watchlist', 'Watchlist reader', 10 * 60_000)
+    const round = async () => { if (running) return; running = true; try { const r = await processWatchlist(per); jobOk('watchlist', `last round: ${r.read} read, ${r.skipped} skipped, ${r.waiting} waiting`) } catch (e) { /* also recorded on each client as last_error */ jobFailed('watchlist', e) } finally { running = false } }
     setTimeout(() => void round(), 90_000).unref()
     timer = setInterval(() => void round(), 10 * 60_000); timer.unref()
 }

@@ -234,7 +234,7 @@ async function checkContainers() {
     return rows
 }
 
-async function checkHttp() {
+export async function checkHttp() {
     return Promise.all(
         HTTP_CHECKS.map(async (c) => {
             const t = Date.now()
@@ -244,21 +244,37 @@ async function checkHttp() {
                 const body = await res.text()
                 const up = c.any ? res.status < 500 : res.status >= 200 && res.status < 400
                 const row = { group: c.group, name: c.name, level: up ? (ms > 3000 ? WARN : OK) : DOWN, detail: `${res.status}, ${ms} ms${up && ms > 3000 ? ' (slow)' : ''}` }
-                // The triage service also says which of its switches are on.
+                // The triage service also says which of its switches are on, and how its background jobs are doing.
+                const jobs = []
                 if (up && c.url.endsWith('/health')) {
                     try {
-                        const f = JSON.parse(body).features
+                        const h = JSON.parse(body), f = h.features
                         if (f) row.switches = { 'Lens MCP': f.lens_mcp, 'PostHog MCP': f.posthog_mcp, 'Claude reads tickets': f.ai }
+                        const LEVEL = { ok: OK, warn: WARN, down: DOWN, waiting: INFO }
+                        for (const j of Array.isArray(h.jobs) ? h.jobs.slice(0, 20) : []) {
+                            const last = j.last_ok_at ? `last success ${ago(Date.now() - Date.parse(j.last_ok_at))} ago` : 'no success yet'
+                            jobs.push({ group: 'Lens jobs', name: String(j.label || j.key).slice(0, 60), level: LEVEL[j.level] || WARN,
+                                detail: String(j.reason ? `${j.reason} · ${last}` : j.detail ? `${j.detail} · ${last}` : last).slice(0, 240) })
+                        }
                     } catch {}
                 }
-                return row
+                return [row, ...jobs]
             } catch (e) {
-                return { group: c.group, name: c.name, level: DOWN, detail: e.name === 'TimeoutError' ? 'no answer in 8 s' : 'not answering' }
+                // Why it is not answering, in words that point at the fix.
+                const code = e.cause?.code || e.code || ''
+                const why = e.name === 'TimeoutError' ? 'no answer in 8 s (overloaded or stuck?)'
+                    : code === 'ECONNREFUSED' ? 'connection refused: the service is not running or not listening'
+                    : code === 'ENOTFOUND' || code === 'EAI_AGAIN' ? 'name not found: its container is missing or not on this network'
+                    : code === 'ECONNRESET' || code === 'UND_ERR_SOCKET' ? 'connection dropped: the service may be restarting'
+                    : code === 'EHOSTUNREACH' ? 'host unreachable' : `not answering${code ? ` (${code})` : ''}`
+                return [{ group: c.group, name: c.name, level: DOWN, detail: why }]
             }
         }),
-    )
+    ).then((rows) => rows.flat())
 }
 
+// Counting needs ClickHouse: say that, rather than the network library's words.
+const cannotCount = (e) => { const code = e.cause?.code || e.code || ''; return code === 'ECONNREFUSED' || /fetch failed/.test(e.message) ? 'cannot count: ClickHouse is not answering' : e.name === 'TimeoutError' ? 'cannot count: ClickHouse is too slow to answer' : `cannot count: ${String(e.message).slice(0, 120)}` }
 let newestCache = { at: 0, value: null }
 async function checkData() {
     const G = 'Data arriving'
@@ -279,13 +295,13 @@ async function checkData() {
                 const stale = MAX_EVENT_AGE_MIN > 0 && newestAt !== null && age > MAX_EVENT_AGE_MIN * 60_000
                 return { group: G, name: 'Events', level: stale ? DOWN : INFO,
                     detail: `${num(e5)} in the last 5 min, ${num(e60)} in the last hour; newest ${newestAt === null ? 'unavailable' : newestAt ? `${ago(age)} ago` : 'more than 30 days ago'}${stale ? ` (more than ${MAX_EVENT_AGE_MIN} min)` : ''}` }
-            } catch (e) { return { group: G, name: 'Events', level: DOWN, detail: `cannot count: ${e.message}` } }
+            } catch (e) { return { group: G, name: 'Events', level: DOWN, detail: cannotCount(e) } }
         })(),
         (async () => {
             try {
                 const [[n]] = await clickhouse('SELECT count() FROM posthog.session_replay_events WHERE _timestamp > now() - INTERVAL 1 HOUR')
                 return { group: G, name: 'Session replays', level: INFO, detail: `${num(n)} replay updates in the last hour (counted, never opened)` }
-            } catch (e) { return { group: G, name: 'Session replays', level: DOWN, detail: `cannot count: ${e.message}` } }
+            } catch (e) { return { group: G, name: 'Session replays', level: DOWN, detail: cannotCount(e) } }
         })(),
     ])
 }

@@ -7,6 +7,7 @@ import type { TimeWindow } from './timewindow.ts'
 //
 // Nothing here stores or returns replay content: only counts, timings and safe element names, per
 // session (for replay links) and per client.
+import { jobFailed, jobOk, registerJob } from './jobhealth.ts'
 import { Worker } from 'node:worker_threads'
 import { createHash } from 'node:crypto'
 
@@ -161,7 +162,8 @@ let timer: NodeJS.Timeout | undefined, running = false
 export function startReplaySignals(): void {
     if (process.env.REPLAY_SIGNALS === 'off' || timer) return
     const per = Math.max(1, Math.min(200, Number(process.env.REPLAY_SIGNALS_PER_RUN) || 30))
-    const round = async () => { if (running) return; running = true; try { await processReplays(per) } catch { /* processReplays records the failed round, including candidate lookup failures. */ } finally { running = false } }
+    registerJob('replay_signals', 'Replay analysis', 15 * 60_000)
+    const round = async () => { if (running) return; running = true; try { const r = await processReplays(per); jobOk('replay_signals', `last round: ${r.read} read, ${r.skipped} skipped`) } catch (e) { /* processReplays also records the failed round. */ jobFailed('replay_signals', e) } finally { running = false } }
     setTimeout(() => void round(), 60_000).unref()
     timer = setInterval(() => void round(), 15 * 60_000); timer.unref()
 }
