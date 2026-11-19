@@ -150,6 +150,8 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 #people-msg:empty,#outcome-msg:empty,#audit-msg:empty,#keys-msg:empty,#msg:empty{display:none}
 .banner{display:flex;border:0;border-radius:0;background:transparent;align-items:flex-start;padding:0 0 24px;margin-bottom:16px;gap:12px}
 .banner h2{margin:0;font-size:24px;line-height:32px}
+#banner.down{background:var(--card);border:1px solid var(--line);border-inline-start:3px solid var(--err);border-radius:var(--r-sm);padding:10px 14px}
+#banner.down #b-head{font-size:18px;line-height:24px}
 .banner .big{font-weight:700;border-radius:50%;display:grid;place-items:center;flex:none;color:var(--card);background:var(--muted);width:28px;height:28px;font-size:16px;margin-top:2px}
 #problems>.card{padding:16px 24px;margin-bottom:24px}
 #problems h2{margin-bottom:8px}

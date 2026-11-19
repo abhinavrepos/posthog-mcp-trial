@@ -151,6 +151,7 @@ main.wide{min-width:0}
 .layout{display:grid;align-items:start;grid-template-columns:minmax(0,312px) minmax(0,1fr);gap:var(--space-6)}
 .layout>section{min-width:0}
 .toolbar select{padding:6px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--ink);width:auto;max-width:100%;font-size:13px}
+#days{border-color:var(--control)}
 .chip{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 8px;border-radius:999px;margin-right:6px;color:var(--muted);border:0;background:var(--hover);vertical-align:baseline}
 #detail>.card>.chip{margin-bottom:8px}
 main button.ghost,.ldlg button.ghost{border-color:transparent;color:var(--ink)}

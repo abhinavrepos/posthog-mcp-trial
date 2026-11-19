@@ -316,13 +316,16 @@ test('rescue period: a chosen period replaces explicit dates, custom keeps them,
 })
 
 test('briefing is the first and default view for all dashboard roles; API access and review controls', async () => {
-    const brief = {generated_at:'2026-06-16',period:window,headline:'Two clients need help.',sections:{new_or_worse:[],close_soon:[],overdue:[],recovered:[],quiet_review:{client:'acme',client_name:clientName,text:'silence is not satisfaction',open:ROOT+'?view=rescue&client=acme'}},counts:{queue:2},queue_scores:{},verified_recoveries:[]}
+    const evidence = {client:'acme',client_name:clientName,text:'t_DlgTask01 attempts fell from 20 to 10',open:ROOT+'?view=flow_time&task=t_DlgTask01'}
+    const brief = {generated_at:'2026-06-16',period:window,headline:'Two clients need help.',sections:{new_or_worse:[evidence],close_soon:[],overdue:[],recovered:[],quiet_review:{client:'acme',client_name:clientName,text:'silence is not satisfaction',open:ROOT+'?view=rescue&client=acme'}},counts:{queue:2},queue_scores:{},verified_recoveries:[]}
     const injected = {...deps,mondayBrief:async()=>brief}
     for(const v of [viewer(),viewer('share'),viewer('none','admin@example.com',true)]) {
         const r = await request('',v,'GET',undefined,injected)
         assert.equal(r.status,200); assert.match(r.body,/<h1>Monday briefing/)
         assert.ok(r.body.indexOf('>Briefing</a>')<r.body.indexOf('>Rescue Queue</a>'))
         assert.match(r.body,/silence is not satisfaction/); assert.doesNotMatch(r.body,/<img/)
+        assert.match(r.body,/>DlgTask01 attempts fell from 20 to 10</); assert.match(r.body,/task=t_DlgTask01">View evidence/)
+        assert.match(r.body,/>No month-end close is due this week\.</)
         assert.equal(r.body.includes('data-review-client='),v.dashboards==='share'||v.role==='admin'); scriptsParse(r.body)
         assert.deepEqual((await request('/api/briefing',v,'GET',undefined,injected)).data,brief)
     }
@@ -373,8 +376,11 @@ test('Ask them shows the real reason it cannot draft, and asks about the period 
 })
 
 test('client story and handover APIs follow dashboard view roles; accessible chart, timeline, fallback and scripts render',async()=>{
-    const story={client:'acme',client_name:clientName,coverage:{complete:true,unprocessed:[]},weeks:[{week_start:'2026-06-01',attempts:10,done:8,users:2,errors:3,unrecovered:1,exports:4,productive_done:5}],events:[{date:'2026-06-05',kind:'note' as const,text:'<private> note'}],surveys:[],summary:'Work changed. Action open. Cause unknown.',unknown:'Unknown'}
-    const injected={...deps,clientStory:async()=>story,handoverPack:async()=> '# Handover\n\n<escaped> pack'}
+    const week={week_start:'2026-06-01',attempts:1704,done:8,users:2,errors:9,unrecovered:1,exports:4,productive_done:5}
+    const change='t_DlgTask01 attempts fell from 20 to 10'
+    const story={client:'acme',client_name:clientName,window:{from:'2026-06-01',to:'2026-06-10'},coverage:{complete:true,unprocessed:[]},weeks:[week,{...week,week_start:'2026-06-08',attempts:10}],events:[{date:'2026-06-05',kind:'note' as const,text:'<private> note'},{date:'2026-06-06',kind:'note' as const,text:change},{date:'2026-06-07',kind:'reason_seen' as const,text:'First observed in weekly review: '+change}],surveys:[],summary:'Work changed. Action open. Cause unknown.',unknown:'Unknown'}
+    const pack='# Handover\n\n## Established tasks (90 days)\n- t_DlgTask01: 8 done\n\n## What changed recently\n- '+change+'\n\n## Open actions and owners\n- '+change+'\n<escaped> pack'
+    const injected={...deps,clientStory:async()=>story,handoverPack:async()=>pack}
     for(const v of [viewer('none'),viewer(),viewer('share'),viewer('none','admin@example.com',true)]) {
         const allowed=v.role==='admin'||v.dashboards!=='none'
         for(const path of ['?view=story&client=acme','/api/story?client=acme','/api/handover-pack?client=acme']) {
@@ -385,8 +391,16 @@ test('client story and handover APIs follow dashboard view roles; accessible cha
                 assert.match(r.body,/Weekly work counts \(chart alternative\)/);assert.match(r.body,/<svg[^>]+role="img"/)
                 assert.match(r.body,/<th class="num" scope="col">People<\/th>/);assert.match(r.body,/&lt;private&gt; note/)
                 assert.match(r.body,/Copy handover pack/);assert.match(r.body,/<pre id="handover-pack"/);assert.match(r.body,/&lt;escaped&gt; pack/)
+                const charts=[...r.body.matchAll(/<svg class="story-chart"[^>]*>(.*?)<\/svg>/g)]
+                assert.deepEqual([...charts[0][1].matchAll(/text-anchor="end">(\d[\d,]*)</g)].map(m=>m[1]),['0','500','1,000','1,500','2,000'])
+                assert.deepEqual([...charts[1][1].matchAll(/text-anchor="end">(\d+)</g)].map(m=>m[1]),['0','5','10','15','20'])
+                assert.match(charts[0][1],/<circle [^>]* r="2" [^>]* stroke-width="1"/);assert.match(charts[0][1],/<circle [^>]* r="4" fill="var\(--card\)" [^>]* stroke-width="2"/)
+                assert.match(r.body,/>First observed in weekly review: DlgTask01 attempts fell from 20 to 10</);assert.match(r.body,/<span>t_DlgTask01 attempts fell from 20 to 10<\/span>/)
+                assert.match(r.body,/<li>DlgTask01: 8 done<\/li>/);assert.match(r.body,/<li>DlgTask01 attempts fell from 20 to 10<\/li>/);assert.match(r.body,/<li>t_DlgTask01 attempts fell from 20 to 10<\/li>/)
+                assert.match(r.body,/<pre id="handover-pack"[^>]*>[\s\S]*?- t_DlgTask01: 8 done/)
                 assert.doesNotMatch(r.body,/<img|<private>|<escaped>/);scriptsParse(r.body)
             }
+            if(path.startsWith('/api/handover-pack')&&allowed) assert.deepEqual(r.data,{markdown:pack})
         }
     }
     for(const path of ['?view=story','/api/story?client=acme&weeks=210','/api/story?client=acme&weeks=1.5','/api/handover-pack']) assert.equal((await request(path)).status,400)

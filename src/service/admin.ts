@@ -366,7 +366,7 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .identity-name{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .people-table th:nth-child(6){white-space:nowrap}
 .people-table label.check{min-height:36px;margin:0;align-items:center}
-.extra-access{display:flex;flex-direction:column;gap:0}.extra-access label.check{min-height:30px;white-space:nowrap}
+.extra-access{display:flex;flex-direction:column;gap:0}.extra-access label.check{min-height:26px;white-space:nowrap}
 #people td select{text-overflow:clip}
 .people-toolbar,.chat-head,.token-toolbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
 .people-toolbar{position:relative}
@@ -384,11 +384,11 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .chat-head h2{margin:0}
 .revoked-toggle{display:flex;gap:8px;align-items:center;justify-content:flex-start;color:var(--muted);margin:0;min-height:36px}
 .token-toolbar{margin-bottom:12px}
-#tokens button.ghost{color:var(--err);font-weight:500}
 #tokens tr:last-child td{border-bottom:0}
 #tokens td:last-child,#tab-chat th:last-child,#tab-outcomes th:last-child,#outcome-rows td:last-child,.people-table th:last-child,#people td:last-child{text-align:right;font-weight:500;vertical-align:top}
+#people td:last-child{vertical-align:middle}
 #outcome-rows td:last-child button+button{margin-left:4px}
-#outcome-rows td:last-child button:last-child,#clips td:last-child button{color:var(--err)}
+#outcome-rows td:last-child button:last-child{color:var(--err)}
 #outcome-form{display:grid;grid-template-columns:minmax(220px,2fr) minmax(120px,1fr) 160px minmax(180px,1.5fr);gap:16px;align-items:end}
 #outcome-form>div{min-width:0!important}
 #outcome-form>button{grid-column:1/-1;justify-self:end}
@@ -405,6 +405,7 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 #audit>tr>td[colspan]{grid-column:1/-1;grid-row:auto;text-align:center;color:var(--muted)}}
 .audit-footer{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
 .audit-footer #audit-pager{flex:1;min-width:0}
+@media(min-width:1181px){.people-toolbar{align-items:end;margin-bottom:8px}body main .people-table tbody td{padding-block:8px;vertical-align:middle}}
 @media(max-width:1180px){.card>.table-wrap:has(.people-table){margin-left:0;margin-right:0}
 .card>.table-wrap:has(.people-table) :is(th,td){padding-left:0!important;padding-right:0!important}
 .people-table colgroup{display:none}
@@ -530,7 +531,7 @@ function drawTokens(reset){const gone=S.chat_tokens.filter(t=>t.revoked_at).leng
 const tokensPg=makePager({mount:$('tokens-pager'),noun:'tokens',size:25,draw:slice=>{
  const tt=$('tokens');tt.innerHTML='';if(!slice.length)tt.innerHTML='<tr><td colspan="5" class="muted">No active keys. People make one on the Chat page.</td></tr>';
  slice.forEach(t=>{const tr=document.createElement('tr');cell(tr,identity(t.email));cell(tr,t.label);cell(tr,when(t.created_at),'small');cell(tr,t.revoked_at?'Revoked '+when(t.revoked_at)+' by '+t.revoked_by:when(t.last_used_at),'small');
-  if(!t.revoked_at){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Revoke';b.setAttribute('aria-label','Revoke '+t.label+' token for '+t.email+' made '+when(t.created_at));b.onclick=async()=>{if(!confirm('Revoke the chat token '+t.label+' of '+t.email+'? Chat with it stops at once.'))return;try{await api('/replays/admin/api/chat-tokens/'+t.id,{method:'DELETE'});await load()}catch(e){msg('people-msg',e.message+' Try the action again.')}};cell(tr,b)}else cell(tr,'');tt.appendChild(tr)});
+  if(!t.revoked_at){const b=document.createElement('button');b.type='button';b.className='ghost danger';b.textContent='Revoke';b.setAttribute('aria-label','Revoke '+t.label+' token for '+t.email+' made '+when(t.created_at));b.onclick=async()=>{if(!confirm('Revoke the chat token '+t.label+' of '+t.email+'? Chat with it stops at once.'))return;try{await api('/replays/admin/api/chat-tokens/'+t.id,{method:'DELETE'});await load()}catch(e){msg('people-msg',e.message+' Try the action again.')}};cell(tr,b)}else cell(tr,'');tt.appendChild(tr)});
 
 guardControls()}});
 const personStates=new Map();
@@ -542,7 +543,7 @@ const peoplePg=makePager({mount:$('people-pager'),noun:'people',size:25,draw:sli
  const tb=$('people');tb.innerHTML='';
  slice.forEach(p=>{const tr=document.createElement('tr');
   const who=identity(p.email);if(p.note){const note=document.createElement('div');note.className='small muted';note.textContent=p.note;who.append(note)}cell(tr,who);
-  const ph=document.createElement('div');ph.textContent=p.posthog.replace(/ \\((owner|admin|member)\\)/g,' $1');if(p.sees_all_replays_in_posthog){const badge=document.createElement('span');badge.className='badge';badge.title='Can watch every replay inside PostHog itself';badge.textContent='All PostHog replays';ph.append(badge)}ph.className='small muted person-meta';who.append(ph);
+  const ph=document.createElement('div');ph.textContent=p.posthog==='No PostHog account in your organizations'?'No account in your PostHog organizations.':p.posthog.replace(/ \\((owner|admin|member)\\)/g,' $1');if(p.sees_all_replays_in_posthog){const badge=document.createElement('span');badge.className='badge';badge.title='Can watch every replay inside PostHog itself';badge.textContent='All PostHog replays';ph.append(badge)}ph.className='small muted person-meta';who.append(ph);
   const sel=roleSelect(p.role,p.locked);sel.setAttribute('aria-label','Clip role for '+p.email);if(p.locked){const w=document.createElement('div');const locked=document.createElement('span');locked.textContent=roleLabel(p.role,p.role);locked.setAttribute('aria-label','Clip role for '+p.email);w.appendChild(locked);const n=document.createElement('div');n.className='small muted';n.textContent='Inherited from PostHog';w.appendChild(n);cell(tr,w)}else{if(!p.set_here){const w=document.createElement('div');w.appendChild(sel);const n=document.createElement('div');n.className='small muted';n.textContent='Default';w.appendChild(n);cell(tr,w)}else cell(tr,sel)}
   if(!p.locked)personStatus(sel);
   sel.onchange=()=>savePerson(sel,()=>api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email:p.email,role:sel.value})}));
@@ -593,7 +594,7 @@ const clipsPg=makePager({mount:$('clips-pager'),noun:'clips',size:25,draw:slice=
    who.appendChild(line)});cell(tr,who);
   cell(tr,mb(c.bytes),'small');
   cell(tr,c.expires_at?day(c.expires_at):'Saved',c.expires_at?'small':'small ok');
-  const w=document.createElement('a');w.className='btn ghost';w.textContent='Watch';w.href='/replays?clip='+encodeURIComponent(c.name);const d=document.createElement('button');d.type='button';d.className='ghost';d.textContent='Delete';d.onclick=async()=>{if(!confirm('Delete this clip for everyone who has it? Its share links stop working.'))return;try{await api('/replays/admin/api/clips/'+encodeURIComponent(c.name),{method:'DELETE'});await load()}catch(e){msg('people-msg',e.message+' Try the action again.')}};
+  const w=document.createElement('a');w.className='btn ghost';w.textContent='Watch';w.href='/replays?clip='+encodeURIComponent(c.name);const d=document.createElement('button');d.type='button';d.className='ghost danger';d.textContent='Delete';d.onclick=async()=>{if(!confirm('Delete this clip for everyone who has it? Its share links stop working.'))return;try{await api('/replays/admin/api/clips/'+encodeURIComponent(c.name),{method:'DELETE'});await load()}catch(e){msg('people-msg',e.message+' Try the action again.')}};
   const box=document.createElement('div');box.style.display='flex';box.style.gap='6px';box.style.flexWrap='wrap';box.append(w,d);cell(tr,box);cb.appendChild(tr)});guardControls()}});
 $('clip-filter').onchange=()=>renderClips(false);
 function clientLabel(value){const option=[...$('outcome-clients').options].find(o=>o.value===String(value));return option&&option.textContent!==String(value)?option.textContent+' ('+String(value)+')':String(value)}

@@ -138,6 +138,7 @@ function adminPage(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Client privacy · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}${STYLE}
 .privacy-page,.privacy-page :is(.card,p){overflow-wrap:anywhere}
 .privacy-page .table-wrap table{min-width:600px}
+.privacy-page #clients td{padding-block:8px;vertical-align:middle}
 .privacy-page :is(.table-wrap,#preview,.row)+p{margin-top:var(--space-4)}
 .privacy-page .row label{margin:0;min-width:0}
 .privacy-page .row label:first-child{flex:1 1 160px;max-width:260px}

@@ -97,7 +97,6 @@ main .pager select{height:32px;min-height:32px}
 main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 #people-msg:empty,#outcome-msg:empty,#audit-msg:empty,#keys-msg:empty,#msg:empty{display:none}
 #revoked-box{margin-top:16px}
-#rows button.ghost{color:var(--err);font-weight:500}
 main table th:last-child,#rows td:last-child{text-align:right}
 @media (max-width:560px){.f{grid-template-columns:1fr auto}
 .f span{grid-column:1/-1}
@@ -133,7 +132,7 @@ function el(tag,attrs,text){const e=document.createElement(tag);Object.assign(e,
 function message(id,text,error=false){$(id).textContent=text;$(id).className='small '+(error?'err':'');$(id).setAttribute('role',error?'alert':'status')}
 const keysPg=makePager({mount:$('keys-pager'),noun:'keys',size:25,draw:slice=>{const tb=$('rows');tb.innerHTML='';if(!slice.length)tb.innerHTML='<tr><td colspan="4" class="muted">No active keys</td></tr>'
   slice.forEach(t=>{const tr=document.createElement('tr');cell(tr,t.label);cell(tr,when(t.created_at));cell(tr,t.revoked_at?'Revoked '+when(t.revoked_at):when(t.last_used_at))
-    if(!t.revoked_at){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Revoke';b.setAttribute('aria-label','Revoke '+t.label+' key made '+when(t.created_at));b.onclick=async()=>{if(!confirm('Revoke "'+t.label+'"? Chat with it stops at once.'))return;b.disabled=true;try{await api('/replays/connect/api/tokens/'+t.id,{method:'DELETE'});await load();message('keys-msg','Key revoked.')}catch(e){message('keys-msg',e.message+' Try revoking again.',true)}finally{b.disabled=false;if(!b.isConnected)($('keys-pager').querySelector('button:not(:disabled)')||$('make')).focus()}};cell(tr,b)}else cell(tr,'');tb.appendChild(tr)})}})
+    if(!t.revoked_at){const b=document.createElement('button');b.type='button';b.className='ghost danger';b.textContent='Revoke';b.setAttribute('aria-label','Revoke '+t.label+' key made '+when(t.created_at));b.onclick=async()=>{if(!confirm('Revoke "'+t.label+'"? Chat with it stops at once.'))return;b.disabled=true;try{await api('/replays/connect/api/tokens/'+t.id,{method:'DELETE'});await load();message('keys-msg','Key revoked.')}catch(e){message('keys-msg',e.message+' Try revoking again.',true)}finally{b.disabled=false;if(!b.isConnected)($('keys-pager').querySelector('button:not(:disabled)')||$('make')).focus()}};cell(tr,b)}else cell(tr,'');tb.appendChild(tr)})}})
 async function load(){try{const d=await api('/replays/connect/api/tokens');const gone=d.tokens.filter(t=>t.revoked_at);keysPg.set(d.tokens.filter(t=>!t.revoked_at),true);$('revoked-box').hidden=!gone.length;$('revoked-sum').textContent='Revoked keys ('+gone.length+')';$('revoked').innerHTML='';gone.slice(0,50).forEach(t=>$('revoked').appendChild(el('li',null,t.label+' · made '+when(t.created_at)+' · revoked '+when(t.revoked_at))))}catch(e){message('keys-msg',e.message+' Reload the page to try again.',true)}}
 $('make').onclick=async()=>{$('make').disabled=true;message('msg','Making your key…');try{const t=await api('/replays/connect/api/tokens',{method:'POST',body:JSON.stringify({label:'GitHub Copilot'})})
   const list=[[t.name,t.url,'${APP_NAME}']]

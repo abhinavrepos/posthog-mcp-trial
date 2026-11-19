@@ -221,7 +221,7 @@ function card(h){
   li.appendChild(el('p','meta',h.client_name+' · '+when(h.started_at)+' · '+dur(h.duration_ms)+' ('+dur(h.active_ms)+' active)'))
   li.appendChild(el('p','ev',h.evidence))
   const ch=el('ul','chips');ch.setAttribute('aria-label','What happened');h.marks.forEach(k=>ch.appendChild(chip(k)));li.appendChild(ch)
-  const acts=el('div','acts');acts.appendChild(clipLink(h.moment.clip_page,'Watch from '+clock(h.moment.offset_s*1000)))
+  const acts=el('div','acts');const watch=clipLink(h.moment.clip_page,'Watch from '+clock(h.moment.offset_s*1000));watch.classList.add('secondary');acts.appendChild(watch)
   const more=el('button','secondary','Session details');more.type='button';more.setAttribute('aria-expanded','false');more.onclick=()=>toggle(li,h,more);acts.appendChild(more)
   if(h.steps_marked>1)acts.appendChild(el('span','small muted',h.steps_marked+' moments in this session'))
   li.appendChild(acts);return li
