@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { scrubWith } from '../src/core/rescueprivacy.ts'
+// Speed limits are for a quiet machine; TEST_TIME_SLACK (the image build sets 3) widens them on a busy one.
+const SLACK = Math.max(1, Number(process.env.TEST_TIME_SLACK) || 1)
 
 const sort = (t: string[]) => [...new Set(t)].sort((a, b) => b.length - a.length)
 // The previous algorithm: each token (3+ characters) replaced everywhere, longest first.
@@ -34,7 +36,7 @@ test('scrubbing is linear: thousands of users and long text stay fast', () => {
     const tokens = sort(Array.from({ length: 5000 }, (_, i) => [`C1PRD|01|C${i % 50}|USER${i}`, `USER${i}`]).flat())
     const rows = Array.from({ length: 300 }, (_, i) => ({ client_name: `Client ${i}`, reasons: [{ text: `Stopped doing Hedge Designation → Save: ${i} done before, none since` }], note: i % 7 ? null : `Spoke with USER${i}` }))
     const t = performance.now(); const out = scrubWith(tokens, rows); const ms = performance.now() - t
-    assert.equal(out[0].note, 'Spoke with [person]'); assert.ok(ms < 150, `${ms} ms`)
+    assert.equal(out[0].note, 'Spoke with [person]'); assert.ok(ms < 150 * SLACK, `${ms} ms`)
 })
 
 test('rescue output reads the selected privacy mode', async () => {

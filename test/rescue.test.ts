@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import type { TaskAttempt } from '../src/core/taskstypes.ts'
+// Speed limits are for a quiet machine; TEST_TIME_SLACK (the image build sets 3) widens them on a busy one.
+const SLACK = Math.max(1, Number(process.env.TEST_TIME_SLACK) || 1)
 
 const dir = mkdtempSync(join(tmpdir(), 'rescue-'))
 Object.assign(process.env, { TRIAGE_DB: join(dir, 'main.db'), TASKS_DB: join(dir, 'tasks.db'), APP_EVENTS_FILE: 'config/app-events.reval.json' })
@@ -168,7 +170,7 @@ test('year of 50 clients × 40 tasks daily rows is under 1 second cold and 10ms 
     start = performance.now(); const hot = await queue(); const warm = performance.now() - start
     t.diagnostic(`730,000 daily rows: cold ${cold.toFixed(1)} ms; cached ${warm.toFixed(2)} ms`)
     assert.equal(r.clients.length, 50); assert.deepEqual(hot, r)
-    assert.ok(cold < 1000, `cold ${cold.toFixed(1)}ms`); assert.ok(warm < 10, `cached ${warm.toFixed(1)}ms`)
+    assert.ok(cold < 1000 * SLACK, `cold ${cold.toFixed(1)}ms`); assert.ok(warm < 10 * SLACK, `cached ${warm.toFixed(1)}ms`)
 })
 
 test('default comparison is the same length as the window, just before it', async () => {

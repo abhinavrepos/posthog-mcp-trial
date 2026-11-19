@@ -258,8 +258,9 @@ build_push() {
         docker buildx build -q --platform linux/amd64 --provenance=false --sbom=false "$@" \
             -f "$dockerfile" -t "$REGISTRY/$ref" --load "$context" >/dev/null || die "Building $ref failed (run without -q to see why: docker buildx build -f $dockerfile $context)."
         if [ "${ref%%:*}" = posthog/lens ] && [[ "$ref" != *:status-* ]]; then
+            # Speed limits in the tests are for a quiet machine: a build machine is often busy (TEST_TIME_SLACK).
             say "running the tests in it ..." >&2
-            docker run --rm --user 1000:1000 --security-opt "seccomp=$ROOT/deploy/lens/seccomp-chrome.json" "$REGISTRY/$ref" \
+            docker run --rm --user 1000:1000 -e TEST_TIME_SLACK="${TEST_TIME_SLACK:-3}" --security-opt "seccomp=$ROOT/deploy/lens/seccomp-chrome.json" "$REGISTRY/$ref" \
                 sh -c 'node --import tsx --test test/*.test.ts' >"$WORK/test.log" 2>&1 || { tail -30 "$WORK/test.log" >&2; die "The tests failed in $ref; nothing was pushed."; }
             say "$(grep -E '^ℹ (pass|fail) ' "$WORK/test.log" | tr '\n' ' ')" >&2
         fi

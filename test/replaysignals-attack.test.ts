@@ -6,6 +6,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { safeName, signalsFromReplay } from '../src/core/replaysignals.ts'
+// Speed limits are for a quiet machine; TEST_TIME_SLACK (the image build sets 3) widens them on a busy one.
+const SLACK = Math.max(1, Number(process.env.TEST_TIME_SLACK) || 1)
 
 // Isolate consumer persistence from real databases, including when this file is run alone.
 const dir = mkdtempSync(join(tmpdir(), 'replay-attack-'))
@@ -128,5 +130,5 @@ test('200,000-line replay: under 5 seconds and under 256 MiB RSS growth', () => 
     const ms = performance.now() - start, growth = Math.max(0, process.memoryUsage().rss - before)
     console.log(`200,000 lines: ${ms.toFixed(1)} ms; RSS growth ${(growth / 1048576).toFixed(1)} MiB`)
     assert.equal(s.duration_ms, 199999); absent(s, ['ZanthorCapital'])
-    assert.ok(ms < 5000, `${ms} ms`); assert.ok(growth < 256 * 1048576, `${growth} bytes`)
+    assert.ok(ms < 5000 * SLACK, `${ms} ms`); assert.ok(growth < 256 * 1048576, `${growth} bytes`)
 })

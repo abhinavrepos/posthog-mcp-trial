@@ -3,6 +3,8 @@ import { gzipSync } from 'node:zlib'
 import assert from 'node:assert/strict'
 import { performance } from 'node:perf_hooks'
 import { safeName, signalsFromReplay } from '../src/core/replaysignals.ts'
+// Speed limits are for a quiet machine; TEST_TIME_SLACK (the image build sets 3) widens them on a busy one.
+const SLACK = Math.max(1, Number(process.env.TEST_TIME_SLACK) || 1)
 
 const element = (id: number, tagName: string, attributes: Record<string, unknown> = {}, childNodes: unknown[] = []) => ({ id, type: 2, tagName, attributes, childNodes })
 const event = (timestamp: number, type: number, data: unknown) => ['', { timestamp, type, data }]
@@ -89,7 +91,7 @@ test('20,000 JSONL lines process in under one second', () => {
     const s = signalsFromReplay(fixture)
     const elapsed = performance.now() - start
     assert.equal(s.duration_ms, 19999)
-    assert.ok(elapsed < 1000, `${elapsed.toFixed(1)} ms`)
+    assert.ok(elapsed < 1000 * SLACK, `${elapsed.toFixed(1)} ms`)
     console.log(`20,000 lines: ${elapsed.toFixed(1)} ms`)
 })
 

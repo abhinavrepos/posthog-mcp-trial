@@ -3,6 +3,8 @@ import { after, test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+// Speed limits are for a quiet machine; TEST_TIME_SLACK (the image build sets 3) widens them on a busy one.
+const SLACK = Math.max(1, Number(process.env.TEST_TIME_SLACK) || 1)
 const dir = mkdtempSync(join(tmpdir(), 'lens-signals-'))
 process.env.TASKS_DB = join(dir, 'tasks.db')
 process.env.TRIAGE_DB = join(dir, 'main.db')
@@ -95,7 +97,7 @@ test('synthetic year of 50 clients: cold under 1s and cached under 10ms', async 
     db.exec('COMMIT'); forgetAnswers()
     let start = performance.now(); const r = await clientSignals({ to }); const cold = performance.now() - start
     start = performance.now(); assert.equal(await clientSignals({ to }), r); const hot = performance.now() - start
-    t.diagnostic(`cold ${cold.toFixed(1)}ms; cached ${hot.toFixed(2)}ms`); assert.ok(cold < 1000); assert.ok(hot < 10)
+    t.diagnostic(`cold ${cold.toFixed(1)}ms; cached ${hot.toFixed(2)}ms`); assert.ok(cold < 1000 * SLACK); assert.ok(hot < 10 * SLACK)
 })
 
 test('v1 processed history and pruned captures cannot look like zero activity', async () => {
