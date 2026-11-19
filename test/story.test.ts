@@ -65,7 +65,7 @@ test('handover contains ranked established work, numbers, owners, surveys, two r
     const pack=await handoverPack('acme')
     for(const heading of ['Established tasks (90 days)','What changed recently','Open actions and owners','Surveys asked','Replays','What we do not know']) assert.ok(pack.includes('## '+heading))
     assert.match(pack,/Hedge Designation: 40 done/)
-    assert.match(pack,/done rate fell/); assert.match(pack,/pm@example.com/); assert.match(pack,/Targeted survey/)
+    assert.match(pack,/completion rate fell/); assert.match(pack,/pm@example.com/); assert.match(pack,/Targeted survey/)
     assert.equal((pack.match(/\[Replay \d\]/g)||[]).length,2)
     assert.match(pack,/session-a/); assert.match(pack,/session-b/); assert.doesNotMatch(pack,/session-c/)
     assert.doesNotMatch(pack,/private-person|hidden.example|ENV\|SITE|second-person/)

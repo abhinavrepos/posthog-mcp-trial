@@ -80,7 +80,7 @@ async function compute(window: Window, baseline: Window, min: number, windows: S
         if (!missing && prev.attempts * scale >= min && n.attempts <= prev.attempts * scale * RESCUE.dropped)
             add('dropped', `${task.task_name} attempts fell from ${scaled(prev.attempts)}${per} to ${n.attempts}`, n.attempts, scaled(prev.attempts))
         if (prev.attempts >= min && n.attempts >= min && prev.done / prev.attempts - n.done / n.attempts >= RESCUE.failing - 1e-12)
-            add('failing', `${task.task_name} done rate fell from ${Math.round(prev.done / prev.attempts * 100)}% to ${Math.round(n.done / n.attempts * 100)}%`, n.done / n.attempts, prev.done / prev.attempts)
+            add('failing', `${task.task_name} completion rate fell from ${Math.round(prev.done / prev.attempts * 100)}% to ${Math.round(n.done / n.attempts * 100)}%`, n.done / n.attempts, prev.done / prev.attempts)
         if (n.done >= RESCUE.done_min && prev.done >= RESCUE.done_min && n.median_s !== null && prev.median_s !== null && n.median_s >= prev.median_s * RESCUE.slower && n.median_s - prev.median_s >= RESCUE.slower_seconds)
             add('slower', `${task.task_name} takes longer: median ${Math.round(n.median_s)} s, from ${Math.round(prev.median_s)} s`, n.median_s, prev.median_s)
     }
@@ -106,7 +106,7 @@ async function compute(window: Window, baseline: Window, min: number, windows: S
     for (const [client, peers] of await peerComparisons(window, [...now.values()])) {
         const c = clients.get(client) || { reasons: [], before: 0, now: 0 }
         for (const p of peers) if (p.ratio >= 2 - 1e-12 || p.peer_done_rate - p.done_rate >= .25 - 1e-12)
-            c.reasons.push({ kind: 'peer_gap', task_id: p.task_id, task_name: p.task_name, text: p.ratio >= 2 - 1e-12 ? p.text : `${p.task_name} done rate is ${Math.round(p.done_rate*100)}% vs ${Math.round(p.peer_done_rate*100)}% across clients`,
+            c.reasons.push({ kind: 'peer_gap', task_id: p.task_id, task_name: p.task_name, text: p.ratio >= 2 - 1e-12 ? p.text : `${p.task_name} completion rate is ${Math.round(p.done_rate*100)}% vs ${Math.round(p.peer_done_rate*100)}% across clients`,
                 now: p.client_median_s, before: p.peer_median_s, evidence: { ratio: p.ratio, done_rate: p.done_rate, peer_done_rate: p.peer_done_rate, peer_clients: p.peer_clients } })
         clients.set(client,c)
     }
@@ -155,8 +155,8 @@ async function answer(p: RescueParams): Promise<RescueQueue> {
     if (!Number.isInteger(min) || min < 1 || min > 100000) throw new ToolInputError('min_attempts must be an integer from 1 to 100000')
     const current=coverage(window), previousCoverage=coverage(baseline)
     const cover={...current,complete:current.complete && previousCoverage.complete && p.compare!=='none',comparison:{requested:baseline,status:p.compare==='none'?'none':current.complete && previousCoverage.complete?'complete':'unavailable',reason:p.compare==='none'?'Comparison disabled':current.complete && previousCoverage.complete?'Both periods complete':'Comparisons require complete current and baseline periods; omitted'},baseline:previousCoverage}
-    const base = { coverage: cover, window, baseline, data_through: through, hidden_snoozed: 0, note: 'Ranked from processed task history. Review the evidence with the account team. Signal reasons (key_person_gap, work_moving_out, giving_up, recurring_close_error) are measured over their own inclusive UTC windows in signal_windows, not the queue window; they have no now/before, use their evidence.' }
-    if (!cover.complete) return { ...base, clients: [], observed_usage:query<{client:string;attempts:number;done:number}>(`SELECT client,sum(attempts) attempts,sum(done) done FROM task_daily WHERE day BETWEEN ? AND ? AND day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= 'analysis_unavailable:' AND key < 'analysis_unavailable;') GROUP BY client ORDER BY attempts DESC LIMIT 150`,window.from,window.to),note:base.note+' Comparison omitted; observed_usage includes only covered days and has no decline flags.' }
+    const base = { coverage: cover, window, baseline, data_through: through, hidden_snoozed: 0, note: 'Review the evidence with the account team. Some warning signs use different dates, shown with their evidence.' }
+    if (!cover.complete) return { ...base, clients: [], observed_usage:query<{client:string;attempts:number;done:number}>(`SELECT client,sum(attempts) attempts,sum(done) done FROM task_daily WHERE day BETWEEN ? AND ? AND day NOT IN (SELECT day FROM task_ingest WHERE finalized = 0 OR truncated != 0) AND day NOT IN (SELECT substr(key, 22) FROM task_state WHERE key >= 'analysis_unavailable:' AND key < 'analysis_unavailable;') GROUP BY client ORDER BY attempts DESC LIMIT 150`,window.from,window.to),note:base.note+' Usage totals include processed days only. Comparisons are unavailable.' }
     const signal_windows: SignalWindows = {}
     const clients = await compute(window, baseline, min, signal_windows), pw = moved(window), pb = moved(baseline)
     // An incomplete earlier comparison cannot be evidence of worsening or recovery.
@@ -165,7 +165,7 @@ async function answer(p: RescueParams): Promise<RescueQueue> {
         const old = previous?.get(c.client)
         c.trend = old === undefined ? 'new' : c.score > old + 1e-9 ? 'worse' : c.score < old - 1e-9 ? 'better' : 'same'
     }
-    return { ...base, signal_windows, clients, ...(!previous ? { note: base.note + ' Earlier comparison is incomplete; trend is new until a prior flag is available.' } : {}) }
+    return { ...base, signal_windows, clients, ...(!previous ? { note: base.note + ' Earlier history is incomplete. Previous warning signs are unavailable.' } : {}) }
 }
 export async function rescueQueue(p: RescueParams = {}): Promise<RescueQueue> {
     const { include_snoozed, ...params } = p

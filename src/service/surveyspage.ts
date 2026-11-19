@@ -45,7 +45,7 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
     if (!canUseSurveys(v)) {
         if (page) {
             res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-            res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Surveys · ${APP_NAME}</title><style>${PAGE_CSS()}</style></head><body>${headerHtml(v, 'Surveys')}<main style="max-width:560px"><div class="card"><h2>No access to the Surveys page</h2><p class="muted">Ask an admin to tick "Surveys" for you on the admin page.</p></div></main></body></html>`)
+            res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Surveys · ${APP_NAME}</title><style>${PAGE_CSS()}</style></head><body>${headerHtml(v, 'Surveys')}<main id="main" tabindex="-1" style="max-width:560px"><div class="card"><h2>No access to the Surveys page</h2><p class="muted">Ask an admin to tick "Surveys" for you on the admin page.</p></div></main></body></html>`)
         } else json(res, 403, { error: 'No access to the Surveys page. Ask an admin.' })
         return true
     }
@@ -54,7 +54,7 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
         res.end(surveysHtml(v))
         return true
     }
-    if (!surveysActive()) return (json(res, 503, { error: config.surveys.enabled ? 'Surveys need POSTHOG_SURVEY_API_KEY. Run the installer again; it makes the key.' : 'Surveys are switched off (FEATURE_SURVEYS=off).' }), true)
+    if (!surveysActive()) return (json(res, 503, { error: 'Surveys are unavailable. Contact a Lens administrator to finish setup.' }), true)
     try {
         if (p === '/replays/surveys/api/list' && req.method === 'GET') return (json(res, 200, { surveys: await surveyOverview(days(url, 30)) }), true)
         const m = /^\/replays\/surveys\/api\/survey\/([0-9a-f-]{8,64})(?:\/(launch|stop|archive|reach|launch-check|answers))?$/i.exec(p)
@@ -101,7 +101,8 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
     } catch (e) {
         // Caller mistakes are 400 with their (server-authored) message; anything else is an upstream failure.
         if (e instanceof ToolInputError) return (json(res, 400, { error: e.message }), true)
-        return (json(res, 502, { error: (e as Error).message }), true)
+        console.error('surveys:', p, e)
+        return (json(res, 502, { error: 'Couldn’t reach PostHog.' }), true)
     }
     json(res, 404, { error: 'Not found.' })
     return true
@@ -246,12 +247,11 @@ body main :is(#detail .chip,.list .item>.chip).stopped{color:var(--warn)}
 th,td{padding:8px 3px;font-size:12px}
 }
 </style></head>
-<body>${headerHtml(v, 'Surveys')}<main class="wide" id="main">
+<body>${headerHtml(v, 'Surveys')}<main id="main" tabindex="-1" class="wide">
 <div class="toolbar page-head"><div><h1>Surveys</h1><p>Survey activity, results and launch options.</p></div><select id="days" aria-label="Survey counts period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></div>
-<div class="layout"><section>
-<p id="page-msg" class="small" role="status" aria-live="polite"></p><div class="status-tabs" id="status-tabs" role="group" aria-label="Show surveys by status"></div><div class="list" id="list"><p class="empty">Loading…</p></div><div id="list-pager"></div>
+<div class="status-panel" id="list-state"><p id="page-msg" class="small" role="status">Loading surveys…</p><button class="secondary compact" id="list-retry" type="button" hidden>Try again</button></div><div class="layout" id="survey-layout" hidden><section><div class="status-tabs" id="status-tabs" role="group" aria-label="Show surveys by status"></div><div class="list" id="list"></div><div id="list-pager"></div>
 <p class="small"><a href="/replays/connect">Create a survey in chat</a></p><details><summary>How this works</summary><p class="small muted">Your survey role: ${SURVEY_ROLE_TEXT[v.role === 'admin' ? 'launch' : v.surveys || 'none']}.</p><p class="small muted">Make or change surveys in chat. Describe who should see it, when it appears and what to ask. New surveys stay as drafts until launched.</p></details></section>
-<section id="detail"><div class="card"><p class="empty">Choose a survey to see results and launch options.</p></div></section>
+<section id="detail"></section>
 </div></main>
 <dialog class="ldlg" id="ldlg" role="dialog" aria-modal="true" aria-labelledby="l-title" aria-describedby="l-name"><form method="dialog" id="l-form">
 <h2 id="l-title" tabindex="-1">Launch this survey?</h2><p class="small muted" id="l-name"></p>
@@ -275,13 +275,17 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const num=n=>n==null?'–':Number(n).toLocaleString('en-US')
 const when=t=>new Date(t).toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'})
 const color=c=>/^#[0-9a-fA-F]{3,6}$/.test(c||'')?c:null
-const api=(path,opts={})=>fetch(path,{...opts,headers:{'content-type':'application/json','x-clip-page':'1'}}).then(async r=>{const b=await r.json().catch(()=>({}));if(r.status===401)location.reload();if(!r.ok)throw new Error(b.error||('Error '+r.status));return b})
+const api=(path,opts={})=>fetch(path,{...opts,headers:{'content-type':'application/json','x-clip-page':'1'}}).then(async r=>{const b=await r.json().catch(()=>({}));if(r.status===401)location.reload();if(!r.ok)throw Object.assign(new Error(b.error||('HTTP '+r.status)),{status:r.status});return b})
 const STATUS={running:'Running',draft:'Draft',stopped:'Stopped',archived:'Archived'}
 let LIST=[],current=null,listRequest=0,busy=false
 const listPager=makePager({mount:$('list-pager'),noun:'surveys',size:25,draw:renderList})
-async function loadList(){const request=++listRequest;try{const d=await api('/replays/surveys/api/list?days='+$('days').value);if(request!==listRequest)return;LIST=d.surveys;drawList();$('page-msg').setAttribute('role','status');$('page-msg').textContent=LIST.some(s=>s.freshness)?'Showing cached survey counts while they refresh.':'';
-  const want=location.hash.slice(1)||(shown()[0]&&shown()[0].id);if(want&&want!==current)await show(want);else if(!LIST.length){current=null;$('detail').innerHTML='<div class="card"><p class="empty">No surveys yet. <a href="/replays/connect">Set up chat</a> to make your first survey.</p></div>'}}
-  catch(e){if(request!==listRequest)return;if(!LIST.length)$('list').innerHTML='<p class="empty">Surveys could not load.</p>';$('page-msg').setAttribute('role','alert');$('page-msg').textContent=e.message+' Change the period to try again.'}}
+function listMessage(message,retry=false){$('page-msg').textContent=message;$('list-retry').hidden=!retry;$('list-state').hidden=!message}
+async function loadList(refreshDetail=false){const request=++listRequest;try{const d=await api('/replays/surveys/api/list?days='+$('days').value);if(request!==listRequest)return;LIST=d.surveys;$('survey-layout').hidden=!LIST.length;
+  if(!LIST.length){current=null;listMessage('No surveys yet.');const a=document.createElement('a');a.href='/replays/connect';a.textContent='Create a survey in chat';$('page-msg').append(' ',a);return}
+  listMessage(LIST.some(s=>s.freshness)?'Showing cached survey counts while they refresh.':'');drawList();
+  const want=location.hash.slice(1)||shown()[0]?.id;if(want&&(want!==current||refreshDetail))await show(want)}
+  catch(e){if(request!==listRequest)return;current=null;$('survey-layout').hidden=true;listMessage(e.status===503?'Surveys are unavailable. Contact a Lens administrator to finish setup.':'Couldn’t load surveys',e.status!==503)}}
+$('list-retry').onclick=()=>{loadList().then(()=>{if($('list-retry').hidden)$('days').focus()})}
 const TABS=[['all','All'],['running','Running'],['draft','Drafts'],['stopped','Stopped']]
 let FILTER=(()=>{const f=new URLSearchParams(location.search).get('status');return TABS.some(t=>t[0]===f)?f:'all'})()
 function drawTabs(){$('status-tabs').innerHTML=TABS.map(([k,label])=>{const n=k==='all'?LIST.length:LIST.filter(s=>s.status===k).length;return '<button type="button" data-status="'+k+'" aria-pressed="'+(FILTER===k)+'">'+label+'<span class="n">'+n+'</span></button>'}).join('')
@@ -290,8 +294,8 @@ const shown=()=>FILTER==='all'?LIST:LIST.filter(s=>s.status===FILTER)
 function drawList(){drawTabs();const active=document.activeElement,id=active&&active.dataset.id;const list=shown();listPager.set(list,true);if(!list.length&&LIST.length)$('list').innerHTML='<p class="empty">'+(FILTER==='draft'?'No drafts. New surveys made in chat start here until someone launches them.':'No '+esc(STATUS[FILTER]||FILTER).toLowerCase()+' surveys.')+'</p>';if(id){const b=Array.from($('list').querySelectorAll('.item')).find(b=>b.dataset.id===id);if(b)b.focus()}}
 function renderList(items){$('list').innerHTML=items.map(s=>'<button type="button" class="item" data-id="'+esc(s.id)+'" aria-current="'+(s.id===current)+'" aria-controls="detail"><b>'+esc(s.name)+'</b><span class="chip '+esc(s.status)+'">'+esc(STATUS[s.status]||s.status)+'</span><small>'+(s.freshness?'<span title="Counts are from a few minutes ago and are refreshing">Refreshing</span> · ':'')+num(s.shown)+' shown · '+num(s.answered)+' answered'+(s.clients==='all'?' · every client':' · '+esc(s.clients.slice(0,3).join(', '))+(s.clients.length>3?' +'+(s.clients.length-3):''))+'</small></button>').join('')||'<p class="empty">No surveys yet. Make your first survey in chat.</p>'
   $('list').querySelectorAll('.item').forEach(b=>b.onclick=()=>{location.hash=b.dataset.id})}
-window.onhashchange=()=>{const id=location.hash.slice(1);if(id&&id!==current)show(id)}
-$('days').onchange=()=>{$('page-msg').setAttribute('role','status');$('page-msg').textContent='Loading surveys…';listPager.set([]);loadList();if(current)show(current)}
+window.onhashchange=()=>{const id=location.hash.slice(1);if(!$('survey-layout').hidden&&id&&id!==current)show(id)}
+$('days').onchange=()=>{listMessage('Loading surveys…');loadList(true)}
 
 const SHADOW={soft:'var(--pop)',strong:'0 16px 44px rgba(0,0,0,.38)',none:'none'},PAD={compact:'14px 16px',normal:'20px 22px',roomy:'26px 28px'}
 // A faithful sketch of the popover over an app window, placed where PostHog puts it (right = bottom right).
@@ -320,10 +324,10 @@ function bars(dist){const e=Object.entries(dist||{}),max=Math.max(1,...e.map(x=>
 function perDay(rows){if(!rows.length)return '<p class="small muted">Nothing shown in this period.</p>';const W=600,H=120,max=Math.max(1,...rows.map(r=>r.shown)),bw=Math.min(28,Math.max(2,W/rows.length-2))
   return '<div class="days"><svg viewBox="0 0 '+W+' '+(H+18)+'" width="'+W+'" role="img" aria-label="Shown and answered per day">'+rows.map((r,i)=>{const x=i*(W/rows.length),h=r.shown/max*H,a=r.answered/max*H;return '<rect x="'+x+'" y="'+(H-h)+'" width="'+bw+'" height="'+h+'" fill="var(--grid)"><title>'+esc(r.day)+': '+r.shown+' shown</title></rect><rect x="'+x+'" y="'+(H-a)+'" width="'+bw+'" height="'+a+'" fill="var(--act)"><title>'+esc(r.day)+': '+r.answered+' answered</title></rect>'}).join('')+'<text x="0" y="'+(H+14)+'" font-size="11" fill="var(--muted)">'+esc(rows[0].day)+'</text><text x="'+W+'" y="'+(H+14)+'" font-size="11" text-anchor="end" fill="var(--muted)">'+esc(rows[rows.length-1].day)+'</text></svg><p class="small muted">Light grey: shown. Dark grey: answered.</p></div><details><summary>Daily counts as a table</summary><div class="table-wrap" role="region" aria-label="Daily survey counts" tabindex="0"><table><caption class="sr-only">Daily survey counts</caption><thead><tr><th scope="col">Day</th><th scope="col" class="n">Shown</th><th scope="col" class="n">Answered</th></tr></thead><tbody id="daily-rows"></tbody></table></div><div id="daily-pager"></div></details>'}
 
-async function show(id){const period=$('days').value;current=id;$('list').querySelectorAll('.item').forEach(b=>b.setAttribute('aria-current',String(b.dataset.id===id)));$('detail').setAttribute('aria-busy','true');$('page-msg').setAttribute('role','status');$('page-msg').textContent='Loading survey…';$('detail').innerHTML='<div class="card"><p class="empty">Loading…</p></div>'
-  let r;try{r=await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'?days='+period)}catch(e){if(current!==id||$('days').value!==period)return;$('detail').removeAttribute('aria-busy');$('page-msg').textContent='';$('detail').innerHTML='<div class="card"><p class="err" role="alert">'+esc(e.message)+' Try loading this survey again.</p><button type="button" class="ghost" id="detail-retry">Try again</button></div>';$('detail-retry').onclick=()=>show(id);return}
+async function show(id){const period=$('days').value;current=id;$('list').querySelectorAll('.item').forEach(b=>b.setAttribute('aria-current',String(b.dataset.id===id)));$('detail').setAttribute('aria-busy','true');$('detail').innerHTML='<div class="card"><p class="empty" role="status">Loading survey…</p></div>'
+  let r;try{r=await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'?days='+period)}catch(e){if(current!==id||$('days').value!==period)return;$('detail').removeAttribute('aria-busy');$('detail').innerHTML='<div class="card"><p class="err" role="alert">'+esc(e.message)+' Try loading this survey again.</p><button type="button" class="ghost" id="detail-retry">Try again</button></div>';$('detail-retry').onclick=()=>show(id);return}
   if(current!==id||$('days').value!==period)return
-  $('detail').removeAttribute('aria-busy');$('page-msg').textContent=''
+  $('detail').removeAttribute('aria-busy')
   const s=r.survey
   const acts=!CAN_LAUNCH?'<span class="small muted">Ask an admin for launch access.</span>':(s.status==='draft'||s.status==='stopped'?'<button type="button" id="a-launch">'+(s.status==='draft'?'Launch':'Start again')+'</button>':'')+(s.status==='running'?'<button type="button" class="danger" id="a-stop">Stop</button>':'')+'<details><summary>More actions</summary><button type="button" id="a-archive" class="ghost">Archive</button></details>'
   const launched=(r.launches||[])[0]
@@ -358,7 +362,7 @@ async function show(id){const period=$('days').value;current=id;$('list').queryS
   })
   if($('client-pager'))makePager({mount:$('client-pager'),noun:'clients',size:25,draw:items=>{$('client-rows').innerHTML=items.map(c=>'<tr><td>'+esc(c.client)+'</td><td class="n">'+num(c.shown)+'</td><td class="n">'+num(c.answered)+'</td><td class="n">'+num(c.dismissed)+'</td></tr>').join('')}}).set(r.by_client)
   if($('daily-pager'))makePager({mount:$('daily-pager'),noun:'days',size:25,draw:items=>{$('daily-rows').innerHTML=items.map(d=>'<tr><td>'+esc(d.day)+'</td><td class="n">'+num(d.shown)+'</td><td class="n">'+num(d.answered)+'</td></tr>').join('')}}).set(r.by_day)
-  const act=(name,ask)=>async()=>{if(busy||ask&&!confirm(ask))return;busy=true;const buttons=Array.from($('detail').querySelectorAll('.acts button'));buttons.forEach(b=>b.disabled=true);const msg=$('a-msg');msg.setAttribute('role','status');msg.textContent=name==='archive'?'Archiving…':'Stopping…';try{await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'/'+name,{method:'POST'});if(name==='archive')location.hash='';current=null;await loadList();$('page-msg').textContent=name==='archive'?'Survey archived.':'Survey stopped.';const next=$('a-launch')||$('days');next.focus()}catch(e){msg.textContent=e.message+' Try again.';msg.className='small err';msg.setAttribute('role','alert')}finally{busy=false;buttons.forEach(b=>b.disabled=false)}}
+  const act=(name,ask)=>async()=>{if(busy||ask&&!confirm(ask))return;busy=true;const buttons=Array.from($('detail').querySelectorAll('.acts button'));buttons.forEach(b=>b.disabled=true);const msg=$('a-msg');msg.setAttribute('role','status');msg.textContent=name==='archive'?'Archiving…':'Stopping…';try{await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'/'+name,{method:'POST'});if(name==='archive')location.hash='';current=null;await loadList();if(current||!$('survey-layout').hidden)listMessage(name==='archive'?'Survey archived.':'Survey stopped.');const next=$('a-launch')||$('days');next.focus()}catch(e){msg.textContent=e.message+' Try again.';msg.className='small err';msg.setAttribute('role','alert')}finally{busy=false;buttons.forEach(b=>b.disabled=false)}}
   if($('a-launch'))$('a-launch').onclick=()=>openLaunch(id)
   if($('a-stop'))$('a-stop').onclick=act('stop','Stop showing "'+s.name+'"? Its answers stay.')
   if($('a-archive'))$('a-archive').onclick=act('archive','Archive "'+s.name+'"? It stops and leaves this list. Its answers stay in PostHog.')
@@ -378,8 +382,8 @@ function launchReady(){$('l-go').disabled=!!(launching||!LAUNCH||LAUNCH.rules.le
 $('l-ack').onchange=launchReady;$('l-ticket').oninput=launchReady;$('l-cancel').onclick=()=>$('ldlg').close()
 $('ldlg').addEventListener('close',()=>{launchRequest++;LAUNCH=null;if(launchOpener&&launchOpener.isConnected)launchOpener.focus();else $('days').focus()})
 $('l-form').onsubmit=async ev=>{ev.preventDefault();launchReady();if($('l-go').disabled)return;const launch=LAUNCH;launching=true;busy=true;$('l-go').disabled=true;$('l-go').textContent='Launching…';$('l-ack').disabled=true;$('l-ticket').disabled=true;$('l-msg').textContent=''
-  try{await api('/replays/surveys/api/survey/'+encodeURIComponent(launch.id)+'/launch',{method:'POST',body:JSON.stringify({ticket:$('l-ticket').value.trim().toUpperCase(),acknowledgement:launch.acknowledgement})});if($('ldlg').open)$('ldlg').close();current=null;await loadList();$('page-msg').textContent='Survey launched.';if($('a-stop'))$('a-stop').focus()}
-  catch(e){if($('ldlg').open)$('l-msg').textContent=e.message+' Check the ticket and try again.';else{$('page-msg').setAttribute('role','alert');$('page-msg').textContent=e.message+' Try launching again.'}}
+  try{await api('/replays/surveys/api/survey/'+encodeURIComponent(launch.id)+'/launch',{method:'POST',body:JSON.stringify({ticket:$('l-ticket').value.trim().toUpperCase(),acknowledgement:launch.acknowledgement})});if($('ldlg').open)$('ldlg').close();current=null;await loadList();if(!$('survey-layout').hidden)listMessage('Survey launched.');if($('a-stop'))$('a-stop').focus()}
+  catch(e){if($('ldlg').open)$('l-msg').textContent=e.message+' Check the ticket and try again.';else{listMessage(e.message+' Try launching again.')}}
   finally{launching=false;busy=false;$('l-ack').disabled=false;$('l-ticket').disabled=false;$('l-go').textContent='Launch survey';launchReady()}}
 loadList();setInterval(()=>{if(document.visibilityState==='visible'&&!$('ldlg').open&&!busy&&!document.querySelector('main').contains(document.activeElement))loadList()},60000)
 `

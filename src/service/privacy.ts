@@ -145,7 +145,7 @@ function adminPage(v: Viewer): string {
 .privacy-page .row button{align-self:end}
 #preview{white-space:pre-wrap;max-height:300px;overflow:auto}
 #preview:empty{display:none}
-</style></head><body>${headerHtml(v, 'Admin')}<main id="main" class="privacy-page">
+</style></head><body>${headerHtml(v, 'Admin')}<main id="main" tabindex="-1" class="privacy-page">
 <div class="page-head"><div><h1>Admin</h1><p>Privacy for AI</p></div></div>${adminTabs(true)}
 <section class="card"><h2>Privacy mode: <span id="current"></span></h2><p>One setting covers Lens tools, ticket triage and PostHog results. Replay access stays the same in all modes.</p>
 <div class="table-wrap" role="region" aria-label="Privacy modes" tabindex="0"><table><thead><tr><th>Mode</th><th>Client names/codes</th><th>Client users’ emails/names/IDs</th><th>Cash amounts</th><th>Trade IDs</th><th>PostHog SQL</th></tr></thead><tbody>
@@ -153,19 +153,34 @@ function adminPage(v: Viewer): string {
 <tr><td><label><input type="radio" name="mode" value="standard"> Standard (default)</label></td><td>Real</td><td>Masked</td><td>Masked</td><td>Visible</td><td>Allowed; results masked</td></tr>
 <tr><td><label><input type="radio" name="mode" value="private"> Private</label></td><td>Numbered codenames</td><td>Masked</td><td>Masked</td><td>Visible</td><td>Refused</td></tr></tbody></table></div>
 <p class="small muted">Open shows what the source still retains. Data stored already generalised, such as message templates, stays generalised. Names typed directly into chat are sent to AI; in private mode use codenames.</p>
-<div id="private"><label>Other PostHog data <select id="posthog"><option value="block">Block data</option><option value="filter">Filter results</option></select></label> <label><input type="checkbox" id="round"> Round counts</label><p class="small muted">Filtering is best effort; transformed or encoded client names may evade it. Block data permits docs only.</p></div></section>
+<div class="row"><button id="apply-mode" type="button" disabled>Apply privacy mode</button><p class="small muted" id="mode-exposure" role="status"></p></div><div id="private" hidden><label>Other PostHog data <select id="posthog"><option value="block">Block data</option><option value="filter">Filter results</option></select></label> <label><input type="checkbox" id="round"> Round counts</label><p class="small muted">Filtering is best effort; transformed or encoded client names may evade it. Block data permits docs only.</p></div></section>
 <section class="card"><h2>Numbered codenames</h2><p>Immutable ranks keep labels stable. Initial ranks are shuffled. Individual codename edits are removed; real-name aliases remain editable below.</p>
-<div class="row"><label>Prefix <input id="prefix" maxlength="40"></label> <label>Start <input id="start" type="number" min="0" step="1"></label> <button id="show" class="secondary">Preview mapping</button> <button id="apply" disabled>Apply preview</button></div><pre id="preview" role="region" aria-label="Codename mapping preview" tabindex="0"></pre><p class="small muted">Old codenames stop resolving. A scheme that reassigns a current or retired label is refused.</p>
+<div class="row"><label>Prefix <input id="prefix" maxlength="40"></label> <label>First codename number <input id="start" type="number" min="0" step="1"></label> <button id="show" class="secondary">Preview mapping</button> <button id="apply" disabled>Apply preview</button></div><pre id="preview" role="region" aria-label="Codename mapping preview" tabindex="0"></pre><p class="small muted">Old codenames stop resolving. A scheme that reassigns a current or retired label is refused.</p>
 <div class="table-wrap" role="region" aria-label="Client codename aliases" tabindex="0"><table><thead><tr><th>Client</th><th>Codename</th><th>Real-name aliases</th><th></th></tr></thead><tbody id="clients"></tbody></table></div></section>
 <section class="card"><h2>Privacy audit</h2><div id="audit"></div></section><p id="msg" role="status"></p></main><script>
-const $=id=>document.getElementById(id);let state,preview;
+const $=id=>document.getElementById(id);let state,preview,savingMode=false;
+const modes=[...document.querySelectorAll('[name=mode]')],modeNames={open:'Open',standard:'Standard',private:'Private'};
+const exposure={open:'Client names, user details, cash amounts and trade IDs are visible. SQL is allowed.',standard:'Client names and trade IDs are visible. User details and cash amounts are masked, including in SQL results.',private:'Client names use numbered codenames. User details and cash amounts are masked. Trade IDs are visible. SQL is blocked.'};
 async function api(path,body){const r=await fetch('/replays/admin/privacy/api/'+path,{method:body?'POST':'GET',headers:{'content-type':'application/json','x-clip-page':'1'},body:body?JSON.stringify(body):undefined});const d=await r.json();if(!r.ok)throw Error(d.error);return d}
 const attempt=f=>async()=>{try{await f();$('msg').textContent='Saved.'}catch(e){$('msg').textContent=e.message}};
-async function load(){state=await api('state');const s=state.settings;$('current').textContent=s.mode;document.querySelectorAll('[name=mode]').forEach(e=>e.checked=e.value===s.mode);$('private').hidden=s.mode!=='private';$('posthog').value=s.posthog;$('round').checked=s.round;$('prefix').value=state.numbering.prefix;$('start').value=state.numbering.start;
-$('clients').replaceChildren();for(const c of state.clients){const tr=document.createElement('tr');for(const text of [c.name||c.client,c.codename]){const td=document.createElement('td');td.textContent=text;tr.append(td)}const td=document.createElement('td'),input=document.createElement('input');input.value=c.aliases.join(', ');input.setAttribute('aria-label','Real-name aliases for '+(c.name||c.client));td.append(input);tr.append(td);const acts=document.createElement('td'),save=document.createElement('button');save.textContent='Save aliases';save.className='secondary';save.onclick=attempt(async()=>{await api('codename',{client:c.client,aliases:input.value});await load()});acts.append(save);tr.append(acts);$('clients').append(tr)}
-$('audit').replaceChildren();for(const row of state.audit){const p=document.createElement('p');p.className='small';p.textContent=row.t+' · '+row.who+' · '+row.action+' · '+row.details;$('audit').append(p)}}
-document.querySelectorAll('[name=mode]').forEach(e=>e.onchange=attempt(async()=>{await api('settings',{mode:e.value});await load()}));
-for(const k of ['posthog','round'])$(k).onchange=attempt(async()=>{await api('settings',{[k]:k==='round'?$(k).checked:$(k).value});await load()});
+function stageMode(){const mode=modes.find(e=>e.checked)?.value;$('apply-mode').disabled=savingMode||!state||!mode||state.settings.mode===mode;$('mode-exposure').textContent=mode?modeNames[mode]+' · '+exposure[mode]:''}
+function drawSettings(s,resetMode){$('current').textContent=modeNames[s.mode];if(resetMode)modes.forEach(e=>e.checked=e.value===s.mode);$('private').hidden=s.mode!=='private';$('posthog').value=s.posthog;$('round').checked=s.round;stageMode()}
+const auditLabels={'privacy.policy_set':'Updated privacy settings','privacy.anonymise_set':'Updated privacy settings','privacy.mode_migrated':'Migrated privacy mode','privacy.codename_set':'Updated client aliases','privacy.numbering_set':'Updated codename numbering','privacy.ranks_migrated':'Assigned codename numbers'};
+const auditDate=new Intl.DateTimeFormat('en-GB',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'});
+function drawAudit(rows){$('audit').replaceChildren();for(const row of rows){const item=document.createElement('div'),p=document.createElement('p'),details=document.createElement('details'),summary=document.createElement('summary'),raw=document.createElement('pre');p.className='small';
+ const t=new Date(row.t),who=row.who==='lens'?'Lens':row.who;let data={};try{data=JSON.parse(row.details)||{}}catch{}
+ const action=data.mode&&modeNames[data.mode]&&(row.action==='privacy.anonymise_set'||row.action==='privacy.policy_set'&&data.before!==data.mode)?'Set the privacy mode to '+modeNames[data.mode]:auditLabels[row.action]||'Updated client privacy';
+ p.textContent=(isNaN(t)?row.t:auditDate.format(t)+', '+t.toISOString().slice(11,16)+' UTC')+' · '+who+' · '+action;
+ summary.textContent='Technical details';raw.textContent=row.action+' · '+row.details;details.append(summary,raw);item.append(p,details);$('audit').append(item)}}
+async function load(){state=await api('state');drawSettings(state.settings,true);$('prefix').value=state.numbering.prefix;$('start').value=state.numbering.start;
+$('clients').replaceChildren();for(const c of state.clients){const tr=document.createElement('tr');for(const text of [c.name||c.client,c.codename]){const td=document.createElement('td');td.textContent=text;tr.append(td)}const td=document.createElement('td'),input=document.createElement('input');input.value=c.aliases.join(', ');input.setAttribute('aria-label','Real-name aliases for '+(c.name||c.client));td.append(input);tr.append(td);const acts=document.createElement('td'),save=document.createElement('button'),status=document.createElement('span');save.type='button';save.textContent='Save aliases';save.className='secondary';status.className='small muted';status.setAttribute('role','status');
+ save.onclick=async()=>{if(save.getAttribute('aria-disabled')==='true')return;const aliases=input.value;save.setAttribute('aria-disabled','true');status.textContent='Saving…';try{const saved=await api('codename',{client:c.client,aliases});if(input.value===aliases)input.value=saved.aliases.join(', ');tr.cells[1].textContent=saved.codename;status.textContent='Saved';api('state').then(d=>drawAudit(d.audit)).catch(()=>{})}catch(e){status.textContent=e.message}finally{save.removeAttribute('aria-disabled')}};
+ acts.append(save,' ',status);tr.append(acts);$('clients').append(tr)}
+ drawAudit(state.audit)}
+modes.forEach(e=>e.onchange=stageMode);
+$('apply-mode').onclick=attempt(async()=>{const mode=modes.find(e=>e.checked)?.value;if(!mode||savingMode||mode===state.settings.mode)return;savingMode=true;stageMode();
+ try{state.settings=await api('settings',{mode});drawSettings(state.settings,false);drawAudit((await api('state')).audit)}finally{savingMode=false;stageMode()}});
+for(const k of ['posthog','round'])$(k).onchange=attempt(async()=>{state.settings=await api('settings',{[k]:k==='round'?$(k).checked:$(k).value});drawSettings(state.settings,false);drawAudit((await api('state')).audit)});
 const scheme=()=>({prefix:$('prefix').value,start:Number($('start').value)});
 for(const k of ['prefix','start'])$(k).oninput=()=>{preview=undefined;$('apply').disabled=true};
 $('show').onclick=attempt(async()=>{const p=scheme(),d=await api('numbering-preview',p);preview={...p,revision:d.revision};$('preview').textContent=d.clients.map(c=>(c.name||c.client)+': '+c.before+' → '+c.codename).join('\\n');$('apply').disabled=false});
@@ -177,7 +192,7 @@ load().catch(e=>$('msg').textContent=e.message);
 function codenamesPage(v: Viewer): string {
     const on = anonymiseOn()
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Codenames · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}${STYLE}</style></head>
-<body>${headerHtml(v, 'Chat')}<main class="narrow" id="main">
+<body>${headerHtml(v, 'Chat')}<main id="main" tabindex="-1" class="narrow">
 <div class="top page-head"><div><h1>Codenames</h1>
 <p class="sub">${on ? 'Copilot only knows clients by codename. Ask about a client using its codename.' : 'Numbered client codenames for private mode.'}</p></div><span class="badge ${on ? 'ok' : ''}">${esc(privacyMode())} mode</span></div>
 ${on ? '<div class="alert" role="note">Names entered directly into Copilot are still sent to AI. Use codenames and start a new chat after enabling privacy.</div>' : ''}
@@ -192,7 +207,7 @@ const pager=makePager({mount:$('pager'),noun:'clients',size:25,draw:slice=>{cons
   for(const c of slice){const tr=document.createElement('tr');const cell=(cls,n)=>{const td=document.createElement('td');td.className=cls;td.append(n);tr.append(td)}
     const b=document.createElement('b');b.textContent=c.codename;cell('cn',b)
     const who=document.createElement('div');who.textContent=c.name||c.client;if(c.name){const k=document.createElement('span');k.className='code';k.textContent=c.client;who.append(k)}cell('cl',who)
-    const cp=document.createElement('button');cp.type='button';cp.className='ghost copy-prompt';cp.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg><span>Copy prompt</span>';cp.setAttribute('aria-label','Copy a Copilot question about '+c.codename)
+    const cp=document.createElement('button');cp.type='button';cp.className='ghost copy-prompt';cp.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg><span>Copy prompt</span>';cp.setAttribute('aria-label','Copy prompt for '+c.codename)
     cp.onclick=async()=>{const t='How is '+c.codename+' doing this month, and what needs attention?';try{await navigator.clipboard.writeText(t);const label=cp.querySelector('span');label.textContent='Copied';setTimeout(()=>label.textContent='Copy prompt',1500);$('msg').textContent='Copied: '+t}catch{$('msg').textContent=t}}
     const box=document.createElement('div');box.className='acts';box.append(cp);cell('ac',box);body.append(tr)}}})
 const filter=()=>{const q=$('find').value.trim().toLowerCase();pager.set(L.filter(c=>!q||[c.client,c.name,c.codename].some(x=>String(x).toLowerCase().includes(q))))}

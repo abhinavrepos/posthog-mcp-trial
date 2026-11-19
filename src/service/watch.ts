@@ -106,7 +106,8 @@ export function watchHtml(v: Viewer): string {
 .steps td{vertical-align:top}.steps tr.sel td{background:var(--accent-soft)}.steps td.t{white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--muted)}
 aside .card{padding:var(--space-4);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);margin:0 0 12px}aside h2{font-size:15px;margin:0 0 4px}.pr{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column}
 .pr li{padding:10px 0;border-top:1px solid var(--line)}.pr li:first-child{border-top:0}.pr b{display:block;font-size:13.5px;font-weight:600}.pr .n{font-size:12.5px;color:var(--muted)}
-.pr .ex{display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:4px;font-size:12.5px}
+.pr .ex{display:flex;flex-wrap:wrap;gap:4px 10px;margin-top:4px;font-size:12.5px}.pr .ex a{text-decoration:underline;text-underline-offset:2px}
+.pr .filt{margin-top:6px;min-height:28px;padding:2px 10px;font-size:12.5px}#pr-more{margin-top:8px;min-height:28px;padding:2px 0;font-size:13px}
 .ask{margin-top:16px}.ask code{display:block;white-space:normal;background:var(--bg);border:1px solid var(--line);border-radius:var(--r-sm);padding:8px 10px;font-size:12.5px;line-height:18px;margin:6px 0}
 .addrow{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px}.addrow>div{flex:1 1 320px;max-width:460px}
 td .st{display:inline-flex;align-items:center;gap:6px}td .st i{width:8px;height:8px;border-radius:50%;background:var(--ok)}td .st.off i{background:var(--control)}
@@ -118,7 +119,7 @@ td .st{display:inline-flex;align-items:center;gap:6px}td .st i{width:8px;height:
 </style></head>
 <body>${headerHtml(v, 'Watchlist')}<main class="wide">
 <div class="page-head"><div><h1>Watchlist</h1><p>Find moments worth replaying in the sessions of the clients you watch.</p></div>
-<div class="row" style="gap:8px"><button class="secondary hidden" id="readnow" type="button">Read new replays now</button></div></div>
+<div class="row" style="gap:8px"><button class="secondary hidden" id="readnow" type="button">Check for new highlights</button></div></div>
 <div class="tabs" role="tablist" aria-label="Watchlist views"><button role="tab" id="tab-hl" aria-selected="true" aria-controls="view-hl" type="button">Highlights</button><button role="tab" id="tab-cl" aria-selected="false" aria-controls="view-cl" type="button">Clients</button></div>
 
 <section id="view-hl" role="tabpanel" aria-labelledby="tab-hl">
@@ -129,8 +130,8 @@ td .st{display:inline-flex;align-items:center;gap:6px}td .st i{width:8px;height:
 <button class="ghost reset hidden" id="f-reset" type="button">Reset filters</button>
 </div>
 <p class="cov small muted" id="cov" role="status" aria-live="polite"></p>
-<div class="w-grid"><div><ol class="feed" id="feed" aria-label="Sessions worth watching"></ol><div id="feed-pager"></div></div>
-<aside aria-labelledby="pr-h"><div class="card"><h2 id="pr-h">Repeated problems</h2><p class="small muted" style="margin:0">The same thing going wrong on the same control in several sessions.</p><ul class="pr" id="pr"></ul></div>
+<div class="w-grid"><div><h2 class="sr-only" id="feed-h">Replay highlights</h2><ol class="feed" id="feed" aria-labelledby="feed-h"></ol><div id="feed-pager"></div></div>
+<aside aria-labelledby="pr-h"><div class="card"><h2 id="pr-h">Repeated problems</h2><p class="small muted" style="margin:0">The same thing going wrong on the same control in several sessions.</p><ul class="pr" id="pr"></ul><button class="ghost hidden" id="pr-more" type="button" aria-expanded="false"></button></div>
 <div class="card ask" id="ask"><h2>Ask in chat</h2><p class="small muted" style="margin:0">Copilot reads the same steps through Lens. Try:</p><code id="ask-q"></code><button class="ghost" id="ask-copy" type="button">Copy prompt</button> <span class="small muted" id="ask-done" aria-live="polite"></span></div></aside></div>
 </section>
 
@@ -191,7 +192,9 @@ async function change(client,action,btn){$('cl-msg').textContent='';if(btn)btn.d
   try{await api('change',{method:'POST',body:JSON.stringify({client,action})});await loadState();loadFeed()}catch(e){$('cl-msg').textContent='Couldn’t update the watchlist: '+e.message}finally{if(btn&&btn.isConnected)btn.disabled=false}}
 $('add-go').onclick=()=>{const v=$('add-client').value.trim();if(!v)return $('add-client').focus();const m=state.clients.find(c=>v===c.id||v===c.name||v.endsWith(' · '+c.id));if(!m){$('cl-msg').textContent='No client matches “'+v+'”. Pick one from the list.';return}change(m.id,'add',$('add-go')).then(()=>{$('add-client').value=''})}
 $('add-client').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();$('add-go').click()}}
-$('readnow').onclick=async()=>{const b=$('readnow');b.disabled=true;try{const r=await api('read-now',{method:'POST'});b.textContent=r.started?'Reading… refresh in a minute':'Already reading'}catch(e){b.textContent='Couldn’t start'}setTimeout(()=>{b.disabled=false;b.textContent='Read new replays now';loadState();loadFeed()},60000)}
+$('readnow').onclick=async()=>{const b=$('readnow');b.disabled=true;$('cov').textContent='Checking for new highlights…'
+  try{const r=await api('read-now',{method:'POST'});$('cov').textContent=r.started?'Checking for new highlights… new sessions appear here within a minute.':'A check is already running. New sessions appear here shortly.'}catch(e){$('cov').textContent='Couldn’t start a check: '+e.message}
+  setTimeout(()=>{b.disabled=false;loadState().then(loadFeed)},60000)}
 
 // ---------------------------------------------------------------- highlights
 const pager=makePager({mount:$('feed-pager'),noun:'sessions',size:25,label:'Highlights',draw:items=>{const f=$('feed');f.innerHTML='';items.forEach(h=>f.appendChild(card(h)))}})
@@ -204,7 +207,7 @@ async function loadFeed(){
   const my=++token;open=null;const f=$('feed');f.innerHTML='';for(let i=0;i<3;i++){const s=el('li','skel');s.setAttribute('aria-hidden','true');f.appendChild(s)}$('cov').textContent='Loading highlights…';$('pr').innerHTML=''
   askText()
   try{const d=await api('highlights?'+filtersQS());if(my!==token)return
-    const c=d.coverage;$('cov').textContent=!state.watchlist.length?'':c.sessions_read?(c.with_highlights+' of '+c.sessions_read+' sessions read have something worth watching'+(c.waiting?' · '+c.waiting+' waiting to be read':'')+(c.skipped?' · '+c.skipped+' could not be read':'')+'.'):(c.waiting?c.waiting+' replays are waiting to be read.':'')
+    const c=d.coverage,n=x=>x.toLocaleString();$('cov').textContent=!state.watchlist.length?'':c.sessions_read?[n(c.sessions_read)+' sessions reviewed',n(c.with_highlights)+' with highlights',c.waiting?n(c.waiting)+' waiting':'',c.skipped?n(c.skipped)+' unreadable':''].filter(Boolean).join(' · '):(c.waiting?n(c.waiting)+' replays waiting to be reviewed':'')
     pager.set([]);f.innerHTML=''
     if(!state.watchlist.length){f.appendChild(emptyCard('No clients on your watchlist','Add a client and Lens starts reading its replays, step by step.',state.canManage?['Add a client',()=>{show(1);$('add-client').focus()}]:null));drawProblems([]);return}
     if(!d.items.length){const filtered=[...filtersQS().keys()].some(k=>k!=='days');f.appendChild(c.sessions_read?emptyCard(filtered?'No highlights match these filters':'Nothing stood out',filtered?'Try another client or kind, or a longer period.':'No struggles in the '+c.sessions_read+' sessions read in this period.',filtered?['Reset filters',()=>$('f-reset').click()]:null):emptyCard(c.waiting?'Replays are waiting to be read':'No replays found in this period',c.waiting?'Lens reads a few every 10 minutes. Check back shortly.':'Watched clients have no finished recordings in this period.',null));drawProblems(d.problems);return}
@@ -261,10 +264,15 @@ function drawDetail(box,d,h){
   function pick(idx,focus){const s=d.steps[idx];marks.forEach(m=>{m.g.classList.toggle('sel',m.idx===idx);m.g.setAttribute('tabindex',m.idx===idx?'0':'-1')});rows.forEach((r,i)=>r.classList.toggle('sel',i===idx));pickInfo.textContent=clock(s.at_ms)+' · '+(s.marks.length?s.marks.map(markText).join(', ')+' · ':'')+s.line;watch.href=s.clip_page;watch.textContent='Watch from '+clock(s.offset_s*1000);if(focus){const m=marks.find(m=>m.idx===idx);m&&m.g.focus()}rows[idx]&&rows[idx].scrollIntoView({block:'nearest'})}
   const first=d.steps.findIndex(s=>s.n===h.moment.step);pick(first>=0?first:0,false)
 }
-function drawProblems(list){const u=$('pr');u.innerHTML=''
-  if(!list.length){u.appendChild(el('li','small muted','No repeated problems in this view.'));return}
-  list.slice(0,8).forEach(p=>{const li=el('li');li.appendChild(el('b',null,p.what+' on '+p.where));li.appendChild(el('span','n',p.sessions+' sessions · '+p.clients+' client'+(p.clients===1?'':'s')+' · '+p.people+' '+(p.people===1?'person':'people')))
-    const ex=el('div','ex');p.examples.forEach(x=>{const a=el('a',null,x.client_name+' · '+new Date(x.started_at).toLocaleDateString([], {day:'numeric',month:'short'})+' at '+clock(x.offset_s*1000));a.setAttribute('aria-label','Watch '+x.client_name+', '+when(x.started_at)+', from '+clock(x.offset_s*1000));a.href=x.clip_page;a.target='_blank';a.rel='noopener';ex.appendChild(a)});li.appendChild(ex);u.appendChild(li)})}
+let allProblems=false
+$('pr-more').onclick=()=>{allProblems=!allProblems;drawProblems(lastProblems);$('pr-more').focus()}
+let lastProblems=[]
+function drawProblems(list){lastProblems=list;const u=$('pr');u.innerHTML='';const more=$('pr-more')
+  if(!list.length){u.appendChild(el('li','small muted','No repeated problems in this view.'));more.classList.add('hidden');return}
+  more.classList.toggle('hidden',list.length<=3);more.textContent=allProblems?'Show fewer':'Show all '+list.length+' patterns';more.setAttribute('aria-expanded',String(allProblems))
+  list.slice(0,allProblems?30:3).forEach(p=>{const li=el('li');li.appendChild(el('b',null,p.what+' on '+p.where));li.appendChild(el('span','n',p.sessions+' sessions · '+p.clients+' client'+(p.clients===1?'':'s')+' · '+p.people+' '+(p.people===1?'person':'people')))
+    const fb=el('button','secondary filt','Show these sessions');fb.type='button';fb.setAttribute('aria-label','Show sessions with: '+p.what);fb.onclick=()=>{$('f-kind').value=p.mark;syncURL();loadFeed();$('feed-h').scrollIntoView({block:'start'})}
+    const ex=el('div','ex');p.examples.forEach(x=>{const a=el('a',null,x.client_name+' · '+new Date(x.started_at).toLocaleDateString([], {day:'numeric',month:'short'})+' at '+clock(x.offset_s*1000));a.setAttribute('aria-label','Watch '+x.client_name+', '+when(x.started_at)+', from '+clock(x.offset_s*1000));a.href=x.clip_page;a.target='_blank';a.rel='noopener';ex.appendChild(a)});li.appendChild(ex);if($('f-kind').value!==p.mark)li.appendChild(fb);u.appendChild(li)})}
 function askText(){const c=$('f-client'),name=c.value?c.options[c.selectedIndex].textContent.replace(/ \\(paused\\)$/,''):'';const days=$('f-days').options[$('f-days').selectedIndex].textContent.toLowerCase()
   $('ask-q').textContent='Using '+CFG.mcpName+', what went wrong '+(name?'at '+name:'at my watched clients')+' in the '+days.replace(/^last /,'last ')+'? Show the step-by-step moments of the worst session, with replay links.'
   $('ask').hidden=!CFG.mcp}

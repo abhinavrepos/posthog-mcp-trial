@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { privacyMode, anonymiseOn } from '../core/anonymise.ts'
 import { config, posthogMcpActive } from '../core/config.ts'
-import { can, canSurvey, canDashboard, chatPolicy, DEFAULT_CHAT_APPS, chatUrl, createMcpToken, listMcpTokens, revokeMcpToken, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
+import { can, canSurvey, canDashboard, chatPolicy, DEFAULT_CHAT_APPS, DEFAULT_CHAT_NOTE, chatUrl, createMcpToken, listMcpTokens, revokeMcpToken, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
 import { APP_NAME, headerHtml, PAGER_JS, PAGE_CSS } from './replays.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
@@ -40,7 +40,7 @@ export async function handleConnect(req: IncomingMessage, res: ServerResponse, u
         res.end(connectHtml(v))
         return true
     }
-    if (!config.features.lensMcp) return (json(res, 503, { error: 'Chat tools are switched off (FEATURE_LENS_MCP=off).' }), true)
+    if (!config.features.lensMcp) return (json(res, 503, { error: 'Chat tools are switched off.' }), true)
     if (p === '/replays/connect/api/tokens' && req.method === 'GET') return (json(res, 200, { tokens: listMcpTokens(v.email) }), true)
     if (p === '/replays/connect/api/tokens' && req.method === 'POST') {
         const body = await readJson(req)
@@ -109,13 +109,13 @@ main td button{padding:6px 3px}
 ol.steps li{padding-left:2px}
 }
 </style></head>
-<body>${headerHtml(v, 'Chat')}<main class="narrow">
+<body>${headerHtml(v, 'Chat')}<main id="main" tabindex="-1" class="narrow">
 <div class="page-head"><div><h1>Connect GitHub Copilot</h1><p>Connect your personal Lens key to Copilot.</p></div></div><div class="card">
-<p class="small">Privacy mode: <b>${privacyMode()}</b></p><div class="policy" role="note" aria-labelledby="policy-title"><p id="policy-title"><b>Approved apps only.</b></p>${policy.apps.length === 1 && policy.apps[0] === DEFAULT_CHAT_APPS[0] ? '<p>Use GitHub Copilot with your ION Microsoft enterprise account.</p>' : `<p>Connect your key only to:</p><ul>${policy.apps.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`}${policy.note ? `<p>${esc(policy.note)}</p>` : ''}</div>${anonymiseOn() ? '<div class="info" role="note"><p><b>Client names are hidden from AI.</b> Copilot sees each client\'s codename, never its name or code. Ask about a client by its codename, and do not type client names into chat. <a href="/replays/codenames">Look up codenames</a>.</p></div>' : ''}
+<p class="small">Privacy mode: <b>${privacyMode()}</b></p><div class="policy" role="note" aria-labelledby="policy-title"><p id="policy-title"><b>Approved apps only.</b></p>${policy.apps.length === 1 && policy.apps[0] === DEFAULT_CHAT_APPS[0] ? '<p>Use GitHub Copilot with your ION Microsoft enterprise account. Connect your Lens key only to approved apps.</p>' : `<p>Connect your key only to:</p><ul>${policy.apps.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`}${policy.note !== DEFAULT_CHAT_NOTE ? `<p>${esc(policy.note)}</p>` : ''}</div>${anonymiseOn() ? '<div class="info" role="note"><p><b>Client names are hidden from AI.</b> Copilot sees each client\'s codename, never its name or code. Ask about a client by its codename, and do not type client names into chat. <a href="/replays/codenames">Look up codenames</a>.</p></div>' : ''}
 <p class="small muted">Your key is shown once and inherits your Lens access.${ph ? ' PostHog commands are included in this one Lens server.' : ''}${canSurvey(surveyRole, 'edit') ? ' You can create, edit and stop surveys in Copilot; launch them from Surveys.' : role ? ` Survey access: ${esc(role)}.` : ''}</p>
 <ol class="steps">
-<li><div>Make your personal key</div><button type="button" id="make">Connect Copilot</button> <span id="msg" class="small" aria-live="polite"></span></li>
-<li>Open Copilot settings.<div>MCP Servers → Add Server → + Add Custom server</div><div id="add"><span class="small muted">Create your key above to see the fields to copy.</span></div></li>
+<li><button type="button" id="make">Create personal key</button> <span id="msg" class="small" aria-live="polite"></span></li>
+<li><h2>Add Lens in Copilot</h2><div>MCP Servers → Add Server → + Add Custom server</div><div id="add"><span class="small muted">Create your key above to see the fields to copy.</span></div></li>
 <li>Start a new chat: <span>“Which clients need attention this month?”</span></li>
 </ol>
 </div>
@@ -131,7 +131,7 @@ const when=t=>t?new Date(t).toLocaleString([], {dateStyle:'medium',timeStyle:'sh
 function cell(tr,t){const td=document.createElement('td');if(t instanceof Node)td.appendChild(t);else td.textContent=t;tr.appendChild(td)}
 function el(tag,attrs,text){const e=document.createElement(tag);Object.assign(e,attrs||{});if(text)e.textContent=text;return e}
 function message(id,text,error=false){$(id).textContent=text;$(id).className='small '+(error?'err':'');$(id).setAttribute('role',error?'alert':'status')}
-const keysPg=makePager({mount:$('keys-pager'),noun:'keys',size:25,draw:slice=>{const tb=$('rows');tb.innerHTML='';if(!slice.length)tb.innerHTML='<tr><td colspan="4" class="muted">No active keys. Choose Connect Copilot to make one.</td></tr>'
+const keysPg=makePager({mount:$('keys-pager'),noun:'keys',size:25,draw:slice=>{const tb=$('rows');tb.innerHTML='';if(!slice.length)tb.innerHTML='<tr><td colspan="4" class="muted">No active keys</td></tr>'
   slice.forEach(t=>{const tr=document.createElement('tr');cell(tr,t.label);cell(tr,when(t.created_at));cell(tr,t.revoked_at?'Revoked '+when(t.revoked_at):when(t.last_used_at))
     if(!t.revoked_at){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Revoke';b.setAttribute('aria-label','Revoke '+t.label+' key made '+when(t.created_at));b.onclick=async()=>{if(!confirm('Revoke "'+t.label+'"? Chat with it stops at once.'))return;b.disabled=true;try{await api('/replays/connect/api/tokens/'+t.id,{method:'DELETE'});await load();message('keys-msg','Key revoked.')}catch(e){message('keys-msg',e.message+' Try revoking again.',true)}finally{b.disabled=false;if(!b.isConnected)($('keys-pager').querySelector('button:not(:disabled)')||$('make')).focus()}};cell(tr,b)}else cell(tr,'');tb.appendChild(tr)})}})
 async function load(){try{const d=await api('/replays/connect/api/tokens');const gone=d.tokens.filter(t=>t.revoked_at);keysPg.set(d.tokens.filter(t=>!t.revoked_at),true);$('revoked-box').hidden=!gone.length;$('revoked-sum').textContent='Revoked keys ('+gone.length+')';$('revoked').innerHTML='';gone.slice(0,50).forEach(t=>$('revoked').appendChild(el('li',null,t.label+' · made '+when(t.created_at)+' · revoked '+when(t.revoked_at))))}catch(e){message('keys-msg',e.message+' Reload the page to try again.',true)}}
@@ -141,8 +141,8 @@ $('make').onclick=async()=>{$('make').disabled=true;message('msg','Making your k
   const field=(box,label,val)=>{const r=el('div',{className:'f'});r.appendChild(el('span',null,label));r.appendChild(el('code',null,val));const copy=copyBtn(val);copy.setAttribute('aria-label','Copy '+label+' for '+box.querySelector('h3').textContent);r.appendChild(copy);box.appendChild(r)}
   const add=$('add');add.innerHTML='';add.className=''
   list.forEach(([n,u,title])=>{const s=el('div',{className:'srv'});s.appendChild(el('h3',null,title))
-    field(s,'Name',n);field(s,'Transport','http');field(s,'URL',u);field(s,'Header name','Authorization');field(s,'Header value','Bearer '+t.token);add.appendChild(s)})
-  $('make').textContent='Make a new key';message('msg','Key ready. Copy the fields below.');await load();add.tabIndex=-1;add.focus()}catch(e){message('msg',e.message+' Try connecting again.',true)}finally{$('make').disabled=false}}
+    field(s,'Name',n);field(s,'Transport','http');field(s,'URL',u);field(s,'Header name','Authorization');s.appendChild(el('p',{className:'small muted'},'Copy your key now. Lens shows it once.'));field(s,'Header value','Bearer '+t.token);add.appendChild(s)})
+  message('msg','Key ready.');await load();add.tabIndex=-1;add.focus()}catch(e){message('msg',e.message+' Try creating the key again.',true)}finally{$('make').disabled=false}}
 load()
 </script></body></html>`
 }

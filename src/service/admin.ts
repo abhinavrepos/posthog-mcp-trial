@@ -69,7 +69,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
     if (!can(v.role, 'admin')) {
         if (p === '/replays/admin' || p === '/replays/admin/') {
             res.writeHead(403, { 'content-type': 'text/html; charset=utf-8' })
-            res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Admin</title><style>${PAGE_CSS()}</style></head><body>${headerHtml(v, 'Admin')}<main><div class="card"><h2>Admins only</h2><p>Ask a PostHog owner or admin for access.</p></div></main></body></html>`)
+            res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Admin</title><style>${PAGE_CSS()}</style></head><body>${headerHtml(v, 'Admin')}<main id="main" tabindex="-1"><div class="card"><h2>Admins only</h2><p>Ask a PostHog owner or admin for access.</p></div></main></body></html>`)
         } else json(res, 403, { error: 'Admins only.' })
         return true
     }
@@ -334,7 +334,7 @@ main .ghost{border-color:transparent;color:var(--ink)}
 main table{table-layout:fixed}
 main td,main th{overflow-wrap:anywhere}
 main td{padding-top:12px;padding-bottom:12px}
-.people-table{table-layout:fixed;width:100%;min-width:0}
+.people-table{table-layout:fixed;width:100%;min-width:0}.people-table :is(th,td):nth-child(4){min-width:160px}.person-save{display:block;margin-top:4px}.person-save:empty{display:none}
 .person-meta{margin-top:2px}
 .people-table td:nth-child(6){white-space:nowrap;font-size:12px}
 .people-table td select{max-width:100%;font-size:13px;padding:7px 4px}
@@ -432,14 +432,14 @@ main input,main select{min-width:0}
 @media(max-width:1100px){#outcome-form{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 </style></head>
-<body>${headerHtml(v, 'Admin')}<main><div class="page-head"><div><h1>Admin</h1><p>Who can use Lens, and what it keeps.</p></div></div>
+<body>${headerHtml(v, 'Admin')}<main id="main" tabindex="-1"><div class="page-head"><div><h1>Admin</h1><p>Who can use Lens, and what it keeps.</p></div></div>
 ${adminTabs()}
 
 <div class="tabpanel" role="tabpanel" aria-labelledby="t-people" id="tab-people" data-panel="people">
 <div class="card"><h2>People</h2><p class="small muted">Changes to access save automatically.</p><div class="people-toolbar"><div><label for="people-filter">Find a person</label><input id="people-filter" type="search" placeholder="Name or email"></div><details class="add-person"><summary>Add a person</summary><div class="toolbar"><div><label for="new-email">PostHog email</label><input id="new-email" type="email" placeholder="name@company.com"></div>
 <div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-system"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-insights"><input id="new-insights" type="checkbox"> Replay insights</label></div><div style="flex:0"><label for="new-surveys">Surveys</label><select id="new-surveys"></select></div><div style="flex:0"><label for="new-dashboards">Dashboards</label><select id="new-dashboards"></select></div><div style="flex:0"><button type="button" id="add">Add person</button></div></div></details></div>
 <p id="people-msg" class="small" aria-live="polite"></p>
-<div class="table-wrap" role="region" aria-label="People access table" tabindex="0"><table class="people-table" role="table"><colgroup><col style="width:25%"><col style="width:15%"><col style="width:16%"><col style="width:13%"><col style="width:13%"><col style="width:9%"><col style="width:9%"></colgroup><thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Person</th><th scope="col" role="columnheader">Clip role</th><th scope="col" role="columnheader">Extra access</th><th scope="col" role="columnheader">Surveys</th><th scope="col" role="columnheader">Dashboards</th><th scope="col" role="columnheader">Last seen</th><th scope="col" role="columnheader">Actions</th></tr></thead><tbody id="people" role="rowgroup"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table></div><div id="people-pager"></div></div>
+<div class="table-wrap" role="region" aria-label="People access table" tabindex="0"><table class="people-table" role="table"><colgroup><col style="width:23%"><col style="width:14%"><col style="width:15%"><col style="width:160px"><col style="width:12%"><col style="width:8%"><col style="width:12%"></colgroup><thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Person</th><th scope="col" role="columnheader">Clip role</th><th scope="col" role="columnheader">Extra access</th><th scope="col" role="columnheader">Surveys</th><th scope="col" role="columnheader">Dashboards</th><th scope="col" role="columnheader">Last seen</th><th scope="col" role="columnheader">Actions</th></tr></thead><tbody id="people" role="rowgroup"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table></div><div id="people-pager"></div></div>
 
 <details class="settings"><summary>Access defaults</summary><p class="small muted">Changes save automatically.</p>
 <div class="toolbar"><div><label for="default-role">Role for other PostHog users</label><select id="default-role"></select></div>
@@ -492,7 +492,7 @@ ${adminTabs()}
 <p id="ret-preview" class="small" aria-live="polite"></p>
 <p id="ret-confirm-wrap" hidden><label class="check" for="ret-confirm"><input id="ret-confirm" type="checkbox"> <span id="ret-confirm-text">I understand these recordings will be permanently deleted.</span></label></p>
 <div><button type="button" id="ret-save">Save retention</button></div>
-<p id="ret-status" class="small muted"></p><p id="ret-msg" class="small" aria-live="polite"></p></div>
+<p id="ret-status" class="small muted"></p><details id="ret-details" hidden><summary>Technical details</summary><p id="ret-error" class="small"></p></details><p id="ret-msg" class="small" aria-live="polite"></p></div>
 <div class="card"><h2>Clips</h2><p class="small muted" id="space"></p>
 <div class="toolbar"><div><label for="clip-filter">Show</label><select id="clip-filter"><option value="">All clips</option><option value="saved">Saved only</option><option value="expiring">Deleted within 3 days</option></select></div></div>
 <div class="table-wrap" role="region" aria-label="Clips" tabindex="0"><table><thead><tr><th scope="col">Clip</th><th scope="col">Who has it</th><th scope="col">Size</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="clips"><tr><td colspan="5">Loading clips…</td></tr></tbody></table></div><div id="clips-pager"></div></div>
@@ -533,30 +533,36 @@ const tokensPg=makePager({mount:$('tokens-pager'),noun:'tokens',size:25,draw:sli
   if(!t.revoked_at){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Revoke';b.setAttribute('aria-label','Revoke '+t.label+' token for '+t.email+' made '+when(t.created_at));b.onclick=async()=>{if(!confirm('Revoke the chat token '+t.label+' of '+t.email+'? Chat with it stops at once.'))return;try{await api('/replays/admin/api/chat-tokens/'+t.id,{method:'DELETE'});await load()}catch(e){msg('people-msg',e.message+' Try the action again.')}};cell(tr,b)}else cell(tr,'');tt.appendChild(tr)});
 
 guardControls()}});
+const personStates=new Map();
+function personStatus(control,labelled=control){const key=labelled.getAttribute('aria-label');const status=document.createElement('span');status.className='small muted person-save';status.setAttribute('role','status');status.textContent=personStates.get(key)||'';control.after(status);return status}
+async function savePerson(control,request,focusLabel=control.getAttribute('aria-label')){const key=control.getAttribute('aria-label')||focusLabel;if(personStates.get(key)==='Saving…')return;const status=control.nextElementSibling;const show=text=>{personStates.set(key,text);status.textContent=text};show('Saving…');
+ try{await request();show('Saved');if(focusLabel!==key){personStates.delete(key);personStates.set(focusLabel,'Saved')}await load(focusLabel)}
+ catch(e){show('');msg('people-msg',e.message);await load(focusLabel).catch(()=>{})}}
 const peoplePg=makePager({mount:$('people-pager'),noun:'people',size:25,draw:slice=>{
  const tb=$('people');tb.innerHTML='';
  slice.forEach(p=>{const tr=document.createElement('tr');
   const who=identity(p.email);if(p.note){const note=document.createElement('div');note.className='small muted';note.textContent=p.note;who.append(note)}cell(tr,who);
   const ph=document.createElement('div');ph.textContent=p.posthog.replace(/ \\((owner|admin|member)\\)/g,' $1');if(p.sees_all_replays_in_posthog){const badge=document.createElement('span');badge.className='badge';badge.title='Can watch every replay inside PostHog itself';badge.textContent='All PostHog replays';ph.append(badge)}ph.className='small muted person-meta';who.append(ph);
   const sel=roleSelect(p.role,p.locked);sel.setAttribute('aria-label','Clip role for '+p.email);if(p.locked){const w=document.createElement('div');const locked=document.createElement('span');locked.textContent=roleLabel(p.role,p.role);locked.setAttribute('aria-label','Clip role for '+p.email);w.appendChild(locked);const n=document.createElement('div');n.className='small muted';n.textContent='Inherited from PostHog';w.appendChild(n);cell(tr,w)}else{if(!p.set_here){const w=document.createElement('div');w.appendChild(sel);const n=document.createElement('div');n.className='small muted';n.textContent='Default';w.appendChild(n);cell(tr,w)}else cell(tr,sel)}
-  sel.onchange=async()=>{try{await api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email:p.email,role:sel.value})});msg('people-msg','Saved: '+p.email+' now has "'+sel.selectedOptions[0].textContent+'".',true);await load()}catch(e){msg('people-msg',e.message);await load()}};
+  if(!p.locked)personStatus(sel);
+  sel.onchange=()=>savePerson(sel,()=>api('/replays/admin/api/person',{method:'POST',body:JSON.stringify({email:p.email,role:sel.value})}));
   const extra=document.createElement('div');extra.className='extra-access';
-  [['system','System page','see the System page'],['insights','Replay insights','see replay insights']].forEach(([key,label,what])=>{const sw=document.createElement('label');sw.className='check small';const cb=document.createElement('input');cb.type='checkbox';cb.setAttribute('aria-label',label+' for '+p.email);cb.checked=!!p[key];sw.append(cb,document.createTextNode(' '+label));
+  [['system','System page'],['insights','Replay insights']].forEach(([key,label])=>{const sw=document.createElement('label');sw.className='check small';const cb=document.createElement('input');cb.type='checkbox';cb.setAttribute('aria-label',label+' for '+p.email);cb.checked=!!p[key];sw.append(cb,document.createTextNode(' '+label));
    if(p.role==='admin'){cb.disabled=true;sw.title='Admins always have this'}
-   cb.onchange=async()=>{try{await api('/replays/admin/api/extra-access',{method:'POST',body:JSON.stringify({email:p.email,[key]:cb.checked})});msg('people-msg',(cb.checked?'Saved: '+p.email+' can now '+what+'.':'Saved: '+p.email+' can no longer '+what+'.'),true);await load()}catch(e){msg('people-msg',e.message);await load()}};
-   extra.append(sw)});
+   cb.onchange=()=>savePerson(sw,()=>api('/replays/admin/api/extra-access',{method:'POST',body:JSON.stringify({email:p.email,[key]:cb.checked})}),cb.getAttribute('aria-label'));
+   extra.append(sw);personStatus(sw,cb)});
   cell(tr,extra);
-  const ss=document.createElement('select');ss.setAttribute('aria-label','Survey role for '+p.email);[{id:'default',text:'Default'}].concat(S.survey_roles).forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.id==='default'?'Default ('+roleLabel(S.survey_default_role,'No access')+')':roleLabel(r.id,r.text);ss.appendChild(o)});
+  const ss=document.createElement('select');ss.setAttribute('aria-label','Survey role for '+p.email);[{id:'default',text:'Default'}].concat(S.survey_roles).forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.id==='default'?'Default · '+roleLabel(S.survey_default_role,'No access'):roleLabel(r.id,r.text);ss.appendChild(o)});
   ss.value=p.role==='admin'?'launch':(p.survey_role_set_here||'default');if(p.role==='admin'){ss.disabled=true;ss.title='Admins can always launch and stop surveys'}
-  ss.onchange=async()=>{try{await api('/replays/admin/api/survey-role',{method:'POST',body:JSON.stringify({email:p.email,role:ss.value})});msg('people-msg','Saved: '+p.email+' survey role is now "'+ss.selectedOptions[0].textContent+'".',true);await load()}catch(e){msg('people-msg',e.message);await load()}};
-  cell(tr,ss);
-  const ds=document.createElement('select');ds.setAttribute('aria-label','Dashboard role for '+p.email);[{id:'default',text:'Default'}].concat(S.dashboard_roles).forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.id==='default'?'Default ('+roleLabel(S.dashboard_default_role,'No access')+')':roleLabel(r.id,r.text);ds.appendChild(o)});
+  ss.onchange=()=>savePerson(ss,()=>api('/replays/admin/api/survey-role',{method:'POST',body:JSON.stringify({email:p.email,role:ss.value})}));
+  cell(tr,ss);personStatus(ss);
+  const ds=document.createElement('select');ds.setAttribute('aria-label','Dashboard role for '+p.email);[{id:'default',text:'Default'}].concat(S.dashboard_roles).forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.id==='default'?'Default · '+roleLabel(S.dashboard_default_role,'No access'):roleLabel(r.id,r.text);ds.appendChild(o)});
   ds.value=p.role==='admin'?'share':(p.dashboard_role_set_here||'default');if(p.role==='admin'){ds.disabled=true;ds.title='Admins can always pin and share dashboards'}
-  ds.onchange=async()=>{try{await api('/replays/admin/api/dashboard-role',{method:'POST',body:JSON.stringify({email:p.email,role:ds.value})});msg('people-msg','Saved: '+p.email+' dashboard role is now "'+ds.selectedOptions[0].textContent+'".',true);await load()}catch(e){msg('people-msg',e.message);await load()}};
-  cell(tr,ds);
+  ds.onchange=()=>savePerson(ds,()=>api('/replays/admin/api/dashboard-role',{method:'POST',body:JSON.stringify({email:p.email,role:ds.value})}));
+  cell(tr,ds);personStatus(ds);
   if(p.clips.clips){const c=document.createElement('div');c.className='small muted';c.textContent=n(p.clips.clips,'clip')+', '+p.clips.saved+' saved · '+mb(p.clips.bytes);who.appendChild(c)}
   {const td=cell(tr,p.last_seen?new Date(p.last_seen).toLocaleDateString([], {month:'short',day:'numeric'}):'never','small');if(td&&p.last_seen)td.title=when(p.last_seen)}
-  if(p.set_here&&!p.locked){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Reset';b.setAttribute('aria-label','Reset clip role for '+p.email);b.title='Remove the role set here, so the default applies';b.onclick=async()=>{if(!confirm('Reset the clip role for '+p.email+' to the default?'))return;try{await api('/replays/admin/api/person?email='+encodeURIComponent(p.email),{method:'DELETE'});msg('people-msg','Removed the role for '+p.email+'.',true);await load()}catch(e){msg('people-msg',e.message)}};cell(tr,b)}else cell(tr,'');
+  if(p.set_here&&!p.locked){const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent='Reset clip role';b.setAttribute('aria-label','Reset clip role for '+p.email);b.title='Remove the role set here, so the default applies';b.onclick=()=>{if(confirm('Reset the clip role for '+p.email+' to the default?'))savePerson(b,()=>api('/replays/admin/api/person?email='+encodeURIComponent(p.email),{method:'DELETE'}),sel.getAttribute('aria-label'))};cell(tr,b);personStatus(b)}else cell(tr,'');
   tr.setAttribute('role','row');[...tr.children].forEach((td,i)=>{td.setAttribute('role','cell');td.dataset.label=['Person','Clip role','Extra access','Surveys','Dashboards','Last activity','Actions'][i]});tb.appendChild(tr)});
 
 if(!slice.length)$('people').innerHTML='<tr><td colspan="7">No people found. Change your search or add a person above.</td></tr>';guardControls()}});
@@ -564,7 +570,7 @@ function renderPeople(keep=false){const q=$('people-filter').value.trim().toLowe
 $('people-filter').oninput=()=>renderPeople();
 
 function roleSelect(value,disabled){const s=document.createElement('select');S.roles.forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=roleLabel(r.id,r.text);if(r.id===value)o.selected=true;s.appendChild(o)});s.disabled=!!disabled;return s}
-async function load(){const focused=document.activeElement;const focusLabel=focused?.getAttribute('aria-label');const previousAudit=S?.audit;S=await api('/replays/admin/api/state');if(previousAudit&&($('filter').value.trim()||previousAudit.length>300))S.audit=previousAudit;
+async function load(returnTo){const previousAudit=S?.audit;S=await api('/replays/admin/api/state');const focusLabel=document.activeElement?.getAttribute('aria-label');if(previousAudit&&($('filter').value.trim()||previousAudit.length>300))S.audit=previousAudit;
  $('new-role').innerHTML='';S.roles.forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.text;if(r.id==='watch')o.selected=true;$('new-role').appendChild(o)});
  $('default-role').innerHTML='';S.roles.filter(r=>r.id!=='admin').forEach(r=>{const o=document.createElement('option');o.value=r.id;o.textContent=r.text;if(r.id===S.default_role)o.selected=true;$('default-role').appendChild(o)});
  $('share').value=S.allow_share_links?'1':'0';
@@ -574,7 +580,7 @@ async function load(){const focused=document.activeElement;const focusLabel=focu
  drawTokens(true);renderPeople(true);
  const st=S.storage;$('space').textContent=n(st.clips,'clip')+' using '+mb(st.bytes)+' on the server. Saved: '+st.saved+' ('+mb(st.saved_bytes)+'). Unsaved clips expire two weeks after their last request.';
  renderClips();
- renderAudit(true);guardControls();if(focusLabel){const next=[...document.querySelectorAll('[aria-label]')].find(el=>el.getAttribute('aria-label')===focusLabel);next?.focus()}}
+ renderAudit(true);guardControls();if(focusLabel){const controls=[...document.querySelectorAll('[aria-label]')];const next=controls.find(el=>el.getAttribute('aria-label')===focusLabel)||controls.find(el=>el.getAttribute('aria-label')===returnTo);next?.focus()}}
 function renderClips(keep=true){const f=$('clip-filter').value;const soon=Date.now()+3*86400000;const cb=$('clips');cb.innerHTML='';
  const list=S.clips.filter(c=>!f||(f==='saved'?c.saved_by.length:c.expires_at&&Date.parse(c.expires_at)<soon));
  clipsPg.set(list,keep)}
@@ -596,7 +602,7 @@ const order=action.startsWith('privacy.')?['on','lens','posthog','triage','codes
 function renderAudit(keep=false){auditPg.set(S.audit,keep);$('audit-more').hidden=S.audit.length%300!==0||!S.audit.length}
 const auditPg=makePager({mount:$('audit-pager'),noun:'activity entries',size:25,draw:slice=>{const tb=$('audit');tb.innerHTML='';
  if(!slice.length)tb.innerHTML='<tr><td colspan="4" class="muted">No activity found. Try another search.</td></tr>';
- slice.forEach(e=>{const tr=document.createElement('tr');const time=document.createElement('time');time.dateTime=e.t;time.title=when(e.t);time.append(new Date(e.t).toLocaleDateString([], {month:'short',day:'numeric'}),' ',document.createElement('br'),new Date(e.t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));cell(tr,time,'small');cell(tr,identity(e.who));cell(tr,ACTIONS[e.action]||e.action);const {t,who,action,...rest}=e;cell(tr,auditDetails(e.action,rest),'audit-detail');tb.appendChild(tr)})}});
+ slice.forEach(e=>{const tr=document.createElement('tr');const time=document.createElement('time');time.dateTime=e.t;time.title=when(e.t);time.append(new Date(e.t).toLocaleDateString([], {month:'short',day:'numeric'}),' ',document.createElement('br'),new Date(e.t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));cell(tr,time,'small');cell(tr,identity(e.who));cell(tr,ACTIONS[e.action]||'Lens activity');const {t,who,action,...rest}=e;cell(tr,auditDetails(e.action,ACTIONS[e.action]?rest:{...rest,action_id:e.action}),'audit-detail');tb.appendChild(tr)})}});
 let searchVersion=0;
 async function searchAudit(more=false){const version=++searchVersion;msg('audit-msg','Loading…',true);try{const q=$('filter').value.trim();const audit=(await api('/replays/admin/api/audit?q='+encodeURIComponent(q)+'&offset='+(more?S.audit.length:0))).audit;if(version!==searchVersion)return;S.audit=more?S.audit.concat(audit):audit;renderAudit(more);msg('audit-msg',audit.length?'Activity loaded.':'No activity found. Try another search.',true)}catch(e){if(version===searchVersion)msg('audit-msg',e.message+' Try the search again.')}}
 $('audit-more').onclick=()=>searchAudit(true);
@@ -629,12 +635,12 @@ return head+clips}
 const risky=p=>!!p&&p.days!==null&&(p.count===null||p.count>0||p.clips.delete>0)
 const status=s=>{current=s.days;$('ret-mode').value=s.days===null?'off':'days';if(s.days!==null)$('ret-days').value=s.days;$('ret-days').disabled=s.days===null
 const parts=[s.days===null?'Now: off.':'Now: '+s.days+' days.']
-if(!s.configured)parts.push('LENS_REPLAY_RETENTION_API_KEY is not set, so nothing is deleted yet.')
-if(s.dry_run)parts.push('Dry run (LENS_REPLAY_RETENTION_DRY_RUN): the daily job only logs what it would delete.')
+if(!s.configured)parts.push('Automatic deletion needs a PostHog key before it can run.')
+if(s.dry_run)parts.push('Dry run: the daily job only logs what it would delete.')
 parts.push('At most '+Number(s.max_per_run).toLocaleString()+' recordings a day.')
-if(s.last_run)parts.push('Last run '+when(s.last_run.at)+': '+(s.last_run.dry_run?(s.last_run.would_delete||0)+' would be deleted':(s.last_run.deleted||0)+' deleted')+(s.last_run.error?', stopped: '+s.last_run.error:'')+'.')
+if(s.last_run)parts.push('Last run '+when(s.last_run.at)+': '+(s.last_run.dry_run?(s.last_run.would_delete||0)+' would be deleted':(s.last_run.deleted||0)+' deleted')+(s.last_run.error?' · stopped early':'')+'.')
 if(s.retry_at)parts.push('Next try after '+when(s.retry_at)+'.')
-$('ret-status').textContent=parts.join(' ')}
+$('ret-status').textContent=parts.join(' ');$('ret-details').hidden=!s.last_run?.error;$('ret-error').textContent=s.last_run?.error||''}
 const reset=()=>{shown=null;$('ret-preview').textContent='';$('ret-confirm-wrap').hidden=true;$('ret-confirm').checked=false}
 const preview=async()=>{reset();const v=chosen();if(v==='off'){$('ret-preview').textContent=describe(null);return null}
 try{const p=await api('/replays/admin/api/replay-retention/preview?days='+encodeURIComponent(v));shown=p;$('ret-preview').textContent=describe(p);$('ret-preview').className='small '+(risky(p)?'err':'ok');if(risky(p)){$('ret-confirm-wrap').hidden=false;$('ret-confirm-text').textContent=p.count===null?'I understand recordings may be permanently deleted.':'I understand '+n(p.count,'recording')+' will be permanently deleted. Raising the number later will not bring them back.'}return p}catch(e){msg('ret-msg',e.message);return null}}

@@ -13,10 +13,10 @@ import { join } from 'node:path'
 import { ClipQueueError } from '../core/clip-queue.ts'
 import { cleanRenderWork, clipRange, pruneCache, renderClip } from '../core/clip.ts'
 import { addComment, captionedFile, checkComment, commentCounts, cues, DEFAULT_DURATION, deleteComment, DURATIONS, getComment, listComments, MAX_TEXT, removeVariants, toVtt, updateComment, variantOf } from '../core/comments.ts'
-import { config, surveysActive } from '../core/config.ts'
+import { config } from '../core/config.ts'
 import { all, db, one, run, tx } from '../core/db.ts'
 import { clipUrl } from '../core/links.ts'
-import { replayUrl } from '../core/posthog.ts'
+import { PostHogError, replayUrl } from '../core/posthog.ts'
 import { recordingInfo, type RecordingInfo } from '../core/recording-info.ts'
 import { downloadName, formatClock, HourlyLimit, parseReplayInput, parseStartTime } from '../core/replay-input.ts'
 import { audit, can, canSeeReplayInsights, canSeeSystem, canUseDashboards, canUseSurveys, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
@@ -350,10 +350,15 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         // header would let anyone dodge the sign-in limit.
         const ip = String(req.socket.remoteAddress || '')
         const email = String(body.email || '').trim().toLowerCase()
-        const out = await signIn(ip, email, String(body.password || ''))
-        if (!out.session) {
+        const out = await signIn(ip, email, String(body.password || '')).catch(() => null)
+        if (!out?.session) {
             audit(email || 'unknown', 'signin.failed', { ip })
-            json(res, 401, { error: out.error })
+            const error = out?.error
+            const unavailable = !out || error === 'PostHog did not start a session.'
+            const message = unavailable ? 'Couldn’t reach PostHog. Try again.' : error?.startsWith('Too many attempts') ? error
+                : error?.startsWith('Your account uses two-factor') ? 'Your account uses two-factor login. Sign in on the PostHog website, then reload this page.'
+                : 'Email or password is incorrect'
+            json(res, unavailable ? 502 : 401, { error: message })
             return true
         }
         // The cookie is PostHog's own session cookie, so this also signs the browser in to PostHog.
@@ -438,7 +443,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         const body = await readJson(req)
         const input = parseReplayInput(String(body.input || ''))
         if (!input) {
-            json(res, 400, { error: 'That is not a PostHog replay link or session id.' })
+            json(res, 400, { error: 'Replay link or session ID is invalid' })
             return true
         }
         try {
@@ -446,7 +451,8 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
             audit(viewer.email, 'recording.inspected', { session_id: input.sessionId })
             json(res, 200, { info, suggested_start_s: input.startS ?? Math.max(0, (info.moments.find((m) => m.kind !== 'page')?.offset_s ?? 0) - 5) })
         } catch (e) {
-            json(res, 404, { error: /404/.test((e as Error).message) ? 'No recording with that id in this project.' : (e as Error).message.slice(0, 200) })
+            const missing = e instanceof PostHogError && e.status === 404
+            json(res, missing ? 404 : 502, { error: missing ? 'No recording with that ID in this project.' : 'Couldn’t reach PostHog. Try again.' })
         }
         return true
     }
@@ -653,7 +659,8 @@ const CSS = `:root{
   --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:24px;--space-6:32px;
   --r-sm:6px;--r:12px;--r-pill:999px;
   --text-small:12px;--text-body:14px;--text-section:18px;--text-title:30px;--text-metric:28px;
-  --title-leading:1.2;--section-leading:1.35;
+  --title-leading:36px;--section-leading:24px;
+  --disabled-ink:var(--muted);--disabled-bg:var(--chip);--disabled-border:var(--line-strong);
   --shadow:0 1px 2px rgb(30 43 68 / .06);--pop:0 12px 32px rgb(30 43 68 / .18);
   --scrim:rgb(10 17 29 / .55);--page:1440px;--hh:56px;--side:216px;
 }
@@ -681,22 +688,22 @@ nav a:hover{color:var(--ink);background:var(--chip)}nav a[aria-current=page]{col
 header.shell{position:fixed;inset:0 auto 0 0;width:var(--side);height:auto;flex-direction:column;align-items:stretch;gap:0;padding:var(--space-5) var(--space-3) var(--space-3);border-bottom:0;border-right:1px solid var(--line);background:var(--side-bg);z-index:20}
 header.shell .brand{gap:8px;padding:0 8px 24px}header.shell nav{flex-direction:column;flex:1;overflow-y:auto}header.shell .hdr{margin-top:auto;border-top:1px solid var(--line);padding-top:10px}
 header.shell .acct-menu{left:0;bottom:calc(100% + 6px)}body:has(header.shell) .skip:focus{position:fixed;top:12px;left:calc(var(--side) + 16px);z-index:50;border:1px solid var(--line);border-radius:var(--r-sm);box-shadow:var(--pop)}.shell-only{display:block}}
-@media(max-width:899px){header.shell{position:sticky;top:0;z-index:20;gap:12px;padding:0 16px}header.shell nav{flex:1;overflow-x:auto;scrollbar-width:none}header.shell nav::-webkit-scrollbar{display:none}
+@media(max-width:899px){html:has(header.shell){scroll-padding-top:calc(var(--hh) + 12px)}header.shell{position:sticky;top:0;z-index:20;gap:12px;padding:0 16px}header.shell nav{flex:1;overflow-x:auto;scrollbar-width:none}header.shell nav::-webkit-scrollbar{display:none}
 header.shell nav a{padding:6px 8px;gap:6px}header.shell .ico{width:16px;height:16px}.acct .who-short{display:none}header.shell .acct-menu{right:0;top:calc(100% + 8px)}}
-.muted{color:var(--muted)}.small{font-size:var(--text-small)}main{min-width:0;max-width:var(--page);margin:0 auto;padding:var(--space-6) var(--space-6) calc(2 * var(--space-6))}
-.card{border:0;border-radius:var(--r);padding:var(--space-5) 0;margin-bottom:var(--space-4);min-width:0}:is(main,.tabpanel)>.card+.card{border-top:1px solid var(--line);border-radius:0}.card .card{box-shadow:none;border:0;padding:0;background:transparent}
+.muted{color:var(--muted)}.small{font-size:var(--text-small);line-height:16px}main{min-width:0;max-width:var(--page);margin:0 auto;padding:var(--space-6) var(--space-6) calc(2 * var(--space-6))}
+.card{border:0;border-radius:var(--r);padding:0;margin:0 0 var(--space-5);min-width:0}:is(main,.tabpanel)>.card+.card{border-top:1px solid var(--line);border-radius:0;padding-top:var(--space-5)}.card .card{box-shadow:none;border:0;padding:0;background:transparent}
 h1{margin:0 0 var(--space-5)}h2{margin:0 0 var(--space-3)}h3{font-size:var(--text-body);line-height:1.5;font-weight:600}
 p,.card,main{overflow-wrap:normal}.who,.rq-owner,code,pre,#share-msg,#pages{overflow-wrap:anywhere}.card>p{margin:0 0 12px}.card>p:last-child{margin-bottom:0}details>summary{cursor:pointer;color:var(--muted);font-size:13px;line-height:20px}details.card>summary{width:100%}details[open]>summary{margin-bottom:var(--space-3)}details>summary:hover{color:var(--ink)}
 label{display:block;font-size:12px;line-height:16px;font-weight:500;color:var(--muted);margin-bottom:4px}
 label input:not([type=checkbox]):not([type=radio]),label select,label textarea{display:block;margin-top:6px}
 input,select,textarea{width:100%;font:inherit;color:inherit;background:var(--card);border:1px solid var(--control);border-radius:var(--r-sm);padding:7px 10px;min-height:36px;max-width:100%}
 input[type=checkbox],input[type=radio]{width:auto;min-height:0;accent-color:var(--accent)}textarea{resize:vertical}
-input:hover,select:hover,textarea:hover{border-color:var(--line-strong)}input:focus,select:focus,textarea:focus{border-color:var(--accent);outline:2px solid var(--accent);outline-offset:2px}
+::placeholder{color:var(--faint);opacity:1}input:hover:not(:disabled),select:hover:not(:disabled),textarea:hover:not(:disabled){background:var(--hover)}input:focus,select:focus,textarea:focus{border-color:var(--accent);outline:2px solid var(--accent);outline-offset:2px}
 .row{display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:flex-end}.row>div{flex:1;min-width:140px}
 [hidden]{display:none!important}button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;font:inherit;font-weight:500;font-size:13px;border-radius:var(--r-sm);padding:var(--space-2) var(--space-3);min-height:36px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);cursor:pointer;text-decoration:none;white-space:nowrap}
 button.secondary,.btn.secondary{background:var(--card);color:var(--ink);border-color:var(--control)}button.ghost,.btn.ghost{background:transparent;color:var(--ink);border-color:transparent}
 button.ghost:hover,.btn.ghost:hover,button.secondary:hover,.btn.secondary:hover{background:var(--chip)}button.danger{background:var(--card);color:var(--err);border-color:var(--err)}
-button:hover:not(:disabled),.btn:hover{background-image:linear-gradient(rgb(0 0 0 / .04),rgb(0 0 0 / .04))}button:disabled{opacity:.65;cursor:not-allowed}
+button:hover:not(:disabled),.btn:hover{background-image:linear-gradient(rgb(0 0 0 / .04),rgb(0 0 0 / .04))}
 .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:6px 0 12px}.facts div{padding:8px 0;min-width:0}
 .facts b{overflow-wrap:anywhere}.facts span{display:block;font-size:12px;color:var(--muted)}.chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{text-align:left;border:1px solid var(--line);background:var(--chip);color:var(--ink);font-weight:500;padding:3px 9px;border-radius:var(--r-pill);font-size:12.5px;min-height:0}
@@ -706,7 +713,7 @@ button:hover:not(:disabled),.btn:hover{background-image:linear-gradient(rgb(0 0 
 .err{color:var(--err)}.ok{color:var(--ok)}video{width:100%;border-radius:8px;background:#000;margin:8px 0}
 table{width:100%;border-collapse:collapse;font-size:13.5px;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
 th{color:var(--muted);font-weight:500;font-size:12px;line-height:18px;vertical-align:bottom;background:transparent}tbody tr:hover{background:var(--hover)}td{font-size:13px;line-height:20px}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}td.empty-state,tbody>tr:only-child>td[colspan]{padding:24px;text-align:center!important;color:var(--muted);vertical-align:middle}tbody>tr:only-child>td[colspan].err{color:var(--err)}tbody>tr:only-child:has(>td[colspan]):hover{background:transparent}
-.table-wrap{overflow-x:auto;max-width:100%;position:relative}th{overflow-wrap:normal!important;word-break:keep-all}main>*{min-width:0}.who{overflow-wrap:anywhere}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}main td a,main li a,main h3 a{color:var(--ink);font-weight:500}main td a:hover,main li a:hover,main h3 a:hover{color:var(--accent)}.hidden{display:none}code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12.5px}
+.table-wrap{overflow-x:auto;max-width:100%;position:relative}th{overflow-wrap:normal!important;word-break:keep-all}main>*{min-width:0}.who{overflow-wrap:anywhere}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}main :is(p,li,td,th,.evidence) a:not(.btn){text-decoration:underline;text-underline-offset:2px}main td a,main li a,main h3 a{color:var(--ink);font-weight:500}main td a:hover,main li a:hover,main h3 a:hover{color:var(--accent)}.hidden{display:none}code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12.5px}
 .narrow>*{max-width:860px}.narrow>.wide-ok{max-width:none}
 .tabs,.tab-group{display:flex;flex-wrap:wrap;gap:var(--space-1);align-items:center;min-width:0}
 .tabs{width:fit-content;max-width:100%;margin:0 0 var(--space-5);padding:var(--space-1);border-radius:var(--r);background:var(--chip)}
@@ -731,11 +738,11 @@ body main .tabs :is([aria-selected=true],[aria-current=page]){background:var(--c
 .skip{position:absolute;left:-9999px;top:0;color:var(--accent);font-weight:600}.skip:focus{position:static;display:block;padding:8px 20px;background:var(--chip);border-bottom:1px solid var(--line);outline-offset:-3px;border-radius:0}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .pager:empty{display:none}.pager{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px;font-size:12.5px;color:var(--muted)}.pager .pg{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.pager button,.pager .pg>span{padding:4px 10px;min-height:30px;white-space:nowrap;font-size:12.5px}.pager button{background:var(--card);color:var(--ink);border-color:var(--line-strong)}.pager select{width:auto;padding:3px 8px;min-height:30px}
+.pager button,.pager .pg>span{padding:4px 10px;min-height:30px;white-space:nowrap;font-size:12.5px}.pager button{background:var(--card);color:var(--ink);border-color:var(--control)}.pager select{width:auto;padding:3px 8px;min-height:30px}
 
 @media(max-width:600px){table:has(>tbody>tr:only-child>td[colspan]) thead{display:none}header.shell{height:auto;flex-wrap:wrap;padding:10px 16px;row-gap:8px}header.shell nav{order:3;flex-basis:100%}main{padding:var(--space-5) var(--space-4) calc(2 * var(--space-5))}.row>div{max-width:100%;min-width:min(140px,100%)}.cm{flex-wrap:wrap}.cm>div{min-width:0}.facts{grid-template-columns:repeat(2,minmax(0,1fr))}.pager .pg{gap:4px}.pager button,.pager .pg>span{padding:4px 7px}}
 main svg{max-width:100%}main a{overflow-wrap:anywhere}main :is(pre,code){overflow-wrap:anywhere}main pre{white-space:pre-wrap}
-main.login-page{width:min(440px,calc(100% - 32px));max-width:none;padding:0;margin:64px auto}.login-page>.card{padding:var(--space-6);margin:0;background:var(--card);box-shadow:var(--shadow)}.login-page h1{font-size:22px;line-height:28px;margin:0 0 8px}.login-page .card>p{font-size:14px;line-height:20px;margin:0 0 24px}.login-page #f{display:grid;gap:16px}.login-page #f>p{margin:0}.login-page #f label{margin-bottom:6px}.login-page #email,.login-page #pw{height:40px}.login-page #go{width:100%;min-height:40px}.login-page .card>details{margin-top:24px;padding-top:16px;border-top:1px solid var(--line)}.login-page .card>details>summary{font-size:13px;line-height:20px}.login-page #msg:empty{display:none}
+main.login-page{width:min(440px,calc(100% - 32px));max-width:none;padding:0;margin:64px auto}.login-page>.card{padding:var(--space-6);margin:0;background:var(--card);box-shadow:var(--shadow)}.login-page h1{font-size:22px;line-height:28px;margin:0 0 8px}.login-page .card>p{font-size:14px;line-height:20px;margin:0 0 24px}.login-page #f{display:grid;gap:16px}.login-page #f>p{margin:0}.login-page #f label{margin-bottom:6px}.login-page #email,.login-page #pw{height:40px}.login-page #go{width:100%;min-height:40px}.login-page .card>details{margin-top:24px;padding-top:16px;border-top:1px solid var(--line)}.login-page .card>details>summary{font-size:13px;line-height:20px}.login-page :is(#msg,#signin-status):empty{display:none}
 .clips-page.narrow>*{max-width:none}.clips-page .row>button{flex:0 0 auto}#make>.row{display:grid;grid-template-columns:160px 240px auto;justify-content:start;align-items:end;gap:12px}#inspect-msg:empty,#job-msg:empty,#recent-msg:empty{display:none}.clips-page td.empty-state{padding:24px;text-align:center;color:var(--muted)}.clips-help>details>summary{padding:8px 0}.clips-help>details+details{border-top:1px solid var(--line);margin-top:8px;padding-top:8px}
 .clips-page .table-wrap:has(#recent .empty-state) td.empty-state{border-bottom:0}
 @media(max-width:600px){#make>.row{grid-template-columns:1fr}.clips-page .row:has(>#check)>div{flex-basis:100%}.clips-page #check{width:100%}}
@@ -756,13 +763,13 @@ body main .kpi .l{font-size:12px;line-height:16px;min-height:32px;color:var(--mu
 body main .kpi .v{font-weight:600}body main .kpi .s{color:var(--muted);margin-top:auto;padding-top:6px}
 body main :is(.chip,.badge,.rescue-level){font-size:12px;line-height:18px;font-weight:500;border-radius:var(--r-pill);padding:1px 8px}
 body :is(a,button,input,select,textarea,summary){transition:background-color 120ms,color 120ms,border-color 120ms,transform 120ms}
-body :is(button,input,select,textarea):disabled{opacity:.65;cursor:not-allowed}
+body :is(button,input,select,textarea):disabled{color:var(--disabled-ink);background:var(--disabled-bg);border-color:var(--disabled-border);cursor:not-allowed}
 body :is(a,button,input,select,textarea,summary,[tabindex]):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 body main .pager :is(button,select){min-height:32px}
-body main :is(button,.btn){min-height:32px}
+body main :is(td,.actions,.chips,.comments) :is(button,.btn),body main :is(button,.btn).compact{min-height:32px;min-width:24px}
 body main button.danger:hover:not(:disabled){background:var(--err-bg)}
 body :is(.tabs :is(a,button),header.shell nav a,.table-wrap,.heat-scroll):focus-visible{outline-offset:-2px}
-body details>summary{list-style:none;font-weight:500}
+body details>summary{list-style:none;font-weight:500;min-height:24px;min-width:24px}
 body details>summary::-webkit-details-marker{display:none}
 body details>summary::before{content:'';display:inline-block;width:6px;height:6px;border-right:1.5px solid currentColor;border-top:1.5px solid currentColor;transform:rotate(45deg);margin-right:10px;vertical-align:2px;flex:none;transition:transform 120ms}
 body details[open]>summary::before{transform:rotate(135deg)}
@@ -777,7 +784,9 @@ body main thead th,body main thead th button.ghost{font-weight:600;color:var(--m
 body main thead th button.ghost:hover{color:var(--ink)}
 /* Secondary actions in a card header (Download CSV, ...) read as buttons, not as text. */
 body main .card>.row>button.ghost{border:1px solid var(--control);min-height:32px;padding:5px 12px}
-body main .card>.row>button.ghost:hover{border-color:var(--line-strong);background:var(--hover)}
+body main .card>.row>button.ghost:hover:not(:disabled){background:var(--hover)}
+body main .card>.row>button.ghost:disabled{border-color:var(--disabled-border);background:var(--disabled-bg)}
+.status-panel{padding:12px 16px;margin:0 0 var(--space-4);background:var(--chip);border-radius:var(--r)}.status-panel>p{margin:0}.status-panel>button,.status-panel>details{margin-top:8px}
 
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}`
 
@@ -791,14 +800,14 @@ export const PAGE_CSS = () => CSS
  * mount, announces changes to screen readers, and hides itself when everything fits on one page. */
 export const PAGER_JS = String.raw`function makePager(o){const mount=o.mount,noun=o.noun||'items';let size=o.size||25,page=0,items=[]
 mount.classList.add('pager');mount.setAttribute('role','navigation');mount.setAttribute('aria-label',(o.label||noun)+' pages')
-function draw(){const pages=Math.max(1,Math.ceil(items.length/size));if(page>=pages)page=pages-1;const start=page*size,slice=items.slice(start,start+size)
+function draw(focus){const pages=Math.max(1,Math.ceil(items.length/size));if(page>=pages)page=pages-1;const start=page*size,slice=items.slice(start,start+size)
 o.draw(slice,start);mount.innerHTML='';if(items.length<=Math.min(size,25)){mount.hidden=true;return}mount.hidden=false
 const info=document.createElement('span');info.setAttribute('aria-live','polite');info.textContent=(start+1)+'–'+(start+slice.length)+' of '+items.length+' '+noun
 const pg=document.createElement('span');pg.className='pg'
-const btn=(t,dis,go,lab)=>{const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent=t;b.disabled=dis;b.setAttribute('aria-label',lab);b.onclick=()=>{page=go;draw();(mount.querySelector('button:not(:disabled)')||mount).focus()};return b}
+const btn=(t,dis,go,lab)=>{const b=document.createElement('button');b.type='button';b.className='ghost';b.textContent=t;b.disabled=dis;b.setAttribute('aria-label',lab);b.onclick=()=>{page=go;draw(lab)};return b}
 pg.appendChild(btn('‹ Previous',page===0,page-1,'Previous page'));const at=document.createElement('span');at.textContent='Page '+(page+1)+' of '+pages;pg.appendChild(at);pg.appendChild(btn('Next ›',page>=pages-1,page+1,'Next page'))
 const sel=document.createElement('select');sel.setAttribute('aria-label','Rows per page');[...new Set([o.size||25,25,50,100])].sort((a,b)=>a-b).forEach(n=>{const op=document.createElement('option');op.value=n;op.textContent=n+' per page';if(n===size)op.selected=true;sel.appendChild(op)})
-sel.onchange=()=>{size=+sel.value;page=0;draw()};pg.appendChild(sel);mount.appendChild(info);mount.appendChild(pg)}
+sel.onchange=()=>{size=+sel.value;page=0;draw('size')};pg.appendChild(sel);mount.appendChild(info);mount.appendChild(pg);if(focus)(focus==='size'?sel:[...pg.querySelectorAll('button:not(:disabled)')].find(b=>b.getAttribute('aria-label')===focus)||pg.querySelector('button:not(:disabled)')||sel).focus()}
 return{set(list,keep){items=list||[];if(!keep)page=0;draw()},redraw:draw,get page(){return page}}}`
 
 export const APP_NAME = config.app.name
@@ -844,37 +853,37 @@ keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeou
             ['Admin', '/replays/admin', 'admin'],
         ] as const
     )
-        .filter(([, , need]) => (need === 'watchlist' ? can(v.role, 'watch') && canSeeReplayInsights(v) : need === 'system' ? canSeeSystem(v) : need === 'surveys' ? surveysActive() && canUseSurveys(v) : need === 'dashboards' ? !!appEvents() && canUseDashboards(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need as Role)))
+        .filter(([, , need]) => (need === 'watchlist' ? can(v.role, 'watch') && canSeeReplayInsights(v) : need === 'system' ? canSeeSystem(v) : need === 'surveys' ? config.surveys.enabled && canUseSurveys(v) : need === 'dashboards' ? !!appEvents() && canUseDashboards(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need as Role)))
         .map(([name, href]) => `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${icon(name)}<span>${name}</span></a>`)
         .join('')
     const initials = (v.name || v.email).split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('')
-    return `${skip}${mainId}<header class="shell">${brand}<nav aria-label="Sections">${tabs}</nav><details class="hdr acct"><summary aria-label="Account: ${esc(v.email)}"><span class="avatar" aria-hidden="true">${esc(initials)}</span><span class="who-short"><b>${esc(v.name || v.email.split('@')[0])}</b><span>${esc(ROLE_TEXT[v.role].replace(/ \(.*\)$/, ''))}</span></span></summary><div class="acct-menu"><span class="who">${esc(v.email)}</span><span class="muted small">${esc(ROLE_TEXT[v.role])}</span><button class="secondary" id="signout" type="button">Sign out</button></div></details></header>
+    return `${skip}${mainId}<header class="shell">${brand}<nav aria-label="Sections">${tabs}</nav><details class="hdr acct"><summary aria-label="Account for ${esc(v.name || v.email.split('@')[0])}"><span class="avatar" aria-hidden="true">${esc(initials)}</span><span class="who-short"><b>${esc(v.name || v.email.split('@')[0])}</b><span>${esc(ROLE_TEXT[v.role].replace(/ \(.*\)$/, ''))}</span></span></summary><div class="acct-menu"><span class="who">${esc(v.email)}</span><span class="muted small">${esc(ROLE_TEXT[v.role])}</span><button class="secondary" id="signout" type="button">Sign out</button></div></details></header>
 <script>document.getElementById('signout').onclick=()=>fetch('/replays/logout',{method:'POST',headers:{'x-clip-page':'1'}}).then(()=>location.href='/');document.addEventListener('click',e=>{const d=document.querySelector('details.acct');if(d&&d.open&&!d.contains(e.target))d.open=false});document.addEventListener('keydown',e=>{const d=document.querySelector('details.acct');if(e.key==='Escape'&&d&&d.open){d.open=false;d.querySelector('summary').focus()}})</script>`
 }
 
 export function loginHtml(section: Section = 'Replay clips'): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
-<body>${headerHtml(undefined, section)}<main class="login-page"><div class="card"><h1>Sign in to ${esc(APP_NAME)}</h1>
+<body>${headerHtml(undefined, section)}<main id="main" tabindex="-1" class="login-page"><div class="card"><h1>Sign in to ${esc(APP_NAME)}</h1>
 <p class="small muted">Use your PostHog account to continue.</p>
 <form id="f"><p><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></p>
 <p><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required></p>
-<p><button id="go" type="submit">Sign in</button></p><p id="msg" class="small err" role="alert"></p></form>
-<details><summary>Use PostHog sign-in instead</summary><p class="small muted"><a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on PostHog</a>, then <a href="/replays">reload this page</a>.</p><p class="small muted">Signing in here also signs you in to PostHog in this browser.</p></details></div></main>
-<script>document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('go');if(b.disabled)return;b.disabled=true;document.getElementById('msg').textContent='Signing in…';
+<p><button id="go" type="submit">Sign in</button></p><p id="signin-status" class="small muted" role="status"></p><p id="msg" class="small err" role="alert"></p></form>
+<details><summary>Other ways to sign in</summary><p class="small muted"><a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on the PostHog website</a>, then <a id="reload-lens" href="">reload this page</a>.</p><p class="small muted">Signing in here also signs you in to PostHog in this browser.</p></details></div></main>
+<script>document.getElementById('reload-lens').href=location.href;document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('go');if(b.disabled)return;b.disabled=true;const msg=document.getElementById('msg'),status=document.getElementById('signin-status');msg.textContent='';status.textContent='Signing in…';
 try{const r=await fetch('/replays/login',{method:'POST',headers:{'content-type':'application/json','x-clip-page':'1'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('pw').value})});
-const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Sign in failed.');location.href=location.pathname+location.search}catch(err){document.getElementById('msg').textContent=err.message}finally{b.disabled=false}}</script></body></html>`
+const d=await r.json().catch(()=>({}));if(!r.ok){msg.textContent=d.error||'Couldn’t reach PostHog. Try again.';return}location.reload()}catch{msg.textContent='Couldn’t reach PostHog. Try again.'}finally{status.textContent='';b.disabled=false}}</script></body></html>`
 }
 
 function noWatchHtml(v: Viewer): string {
     if (!can(v.role, 'watch')) return noAccessHtml(v)
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Watchlist · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
-<body>${headerHtml(v, 'Watchlist')}<main style="max-width:560px"><div class="card"><h1 style="font-size:24px;margin-bottom:12px">Request access to the Watchlist</h1>
+<body>${headerHtml(v, 'Watchlist')}<main id="main" tabindex="-1" style="max-width:560px"><div class="card"><h1 style="font-size:24px;margin-bottom:12px">Request access to the Watchlist</h1>
 <p class="small muted">Signed in as <b>${esc(v.email)}</b>.</p><p>The Watchlist shows how people worked, step by step, from replays. Ask a Lens admin for replay insights on the admin page.</p></div></main></body></html>`
 }
 
 function noAccessHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No access · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
-<body>${headerHtml(v, 'Replay clips')}<main style="max-width:560px"><div class="card"><h1 style="font-size:24px;margin-bottom:12px">Request access to replay clips</h1>
+<body>${headerHtml(v, 'Replay clips')}<main id="main" tabindex="-1" style="max-width:560px"><div class="card"><h1 style="font-size:24px;margin-bottom:12px">Request access to replay clips</h1>
 <p class="small muted">Signed in as <b>${esc(v.email)}</b>.</p><p>Ask a PostHog admin for the “Watch clips” role on the admin page.</p>
 <details><summary>Why access is required</summary><p class="small muted">Replays can show client data, so an admin grants access to each person.</p></details></div></main></body></html>`
 }
@@ -885,22 +894,22 @@ function pageHtml(v: Viewer): string {
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips · ${esc(APP_NAME)}</title><style>${CSS}
 
 </style></head>
-<body>${headerHtml(v, 'Replay clips')}<main class="clips-page narrow">
+<body>${headerHtml(v, 'Replay clips')}<main id="main" tabindex="-1" class="clips-page narrow">
 <div class="page-head"><div><h1>Replay clips</h1><p>Choose a replay and make a clip to share.</p></div></div>
 
-<div class="card"><h2>1. Choose a replay</h2>
+<div class="card"><h2>1. Choose a replay</h2><form id="inspect-form">
 <label for="input">PostHog replay link or session ID</label>
 <div class="row"><div><input id="input" placeholder="Paste a replay link or session ID" autocomplete="off"></div>
-<button id="check" type="button">Check replay</button></div>
+<button id="check" type="submit">Check replay</button></div></form>
 <p aria-live="polite" aria-atomic="true" id="inspect-msg" class="small"></p>
 <div id="info" class="hidden">
 <div class="facts"><div><span>Client</span><b id="f-client"></b></div><div><span>User</span><b id="f-user"></b></div><div><span>Recorded</span><b id="f-when"></b></div><div><span>Length</span><b id="f-len"></b></div></div>
 <p class="small muted">Key moments: choose one to start just before it.</p><div id="moments" class="chips"></div><div id="moments-pager"></div>
 <p class="small muted" id="pages"></p></div></div>
 
-<div class="card" id="make" aria-disabled="true"><h2>2. Make the clip</h2><p class="small muted" id="make-help">Check a replay to enable clip creation.</p>
-<div class="row"><div><label for="start">Start at (m:ss)</label><input id="start" value="0:00"></div>
-<div><label for="length">Length</label><select id="length"></select></div>
+<div class="card" id="make"><h2>2. Make the clip</h2><p class="small muted" id="make-help">Check a replay to choose its start time and clip length.</p>
+<div class="row"><div><label for="start">Start at (m:ss)</label><input id="start" value="0:00" disabled></div>
+<div><label for="length">Length</label><select id="length" disabled></select></div>
 <button id="go" type="button" disabled>Make clip</button></div>
 <p aria-live="polite" aria-atomic="true" id="job-msg" class="small"></p>
 <div id="result" class="hidden"><div class="player" id="player"><video aria-label="Replay clip" id="video" controls preload="metadata" controlslist="nodownload nofullscreen" oncontextmenu="return CFG.canDownload"><track kind="captions" srclang="en" label="Comments" id="track"></video><div class="cap" id="cap" aria-live="polite"></div><button class="fs" id="fs" type="button" title="Full screen, with the comments">Full screen</button></div>
@@ -936,20 +945,21 @@ const day=iso=>new Date(iso).toLocaleDateString([], {dateStyle:'medium'});
 const keepText=c=>c.saved?'You saved this clip. It stays until you unsave it.':c.saved_by.length?'Saved by someone else, so it is kept.':'Deleted on '+day(c.expires_at)+' unless someone saves it.';
 async function toggleSave(c){if(c.saved&&!confirm('Unsave this clip? It may be deleted after the retention period.'))return c;const r=await api('/replays/api/clips/'+encodeURIComponent(c.name)+'/save',{method:'POST',body:JSON.stringify({saved:!c.saved})});return r}
 let info=null,cur=null;
+function clipControls(enabled){for(const id of ['start','length','go'])$(id).disabled=!enabled;$('make-help').hidden=enabled}
 function txt(el,t,cls){el.textContent=t;el.className='small '+(cls||'');el.setAttribute('role',cls==='err'?'alert':'status')}
 const momentsPager=makePager({mount:$('moments-pager'),noun:'key moments',size:25,draw:moments=>{  const box=$('moments');box.innerHTML='';
   if(!moments.length){box.innerHTML='<span class="muted small">No errors or frustrated clicks in this recording.</span>'}
   moments.forEach(m=>{const b=document.createElement('button');b.type='button';b.className='chip'+(m.kind==='error'?' error':'');b.innerHTML='<span class="t"></span>';b.querySelector('.t').textContent=clock(m.offset_s);b.append(m.kind+' '+m.label);b.onclick=()=>{$('start').value=clock(Math.max(0,m.offset_s-5))};box.appendChild(b)});
 }});
-async function check(){if($('check').disabled)return;const input=$('input').value.trim();if(!input){txt($('inspect-msg'),'Paste a replay link or session ID first.','err');$('input').focus();return}info=null;$('check').disabled=true;$('input').disabled=true;$('make').setAttribute('aria-disabled','true');$('make-help').hidden=false;txt($('inspect-msg'),'Checking…','muted');$('info').classList.add('hidden');$('go').disabled=true;
+async function check(){if($('check').disabled)return;const input=$('input').value.trim();if(!input){txt($('inspect-msg'),'Replay link or session ID is invalid','err');$('input').focus();return}info=null;$('check').disabled=true;$('input').disabled=true;clipControls(false);txt($('inspect-msg'),'Checking…','muted');$('info').classList.add('hidden');
  try{const r=await api('/replays/api/inspect',{method:'POST',body:JSON.stringify({input})});info=r.info;
   $('f-client').textContent=info.client||'unknown';$('f-user').textContent=info.user||'unknown';$('f-when').textContent=when(info.start);$('f-len').textContent=clock(info.duration_s);
   momentsPager.set(info.moments.filter(m=>m.kind!=='page'));
   $('pages').textContent=info.pages.length?'Pages: '+info.pages.join(' → '):'';
-  $('start').value=clock(r.suggested_start_s);$('info').classList.remove('hidden');$('go').disabled=false;$('make').setAttribute('aria-disabled','false');$('make-help').hidden=true;txt($('inspect-msg'),'Replay checked. Choose a start time and length.','ok')
- }catch(e){txt($('inspect-msg'),e.message+' Check the link and try again.','err')}finally{$('check').disabled=false;$('input').disabled=false}}
-$('input').addEventListener('input',()=>{info=null;$('go').disabled=true;$('make').setAttribute('aria-disabled','true');$('make-help').hidden=false;$('info').classList.add('hidden');txt($('inspect-msg'),'Check this replay before making a clip.','muted')});
-$('check').onclick=check;$('input').addEventListener('keydown',e=>{if(e.key==='Enter')check()});$('input').addEventListener('paste',()=>setTimeout(check,50));
+  $('start').value=clock(r.suggested_start_s);$('info').classList.remove('hidden');clipControls(true);txt($('inspect-msg'),'Replay checked. Choose a start time and length.','ok')
+ }catch(e){txt($('inspect-msg'),e instanceof TypeError?'Couldn’t reach PostHog. Try again.':e.message,'err')}finally{$('check').disabled=false;$('input').disabled=false}}
+$('input').addEventListener('input',()=>{info=null;clipControls(false);$('info').classList.add('hidden');txt($('inspect-msg'),'Check this replay before making a clip.','muted')});
+$('inspect-form').onsubmit=e=>{e.preventDefault();check()};$('input').addEventListener('paste',()=>setTimeout(check,50));
 $('go').onclick=async()=>{if($('go').disabled)return;$('go').disabled=true;$('check').disabled=true;$('input').disabled=true;$('result').classList.add('hidden');txt($('job-msg'),'Queued…','muted');
  try{let j=await api('/replays/api/clips',{method:'POST',body:JSON.stringify({input:$('input').value.trim(),start:$('start').value,length:Number($('length').value)})});
   while(j.state==='queued'||j.state==='rendering'){$('job-msg').innerHTML='<span class="spin" aria-hidden="true"></span> '+(j.state==='queued'?'Waiting in queue (position '+j.position+')':'Making the clip… '+j.elapsed_s+' s (usually 10 to 30 s)');await new Promise(r=>setTimeout(r,1500));j=await api('/replays/api/jobs/'+j.id)}

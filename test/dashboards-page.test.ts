@@ -80,7 +80,7 @@ test('realistic map and flow render escaped data, flags, charts, paths, errors a
     assert.match(map.body, /did this before, not at all now/)
     assert.match(map.body, /3 min 20 s/)
     assert.match(map.body, /45 s/)
-    assert.match(map.body, /Building history: 8 days to go/)
+    assert.match(map.body, /8 days still processing/)
     assert.match(map.body, /view=flow_time/)
     assert.match(map.body, /data-open="pin-dialog"/)
     scriptsParse(map.body)
@@ -219,7 +219,7 @@ test('empty states and core failures produce useful pages and sanitized JSON', a
     const empty = { ...deps, async taskMap(p: TaskMapParams) { const m = await deps.taskMap(p); return { ...m, clients: [], rows: [], data_through: null } }, ingestStatus() { return { ...history, first_day: null, last_day: null, attempts: 0, behind_days: 0 } } }
     const r = await request('?view=task_map', viewer(), 'GET', undefined, empty)
     assert.equal(r.status, 200)
-    assert.match(r.body, /Building history/)
+    assert.match(r.body, /History coverage/)
     assert.match(r.body, /No tasks match these filters/)
     scriptsParse(r.body)
     const broken = { ...deps, async taskMap(): Promise<TaskMap> { throw new Error('secret SQL query and stack') }, async flowTime(): Promise<FlowTime> { throw new Error('secret SQL query and stack') } }
@@ -251,10 +251,10 @@ test('rescue is the second tab; role forms, top three reasons, filters, coverage
     const injected = { ...deps, rescueQueue: async () => rescue }
     for (const v of [viewer(), viewer('share'), viewer('none', 'admin@example.com', true)]) {
         const r = await request('?view=rescue', v, 'GET', undefined, injected)
-        assert.equal(r.status, 200); assert.match(r.body, /1 client needs someone/)
+        assert.equal(r.status, 200); assert.match(r.body, /1 client flagged/)
         assert.ok(r.body.indexOf('>Rescue Queue</a>') < r.body.indexOf('>Client Task Map</a>'))
         assert.match(r.body, /&lt;img src=x onerror=1&gt;/); assert.doesNotMatch(r.body, /<img|<note>|<li>Fourth/)
-        assert.match(r.body, /data-page-list="rescue-pager"/); assert.match(r.body, />Task Map<\/a>/)
+        assert.match(r.body, /data-page-list="rescue-pager"/); assert.match(r.body, />Client Task Map<\/a>/)
         assert.equal(r.body.includes('<form class="rescue-action"'), v.role === 'admin' || v.dashboards === 'share')
         assert.match(r.body, /role="status" aria-live="polite"/); scriptsParse(r.body)
     }

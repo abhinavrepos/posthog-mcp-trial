@@ -146,12 +146,12 @@ test('older saved briefings are rebuilt with the grid and new headline, keeping 
     db.prepare('UPDATE briefing_snapshots SET payload=? WHERE "by"=?').run(JSON.stringify(legacy),'legacy@example.com')
     const upgraded=await mondayBrief({by:'legacy@example.com',now})
     assert.ok(Array.isArray(upgraded.grid));assert.equal(upgraded.version,2);assert.deepEqual(upgraded.sections,legacy.sections)
-    assert.match(upgraded.headline,/^\d+ clients? needs? someone/)
+    assert.match(upgraded.headline,/^\d+ clients? flagged/)
     assert.deepEqual(upgraded.queue_scores,legacy.queue_scores)
     assert.equal((db.prepare('SELECT count(*) AS n FROM briefing_snapshots').get() as any).n,1)
 })
 
 test('briefing headline counts the same clients as the table and uses correct singular and plural',()=>{
-    assert.equal(briefHeadline({queue:1,urgent:0,new_or_worse:1,overdue:1,recovered:1}),'1 client needs someone. Since your last briefing: 1 new or worse, 1 action overdue, 1 recovery.')
-    assert.equal(briefHeadline({queue:9,urgent:3,new_or_worse:0,overdue:2,recovered:0}),'9 clients need someone (3 urgent). Since your last briefing: 0 new or worse, 2 actions overdue, 0 recoveries.')
+    assert.equal(briefHeadline({queue:1,urgent:0,new_or_worse:1,overdue:1,recovered:1}),'1 client flagged. Since your last briefing: 1 new or worse, 1 action overdue, 1 recovery.')
+    assert.equal(briefHeadline({queue:9,urgent:3,new_or_worse:0,overdue:2,recovered:0}),'9 clients flagged · urgent clients: 3. Since your last briefing: 0 new or worse, 2 actions overdue, 0 recoveries.')
 })

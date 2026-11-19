@@ -18,7 +18,7 @@ export async function readStatus(fetcher: typeof fetch = fetch): Promise<{ statu
     const headers: Record<string, string> = statusPassword ? { authorization: `Basic ${Buffer.from(`lens:${statusPassword}`).toString('base64')}` } : {}
     try {
         const r = await fetcher(`${statusUrl}/api/status`, { headers, signal: AbortSignal.timeout(8000) })
-        if (!r.ok) return { status: 502, body: { error: `The status service answered ${r.status}.` } }
+        if (!r.ok) return { status: 502, body: { error: `The status service answered ${r.status}.`, upstream_status: r.status } }
         return { status: 200, body: await r.json() }
     } catch {
         return { status: 502, body: { error: 'The status service is not answering.' } }
@@ -55,7 +55,7 @@ export async function handleSystem(req: IncomingMessage, res: ServerResponse, ur
     if (!canSeeSystem(v)) {
         if (page) {
             res.writeHead(403, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' })
-            res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>System · ${APP_NAME}</title><style>${PAGE_CSS()}</style></head><body>${headerHtml(v, 'System')}<main style="max-width:560px"><div class="card"><h2>No access to the System page</h2><p class="muted">Ask an admin to tick "System page" for you on the admin page.</p></div></main></body></html>`)
+            res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>System · ${APP_NAME}</title><style>${PAGE_CSS()}</style></head><body>${headerHtml(v, 'System')}<main id="main" tabindex="-1" style="max-width:560px"><div class="card"><h2>No access to the System page</h2><p class="muted">Ask an admin to tick "System page" for you on the admin page.</p></div></main></body></html>`)
         } else json(res, 403, { error: 'No access to the System page. Ask an admin.' })
         return true
     }
@@ -209,10 +209,10 @@ th,td{padding:7px 4px}
 
 }
 </style></head>
-<body>${headerHtml(v, 'System')}<main class="wide">
+<body>${headerHtml(v, 'System')}<main id="main" tabindex="-1" class="wide">
 <div class="page-head"><div><h1>System</h1><p>Service health, ingestion and server activity.</p></div></div>
-<div class="banner" id="banner"><span class="big" id="b-icon" aria-hidden="true">…</span><div><h2 id="b-head" role="status" aria-live="polite">Checking…</h2><p id="b-sub"></p></div></div>
-<div id="problems"></div><div id="problems-pager"></div>
+<div class="banner" id="banner"><span class="big" id="b-icon" aria-hidden="true">…</span><div><h2 id="b-head" role="status" aria-live="polite">Checking…</h2><p id="b-sub"></p><details id="status-details" hidden><summary>Technical details</summary><p id="status-error"></p></details></div></div>
+<div id="system-results" hidden><div id="problems"></div><div id="problems-pager"></div>
 <div id="tiles"></div>
 <details class="section-details"><summary>Trends</summary><div class="charts">
 <div class="card"><h2>Events per hour, last 24 hours</h2><div class="chart" id="c-events"></div><details class="nums" id="n-events"><summary>Show the numbers</summary><div id="t-events"></div><div id="p-events"></div></details></div>
@@ -231,7 +231,7 @@ th,td{padding:7px 4px}
 <div class="table-wrap" role="region" aria-label="Containers" tabindex="0"><table class="containers-table"><thead><tr><th scope="col">Status</th><th scope="col">Container</th><th scope="col" class="r">Running</th><th scope="col" class="n">CPU</th><th scope="col" class="n">Memory</th><th scope="col" class="n">Restarts</th></tr></thead><tbody id="rows"><tr><td colspan="6">Loading containers…</td></tr></tbody></table></div><div id="containers-pager"></div></div>
 <details class="section-details"><summary>Recent changes</summary><div id="changes">Loading recent changes…</div><div id="changes-pager"></div></details>
 <details class="section-details"><summary>About this server</summary><div id="about"></div><details class="nums"><summary>How this works</summary><p class="small muted">Only counts and machine figures are read, never event or replay content. CPU and memory history restarts with the status service.</p></details></details>
-<p class="small muted">Refreshes every 15 seconds.</p>
+<p class="small muted" id="refresh-note">Refreshes every 15 seconds.</p></div>
 </main>
 <script>${PAGER_JS}
 ${CLIENT}</script></body></html>`
@@ -298,9 +298,13 @@ function table(keep=true){const active=document.activeElement;const focusedKey=a
   $('rows').querySelectorAll('details').forEach(d=>d.ontoggle=()=>d.open?opened.add(d.dataset.key):opened.delete(d.dataset.key));if(focusedKey)$('rows').querySelectorAll('details').forEach(d=>{if(d.dataset.key===focusedKey)d.querySelector('summary')?.focus()})},keep)}
 $('find').oninput=()=>table(false);$('view').onchange=()=>table(false)
 let lastStatus=null,connectionError=null
-function freshness(){if(!lastStatus)return;const s=lastStatus,age=s.checked_at?Math.max(0,Math.floor((Date.now()-Date.parse(s.checked_at))/1000)):null,stale=age!=null&&age>60
-  $('banner').className='banner '+(stale?'warn':connectionError?'down':s.level);$('b-icon').innerHTML=stale?'!':connectionError?ICON.down:ICON[s.level]||''
-  const heading=stale?'Status data is stale — checks have stopped':connectionError?connectionError:!s.checked_at?'Checking…':s.down?plural(s.down,'problem')+(s.warn?', '+plural(s.warn,'warning'):''):s.warn?'All services operational · '+plural(s.warn,'warning'):'All services operational';if($('b-head').textContent!==heading)$('b-head').textContent=heading
+function freshness(){const s=lastStatus;if(connectionError){const at=s?.checked_at||s?.received_at;
+  $('banner').className='banner down';$('b-icon').innerHTML=ICON.down;$('b-head').textContent='System status is unavailable';
+  $('b-sub').textContent='Retrying automatically every 15 seconds.'+(at?' Last updated '+new Date(at).toLocaleString('en-GB',{dateStyle:'medium',timeStyle:'short',timeZone:'UTC'})+' UTC.':'');$('b-sub').title='';
+  $('refresh-note').hidden=true;$('status-details').hidden=false;$('status-error').textContent=connectionError;return}
+  if(!s)return;const age=s.checked_at?Math.max(0,Math.floor((Date.now()-Date.parse(s.checked_at))/1000)):null,stale=age!=null&&age>60;
+  $('status-details').hidden=true;$('refresh-note').hidden=false;$('banner').className='banner '+(stale?'warn':s.level);$('b-icon').innerHTML=stale?'!':ICON[s.level]||'';
+  const heading=stale?'Status data is stale — checks have stopped':!s.checked_at?'Checking…':s.down?plural(s.down,'problem')+(s.warn?', '+plural(s.warn,'warning'):''):s.warn?'All services operational · '+plural(s.warn,'warning'):'All services operational';if($('b-head').textContent!==heading)$('b-head').textContent=heading
   $('b-sub').textContent=age==null?'Waiting for the first check':'Updated '+age+' s ago';$('b-sub').title=s.checked_at?new Date(s.checked_at).toLocaleString():''}
 const pairs=entries=>entries.map(([k,v])=>'<div class="svc"><span>'+esc(k)+'</span><span class="d">'+esc(v??'–')+'</span></div>').join('')
 
@@ -308,7 +312,7 @@ function charts(m){bars($('c-events'),m.events_by_hour,false,m.extras_at||Date.n
 
 function draw(s){const rows=s.checks||[],m=s.metrics||{},mc=m.machine||{},byName=g=>rows.filter(r=>r.group===g)
   const box=rows.filter(r=>r.group.startsWith('Containers')).sort((a,b)=>RANK[b.level]-RANK[a.level]||a.name.localeCompare(b.name));containers=box
-  const counts=containerSummary(box);lastStatus=s;connectionError=null;freshness()
+  const counts=containerSummary(box);lastStatus={...s,received_at:new Date().toISOString()};connectionError=null;freshness()
   const problems=rows.filter(r=>r.level==='down'||r.level==='warn').sort((a,b)=>RANK[b.level]-RANK[a.level])
   paged('problems',problems,'problems',slice=>{$('problems').innerHTML=slice.length?'<div class="card"><h2>Needs attention</h2>'+slice.map(r=>'<div class="svc"><span>'+(r.group==='Machine'&&r.name==='Memory'?'Low available memory':esc(r.group)+' · '+esc(r.name))+'</span><span class="d">'+esc(r.detail)+'</span>'+st(r.level)+'</div>').join('')+'</div>':''})
   const hours=m.events_by_hour,last=hours?hours.filter(h=>h[0]>=Math.floor(Date.now()/3600000)*3600000).reduce((a,h)=>a+h[1],0):null,day=hours?hours.reduce((a,h)=>a+h[1],0):null
@@ -326,10 +330,9 @@ function draw(s){const rows=s.checks||[],m=s.metrics||{},mc=m.machine||{},byName
   const a=s.about||{},dd=m.docker_disk
   $('about').innerHTML=pairs([['PostHog web image',a.posthog_image],['ClickHouse version',a.clickhouse_version],['Docker engine',a.docker_version],['Status service uptime',a.uptime_s==null?null:Math.floor(a.uptime_s/60)+' minutes'],['Check interval',a.interval_s==null?null:a.interval_s+' s'],['Last check duration',a.took_ms==null?null:a.took_ms+' ms'],['Alerts',a.alerts==null?null:a.alerts==='off'?'Off: no webhook in the status page settings':'On ('+a.alerts.format+', after '+a.alerts.after_minutes+' min)'+(a.alerts.last_sent_at?', last sent '+new Date(a.alerts.last_sent_at).toLocaleString():', none sent yet')+(a.alerts.alerting&&a.alerts.alerting.length?', open: '+a.alerts.alerting.join('; '):'')+(a.alerts.last_error?'. Last failure: '+a.alerts.last_error:'')]])+'<details><summary>Docker disk usage · cached 10 minutes</summary>'+(dd?pairs([['Images',gb(dd.images_bytes)],['Containers (writable layers)',gb(dd.containers_bytes)],['Volumes',gb(dd.volumes_bytes)],['Build cache',gb(dd.build_cache_bytes)],['Measured',new Date(dd.at).toLocaleString()]]):'<p>Unavailable</p>')+'</details><p class="small muted">Large counts and table sizes refresh every five minutes. CPU is a share of the whole machine. Histories and recent changes are held in memory.</p>'
   $('c-title').textContent='All containers ('+box.length+')';table()}
-let everDrawn=false
-async function tick(){try{const r=await fetch('/replays/system/api',{cache:'no-store'}),d=await r.json().catch(()=>({}));if(r.status===401)return location.reload();if(!r.ok)throw new Error(d.error||'The status service is not answering.');draw(d);everDrawn=true;document.querySelectorAll('.split.empty-wait').forEach(x=>{x.hidden=false;x.classList.remove('empty-wait')})}
-  catch(e){connectionError=e.message;$('banner').className='banner down';$('b-icon').innerHTML=ICON.down;$('b-head').textContent=e.message;$('b-sub').textContent='Trying again in 15 seconds. If this continues, contact the server administrator.'
-  if(!everDrawn){$('rows').innerHTML='<tr><td colspan="6" class="muted">Not available until the status service answers.</td></tr>';$('changes').textContent='Not available until the status service answers.';['clickhouse','lens'].forEach(id=>{const c=$(id);if(c&&!c.textContent.trim()){const sp=c.closest('.split');if(sp){sp.hidden=true;sp.classList.add('empty-wait')}}})}}}
+async function tick(){try{const r=await fetch('/replays/system/api',{cache:'no-store'}),d=await r.json().catch(()=>({}));if(r.status===401)return location.reload();if(!r.ok)throw new Error('HTTP '+(d.upstream_status||r.status)+(d.upstream_status?'':d.error?' · '+d.error:''));
+  $('system-results').hidden=false;draw(d)}
+  catch(e){connectionError=e.message;freshness()}}
 document.querySelector?.('.section-details')?.addEventListener('toggle',function(){if(this.open&&lastStatus)charts(lastStatus.metrics||{})})
 tick();setInterval(tick,15000);setInterval(freshness,1000)
 `
