@@ -31,7 +31,9 @@ function period(when: string | undefined, fallbackDays = 7): Window {
     const today = day(Date.now()), startOfToday = Date.parse(today + 'T00:00:00Z')
     if (!w) return { from: day(Date.now() - (fallbackDays - 1) * 86_400_000), to: today }
     // "last 7 days" ends where processed history ends (yesterday); here it means up to now. "yesterday" stays yesterday.
-    const rolling = !when || /\b(last|past|this|today|recent|since)\b/i.test(when)
+    // With no period given, the tool wrapper passes its default window as "<from> to <to>": that is rolling too.
+    const defaulted = !!when && when.trim() === `${day(+w.from)} to ${day(+w.to - 1)}` && +w.to === startOfToday && +w.to - +w.from === fallbackDays * 86_400_000
+    const rolling = !when || defaulted || /\b(last|past|this|today|recent|since)\b/i.test(when)
     return { from: day(+w.from), to: rolling && +w.to >= startOfToday ? today : day(Math.min(+w.to, Date.now()) - 1) }
 }
 export function registerWatchTools(reg: Reg, caller: { who: string; email?: string }): void {

@@ -330,3 +330,18 @@ test('candidates: ownership and "finished" come from the whole session; ids are 
     assert.match(sql, /HAVING max\(timestamp\) < now\(\) - INTERVAL 30 MINUTE AND clients = 1/)
     assert.match(sql, /\$session_id IN \(SELECT \$session_id FROM events WHERE .* IN \('LAB1','x\\'\) OR 1=1 --'\)\)/)
 })
+
+test('no period given: the last 7 days include today', async () => {
+    seedNames()
+    tasksDb.exec('DELETE FROM watch_clients; DELETE FROM watch_sessions; DELETE FROM watch_skips; DELETE FROM watch_retries')
+    W.changeWatch('LAB5', 'add', 'pm@x')
+    // One session started an hour ago (today), one yesterday.
+    const ids = sessions.filter((s) => s.client_id === 'LAB5').map((s) => s.session_id)
+    await W.processWatchlist(10, { candidates: async () => ({ list: ids.map((id, i) => ({ session_id: id, client: 'LAB5', user: 'u', start: new Date(Date.now() - (i ? 26 : 1) * 3_600_000).toISOString() })), found: new Map([['LAB5', 2]]) }), jsonl: async (id) => fixture(id), durationMs: async () => 70_000, names: async () => NAMES })
+    const c = await chat('share')
+    const r = await c.call('watch_highlights', {})
+    assert.equal(r.data.window.to, today, JSON.stringify(r.data.window))
+    assert.equal(r.data.total, 2)
+    assert.equal((await c.call('watch_highlights', { when: 'yesterday' })).data.window.to < today, true)
+    await c.close()
+})
