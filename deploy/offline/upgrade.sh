@@ -53,7 +53,10 @@ env_of() { grep -E "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' 
 # in $CONF; a machine set up before this setting existed keeps registry; a new one: local on Ubuntu/Debian.
 if [ -z "${IMAGE_SOURCE:-}" ]; then
     IMAGE_SOURCE="$(conf IMAGE_SOURCE)"
-    if [ -z "$IMAGE_SOURCE" ] && [ -f "$CONF" ]; then IMAGE_SOURCE=registry; fi
+    # A machine set up before this setting existed: registry, unless the images were loaded here (docker load).
+    if [ -z "$IMAGE_SOURCE" ] && [ -f "$CONF" ]; then
+        if docker image ls -q 'lens-offline/posthog/kit' 2>/dev/null | grep -q .; then IMAGE_SOURCE=local; else IMAGE_SOURCE=registry; fi
+    fi
     if [ -z "$IMAGE_SOURCE" ]; then
         case "$(. /etc/os-release 2>/dev/null; echo "${ID:-}")" in ubuntu | debian) IMAGE_SOURCE=local ;; *) IMAGE_SOURCE=registry ;; esac
     fi

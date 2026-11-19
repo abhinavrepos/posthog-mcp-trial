@@ -282,6 +282,13 @@ if [ "$ONLY" = rollback ]; then
         echo "There are no volume backups (SKIP_VOLUME_BACKUP was set): restore your VM snapshot instead."
         exit 1
     fi
+    # Every listed volume must have its archive before anything is stopped or deleted.
+    while read -r v; do
+        [ -f "$BACKUP_DIR/volumes/$v.tar" ] || { echo "The backup has no archive for volume $v (the backup did not finish); nothing was changed. Restore your VM snapshot instead."; exit 1; }
+    done < "$BACKUP_DIR/volumes/list.txt"
+    if [ ! -f "$BACKUP_DIR/SHA256SUMS" ] && [ "$(recall volume_backup)" = yes ]; then
+        echo "The backup did not finish (no SHA256SUMS); nothing was changed. Restore your VM snapshot instead."; exit 1
+    fi
     if [ -f "$BACKUP_DIR/SHA256SUMS" ]; then
         say "checking the backup against its checksums before touching anything"
         (cd "$BACKUP_DIR" && sha256sum --quiet -c SHA256SUMS) || { echo "The backup does not match its checksums; nothing was changed."; exit 1; }
@@ -300,6 +307,8 @@ if [ "$ONLY" = rollback ]; then
     # bookkeeping there, and restoring ClickHouse without it sets its data parts aside as broken.
     while read -r v; do
         docker volume rm -f "$v" >/dev/null 2>&1 || true
+        # Never unpack over data that is still there: a volume that could not be removed stops the rollback.
+        if docker volume inspect "$v" >/dev/null 2>&1; then echo "Volume $v could not be removed (still in use?); stopped before restoring it. Run the rollback again once it is free."; exit 1; fi
         docker volume create --label com.docker.compose.project="$PROJECT" --label com.docker.compose.volume="${v#"${PROJECT}"_}" "$v" >/dev/null
         docker run --rm -v "$v:/v" -v "$BACKUP_DIR/volumes:/b:ro" "$HELPER_IMAGE" sh -c "cd /v && tar -xf /b/$v.tar"
         say "    restored volume $v"
@@ -442,10 +451,10 @@ if phase check; then
     # Apps may keep sending during the upgrade: it does not wait for them to stop. Events that arrive while
     # PostHog is down may be lost (unless the apps retry). Remembered, so a run that continues later compares
     # the same way (phases postgres and verify then accept more rows than phase before).
-    if [ "$b" -gt "$a" ] || [ "${ALLOW_LIVE:-0}" = 1 ]; then
-        say "events are still arriving: the upgrade goes ahead; the final check allows for rows that arrive meanwhile"
-        remember live yes
-    fi
+    # The comparison always allows for rows that arrive during the upgrade: two 10-minute counts can be equal
+    # under steady traffic, so "no new events seen" does not prove that nothing arrives later.
+    if [ "$b" -gt "$a" ]; then say "events are still arriving: the upgrade goes ahead; the final check allows for rows that arrive meanwhile"; fi
+    remember live yes
     recordings=$(dc exec -T clickhouse clickhouse-client -q "SELECT uniqExact(session_id) FROM posthog.session_replay_events" < /dev/null)
     if [ -z "$minio_vol" ]; then remember replays copy
     elif [ -z "$(recall replays)" ]; then
