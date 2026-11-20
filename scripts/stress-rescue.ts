@@ -115,7 +115,8 @@ clearInterval(rssTimer); loop.disable()
 const load = JSON.parse(readFileSync(join(dir, 'load.json'), 'utf8'))
 const { rescueQueue } = await import('../src/core/rescue.ts')
 const db = await import('../src/core/db.ts')
-const q14 = await rescueQueue({ window: { from: dayStr(14), to: dayStr(1) } })
+// The last 14 finished days (yesterday is not final yet), as the product's own windows end.
+const q14 = await rescueQueue({ window: { from: dayStr(15), to: dayStr(2) } })
 const c01 = q14.clients.find((c) => c.client === 'C01'), c02 = q14.clients.find((c) => c.client === 'C02')
 const audits = (db.one('SELECT count(*) AS n FROM audit WHERE action = ?', 'rescue.updated') as { n: number }).n
 const rows = (db.one('SELECT count(*) AS n FROM rescue_actions') as { n: number }).n
@@ -126,9 +127,9 @@ const summary = {
     lens_rss_peak_mb: Math.round(rssPeak / 1048576),
     load,
     consistency: { status_writes_ok: load.writes_ok, audit_rows: audits, audit_matches_writes: audits === load.writes_ok, clients_with_status: rows },
-    planted: { C01: c01 ? `${c01.level}: ${c01.reasons[0]?.text}` : 'NOT FLAGGED', C02: c02 ? `${c02.level}: ${c02.reasons.map((r) => r.kind).join(',')}` : 'NOT FLAGGED', flagged_total: q14.clients.length },
+    planted: { C01: c01 ? `${c01.level}: ${c01.reasons[0]?.text}` : 'NOT FLAGGED', C02: c02 ? `${c02.level}: ${c02.reasons.map((r) => r.kind).join(',')}` : 'NOT FLAGGED', coverage: q14.coverage, flagged_total: q14.clients.length },
 }
 console.log('\nSUMMARY ' + JSON.stringify(summary, null, 2))
 writeFileSync(process.env.STRESS_OUT || join(tmpdir(), 'lens-stress-summary.json'), JSON.stringify(summary, null, 2))
-rmSync(dir, { recursive: true, force: true })
+if (process.env.STRESS_KEEP) console.log(JSON.stringify({ msg: 'kept', dir })); else rmSync(dir, { recursive: true, force: true })
 process.exit(0)
