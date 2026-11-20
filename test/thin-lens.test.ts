@@ -174,3 +174,17 @@ test('instructions and tool descriptions stay short and direct',()=>{
     registerTools(server);assert.ok(descriptions.length>=8);assert.ok(descriptions.every(s=>s.length<2048))
 })
 after(()=>rmSync(dir,{recursive:true,force:true}))
+
+test('find_sessions recorded_only keeps only sessions that have a recording, and the default does not filter',async t=>{
+    const seen:string[]=[]
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
+        const q=JSON.parse(String(init.body)).query
+        if(q.query.includes('GROUP BY sid')){seen.push(q.query);return response([])}
+        return response([])
+    })
+    const window={from:new Date('2026-11-12T00:00:00Z'),to:new Date('2026-11-19T00:00:00Z')}
+    await findSessions({clientId:'SEM',limit:1,recordedOnly:true,...window})
+    await findSessions({clientId:'SEM',limit:1,...window})
+    assert.match(seen[0]!,/IN \(SELECT session_id FROM raw_session_replay_events/)
+    assert.doesNotMatch(seen[1]!,/raw_session_replay_events/)
+})

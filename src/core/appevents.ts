@@ -131,7 +131,7 @@ export async function recordingSpans(ids: string[]) {
         FROM raw_session_replay_events WHERE session_id IN {ids} GROUP BY session_id LIMIT 100`, {ids})
     return new Map(rows.map(r => [String(r.session_id), {start: new Date(String(r.start)).toISOString(), end: new Date(String(r.end)).toISOString()}]))
 }
-export interface SessionQuery { clientId: string; screen?: string; what?: string; user?: string; email?: string; from: Date; to: Date; limit?: number; cursor?: string }
+export interface SessionQuery { clientId: string; screen?: string; what?: string; user?: string; email?: string; from: Date; to: Date; limit?: number; cursor?: string; recordedOnly?: boolean }
 export async function findSessions(q: SessionQuery) {
     if (!Number.isFinite(+q.from) || !Number.isFinite(+q.to) || q.to <= q.from || +q.to - +q.from > 366 * 86400000) throw new ToolInputError('Choose a time window of at most one year.')
     const reg = required(), limit = Math.max(1, Math.min(q.limit ?? 10, 30))
@@ -151,6 +151,7 @@ export async function findSessions(q: SessionQuery) {
         minIf(timestamp, ${q.what ? contains(action,'what') : contains(screen,'screen')}) AS first_match
         FROM events WHERE timestamp >= {from} AND timestamp < {to}
         AND toString(${P.client}) = {client} AND notEmpty(toString(properties.$session_id)) AND ${userFilter}
+        ${q.recordedOnly ? 'AND toString(properties.$session_id) IN (SELECT session_id FROM raw_session_replay_events WHERE min_first_timestamp >= {from} - INTERVAL 1 DAY AND min_first_timestamp < {to})' : ''}
         GROUP BY sid HAVING countIf(${contains(screen,'screen')}) > 0 AND countIf(${contains(action,'what')}) > 0
         ${after ? 'AND (last < {cts} OR (last = {cts} AND sid < {csid}))' : ''}
         ORDER BY last DESC, sid DESC LIMIT ${limit+1}`

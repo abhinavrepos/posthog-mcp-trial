@@ -77,14 +77,14 @@ export function registerTools(server:McpServer,_ai?:unknown,caller?:Caller,_raw=
         for(const m of matches)auditClient(m.id)
         return jsonResult('Client matches',matches.map(({users,emails,distinct_ids,...m})=>m))
     })
-    server.registerTool('find_sessions',{description:'Find client sessions newest first. Optional screen matches dialog/tab name or code; what matches action/message text; user accepts email or distinct-id user. Up to one year. Returns PostHog replay and Lens clip links; use next_cursor for older sessions.',inputSchema:{client:z.string().min(1).max(320),screen:z.string().max(200).optional(),what:z.string().max(500).optional(),user:z.string().max(320).optional(),...timeShape,limit:z.number().int().min(1).max(30).default(10),cursor:z.string().max(250).optional()},annotations:{readOnlyHint:true}},async args=>{
+    server.registerTool('find_sessions',{description:'Find client sessions newest first. Optional screen matches dialog/tab name or code; what matches action/message text; user accepts email or distinct-id user. Up to one year. Returns PostHog replay and Lens clip links; use next_cursor for older sessions. When the person wants a replay to watch, set recorded_only: true so only sessions with a playable recording come back.',inputSchema:{client:z.string().min(1).max(320),recorded_only:z.boolean().optional().describe('Only sessions with a recording (set when asked for a replay to watch).'),screen:z.string().max(200).optional(),what:z.string().max(500).optional(),user:z.string().max(320).optional(),...timeShape,limit:z.number().int().min(1).max(30).default(10),cursor:z.string().max(250).optional()},annotations:{readOnlyHint:true}},async args=>{
         const w=resolveTime(args,30)
         const context=toolContext.getStore();if(context)context.window=w
         if(+w.to-+w.from>366*86400000)throw new ToolInputError('Choose a time window of at most one year.')
         const matches=await resolveClient({text:args.client,from:w.from,to:w.to}), best=matches[0]
         if(!best)throw new ToolInputError('No client matches. Try a client code or user.')
         auditClient(best.id)
-        return jsonResult('Sessions',await findSessions({clientId:best.id,from:w.from,to:w.to,screen:args.screen,what:args.what,user:args.user || best.matched_user,limit:args.limit,cursor:args.cursor}))
+        return jsonResult('Sessions',await findSessions({clientId:best.id,from:w.from,to:w.to,screen:args.screen,what:args.what,user:args.user || best.matched_user,limit:args.limit,cursor:args.cursor,recordedOnly:args.recorded_only === true}))
     })
     server.registerTool('get_replay_link',{description:'Get PostHog replay and Lens MP4 clip links. Waits up to 25 seconds for rendering; unfinished clips complete in the background.',inputSchema:{session_id:z.string().min(1),start_s:z.number().min(0),duration_s:z.number().min(3).max(120).default(30)}},async({session_id:raw,start_s,duration_s})=>{
         const session_id=sessionIdOf(raw), request={sessionId:session_id,startOffsetS:start_s,durationS:duration_s}
