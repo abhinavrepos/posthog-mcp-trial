@@ -3,6 +3,21 @@
 What went wrong while rehearsing today's deployment and load test, what caused it, and what was done.
 Newest first. Times are UTC.
 
+## 2. Moving the load test to the main machine (02:45)
+
+- At the owner's request the rehearsal VM (`/var/lib/ubuntu-vm`, ~104 GB disk, 16 GB RAM) was shut down
+  cleanly and deleted, and the load test moved to the main machine (8 cores, 30 GB RAM, 112 GB free
+  after the VM went).
+- `fresh-install.sh` stops on this machine's OS: the installer accepts only Ubuntu 24.04 or Amazon Linux
+  2023, and the main machine runs Ubuntu 26.10. For this test only, the unpacked copy in
+  `/opt/posthog-lens/deploy/install.sh` was patched locally to accept it (`ALLOW_ANY_UBUNTU=1`); the
+  repository is unchanged. PostHog's own installer already accepts any Ubuntu.
+- The installer reported that Lens would listen on the machine's public address. Ports 8080 and 8090 were
+  closed to the public interface with `iptables -I INPUT -i enp1s0 ... -j DROP` (comment `lens-loadtest`;
+  remove after the test). PostHog's published ports 80/443 were already unreachable from outside through
+  an earlier `DOCKER-USER` rule (comment `lens-test`).
+- Today's deployment is not affected: the target is Ubuntu 24.04 and goes through `upgrade.sh`.
+
 ## 1. Event capture crash-looping for about 45 hours (found 02:20, fixed 02:35)
 
 **What was seen.** On the offline Ubuntu VM (PostHog + Lens, the production rehearsal machine), three
