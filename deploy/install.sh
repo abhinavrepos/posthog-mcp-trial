@@ -119,12 +119,12 @@ trap 'rc=$?; [ $rc -ne 0 ] && [ -n "$CURRENT" ] && { echo; echo "${R}${B}STOPPED
 echo "${B}PostHog Lens installer${N}  ($(date -u '+%Y-%m-%d %H:%M UTC'), project folder $APP_DIR)"
 
 # ------------------------------------------------------------------ answers
-# Precedence: the environment, then --config, then the answers of a previous run, then .secrets.env,
-# then the default.
+# Precedence: persistent CONF, kit site defaults, environment, --config, previous answers,
+# .secrets.env, then the default.
 read_env_file() { # file key -> value (unquoted, inline comment removed); empty when missing
     [ -f "$1" ] || return 0
     python3 - "$1" "$2" <<'PY'
-import re, sys
+import json, re, sys
 path, key = sys.argv[1:]
 val = None
 for line in open(path, encoding="utf-8"):
@@ -133,7 +133,13 @@ for line in open(path, encoding="utf-8"):
         continue
     v = m.group(2).strip()
     if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
-        v = v[1:-1]
+        if v[0] == '"':
+            try:
+                v = json.loads(v)
+            except ValueError:
+                v = v[1:-1]
+        else:
+            v = v[1:-1]
     else:
         v = re.sub(r"\s+#.*$", "", v).strip()
     val = v
@@ -141,13 +147,20 @@ if val is not None:
     print(val)
 PY
 }
-known() { # key -> the first value found
-    local k="$1" v="${!1:-}"
+known() { # site/CONF values override old answers, including an explicitly empty value
+    local k="$1" v file
+    for file in "${POSTHOG_LENS_CONF:-/etc/posthog-lens/posthog-lens.env}" "$HERE/offline/sites/$(hostname -s)/site.env"; do
+        if [ -f "$file" ] && grep -qE "^[[:space:]]*(export[[:space:]]+)?${k}[[:space:]]*=" "$file"; then
+            read_env_file "$file" "$k"; return
+        fi
+    done
+    v="${!1:-}"
     [ -n "$v" ] || v="$(read_env_file "$CONFIG" "$k")"
     [ -n "$v" ] || v="$(read_env_file "$ANSWERS" "$k")"
     [ -n "$v" ] || v="$(read_env_file "$SECRETS" "$k")"
     printf '%s' "$v"
 }
+
 save_answer() {
     touch "$ANSWERS"; chmod 600 "$ANSWERS"
     python3 - "$ANSWERS" "$1" "$2" <<'PY'
@@ -211,13 +224,13 @@ is_autoyesno() { [[ "$1" =~ ^(auto|yes|no)$ ]] || { warn "auto, yes or no"; retu
 is_address() { [[ "$1" =~ ^(https?://)?[A-Za-z0-9.-]+$ ]] || { warn "a domain (posthog.example.com), an IP address, or http://name"; return 1; }; }
 is_private_ip() { [[ "$1" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)[0-9.]+$ ]]; }
 addr_kind() { local h="${1#*://}"; [[ "$1" == http://* ]] || [[ "$h" =~ ^[0-9.]+$ ]] && echo http || echo https; }
-# One or more addresses, comma-separated, all of one kind: domains with HTTPS, or IPs and http:// names.
+# One or more addresses, comma-separated; mixed HTTPS names and HTTP IPs are supported.
 is_addresses() {
     local a first=""
     for a in ${1//,/ }; do
         is_address "$a" || return 1
         [ -n "$first" ] || first="$(addr_kind "$a")"
-        [ "$(addr_kind "$a")" = "$first" ] || { warn "mix of kinds: use only domains (HTTPS), or only IPs and http:// names (plain HTTP)"; return 1; }
+
     done
     [ -n "$first" ]
 }
@@ -254,7 +267,7 @@ collect_answers() {
         [ -n "$(known ADMIN_EMAIL)" ] || def_admin="$(existing_admin)"
     fi
     [ $INTERACTIVE = 1 ] && say "Press Enter to keep the value in [brackets]."
-    ask POSTHOG_ADDRESS "Address(es) people use to reach PostHog, comma-separated (the first is the main one). Domains get HTTPS (DNS must point here, ports 80 and 443 open in the security group); IPs and http://names are plain HTTP. Do not mix the two." "$def_address" 1 0 is_addresses
+    ask POSTHOG_ADDRESS "Address(es) people use to reach PostHog, comma-separated (the first is the main one). Domains get HTTPS (DNS must point here, ports 80 and 443 open in the security group); IPs and http://names are plain HTTP." "$def_address" 1 0 is_addresses
     POSTHOG_ADDRESS="${POSTHOG_ADDRESS// /}"; save_answer POSTHOG_ADDRESS "$POSTHOG_ADDRESS"
     if [ "$MODE" = fresh ]; then
         ask ADMIN_EMAIL "Email for the first PostHog login" "" 1 0 is_email
@@ -290,9 +303,19 @@ collect_answers() {
     setting PROP_CLIENT_NAME client_name
     setting PROP_APP_VERSION app_version
     setting PROP_PERSON_EMAIL email
-    setting CLIENT_FROM_DISTINCT_ID 0 is_part
+    local detected detected_client detected_app
+    detected="$(python3 "$HERE/offline/detect-settings.py" "$SECRETS" "$ANSWERS" "$CONFIG")"
+    detected_client="$(printf '%s\n' "$detected" | sed -n 's/^CLIENT_FROM_DISTINCT_ID=//p')"
+    detected_app="$(printf '%s\n' "$detected" | sed -n 's/^APP_EVENTS_FILE=//p')"
+    # Explicit site/CONF settings win; detection replaces only empty or historical default values.
+    if [ -n "$detected_client" ] && [ "$(known CLIENT_FROM_DISTINCT_ID)" = 0 ] &&
+        [ -z "$(read_env_file "$CONFIG" CLIENT_FROM_DISTINCT_ID)" ] &&
+        [ -z "$(read_env_file "${POSTHOG_LENS_CONF:-/etc/posthog-lens/posthog-lens.env}" CLIENT_FROM_DISTINCT_ID)" ]; then
+        export CLIENT_FROM_DISTINCT_ID="$detected_client"
+    fi
+    setting CLIENT_FROM_DISTINCT_ID "${detected_client:-0}" is_part
     setting DISTINCT_ID_SEPARATOR "|" is_sep
-    setting APP_EVENTS_FILE "" is_appevents
+    setting APP_EVENTS_FILE "$detected_app" is_appevents
     setting SCREENS_FILE "" is_file
     setting JIRA_BASE_URL "" is_url
     setting JIRA_EMAIL "" is_email
@@ -570,7 +593,7 @@ step_posthog() {
     if [ "$MODE" = upgrade ]; then
         CURRENT=posthog; step "Upgrading the PostHog in $POSTHOG_DIR (about 2 hours; it continues where it stopped)"
         REPLAYS="$([ "$MIGRATE_REPLAYS" = yes ] && echo copy || echo skip)" POSTHOG_DIR="$POSTHOG_DIR" \
-            bash "$HERE/migrate/posthog-upgrade.sh" --yes </dev/null
+            FROM_LENS_INSTALLER=1 bash "$HERE/migrate/posthog-upgrade.sh" --yes </dev/null
         posthog_healthy || die "PostHog is not healthy after the upgrade (curl $POSTHOG_URL/_health)."
         [ "$(git -C "$POSTHOG_DIR/posthog" rev-parse HEAD)" = "$TARGET_COMMIT" ] || die "PostHog's source is not at $TARGET_COMMIT."
         ok "PostHog upgraded to ${TARGET_COMMIT:0:12}, its data checked (RESULT: PASS)"
@@ -768,13 +791,26 @@ APP_KEYS=(PROP_CLIENT_ID PROP_CLIENT_NAME PROP_APP_VERSION PROP_PERSON_EMAIL CLI
     FEATURE_SURVEYS POSTHOG_SURVEY_API_KEY POSTHOG_SURVEY_GATE SURVEY_BRAND)
 step_settings() {
     CURRENT=settings; step "Writing .secrets.env"
-    local k v n=0
+    local k v n=0 detected
+    # Fresh installs obtain API credentials after collect_answers. Detect again now that PostHog is ready.
+    detected="$(python3 "$HERE/offline/detect-settings.py" "$SECRETS")"
+    while IFS='=' read -r k v; do
+        [ -n "$k" ] || continue
+        case "$k" in APP_EVENTS_FILE|CLIENT_FROM_DISTINCT_ID|DISTINCT_ID_SEPARATOR) ;; *) continue ;; esac
+        if [ -z "$(read_env_file "${POSTHOG_LENS_CONF:-/etc/posthog-lens/posthog-lens.env}" "$k")" ] &&
+            [ -z "$(read_env_file "$CONFIG" "$k")" ] &&
+            [ -z "$(read_env_file "$HERE/offline/sites/$(hostname -s)/site.env" "$k")" ]; then
+            if [ -z "${!k:-}" ] || { [ "$k" = CLIENT_FROM_DISTINCT_ID ] && [ "${!k}" = 0 ]; }; then
+                printf -v "$k" '%s' "$v"; save_answer "$k" "$v"
+            fi
+        fi
+    done <<<"$detected"
     for k in "${APP_KEYS[@]}"; do set_secret "$k" "${!k:-}"; n=$((n + 1)); done
     # Any other setting from .env.example that the --config file sets, copied as it is.
     if [ -n "$CONFIG" ]; then
         for k in $(grep -oE '^[A-Z_]+=' "$APP_DIR/.env.example" | tr -d =); do
             case " ${APP_KEYS[*]} POSTHOG_HOST POSTHOG_PUBLIC_HOST POSTHOG_PROJECT_ID POSTHOG_PROJECT_TOKEN POSTHOG_PERSONAL_API_KEY POSTHOG_ADMIN_EMAIL POSTHOG_ADMIN_PASSWORD " in *" $k "*) continue ;; esac
-            v="$(read_env_file "$CONFIG" "$k")"
+            v="$(known "$k")"
             [ -n "$v" ] && { set_secret "$k" "$v"; n=$((n + 1)); }
         done
     fi

@@ -14,16 +14,34 @@
 #
 # Environment: SECRETS (../../.secrets.env), POSTHOG_DIR (/opt/posthog), MCP_PORT (8787),
 # MCP_POSTHOG_API_URL (how the container reaches PostHog's API: http://web:8000 for plain HTTP,
-# the public HTTPS address otherwise).
+# default, including public HTTPS sites).
 set -euo pipefail
 cd "$(dirname "$0")"
+# Persistent, optional site layer survives kit unpacking. Never put local overrides in the kit checkout.
+MCP_SITE_COMPOSE="${MCP_SITE_COMPOSE:-/etc/posthog-lens/posthog-mcp.override.yml}"
+export COMPOSE_FILE="$PWD/docker-compose.yml"
+if [ -f "$MCP_SITE_COMPOSE" ]; then
+    export COMPOSE_FILE="$COMPOSE_FILE:$MCP_SITE_COMPOSE"
+fi
+# Apply the selected upstream last, including over an old public-HTTPS site override.
+export COMPOSE_FILE="$COMPOSE_FILE:$PWD/docker-compose.api.yml"
 if [ "${1:-}" = down ]; then MCP_POSTHOG_API_URL=- MCP_POSTHOG_PUBLIC_URL=- docker compose down; exit 0; fi
 SECRETS="${SECRETS:-$(cd ../.. && pwd)/.secrets.env}"
 POSTHOG_DIR="${POSTHOG_DIR:-/opt/posthog}"
 export MCP_PORT="${MCP_PORT:-8787}" MCP_BIND="${MCP_BIND:-127.0.0.1}"
 export MCP_APPS_URL="${MCP_NETWORK_URL:-http://127.0.0.1:$MCP_PORT/mcp}"; MCP_APPS_URL="${MCP_APPS_URL%/mcp}"
+if [ -z "${POSTHOG_NETWORK:-}" ]; then
+    web_container="$(cd "$POSTHOG_DIR" && env -u COMPOSE_FILE docker compose ps -q web | head -1)"
+    [ -z "$web_container" ] || POSTHOG_NETWORK="$(docker inspect -f '{{range $name, $network := .NetworkSettings.Networks}}{{$name}} {{end}}' "$web_container" | awk '{print $1}')"
+fi
 export POSTHOG_NETWORK="${POSTHOG_NETWORK:-$(basename "$POSTHOG_DIR")_default}"
-get() { grep -E "^$1=" "$SECRETS" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
+get() { python3 - "$SECRETS" "$1" <<'PYENV'
+import sys
+sys.path.insert(0, '../offline')
+from site_config_loader import env
+print(env(sys.argv[1]).get(sys.argv[2], ''))
+PYENV
+}
 put() {
     python3 - "$SECRETS" "$1" "$2" <<'PY'
 import sys
@@ -44,11 +62,33 @@ docker network inspect "$POSTHOG_NETWORK" >/dev/null 2>&1 || { echo "Docker netw
 public="$(get POSTHOG_PUBLIC_HOST)"
 [ -n "$public" ] || { echo "POSTHOG_PUBLIC_HOST is not set in $SECRETS."; exit 1; }
 export MCP_POSTHOG_PUBLIC_URL="$public"
-# With HTTPS PostHog sends plain-HTTP requests to https://, so the container takes the public address.
-if [ -z "${MCP_POSTHOG_API_URL:-}" ]; then
-    case "$public" in https://*) MCP_POSTHOG_API_URL="$public" ;; *) MCP_POSTHOG_API_URL=http://web:8000 ;; esac
+# Internal HTTP avoids load balancer certificates and hairpin routing.
+export MCP_POSTHOG_API_URL="${MCP_POSTHOG_API_URL:-http://web:8000}"
+probe_internal() {
+    local path headers
+    for path in /_health /api/; do
+        headers="$(cd "$POSTHOG_DIR" && env -u COMPOSE_FILE docker compose exec -T web curl --noproxy '*' -sS -D - -o /dev/null --max-time 10 "http://web:8000$path")" || return 1
+        if grep -qiE '^location: *https://' <<<"$headers"; then return 2; fi
+        grep -qE '^HTTP/[^ ]+ (200|401|403)' <<<"$headers" || return 1
+    done
+}
+if [ "$MCP_POSTHOG_API_URL" = http://web:8000 ]; then
+    ready=0; repaired=0
+    for _ in $(seq 1 120); do
+        result=0; probe_internal || result=$?
+        if [ "$result" = 0 ]; then ready=1; break; fi
+        if [ "$result" = 2 ] && [ "$repaired" = 0 ]; then
+            echo "PostHog redirects internal HTTP to HTTPS; setting DISABLE_SECURE_SSL_REDIRECT=true in the persistent site file."
+            python3 ../offline/site-config.py "$POSTHOG_DIR"
+            (cd "$POSTHOG_DIR" && env -u COMPOSE_FILE docker compose up -d --no-build --pull never web)
+            repaired=1
+        fi
+        sleep 5
+    done
+    [ "$ready" = 1 ] || { echo "Internal PostHog /_health or /api/ unavailable or redirects to HTTPS. Fix web health and DISABLE_SECURE_SSL_REDIRECT in $POSTHOG_DIR/docker-compose.site.yml, then rerun $0."; exit 1; }
+    echo "Internal network preflight passed: MCP calls $MCP_POSTHOG_API_URL (/_health and /api/)."
 fi
-export MCP_POSTHOG_API_URL
+echo "PostHog MCP upstream API: $MCP_POSTHOG_API_URL; public links: $MCP_POSTHOG_PUBLIC_URL"
 # The machine's CA bundle, so the container trusts the same certificates (see docker-compose.yml).
 for b in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do [ -f "$b" ] && { export HOST_CA_BUNDLE="$b"; break; }; done
 [ -n "${HOST_CA_BUNDLE:-}" ] || { echo "No CA bundle found on this machine (/etc/ssl/certs/ca-certificates.crt or /etc/pki/tls/certs/ca-bundle.crt)."; exit 1; }
@@ -56,7 +96,7 @@ for b in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do
 if [ -z "$(get POSTHOG_MCP_API_KEY)" ] || [ "${1:-}" = --new-key ]; then
     email="$(get POSTHOG_ADMIN_EMAIL)"; project="$(get POSTHOG_PROJECT_ID)"
     [ -n "$email" ] && [ -n "$project" ] || { echo "POSTHOG_ADMIN_EMAIL or POSTHOG_PROJECT_ID is missing in $SECRETS."; exit 1; }
-    out=$(cd "$POSTHOG_DIR" && docker compose exec -T -e ADMIN_EMAIL="$email" -e PROJECT_ID="$project" web python manage.py shell 2>/dev/null <<'PY'
+    out=$(cd "$POSTHOG_DIR" && env -u COMPOSE_FILE docker compose exec -T -e ADMIN_EMAIL="$email" -e PROJECT_ID="$project" web python manage.py shell 2>/dev/null <<'PY'
 import os
 from posthog.models import User
 from posthog.models.personal_api_key import PersonalAPIKey
@@ -86,7 +126,7 @@ PY
     echo "Made a read-only API key for the MCP server (no session replay scopes), label posthog-mcp."
 fi
 # In-app surveys are managed only in Lens: a key made before that rule loses its survey scopes.
-(cd "$POSTHOG_DIR" && docker compose exec -T web python manage.py shell 2>/dev/null <<'PY'
+(cd "$POSTHOG_DIR" && env -u COMPOSE_FILE docker compose exec -T web python manage.py shell 2>/dev/null <<'PY'
 from posthog.models.personal_api_key import PersonalAPIKey
 for k in PersonalAPIKey.objects.filter(label="posthog-mcp"):
     kept = [s for s in (k.scopes or []) if not s.startswith("survey:")]
@@ -103,7 +143,9 @@ put POSTHOG_MCP_URL "http://$local_host:$MCP_PORT/mcp"
 # A machine without internet takes the image from ECR (deploy/offline/ecr.env).
 . ../offline/ecr.sh
 if [ "$IMAGES_FROM" = ecr ]; then export POSTHOG_MCP_IMAGE="$ECR_POSTHOG_MCP"; images_login; ecr_fetch "$ECR_POSTHOG_MCP" || exit 1; fi
-docker compose up -d --quiet-pull --remove-orphans 2>&1 | grep -v -E "^ *(Container|Network) " || true
+pull_args=()
+[ "${MCP_NO_PULL:-0}" != 1 ] || pull_args=(--pull never)
+docker compose up -d --quiet-pull --remove-orphans "${pull_args[@]}"
 # Up to 3 minutes: at start the server fetches its skills catalog from github.com and waits up to 60 s
 # for it. Without internet it then starts without those skills (its tools all work) and keeps trying.
 echo "Starting PostHog's MCP server (up to 3 minutes without internet: it waits 60 s for GitHub first)"

@@ -23,7 +23,7 @@ POSTHOG_DIR="${POSTHOG_DIR:-/opt/posthog}"
 cd "$POSTHOG_DIR"
 [ -f docker-compose.yml ] || { echo "No docker-compose.yml in $POSTHOG_DIR. Set POSTHOG_DIR."; exit 1; }
 
-envget() { grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- || true; }
+envget() { grep -E "^$1=" .env 2>/dev/null | tail -1 | cut -d= -f2- | sed -E 's/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/' || true; }
 setting() { local v="${!1:-}"; [ -n "$v" ] || v="$(envget "$1")"; echo "${v:-$2}"; }
 RETENTION_HOURS="$(setting KAFKA_RETENTION_HOURS 24)"
 RETENTION_GB="$(setting KAFKA_RETENTION_GB_PER_PARTITION 2)"

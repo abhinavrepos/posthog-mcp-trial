@@ -241,6 +241,7 @@ web_python() { # run a python file from this folder inside the running web conta
     web=$(dc ps -q --status running web | head -1)
     [ -n "$web" ] || { echo "PostHog's web service is not running (${DC[*]} ps web; ${DC[*]} logs web). Start it, then run the script again."; return 1; }
     docker cp "$HERE/$f" "$web:/tmp/$f" >/dev/null
+    dc exec -T -u 0 web chmod 0644 "/tmp/$f" < /dev/null
     dc exec -T "$@" web python -u "/tmp/$f" < /dev/null
 }
 wait_web() {
@@ -487,6 +488,7 @@ PROJECT=$(recall project)
 
 # ---------------------------------------------------------------- 2 before
 if phase before; then
+    python3 "$HERE/../offline/site-config.py" "$POSTHOG_DIR" --before-upgrade
     web_python counts.py -e STORES=general > "$STATE/before.json.partial"
     mv "$STATE/before.json.partial" "$STATE/before.json"
     python3 -c "
@@ -605,6 +607,8 @@ fi
 
 # ---------------------------------------------------------------- 5 configure
 if phase configure; then
+    python3 "$HERE/../offline/site-config.py" "$POSTHOG_DIR" --before-upgrade
+    EXTRA_COMPOSE_FILES="$(grep '^EXTRA_COMPOSE_FILES=' .env | tail -1 | cut -d= -f2- | tr -d '\"')"
     # .env changes, in the order upgrade-hobby makes them.
     tmp="$(mktemp)"
     awk '
@@ -637,6 +641,7 @@ if phase configure; then
         # Fails within seconds where there is no internet; GeoIP then stays off.
         curl -fsSL --connect-timeout 5 --max-time 120 'https://mmdbcdn.posthog.net/' --http1.1 | brotli --decompress --output=share/GeoLite2-City.mmdb && echo "{\"date\": \"$(date +%Y-%m-%d)\"}" > share/GeoLite2-City.json || say "GeoIP download failed; GeoIP stays off until share/GeoLite2-City.mmdb exists"
     fi
+    chmod 0644 share/GeoLite2-City.* 2>/dev/null || true
     # Compose files, rendered from the new source the way upgrade-hobby renders them.
     cp posthog/docker-compose.base.yml docker-compose.base.yml
     # PostHog's stock file replaces this one. This site's own lines go back in: without SECURE_COOKIES=false
@@ -650,7 +655,8 @@ if phase configure; then
     mkdir -p compose
     printf '#!/bin/bash\n./compose/wait\n./bin/migrate\n./bin/docker-server\n' > compose/start
     [ -f compose/temporal-django-worker ] || printf '#!/bin/bash\n./bin/temporal-django-worker\n' > compose/temporal-django-worker
-    chmod +x compose/start compose/temporal-django-worker
+    chmod 0755 compose share compose/start compose/temporal-django-worker
+    [ ! -f compose/wait ] || chmod 0755 compose/wait
     cp "$HERE/versions/docker-compose.pinned.yml" docker-compose.pinned.yml
     files="docker-compose.yml"; [ -f docker-compose.override.yml ] && files="$files:docker-compose.override.yml"
     # docker-compose.no-internet.yml also names services of docker-compose.scale.yml, which is out of the list
@@ -662,7 +668,8 @@ if phase configure; then
     envset EXTRA_COMPOSE_FILES "$EXTRA_COMPOSE_FILES"
     # From ECR: every service's image from the registry (docker-compose.ecr.yml, last in the list).
     ecr_compose_override "$POSTHOG_DIR" || exit 1
-    files="$(grep -E '^COMPOSE_FILE=' .env | cut -d= -f2-)"
+    files="$(grep -E '^COMPOSE_FILE=' .env | cut -d= -f2- | tr -d '"')"
+    python3 "$HERE/../offline/public-mount-permissions.py" "$POSTHOG_DIR"
     dc config -q
     say "compose files: $files"
     finish configure
@@ -750,7 +757,7 @@ if phase stone; then
         images_login
         ecr_fetch "$STEPPING_STONE_IMAGE" || exit 1
         printf 'services:\n    web:\n        image: %s\n' "$STEPPING_STONE_IMAGE" > "$STATE/stone.yml"
-        stone_files=(); IFS=: read -ra cf <<< "$(grep -E '^COMPOSE_FILE=' .env | cut -d= -f2-)"
+        stone_files=(); IFS=: read -ra cf <<< "$(grep -E '^COMPOSE_FILE=' .env | cut -d= -f2- | tr -d '"')"
         for f in "${cf[@]}"; do stone_files+=(-f "$f"); done
         stone() { dc "${stone_files[@]}" -f "$STATE/stone.yml" run --rm -T --no-deps -e SKIP_ASYNC_MIGRATIONS_SETUP=1 -e PYTHONUNBUFFERED=1 web "$@"; }
         TOTAL=$(pending stone); TOTAL=${TOTAL:-?}
@@ -819,6 +826,7 @@ if phase start; then
     dc up -d --remove-orphans db redis7 clickhouse kafka >/dev/null 2>&1   # the old redis 6.2 and cyclotron-janitor are gone
     NODE_BASE_IMAGE="$NODE_BASE_IMAGE" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/../posthog/scale.sh" < /dev/null
     wait_web
+    dc exec -T web python manage.py shell < "$HERE/remote-config.py"
     finish start
 fi
 
@@ -846,7 +854,7 @@ PYEOF
     chmod 0644 "$js"
     printf 'services:\n    plugins:\n        volumes:\n            - %s:/code/nodejs/bin/migrate-minio-to-seaweedfs.js:ro\n' "$js" > "$STATE/storage-copier.yml"
 }
-hobby_storage() { echo y | COMPOSE_FILE="$(grep -E '^COMPOSE_FILE=' .env | cut -d= -f2-):$STATE/storage-copier.yml" bash posthog/bin/migrate-storage-hobby --volume "$(recall minio_volume)" "$1"; }
+hobby_storage() { echo y | COMPOSE_FILE="$(grep -E '^COMPOSE_FILE=' .env | cut -d= -f2- | tr -d '"'):$STATE/storage-copier.yml" bash posthog/bin/migrate-storage-hobby --volume "$(recall minio_volume)" "$1"; }
 storage_copy() { # SERVICE
     local svc="$1" bucket=posthog log="$STATE/storage-$1.log"
     [ "$svc" = ai-blobs ] && bucket=ai-blobs
@@ -914,6 +922,8 @@ fi
 
 # ---------------------------------------------------------------- 13 verify
 if phase verify; then
+    wait_web
+    dc exec -T -e REMOTE_CONFIG_VERIFY=1 web python manage.py shell < "$HERE/remote-config.py"
     replays_copied=1
     if [ "$(recall replays)" = skip ] && [ ! -f "$STATE/done/replays" ]; then replays_copied=0; fi
     say "counting everything again"
@@ -941,4 +951,8 @@ if phase verify; then
     say "the old MinIO volume$( [ "$replays_copied" = 1 ] || echo ' (it still holds the only copy of the session replays)')."
     [ "$replays_copied" = 1 ] || say "To copy the session replays later: $0 replays, then $0 verify."
     say "When you are sure everything is fine: $0 cleanup   (it shows each item and asks before deleting it)"
+fi
+
+if [ "${FROM_LENS_INSTALLER:-0}" != 1 ] && [ -f "$STATE/done/verify" ]; then
+    echo "*** POSTHOG ONLY: Lens still needs installation/startup. Run: sudo posthog-lens update <kit> ***"
 fi

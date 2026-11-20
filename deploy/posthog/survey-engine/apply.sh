@@ -188,6 +188,8 @@ done
 # The manifest records when it was built; it only follows the files above.
 [ "$changed" = 1 ] || [ ! -f "$OUT/manifest.json" ] && cp "$OUT/new/manifest.json" "$OUT/manifest.json"
 rm -rf "$OUT/new"
+# These files are bind-mounted into the non-root web container, even under umask 077.
+chmod 0644 "$OUT"/surveys.js "$OUT"/surveys.js.br "$OUT"/surveys.js.gz
 cat > "$OVERRIDE.tmp" <<EOF
 # Lens survey engine (deploy/posthog/survey-engine): PostHog's survey renderer with "$BRAND" and
 # Lens condition chains. Written by apply.sh; remove with apply.sh --remove.

@@ -131,9 +131,9 @@ is_ipv4() {
 ask_domain() {
     local raw="${1:-}"
     if [ -z "$raw" ] && [ -f "$INSTALL_DIR/.env" ]; then
-        raw="$(grep -E '^ADDRESSES=' "$INSTALL_DIR/.env" | head -1 | cut -d= -f2- || true)"
+        raw="$(grep -E '^ADDRESSES=' "$INSTALL_DIR/.env" | head -1 | cut -d= -f2- | tr -d '"' || true)"
         if [ -z "$raw" ]; then
-            raw="$(grep -E '^DOMAIN=' "$INSTALL_DIR/.env" | head -1 | cut -d= -f2- || true)"
+            raw="$(grep -E '^DOMAIN=' "$INSTALL_DIR/.env" | head -1 | cut -d= -f2- | tr -d '"' || true)"
             if [ -n "$raw" ] && grep -qE '^HTTP_ONLY=1' "$INSTALL_DIR/.env"; then
                 raw="http://$raw"
             fi
@@ -149,6 +149,8 @@ ask_domain() {
     raw="${raw// /}"
     ADDRESSES="$raw"
     ALL_DOMAINS=()
+    CADDY_SITES=()
+    ANY_HTTP=0
     local one d kind first_kind=""
     for one in ${raw//,/ }; do
         d="$(normalize_domain "$one")"
@@ -166,11 +168,9 @@ ask_domain() {
             first_kind="$kind"
             DOMAIN="$d"
             HTTP_ONLY=0; [ "$kind" = http ] && HTTP_ONLY=1
-        elif [ "$kind" != "$first_kind" ]; then
-            # HTTPS turns on secure cookies and redirects every request to https://, which an IP or a
-            # plain-HTTP name cannot serve.
-            die "'$one' is a different kind of address than '${raw%%,*}'. Use only domains (HTTPS), or only IPs and http:// names (plain HTTP)."
         fi
+        CADDY_SITES+=("$kind://$d")
+        [ "$kind" != http ] || ANY_HTTP=1
         case " ${ALL_DOMAINS[*]} " in *" $d "*) ;; *) ALL_DOMAINS+=("$d") ;; esac
     done
     [ ${#ALL_DOMAINS[@]} -gt 0 ] || die "No address given."
@@ -184,7 +184,7 @@ ask_domain() {
     fi
     ORIGINS=""
     for d in "${ALL_DOMAINS[@]}"; do
-        ORIGINS="${ORIGINS:+$ORIGINS,}$([ "$HTTP_ONLY" = 1 ] && echo http || echo https)://$d"
+        ORIGINS="${ORIGINS:+$ORIGINS,}https://$d,http://$d"
     done
     [ ${#ALL_DOMAINS[@]} = 1 ] || ok "Also reachable at: ${ORIGINS#*,}"
 }
@@ -373,13 +373,9 @@ fetch_posthog_repo() {
 # Docker Compose fills ${CADDY_HOST} into the Caddyfile from .env when it reads the compose
 # file. Without it, Caddy falls back to localhost:8000 and nothing answers on port 80 or 443.
 caddy_host() {
-    if [ "$HTTP_ONLY" = 1 ]; then
-        echo "http://"
-    else
-        local d out=""
-        for d in "${ALL_DOMAINS[@]}"; do out="${out}${d}, "; done
-        echo "${out}http://, https://"
-    fi
+    local entry out=""
+    for entry in "${CADDY_SITES[@]}"; do out="${out}${out:+, }$entry"; done
+    echo "$out, http://"
 }
 
 set_env_value() {
@@ -467,7 +463,9 @@ for host, port in SERVICES:
                 break
             time.sleep(3)
 EOF
-    chmod +x compose/start compose/temporal-django-worker compose/wait
+    chmod 0755 compose compose/start compose/temporal-django-worker compose/wait
+    chmod 0755 share
+    python3 "$_HOBBY_HERE/../offline/public-mount-permissions.py" "$INSTALL_DIR"
     ok "Compose files written"
 }
 
@@ -482,6 +480,8 @@ write_override() {
         echo "    web:"
         echo "        environment:"
         echo "            EXTRA_CSRF_TRUSTED_ORIGINS: '${ORIGINS}'"
+        echo "            DISABLE_SECURE_SSL_REDIRECT: 'true'"
+        [ "${ANY_HTTP:-$HTTP_ONLY}" != 1 ] || echo "            SECURE_COOKIES: 'false'"
         if [ "$HTTP_ONLY" = 1 ]; then
             # docker-compose.hobby.yml hardcodes https:// URLs.
             cat <<EOF
@@ -503,12 +503,11 @@ write_override() {
         environment:
             SITE_URL: ${SITE_URL}
 EOF
-        else
-            # Caddy gets a certificate for each domain in its site list.
-            echo "    proxy:"
-            echo "        environment:"
-            echo "            CADDY_HOST: '$(caddy_host)'"
         fi
+        # Explicit schemes support HTTP IPs and HTTPS domains together.
+        echo "    proxy:"
+        echo "        environment:"
+        echo "            CADDY_HOST: '$(caddy_host)'"
     } > "$out"
     # A COMPOSE_FILE list (scale.sh writes one) replaces the automatic merge, so the file must be in it.
     local files
@@ -525,7 +524,7 @@ EOF
         [[ ":$extra:" == *":$out:"* ]] || set_env_value EXTRA_COMPOSE_FILES "${extra:+$extra:}$out"
     fi
     # Without this, Django marks cookies HTTPS-only and redirects to https://, so login fails.
-    if [ "$HTTP_ONLY" = 1 ] && ! grep -q '^SECURE_COOKIES=false' .env.services; then
+    if [ "${ANY_HTTP:-$HTTP_ONLY}" = 1 ] && ! grep -q '^SECURE_COOKIES=false' .env.services; then
         printf 'SECURE_COOKIES=false\n' >> .env.services
     fi
     grep -q '^TRUST_ALL_PROXIES=' .env.services || printf 'TRUST_ALL_PROXIES=true\n' >> .env.services
@@ -541,7 +540,7 @@ write_pinned_images() {
     local files="docker-compose.yml" extra f
     [ -f docker-compose.override.yml ] && files="$files:docker-compose.override.yml"
     files="$files:docker-compose.pinned.yml"
-    extra="$(grep -E '^COMPOSE_FILE=' .env 2>/dev/null | cut -d= -f2- || true)"
+    extra="$(grep -E '^COMPOSE_FILE=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' || true)"
     for f in ${extra//:/ }; do
         case ":$files:" in *":$f:"*) ;; *) files="$files:$f" ;; esac
     done
@@ -552,6 +551,7 @@ write_pinned_images() {
 download_geoip() {
     cd "$INSTALL_DIR"
     if [ -s share/GeoLite2-City.mmdb ]; then
+        chmod 0644 share/GeoLite2-City.*
         ok "GeoIP database already present"
         return
     fi
@@ -773,23 +773,17 @@ addresses_only() {
     [ -f "$INSTALL_DIR/.env" ] && [ -f "$INSTALL_DIR/docker-compose.yml" ] || die "No PostHog installed in $INSTALL_DIR."
     [ -n "${1:-}" ] || die "Usage: install-posthog-hobby.sh --addresses-only ADDRESS[,ADDRESS...]"
     cd "$INSTALL_DIR"
-    local before out=docker-compose.override.yml
-    before="$(grep -E '^HTTP_ONLY=' .env | cut -d= -f2 || true)"
-    # A PostHog this script did not install (an upgraded one) has no HTTP_ONLY: its SITE_URL tells.
-    if [ -z "$before" ]; then
-        case "$(docker compose config 2>/dev/null | grep -m1 -E '^ +SITE_URL:' | awk '{print $2}' | tr -d "\"'")" in
-            http://*) before=1 ;; *) before=0 ;;
-        esac
-    fi
+    local out=docker-compose.override.yml
     ask_domain "$1"
-    [ "$before" = "$HTTP_ONLY" ] || die "That switches PostHog between HTTP and HTTPS. Run the whole script for that: sudo bash $0 $1"
     write_env
     # Someone else's docker-compose.override.yml is kept: the addresses go in a file of their own.
     if [ -f docker-compose.override.yml ] && ! head -1 docker-compose.override.yml | grep -q 'install-posthog-hobby.sh'; then
         out=docker-compose.addresses.yml
     fi
     write_override "$out"
+    python3 "$_HOBBY_HERE/../offline/site-config.py" "$INSTALL_DIR" --addresses "$ADDRESSES"
     docker compose up -d --no-build >/dev/null 2>&1 || docker compose up -d --no-build || die "Docker Compose could not apply the change."
+    wait_for_health
     ok "PostHog now answers on: $ORIGINS"
 }
 

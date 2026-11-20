@@ -35,6 +35,13 @@ uid="$(id -u "$APP_USER")"; gid="$(id -g "$APP_USER")"
 mkdir -p "$APP_DIR"/{run,clips,.cache,config,logs}
 [ -f "$APP_DIR/.mcp.json" ] || install -m 600 /dev/null "$APP_DIR/.mcp.json"
 chown "$uid:$gid" "$APP_DIR"/{run,clips,.cache,logs} "$APP_DIR/.mcp.json"
+# umask 077 must not hide read-only bind mounts from the service uid. Secrets stay private.
+chmod 0755 "$APP_DIR/config"
+find "$APP_DIR/config" -type d -exec chmod 0755 {} +
+find "$APP_DIR/config" -type f -exec chmod 0644 {} +
+if [ -f "$APP_DIR/.secrets.env" ]; then
+    chown "$uid:$gid" "$APP_DIR/.secrets.env"; chmod 0600 "$APP_DIR/.secrets.env"
+fi
 
 setting() { [ -f "$APP_DIR/.secrets.env" ] && grep -E "^$1=" "$APP_DIR/.secrets.env" | tail -1 | cut -d= -f2- | sed -E 's/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/' || true; }
 
@@ -44,8 +51,13 @@ args=(--network host --user "$uid:$gid" --init
     -v "$APP_DIR/config:/app/config:ro" -v "$APP_DIR/.mcp.json:/app/.mcp.json")
 [ -f "$APP_DIR/.secrets.env" ] && args+=(-v "$APP_DIR/.secrets.env:/app/.secrets.env:ro")
 # A screens file given by its full path outside config/ is mounted where the setting says.
-screens="$(setting SCREENS_FILE)"
-if [[ "$screens" = /* ]] && [ -f "$screens" ] && [[ "$screens" != "$APP_DIR/config/"* ]]; then args+=(-v "$screens:$screens:ro"); fi
+for file_setting in SCREENS_FILE APP_EVENTS_FILE; do
+    mount_file="$(setting "$file_setting")"
+    if [[ "$mount_file" = /* ]] && [ -f "$mount_file" ] && [[ "$mount_file" != "$APP_DIR/config/"* ]]; then
+        chown "$uid:$gid" "$mount_file"; chmod 0640 "$mount_file"
+        args+=(-v "$mount_file:$mount_file:ro")
+    fi
+done
 
 case "${1:-}" in
     serve)

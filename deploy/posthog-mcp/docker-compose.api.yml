@@ -1,0 +1,7 @@
+# up.sh applies this last so an old site override cannot silently restore public HTTPS.
+# Change the upstream explicitly with MCP_POSTHOG_API_URL when needed.
+services:
+    posthog-mcp:
+        environment:
+            POSTHOG_API_BASE_URL: ${MCP_POSTHOG_API_URL:?}
+            POSTHOG_PUBLIC_URL: ${MCP_POSTHOG_PUBLIC_URL:?}

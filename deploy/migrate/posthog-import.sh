@@ -42,7 +42,8 @@ run_phase() { # name
 }
 finish() { [ "${DRY_RUN:-0}" = 1 ] || touch "$STATE/done/$1"; say "phase $1 finished"; }
 # A one-off container of this PostHog's app, with the bundle and these scripts mounted.
-app() { dc run --rm --no-deps -T -v "$BUNDLE:/migration/bundle:ro" -v "$STATE:/migration/state" -v "$HERE:/migration/scripts:ro" "$@"; }
+# Maintenance containers read private export bundles and write root-owned migration state.
+app() { dc run --rm --no-deps -T --user 0 -v "$BUNDLE:/migration/bundle:ro" -v "$STATE:/migration/state" -v "$HERE:/migration/scripts:ro" "$@"; }
 
 # ---------------------------------------------------------------- 1 check
 if run_phase check; then

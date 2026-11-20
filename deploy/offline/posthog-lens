@@ -48,7 +48,8 @@ say() { echo "==> $*"; }
 # sudo resets PATH; the AWS CLI and Docker live in the usual places.
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-conf() { grep -E "^$1=" "$CONF" 2>/dev/null | tail -1 | cut -d= -f2- | sed -E 's/^"(.*)"$/\1/' || true; }
+conf() { conf_of "$CONF" "$1"; }
+
 load() {
     [ -f "$CONF" ] || die "$CONF is missing: run the one-time setup first (sudo bash posthog-lens setup <kit tag>)."
     LENS_DIR="$(conf LENS_DIR)"; LENS_DIR="${LENS_DIR:-/data04/posthog-lens}"
@@ -87,15 +88,18 @@ site_check() {
     [ -z "$site" ] || [ "$site" = "$(hostname -s)" ] || die "$CONF is for $site, but this machine is $(hostname -s)."
 }
 site_files() {
-    local site extra env="$POSTHOG_DIR/.env" name=docker-compose.site.yml; site="$(conf SITE)"
-    [ -n "$site" ] || return 0
-    [ -f "$LENS_DIR/deploy/offline/sites/$site/$name" ] || die "this kit has no deploy/offline/sites/$site/$name."
-    install -o root -g root -m 644 "$LENS_DIR/deploy/offline/sites/$site/$name" "$POSTHOG_DIR/$name"
-    extra="$(grep -E '^EXTRA_COMPOSE_FILES=' "$env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || true)"
-    case ":$extra:" in
-        *":$name:"*) ;;
-        *) sed -i '/^EXTRA_COMPOSE_FILES=/d' "$env"; echo "EXTRA_COMPOSE_FILES=${extra:+$extra:}$name" >>"$env" ;;
-    esac
+    local site addresses keep_addresses name=docker-compose.site.yml; site="$(conf SITE)"
+    [ -n "$site" ] || site="$(hostname -s)"
+    if [ -f "$LENS_DIR/deploy/offline/sites/$site/$name" ] && [ ! -f "$POSTHOG_DIR/$name" ]; then
+        install -o root -g root -m 644 "$LENS_DIR/deploy/offline/sites/$site/$name" "$POSTHOG_DIR/$name"
+    fi
+    [ -f "$POSTHOG_DIR/docker-compose.yml" ] || return 0
+    addresses="$(conf POSTHOG_ADDRESS)"
+    [ -n "$addresses" ] || addresses="$(conf_of "$LENS_DIR/deploy/offline/sites/$site/site.env" POSTHOG_ADDRESS)"
+    keep_addresses="$(conf KEEP_POSTHOG_ADDRESSES)"
+    [ -n "$keep_addresses" ] || keep_addresses="$(conf_of "$LENS_DIR/deploy/offline/sites/$site/site.env" KEEP_POSTHOG_ADDRESSES)"
+    [ "$keep_addresses" != yes ] || addresses=""
+    python3 "$LENS_DIR/deploy/offline/site-config.py" "$POSTHOG_DIR" --addresses "$addresses"
 }
 
 update() {
@@ -111,6 +115,13 @@ update() {
         ecr_login
         say "unpacking $image into $LENS_DIR"
         docker pull -q "$image" >/dev/null || die "cannot pull $image (is the tag right?)."
+    fi
+    # Rescue legacy local MCP overrides before the kit replaces its deployment files.
+    if [ -f "$LENS_DIR/deploy/posthog-mcp/docker-compose.override.yml" ] &&
+        [ ! -f /etc/posthog-lens/posthog-mcp.override.yml ]; then
+        install -d -m 0755 /etc/posthog-lens
+        install -m 0600 "$LENS_DIR/deploy/posthog-mcp/docker-compose.override.yml" /etc/posthog-lens/posthog-mcp.override.yml
+        say "Kept the local MCP override in /etc/posthog-lens/posthog-mcp.override.yml"
     fi
     docker run --rm -v "$LENS_DIR:/out" "$image"
     # This command comes with the kit too, so a fix to it reaches the machine with the update.
@@ -150,6 +161,7 @@ status() {
     echo "PostHog         $(curl -s -o /dev/null -m 5 -w '%{http_code}' http://localhost/_health | sed 's/^200$/answering (200)/')"
     local port; port="$(conf_of "$LENS_DIR/.secrets.env" SERVICE_PORT)"; port="${port:-8080}"
     echo "PostHog Lens    $(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:$port/healthz" | sed 's/^200$/answering (200)/'), $(systemctl is-active ticket-triage 2>/dev/null || true)"
+    curl -fs -m 5 "http://localhost:$port/healthz" >/dev/null || echo "FAIL: Lens not running; run sudo posthog-lens update <kit>"
     echo
     [ -x "$LENS_DIR/deploy/install.sh" ] && bash "$LENS_DIR/deploy/install.sh" status | sed -n '1,20p' || true
 }
@@ -174,7 +186,7 @@ check() {
         if [ $SECONDS -ge $end ]; then
             echo "NOT READY after $mins min:"
             [ "$ph" = 200 ] || echo "    PostHog does not answer (http://localhost/_health: ${ph:-no answer})"
-            [ "$lens" = 200 ] || echo "    PostHog Lens does not answer (port $port: ${lens:-no answer}); see: journalctl -u ticket-triage -n 50"
+            [ "$lens" = 200 ] || echo "    Lens not running (port $port: ${lens:-no answer}); see: journalctl -u ticket-triage -n 50"
             if [ "$st" != ok ]; then
                 curl -s -m 5 ${spass:+-u "x:$spass"} "http://127.0.0.1:$sport/api/status" 2>/dev/null | python3 -c '
 import json, sys
@@ -188,6 +200,7 @@ for r in d["checks"]:
         sleep 10
     done
     local warns; warns="$(curl -s -m 5 ${spass:+-u "x:$spass"} "http://127.0.0.1:$sport/api/status" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("warn", 0))' 2>/dev/null || echo 0)"
+    POSTHOG_DIR="$POSTHOG_DIR" python3 "$LENS_DIR/deploy/offline/server-check.py" "$LENS_DIR" || return 1
     echo "READY: PostHog, PostHog Lens and every status-page check are fine$([ "${warns:-0}" != 0 ] && echo " ($warns warning(s) on the status page: http://127.0.0.1:$sport)")."
 }
 
@@ -255,7 +268,28 @@ for r in reversed(rows):
         print("    stopped at: %s  log: %s" % (r.get("step") or "?", r.get("log")))
 PY
 }
-conf_of() { grep -E "^$2=" "$1" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
+conf_of() { python3 - "$1" "$2" <<'PYENV'
+import json, re, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+value = ''
+for line in path.read_text().splitlines() if path.exists() else []:
+    match = re.match(r'^\s*(?:export\s+)?([A-Za-z_]\w*)\s*=(.*)$', line)
+    if match and match[1] == sys.argv[2]:
+        value = match[2].strip()
+        if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'":
+            if value[0] == '"':
+                try:
+                    value = json.loads(value)
+                except ValueError:
+                    value = value[1:-1]
+            else:
+                value = value[1:-1]
+        else:
+            value = re.sub(r'\s+#.*$', '', value).strip()
+print(value)
+PYENV
+}
 
 setup() {
     local tag="${1:-}" old="${OLD_DIR:-/data04/ph_ops/posthog-mcp-trial}" self
@@ -315,7 +349,7 @@ case "$cmd" in
     alert-test) load; alert_test ;;
     progress) progress "$@" ;;
     history) history "$@" ;;
-    doctor) load; exec bash "$LENS_DIR/deploy/lens/lens.sh" doctor ;;
+    doctor) load; POSTHOG_DIR="$POSTHOG_DIR" exec python3 "$LENS_DIR/deploy/offline/server-check.py" "$LENS_DIR" ;;
     restart) systemctl restart ticket-triage && say "PostHog Lens restarted" ;;
     cleanup) load; POSTHOG_DIR="$POSTHOG_DIR" exec bash "$LENS_DIR/deploy/migrate/posthog-upgrade.sh" cleanup ;;
     rollback) load; POSTHOG_DIR="$POSTHOG_DIR" exec bash "$LENS_DIR/deploy/migrate/posthog-upgrade.sh" rollback ;;
