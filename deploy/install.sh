@@ -508,7 +508,8 @@ port_user() {
 step_check() {
     CURRENT=check; step "Checking this machine"
     . /etc/os-release
-    { [ "$ID" = amzn ] && [[ "$VERSION_ID" == 2023* ]]; } || { [ "$ID" = ubuntu ] && [[ "$VERSION_ID" == 24.04* ]]; } \
+    # LENS_ALLOW_ANY_OS=1: test machines only (another Ubuntu release); production stays on the supported list.
+    [ "${LENS_ALLOW_ANY_OS:-0}" = 1 ] || { [ "$ID" = amzn ] && [[ "$VERSION_ID" == 2023* ]]; } || { [ "$ID" = ubuntu ] && [[ "$VERSION_ID" == 24.04* ]]; } \
         || die "Amazon Linux 2023 (EC2, images from ECR) or Ubuntu 24.04 (self-hosted, images loaded onto it) only; this is $PRETTY_NAME."
     ok "OS: $PRETTY_NAME"
     [ "$(uname -m)" = x86_64 ] || die "x86_64 only: Chrome for rendering clips has no Linux arm64 build (this is $(uname -m)). Pick an Intel or AMD instance type (m7i, m6i, m6a, t3...), not Graviton."
