@@ -49,6 +49,9 @@ if [ -z "${MCP_POSTHOG_API_URL:-}" ]; then
     case "$public" in https://*) MCP_POSTHOG_API_URL="$public" ;; *) MCP_POSTHOG_API_URL=http://web:8000 ;; esac
 fi
 export MCP_POSTHOG_API_URL
+# The machine's CA bundle, so the container trusts the same certificates (see docker-compose.yml).
+for b in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt; do [ -f "$b" ] && { export HOST_CA_BUNDLE="$b"; break; }; done
+[ -n "${HOST_CA_BUNDLE:-}" ] || { echo "No CA bundle found on this machine (/etc/ssl/certs/ca-certificates.crt or /etc/pki/tls/certs/ca-bundle.crt)."; exit 1; }
 
 if [ -z "$(get POSTHOG_MCP_API_KEY)" ] || [ "${1:-}" = --new-key ]; then
     email="$(get POSTHOG_ADMIN_EMAIL)"; project="$(get POSTHOG_PROJECT_ID)"

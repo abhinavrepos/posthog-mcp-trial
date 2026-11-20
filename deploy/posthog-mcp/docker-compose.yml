@@ -15,6 +15,12 @@ services:
             POSTHOG_API_BASE_URL: ${MCP_POSTHOG_API_URL:?}
             POSTHOG_PUBLIC_URL: ${MCP_POSTHOG_PUBLIC_URL:?}
             MCP_APPS_BASE_URL: ${MCP_APPS_URL:-http://127.0.0.1:8787}
+            # Trust the certificate authorities this machine trusts (a company CA behind an HTTPS PostHog address):
+            # without it every call failed with UNABLE_TO_VERIFY_LEAF_SIGNATURE and the server answered 500.
+            NODE_EXTRA_CA_CERTS: /etc/ssl/host-ca.crt
+        volumes:
+            # up.sh sets HOST_CA_BUNDLE to the machine's CA bundle (Debian/Ubuntu or RHEL path).
+            - ${HOST_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}:/etc/ssl/host-ca.crt:ro
         ports:
             # 127.0.0.1: this machine only. 0.0.0.0 (MCP_BIND): the network too. Either way every request
             # needs a PostHog personal API key.
