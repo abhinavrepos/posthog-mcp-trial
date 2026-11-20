@@ -1439,6 +1439,68 @@ export async function findTrade(q: { id: string; from: Date; to: Date; clientId?
     }
 }
 
+/** Recent sessions that used a dialog, whether or not anything went wrong. */
+export async function findSessions(q: { clientId: string; screen: string; email?: string; from: Date; to: Date; limit?: number; cursor?: string }) {
+    const reg = required()
+    const names = await dialogLabels(q.from, q.to)
+    const screen = q.screen.trim()
+    const matches = names.has(screen) ? [screen] : [...names].filter(([, v]) => screen && v.name?.toLowerCase().includes(screen.toLowerCase())).map(([code]) => code)
+    if (!matches.length) {
+        const pairs = [...new Set(screen.toLowerCase().split('').slice(1).map((_, i) => screen.slice(i, i + 2).toLowerCase()))]
+        const score = ([code, v]: [string, { name?: string }]) => pairs.filter(pair => `${code} ${v.name || ''}`.toLowerCase().includes(pair)).length
+        const candidates = [...names].sort((a, b) => score(b) - score(a)).slice(0, 5).map(([code, v]) => `${code}${v.name ? ` (${v.name})` : ''}`)
+        throw new ToolInputError(`No dialog matches "${screen}". Candidates: ${candidates.join(', ') || 'none observed; use describe_app_events to inspect the vocabulary'}.`)
+    }
+    let after: { ts: string; sid: string } | undefined
+    if (q.cursor) {
+        const [ts, sid] = [q.cursor.slice(0, q.cursor.indexOf('|')), q.cursor.slice(q.cursor.indexOf('|') + 1)]
+        if (!q.cursor.includes('|') || !Number.isFinite(Date.parse(ts)) || !/^[\w.:-]{1,120}$/.test(sid)) throw new ToolInputError('cursor: pass next_cursor exactly as a previous find_sessions answer gave it.')
+        after = { ts, sid }
+    }
+    const limit = Math.max(1, Math.min(q.limit ?? 10, 30))
+    const values = { from: q.from.toISOString(), to: q.to.toISOString(), events: [reg.events.screen, reg.events.interaction], dialogs: matches, client: q.clientId, email: (q.email || '').toLowerCase(), cts: after?.ts ?? '', csid: after?.sid ?? '' }
+    const hits = await newestSessions(
+        `SELECT toString(properties.$session_id) AS sid, min(timestamp) AS first FROM events
+         WHERE timestamp >= {from} AND timestamp < {to} AND event IN {events} AND notEmpty(toString(properties.$session_id))
+           AND ${prop(reg, 'dialog')} IN {dialogs} AND toString(${P.client}) = {client}
+           AND ({email} = '' OR lower(toString(${P.email})) = {email})
+         GROUP BY sid${after ? ' HAVING first < {cts} OR (first = {cts} AND sid < {csid})' : ''} ORDER BY first DESC, sid DESC LIMIT ${limit + 1}`,
+        values, q.from, after ? new Date(Math.min(+q.to, Date.parse(after.ts) + 1)) : q.to, limit + 1, 'first')
+    const more = hits.length > limit
+    hits.length = Math.min(hits.length, limit)
+    const last = hits.at(-1)
+    const spans = await recordingSpans(hits.map(h => String(h.sid))).catch(() => new Map())
+    const dialogs = matches.map(code => ({ code, name: names.get(code)?.name }))
+    const sessions = []
+    for (const h of hits) {
+        const sid = String(h.sid)
+        const ev = (await hogql(
+            `SELECT ${columns(reg)} FROM events WHERE properties.$session_id = {sid} AND event IN {events}
+             AND timestamp >= {from} AND timestamp < {to} AND toString(${P.client}) = {client}
+             AND ({email} = '' OR lower(toString(${P.email})) = {email}) ORDER BY ts LIMIT 5000`,
+            { ...values, sid })).map(toRaw)
+        const used = ev.filter(e => matches.includes(e.dialog))
+        const span = spans.get(sid)
+        sessions.push({
+            session_id: sid,
+            client: ev.find(e => e.client)?.client || '',
+            user: ev.find(e => e.user)?.user || '',
+            first_seen: used[0]?.ts || String(h.first),
+            last_seen: used.at(-1)?.ts || String(h.first),
+            dialogs: dialogs.map(d => ({ ...d, events: used.filter(e => e.dialog === d.code).length })).filter(d => d.events),
+            error_count: toSteps(ev, reg).filter(s => s.kind === 'message' && s.outcome === 'error').length,
+            ...(ev.length === 5000 ? { truncated: true } : {}),
+            replay_url: span ? replayUrl(sid, Math.max(0, (Date.parse(String(h.first)) - Date.parse(span.start)) / 1000 - 10)) : undefined,
+        })
+    }
+    return {
+        screen, dialogs, sessions,
+        ...(more && last ? { more_sessions: true, next_cursor: `${String(last.first)}|${String(last.sid)}` } : {}),
+        limits: 'Session details count at most 5000 app events per session in the requested window; truncated sessions are marked. For older sessions, call find_sessions with the same filters and window plus cursor: next_cursor.',
+        note: 'Sessions where the client used any matched dialog, newest first. first_seen and last_seen refer to matching dialog events; error_count counts error messages anywhere in the session within the window. No error is required.',
+    }
+}
+
 /** A name-only, cached vocabulary for advisory query guards; an incomplete read proves no absence. */
 export async function observedAppEventNames(): Promise<string[] | undefined> {
     return (await cachedPosthogRead(readCacheKey('observed-app-event-names', {}), async () => {

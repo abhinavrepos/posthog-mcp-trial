@@ -1,9 +1,9 @@
 import { analyticalWindow, parseTimeWindow, type TimeWindow } from '../core/timewindow.ts'
 import { coverage, dataThrough, tasksDb } from '../core/tasks.ts'
 import { historyLimits } from '../core/historycoverage.ts'
-const analytical = new Set(['pin_dashboard','aggregate_events','design_survey','set_rescue_status','find_client_incidents','screen_usage','error_blast_radius','find_silent_issues','triage_ticket','list_releases','release_outcomes','ticket_evidence','client_feedback','reval_brief','describe_app_events','session_story','dialog_friction','message_doctor','attempt_timings','top_pains','find_trade','client_signals','discover_workflows','workflow_completion','client_experience','friction_hotspots','signal_scorecard','client_story','client_activity_changes','compare_client_patterns','handover_pack','monday_brief','rescue_queue','task_map','flow_time','list_surveys','survey_results'])
+const analytical = new Set(['pin_dashboard','aggregate_events','design_survey','set_rescue_status','find_client_incidents','screen_usage','error_blast_radius','find_silent_issues','triage_ticket','list_releases','release_outcomes','ticket_evidence','client_feedback','reval_brief','describe_app_events','session_story','dialog_friction','message_doctor','attempt_timings','top_pains','find_trade','find_sessions','client_signals','discover_workflows','workflow_completion','client_experience','friction_hotspots','signal_scorecard','client_story','client_activity_changes','compare_client_patterns','handover_pack','monday_brief','rescue_queue','task_map','flow_time','list_surveys','survey_results'])
 const retained = new Set(['dialog_friction','top_pains','client_signals','discover_workflows','workflow_completion','signal_scorecard','client_story','client_activity_changes','compare_client_patterns','handover_pack','monday_brief','rescue_queue','task_map','flow_time'])
-const defaults:Record<string,number>={top_pains:7,describe_app_events:7,client_signals:14,find_trade:30,screen_usage:30,error_blast_radius:30,flow_time:90,survey_results:90,list_surveys:30,rescue_queue:28,task_map:28}
+const defaults:Record<string,number>={top_pains:7,describe_app_events:7,client_signals:14,find_trade:30,find_sessions:30,screen_usage:30,error_blast_radius:30,flow_time:90,survey_results:90,list_surveys:30,rescue_queue:28,task_map:28}
 const day=(d:Date)=>d.toISOString().slice(0,10)
 /** Attach disclosures before the privacy pass, including text-only analytical reports. */
 export function analyticalResult(name:string,args:unknown,result:unknown, requested?:TimeWindow): unknown {
@@ -45,9 +45,9 @@ export function analyticalResult(name:string,args:unknown,result:unknown, reques
         if(!v || typeof v!=='object')return
         for(const [key,child] of Object.entries(v)) {
             if(['coverage','limits','days','unprocessed'].includes(key))continue
-            // find_trade's cursor already points past this entire page. Keep its session rows,
+            // Session lookup cursors already point past this entire page. Keep its session rows,
             // reducing their nested evidence instead, or the next page silently skips sessions.
-            if(name==='find_trade' && !path && key==='sessions' && Array.isArray(child)) child.forEach((row,i)=>walk(row,`sessions[${i}].`))
+            if((name==='find_trade' || name==='find_sessions') && !path && key==='sessions' && Array.isArray(child)) child.forEach((row,i)=>walk(row,`sessions[${i}].`))
             else if(Array.isArray(child)) candidates.push({path:path+key,list:child})
             else walk(child,path+key+'.')
         }

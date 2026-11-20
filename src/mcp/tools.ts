@@ -24,7 +24,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 
-import { appEvents, clientSignalsReport, describeAppEvents, dialogFriction, findTrade, sessionStory, slowAttempts, topPains } from '../core/appevents.ts'
+import { appEvents, clientSignalsReport, describeAppEvents, dialogFriction, findSessions, findTrade, sessionStory, slowAttempts, topPains } from '../core/appevents.ts'
 import { completionWorkflow, discoverWorkflows, workflowCompletionReport } from '../core/workflowqueries.ts'
 import { WORKFLOW_NAME_LIMIT } from '../core/workflows.ts'
 import { revalBrief } from '../core/brief.ts'
@@ -109,13 +109,13 @@ const A = appEvents()?.app || 'your app'
 // Every tool name, for PostHog's proxied exec description ("use the lens server's tools (...)").
 export const CORE_TOOLS = ['get_job_result', 'resolve_client', 'find_client_incidents', 'get_replay_link', 'screen_usage', 'error_blast_radius', 'find_silent_issues', 'triage_ticket']
 export const RELEASE_TOOLS = ['list_releases', 'release_outcomes', 'ticket_evidence', 'client_feedback', 'record_verdict', 'correct_ticket_link', 'refresh_releases']
-export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor', 'aggregate_events']
+export const APP_EVENT_TOOLS = ['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'find_sessions', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor', 'aggregate_events']
 export const lensToolNames = (): string[] => [...CORE_TOOLS, ...(config.features.jira ? RELEASE_TOOLS : []), ...(appEvents() ? APP_EVENT_TOOLS : []), ...surveyToolNames(), ...dashboardToolNames()]
 
 // Answers of the read-only analysis tools, shared by every chat session: the same question within two
 // minutes is answered from memory, and identical questions asked at once share one run. Only these
 // tools: answers are separated by insights access where needed. Errors are never kept.
-export const CACHED_TOOLS = new Set(['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor', 'screen_usage', 'find_silent_issues', 'error_blast_radius', 'aggregate_events'])
+export const CACHED_TOOLS = new Set(['reval_brief', 'describe_app_events', 'top_pains', 'dialog_friction', 'session_story', 'attempt_timings', 'find_trade', 'find_sessions', 'client_signals', 'discover_workflows', 'workflow_completion', 'message_doctor', 'screen_usage', 'find_silent_issues', 'error_blast_radius', 'aggregate_events'])
 // All of these read PostHog events only. Lens's own writes (record_verdict, correct_ticket_link,
 // refresh_releases, triage_ticket) change releases, verdicts and ticket links, which only uncached tools
 // read (release_outcomes, list_releases, ticket_evidence...), so a write never needs to drop these answers.
@@ -178,7 +178,7 @@ export function mcpClipRefusal(): string | undefined {
 // Every Lens tool result goes through the AI-safety pass (src/core/aisafety.ts) at this one boundary,
 // whether or not client anonymisation is on. Execution errors are mapped to actionable public messages;
 // their full diagnostics stay in server logs, joined to the metadata audit by correlation id.
-export const WINDOW_DEFAULTS: Record<string,number|string> = {screen_usage:30,error_blast_radius:30,describe_app_events:7,client_signals:14,find_trade:30,aggregate_events:30,reval_brief:14,task_map:28,flow_time:90,rescue_queue:28,set_rescue_status:28,client_experience:28,friction_hotspots:28,client_story:182,pin_dashboard:28,signal_scorecard:364,design_survey:14,list_surveys:30,survey_results:90,client_activity_changes:'last_4_years',compare_client_patterns:'last_4_years'}
+export const WINDOW_DEFAULTS: Record<string,number|string> = {screen_usage:30,error_blast_radius:30,describe_app_events:7,client_signals:14,find_trade:30,find_sessions:30,aggregate_events:30,reval_brief:14,task_map:28,flow_time:90,rescue_queue:28,set_rescue_status:28,client_experience:28,friction_hotspots:28,client_story:182,pin_dashboard:28,signal_scorecard:364,design_survey:14,list_surveys:30,survey_results:90,client_activity_changes:'last_4_years',compare_client_patterns:'last_4_years'}
 type ToolCaller = Pick<ChatCaller, 'who'> & Partial<Pick<ChatCaller,'email'|'tokenId'|'surveyRole'|'dashboardRole'|'admin'|'insights'>>
 /** Account for authenticated invocations refused by the transport's privacy guard. */
 export function auditToolRefusal(name:string,keys:string[],refusal:unknown,caller?:ToolCaller): unknown {
@@ -889,6 +889,28 @@ function registerAppEventTools(server: McpServer, insights: boolean): void {
             const win = requestedToolWindow() || parseTimeWindow(w || 'last 30 days', new Date(), timezone)
             const best = client ? (await pickClient(client)).best : undefined
             return json(`${app}: id ${id}${best ? ` for ${best.name}` : ''} (${win.label}):`, await findTrade({ id, from: win.from, to: win.to, clientId: best?.id, cursor }))
+        }
+    )
+    server.registerTool(
+        'find_sessions',
+        {
+            title: 'Find sessions using a screen',
+            description: "Finds recent sessions where a client used a given screen or dialog (by code or name, e.g. 'amortization report'), with replay links. Use for 'show me a session where <client> used <screen>'. No error needed.",
+            inputSchema: {
+                client: z.string().describe('Client name, code or user email; resolved by Lens.'),
+                screen: z.string().min(1).describe('Dialog code or display name, e.g. amortization report. All matching names are included.'),
+                email: z.string().optional().describe('Narrow to one user email.'),
+                when: z.string().optional().describe('Default: last 30 days.'),
+                timezone: tz,
+                limit: z.number().int().min(1).max(30).default(10),
+                cursor: z.string().max(200).optional().describe('next_cursor from find_sessions; keep the same client, screen, email and window.'),
+            },
+            outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
+        },
+        async ({ client, screen, email, when: w, timezone, limit, cursor }) => {
+            const win = requestedToolWindow() || parseTimeWindow(w || 'last 30 days', new Date(), timezone)
+            const { best } = await pickClient(client)
+            return json(`${app}: ${screen} for ${best.name} (${win.label}):`, await findSessions({ clientId: best.id, screen, email, from: win.from, to: win.to, limit, cursor }))
         }
     )
     server.registerTool(

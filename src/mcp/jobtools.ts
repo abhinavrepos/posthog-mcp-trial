@@ -11,7 +11,7 @@ import { db } from '../core/db.ts'
 import type { ChatCaller } from '../service/access.ts'
 import type { TimeWindow } from '../core/timewindow.ts'
 
-export const JOB_TOOLS = new Set(['aggregate_events', 'workflow_completion', 'discover_workflows', 'signal_scorecard', 'describe_app_events', 'message_doctor', 'find_trade', 'top_pains', 'rescue_queue', 'dialog_friction', 'client_signals', 'client_activity_changes', 'compare_client_patterns'])
+export const JOB_TOOLS = new Set(['aggregate_events', 'workflow_completion', 'discover_workflows', 'signal_scorecard', 'describe_app_events', 'message_doctor', 'find_trade','find_sessions', 'top_pains', 'rescue_queue', 'dialog_friction', 'client_signals', 'client_activity_changes', 'compare_client_patterns'])
 export const FAST_TOOLS = new Set(['resolve_client','get_replay_link','find_task','list_dashboards','get_job_result','describe_tools','describe_config'])
 export function jobBacked(name: string, readOnly: boolean, args: {command?:unknown} = {}) {
     if(name==='posthog_exec') return isPosthogQuery(args.command)

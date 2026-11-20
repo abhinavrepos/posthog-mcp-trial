@@ -17,7 +17,7 @@ export const CANDIDATES_OUTPUT = z.looseObject({}).meta({ title: 'lens-candidate
 /** The tools registered with ANALYSIS_OUTPUT (kept in sync by test/structured-output.test.ts). */
 export const ANALYSIS_SCHEMA_TOOLS = new Set(['find_client_incidents', 'screen_usage', 'error_blast_radius', 'find_silent_issues',
     'discover_workflows', 'aggregate_events', 'workflow_completion', 'describe_app_events', 'dialog_friction', 'message_doctor', 'top_pains',
-    'find_trade', 'client_signals', 'design_survey', 'list_surveys', 'survey_results', 'signal_scorecard', 'client_experience',
+    'find_trade', 'find_sessions', 'client_signals', 'design_survey', 'list_surveys', 'survey_results', 'signal_scorecard', 'client_experience',
     'friction_hotspots', 'client_story', 'client_activity_changes', 'compare_client_patterns', 'monday_brief', 'rescue_queue',
     'set_rescue_status', 'task_map', 'flow_time'])
 /** Analysis tools that accept `detail` (concise | full). get_job_result also accepts it for completed jobs. */
@@ -72,7 +72,7 @@ const DROP = new Set(['examples', 'example', 'example_sessions', 'example_sessio
 // Disclosures are never compacted; they say what the numbers cover.
 const KEEP = new Set(['window', 'period', 'coverage', 'limits', 'omitted_rows_by_path', 'comparison', 'freshness'])
 // Per-tool keys kept whole: survey_results' spec is meant to be edited and passed back to save_survey.
-const KEEP_FOR: Record<string, string[]> = { survey_results: ['spec'] }
+const KEEP_FOR: Record<string, string[]> = { survey_results: ['spec'], find_sessions: ['sessions'] }
 const size = (v: unknown) => Array.isArray(v) ? v.length : 1
 /** Generic compaction of a final answer object for detail=concise. Pure: returns a new object. */
 export function conciseValue(name: string, value: Record<string, unknown>): Record<string, unknown> {

@@ -1,4 +1,4 @@
-export const HEAVY_TOOLS = new Set(['aggregate_events','workflow_completion','discover_workflows','signal_scorecard','describe_app_events','message_doctor','find_trade','top_pains','rescue_queue','dialog_friction','client_signals','client_activity_changes','compare_client_patterns'])
+export const HEAVY_TOOLS = new Set(['aggregate_events','workflow_completion','discover_workflows','signal_scorecard','describe_app_events','message_doctor','find_trade','find_sessions','top_pains','rescue_queue','dialog_friction','client_signals','client_activity_changes','compare_client_patterns'])
 export class RateLimitError extends Error {}
 type Bucket = { minute: number; hour: number; at: number; active: number }
 const positive = (value: string|undefined, fallback: number) => Number.isFinite(Number(value)) && Number(value)>0 ? Number(value) : fallback
