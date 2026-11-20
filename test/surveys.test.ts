@@ -606,7 +606,6 @@ describe('shared survey read caches', () => {
 
 // Colour check through MCP on a real PostHog (2026-11-18): every look was stored as asked; these three were not right.
 test('survey colours: short hex is stored as six digits, rgb() gets a plain answer, contrast warnings keep their numbers', async () => {
-    const { maskAmounts } = await import('../src/core/appevents.ts')
         const short = compileSurvey({ ...base, look: { background: '#FFF', text: '#000', button: '#0A6' } } as never, { reg })
     const a = (short.body as { appearance: Record<string, string> }).appearance
     assert.deepEqual([a.backgroundColor, a.textColor, a.submitButtonColor], ['#ffffff', '#000000', '#00aa66'])
@@ -615,8 +614,6 @@ test('survey colours: short hex is stored as six digits, rgb() gets a plain answ
     const low = compileSurvey({ ...base, look: { text: '#cccccc' } } as never, { reg })
     const warning = low.problems.find((p) => p.where === 'look')!.text
     assert.match(warning, /contrast 1\.6:1; under 4\.5:1/)
-    assert.equal(maskAmounts(warning), warning)
-    assert.equal(maskAmounts('Limit 4.5:1 EUR'), 'Limit 4.5:<amount>') // the money part stays masked
 })
 
 describe('saving after a create that timed out', () => {

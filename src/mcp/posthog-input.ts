@@ -76,7 +76,7 @@ export function queryWarnings(command: string, app: AppEvents | null, observed: 
         warnings.push(`Warning: A requested event has not been observed in ${app.app}'s data; its screen event is ${app.events.screen} and its interaction event is ${app.events.interaction}.`)
     for (const key of keys) if (!key.startsWith('$') && !properties.includes(key)) {
         const suggestion = closestNames(key, properties)[0]
-        warnings.push(`Warning: A property key is outside the data dictionary.${suggestion ? ` Did you mean ${suggestion}?` : ' Check describe_app_events.'}`)
+        warnings.push(`Warning: A property key is outside the data dictionary.${suggestion ? ` Did you mean ${suggestion}?` : ' Check the configured app event map or use read-data-schema.'}`)
     }
     return [...new Set(warnings)].slice(0, 4)
 }

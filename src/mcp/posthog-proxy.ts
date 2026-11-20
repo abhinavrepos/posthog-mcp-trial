@@ -1,7 +1,7 @@
-import { compactInfo, compactTools, metadataCommand, posthogDocsCache, posthogServerKey, PREWARM_DOCS } from './posthog-docs.ts'
+import { outputFilter } from './output-filter.ts'
+import { compactInfo, compactTools, metadataCommand, posthogDocsCache, posthogServerKey } from './posthog-docs.ts'
 import { annotatePosthogBuckets } from './posthog-buckets.ts'
 import { closestNames, toolNames, obsoleteCorrection, posthogInputWarnings } from './posthog-input.ts'
-import { dataDictionary } from '../core/datadictionary.ts'
 import { errorDiagnostic } from '../core/errordiagnostics.ts'
 import { toolLimiter } from './ratelimit.ts'
 import { writeToolAudit } from './toolaudit.ts'
@@ -10,19 +10,13 @@ import { isPosthogMetadata, isPosthogQuery, posthogQueryGate, posthogQueryContex
 import { posthogFailure, posthogPublicMessage } from './posthog-error.ts'
 import { toolError } from './toolerror.ts'
 import { createHash, randomUUID } from 'node:crypto'
-import { publicToolError } from './publicerror.ts'
 // Routing text is pure; the HTTP adapter only handles authentication and transport.
-import { safetyWith, metadataSafetyWith, staffEmails } from '../core/aisafety.ts'
-import { identityTokens } from '../core/rescueprivacy.ts'
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { StringDecoder } from 'node:string_decoder'
 
-import { privacyCurrent, PRIVACY_CHANGED, privacyMode, withPrivacy, anonFor, hideClients } from '../core/anonymise.ts'
-import { refreshRoster } from '../core/anonroster.ts'
-import { guardResponse } from './anonymise.ts'
 
 /** What the proxy says about Lens: its server name, the tracked app's name and its tool names. */
 export interface LensInfo {
@@ -31,22 +25,10 @@ export interface LensInfo {
 }
 const DEFAULT_INFO: LensInfo = { app: 'the app', tools: ['get_replay_link'] }
 
-export function routingBlock(name: string, info: LensInfo = DEFAULT_INFO): string {
-    const app = info.app
-    const privacy = privacyMode() === 'private' ? 'Private mode: execute-sql is refused. Other PostHog data follows the admin block/filter setting.\n' : privacyMode() === 'open' ? 'Open mode: available identities and amounts are visible; person reads are allowed.\n' : 'Standard mode: client-user identities and amounts are masked; SQL results are masked.\n'
-    return `${privacy}Replays are private: use ${name}'s get_replay_link and give the person the link; never call session-recording-*, query-session-recordings-list or vision-* tools.
-Messaging (workflows-*, broadcasts-*), ${privacyMode() === 'open' ? 'person mutations (person reads are allowed)' : 'person lists (persons-*, query-*-actors, cohort membership changes)'}, session lookups (heatmaps-events, logs-impact), error investigation (query-error-tracking-issue, query-error-tracking-issue-events, query-error-tracking-issues-list) and surveys are refused. Use discover_workflows/workflow_completion for app tasks, resolve_client/client_experience/client_signals for clients, find_sessions/session_story/find_client_incidents/find_silent_issues for sessions, error_blast_radius for errors and Lens survey tools for surveys.
-Use the Lens server (${name}) instead for a named ${app} client or user, trade/link id, ${app} dialog/screen/button, errors ${app} showed users, which clients or users an error hit, one session, Jira ticket, release outcome, "where do clients struggle" or "who is at risk", which clients stopped doing a task, how long a flow takes or which path people take${info.tools.includes('design_survey') ? `, and in-app surveys for ${app} users (making, stopping, answers; launching only on the Lens Surveys page)` : ''}. Call its tools directly with JSON arguments, never through exec.
-Use PostHog exec for generic product analytics and PostHog objects: trends, funnels, retention, insights, dashboards, feature flags, experiments, cohorts, annotations, actions/event definitions, error-tracking administration, data warehouse/batch exports, docs/SDK help${privacyMode() === 'private' ? '; raw SQL is refused' : ' and raw SQL' }.
-
-${dataDictionary({ format: 'compact' })}`
+export function routingBlock(_name: string, _info: LensInfo = DEFAULT_INFO): string {
+    return 'Use posthog_exec for analysis: tools / info <tool> / call <tool> <json>. For replays use resolve_client then find_sessions and give both links. Save graphs with pin_graph.'
 }
-
-export function execRoutingLine(name: string, info: LensInfo = DEFAULT_INFO): string {
-    return `Replays, session/user lookups, error investigation, ${privacyMode() === 'open' ? 'person mutations' : 'person lists'}, messaging and surveys are refused;${privacyMode() === 'private' ? ' SQL is refused in private mode;' : ''} use get_replay_link, find_sessions, session_story, find_client_incidents, find_silent_issues, error_blast_radius, resolve_client, client_experience, client_signals, discover_workflows, workflow_completion and Lens survey tools. Not for ${info.app} clients or users, trade ids, ${info.app} screens or the errors it shows users, client task maps, flow times and paths, single sessions, replays, Jira tickets${info.tools.includes('design_survey') ? ', release outcomes or in-app surveys' : ' or release outcomes'}: use the ${name} server's tools (${info.tools.join(', ')}) for those.
-
-${dataDictionary({ format: 'compact' })}`
-}
+export const execRoutingLine = routingBlock
 
 type Rpc = Record<string, any>
 const object = (value: unknown): value is Rpc => !!value && typeof value === 'object' && !Array.isArray(value)
@@ -81,8 +63,6 @@ export function rewriteSseLine(line: string, name = 'lens', info: LensInfo = DEF
     return `${match[1]}${JSON.stringify(rewriteResponse(value, name, info))}${match[3]}`
 }
 
-export { commandRefusal, commandRefusal as replayRefusal, anonRefusal } from '../core/posthogpolicy.ts'
-import { commandRefusal, anonRefusal } from '../core/posthogpolicy.ts'
 
 export function bearerAuthorized(req: IncomingMessage, token: string): boolean {
     if (!token) return false
@@ -154,7 +134,7 @@ function send(res: ServerResponse, status: number, value: unknown) {
 }
 
 export function handlePosthogMcp(req: IncomingMessage, res: ServerResponse, options: ProxyOptions): Promise<void> {
-    return withPrivacy(() => handlePosthogMcpFrozen(req, res, options))
+    return handlePosthogMcpFrozen(req, res, options)
 }
 async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse, options: ProxyOptions): Promise<void> {
     if (!(options.authorize ? options.authorize(req) : bearerAuthorized(req, options.token))) return send(res, 401, { error: 'MCP needs Authorization: Bearer <MCP_TOKEN or your personal token>' })
@@ -168,38 +148,18 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
     const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 30_000)
     const onClose = () => controller.abort()
     res.once('close', onClose)
-    // Freeze the policy for the request; stop releasing data if it changes during a stream.
-    const anon = anonFor('posthog')
-    let tokens: string[] = [], staff = new Set<string>()
-    const cleanText = (v: string) => privacyCurrent() ? safetyWith(v, tokens, staff) : PRIVACY_CHANGED
-    const clean = (v: unknown): unknown => {
-        if (Array.isArray(v)) return v.map(clean)
-        if (!object(v)) return v
-        // The safety pass handles answers, not protocol versions or request ids.
-        if (!privacyCurrent()) return { jsonrpc: '2.0', id: v.id ?? null, error: { code: -32603, message: PRIVACY_CHANGED } }
-        const safe = { ...v }
-        // Notifications (progress, log messages) carry text too: their params are cleaned like answers.
-        for (const key of ['result', 'error', 'params']) if (key in safe) {
-            const metadata = key === 'result' && (Array.isArray(safe[key]?.tools) || Array.isArray(safe[key]?.prompts))
-            const staticDocs = key === 'result' && !safe[key]?.isError && metadataIds.get(v.id)
-            const answer = staticDocs ? safe[key] : (metadata ? metadataSafetyWith : safetyWith)(safe[key], tokens, staff)
-            safe[key] = anonFor('posthog') ? guardResponse(answer, 'posthog_cleaned') : answer
-        }
-        return safe
-    }
     const out = (v: unknown) => {
         for(const answer of Array.isArray(v) ? v : [v]) if(object(answer)) {
             const record=records.find(r=>r.id===answer.id)
             if(record) { record.chars=JSON.stringify(answer).length;if(answer.error || answer.result?.isError) record.error='upstream' }
         }
-        return clean(rewriteResponse(v, options.name, options.info))
+        return outputFilter(rewriteResponse(v, options.name, options.info))
     }
     const sseLine = (line: string) => {
-        if (!line.startsWith('data:')) return cleanText(anonFor('posthog') ? hideClients(line).text : line)
+        if (!line.startsWith('data:')) return line
         const m = /^(data: *)(.*?)(\r?)$/.exec(line)!
-        try { return `${m[1]}${JSON.stringify(out(JSON.parse(m[2])))}${m[3]}` } catch { return cleanText(anonFor('posthog') ? hideClients(line).text : line) }
+        try { return `${m[1]}${JSON.stringify(out(JSON.parse(m[2])))}${m[3]}` } catch { return line }
     }
-    const metadataIds = new Map<unknown, boolean>()
     const records: {id:unknown; tool:string; keys:string[]; correlation:string; started:number; release?:()=>void; error?:string; chars:number}[] = []
     const analytics = (item:Rpc) => isPosthogQuery(item.params?.name === 'exec' ? item.params.arguments?.command : `call ${item.params?.name} ${JSON.stringify(item.params?.arguments || {})}`)
     let gateRelease: (()=>void)|undefined
@@ -212,8 +172,6 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
         void held.catch(()=>{})
     }
     try {
-        tokens = await identityTokens(); staff = staffEmails()
-        if (anon) await refreshRoster()
         let body: string | undefined
         let batch = false
         const refusals: Rpc[] = []
@@ -234,14 +192,7 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
                         refusals.push({jsonrpc:'2.0',id:item.id??null,result:mapped.result});return []
                     }
                 }
-                const refusal = commandRefusal(item, options.name)
-                if (refusal) { if(record)record.error='privacy_refused'; refusals.push(refusal); return [] }
-                // A duplicate batch id cannot safely identify a static-doc answer.
-                if (object(item) && item.id != null) metadataIds.set(item.id, !metadataIds.has(item.id) && item.method === 'tools/call' && item.params?.name === 'exec' && isPosthogMetadata(item.params.arguments?.command))
-                if (!anon) return [item]
-                const a = anonRefusal(item, options.name)
-                if (a.refusal) { if(record)record.error='privacy_refused'; refusals.push(a.refusal); return [] }
-                return [a.value]
+                return [item]
             })
             if (!allowed.length && refusals.length) return send(res, 200, batch ? refusals : refusals[0])
             body = JSON.stringify(batch ? allowed : allowed[0])
@@ -337,7 +288,7 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
                 output = JSON.stringify(refusals.length ? [...(Array.isArray(value) ? value : [value]), ...refusals] : value)
             } else if (refusals.length) {
                 return send(res, 200, refusals)
-            } else output = cleanText(anonFor('posthog') ? hideClients(raw).text : raw)
+            } else output = raw
             res.writeHead(upstream.status)
             res.end(output)
         }
@@ -355,7 +306,7 @@ async function handlePosthogMcpFrozen(req: IncomingMessage, res: ServerResponse,
         gateRelease?.()
         for(const record of records) {
             record.release?.()
-            try {writeToolAudit({at:new Date(record.started).toISOString(),user_email:options.caller?.email || options.caller?.who || 'shared',token_id:options.caller?.tokenId || options.caller?.who || 'shared',tool:record.tool,argument_keys:record.keys,client_ids:[],duration_ms:Date.now()-record.started,result_chars:record.chars,is_error:!!record.error,error_kind:record.error,privacy_mode:privacyMode(),correlation_id:record.correlation})}
+            try {writeToolAudit({at:new Date(record.started).toISOString(),user_email:options.caller?.email || options.caller?.who || 'shared',token_id:options.caller?.tokenId || options.caller?.who || 'shared',tool:record.tool,argument_keys:record.keys,client_ids:[],duration_ms:Date.now()-record.started,result_chars:record.chars,is_error:!!record.error,error_kind:record.error,correlation_id:record.correlation})}
             catch(error) {errorDiagnostic(error,record.tool,'audit',record.correlation)}
         }
         clearTimeout(timer)
@@ -370,40 +321,15 @@ function upstreamRequest(url: string | URL, apiKey: string, init: RequestInit): 
     return fetch(url, { ...init, headers, redirect: 'error' })
 }
 
-/** Warm the static PostHog docs now and every 20 minutes (the cache refreshes ahead of expiry). One at a time. */
-export function keepPosthogDocsWarm(options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): () => void {
-    const warm = async () => { for (const command of PREWARM_DOCS) await posthogExec(command, options).catch(() => undefined) }
-    void warm()
-    const timer = setInterval(() => void warm(), 20 * 60_000); timer.unref()
-    return () => clearInterval(timer)
-}
 export function posthogExec(command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
-    return withPrivacy(() => posthogExecFrozen(command, options))
-}
-/** The policy checks of a posthog_exec command (refused commands, private-mode refusals and filtering). Cheap:
- * the job dispatcher runs them BEFORE creating a job, so a refusal is immediate, never a job handle. */
-export async function posthogExecPolicy(command: string, name = 'lens'): Promise<{ refusal: unknown } | { call: unknown }> {
-    let call: unknown = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'exec', arguments: { command } } }
-    const refused = commandRefusal(call, name)
-    if (refused) return { refusal: publicToolError({ isError: true, content: [{ type: 'text', text: refused.error.message }] }) }
-    if (anonFor('posthog')) {
-        await refreshRoster()
-        const a = anonRefusal(call, name)
-        if (a.refusal) return { refusal: publicToolError(a.refusal.result) }
-        call = a.value
-    }
-    return { call }
+    return posthogExecFrozen(command, options)
 }
 const upstreamToolNames = new Map<string, { at: number; names: string[] }>()
 async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
-    const policy = await posthogExecPolicy(command, options.name)
-    if ('refusal' in policy) return policy.refusal
     const server = posthogServerKey(options.url, options.apiKey)
     const metadata = isPosthogMetadata(command) ? metadataCommand(command) : undefined
     const fetchRaw = async (upstreamCommand: string) => {
-        const upstreamPolicy = upstreamCommand === command ? policy : await posthogExecPolicy(upstreamCommand, options.name)
-        if ('refusal' in upstreamPolicy) return upstreamPolicy.refusal
-        return posthogExecRaw(upstreamPolicy.call, upstreamCommand, options)
+        return posthogExecRaw({jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'exec',arguments:{command:upstreamCommand}}}, upstreamCommand, options)
     }
     const docs = (raw: string): Promise<any> => posthogDocsCache.get(server, raw, () => fetchRaw(raw))
     try {
@@ -424,12 +350,10 @@ async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'u
                 return { ...raw, content }
             })
         } else raw = await fetchRaw(command)
-        if (isPosthogMetadata(command)) return guardResponse(raw, 'posthog_cleaned')
-        // Advisory lines (unknown event or property names) are Lens-authored; the answer still gets every privacy pass.
+        if (isPosthogMetadata(command)) return raw
         const warnings = await posthogInputWarnings(command).catch(() => [])
         const annotated = annotatePosthogBuckets(command, warnings.length ? { ...raw, content: [...(raw.content || []), ...warnings.map(text => ({ type: 'text', text }))] } : raw)
-        const result = safetyWith(annotated, await identityTokens(), staffEmails())
-        return guardResponse(result, 'posthog_cleaned')
+        return annotated
     } catch (error) {
         posthogDocsCache.invalidate(server)
         if (error instanceof Error && posthogPublicMessage(error.message)) throw error

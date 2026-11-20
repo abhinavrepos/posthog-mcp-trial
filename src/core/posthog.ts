@@ -8,7 +8,7 @@ import { setImmediate as yieldTurn } from 'node:timers/promises'
 import { config, requirePosthog } from './config.ts'
 
 // How many HogQL queries Lens runs at once (POSTHOG_CONNECTIONS, 1-16, default 4): ClickHouse on a small box
-// cannot run many heavy reads together, but chat, pages and the history build share these. Connections
+// cannot run many heavy reads together, but MCP tools and pages share these. Connections
 // are reused by Node's own fetch (keep-alive). Do not pass an Agent from the npm undici package to the
 // built-in fetch: their versions differ and every request then fails ("fetch failed").
 const MAX_READS = Math.min(16, Math.max(1, Math.floor(Number(process.env.POSTHOG_CONNECTIONS) || 4)))

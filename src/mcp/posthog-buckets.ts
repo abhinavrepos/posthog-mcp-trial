@@ -1,5 +1,5 @@
 /** Conservative annotations: only explicit absolute bounds and unambiguous calendar bucket tables.
- * This runs before every existing data privacy pass and never changes a returned number. */
+ * This annotates results without changing returned numbers. */
 export function annotatePosthogBuckets(command: string, result: any): any {
     const match = /^\s*call\s+(?:posthog:)?query-(trends|lifecycle|retention)\s+(\{[\s\S]*\})\s*$/.exec(command)
     if (!match || result?.isError || !Array.isArray(result?.content)) return result

@@ -1,10 +1,4 @@
-// How Lens's own background jobs are doing: task history, replay analysis, the Watchlist, replay retention,
-// briefing delivery, the chat pre-warm. Each job reports here after every round; the System page shows the
-// result (through /health and the status service), and the service log gets one clear line whenever a job
-// starts failing or recovers, not one per round.
-//
-// Everything is in memory: nothing is queried to produce it. Reasons are rewritten into plain words and
-// never carry query text, URLs or addresses.
+// In-memory health diagnostics exposed by /health. No data processing scheduler.
 export type JobLevel = 'ok' | 'warn' | 'down' | 'waiting'
 export interface JobState {
     key: string; label: string; level: JobLevel; reason: string | null
@@ -35,7 +29,7 @@ export function plainReason(e: unknown): string {
     if (status >= 500) return `PostHog returned an error (HTTP ${status})`
     if (/heap out of memory|err_worker_out_of_memory|out of memory|allocation failed|resourcelimits/.test(m)) return 'ran out of memory'
     if (/enospc|no space left|disk is full|database or disk is full/.test(m)) return 'the disk is full'
-    if (/database is locked|sqlite_busy/.test(m)) return 'the history database was busy'
+    if (/database is locked|sqlite_busy/.test(m)) return 'the database was busy'
     if (/worker exited|worker .*terminated/.test(m)) return 'its worker stopped unexpectedly'
     if (/too large/.test(m)) return 'a recording was too large to read'
     // Anything else: the first line, without URLs, addresses or quoted text.

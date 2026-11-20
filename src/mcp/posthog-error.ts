@@ -1,6 +1,6 @@
 import { errorDiagnostic } from '../core/errordiagnostics.ts'
 import { toolCorrelationId } from '../core/toolcontext.ts'
-const advice = 'narrow the date range, filter to fewer events or properties, or use Lens aggregate_events for counts by period and dimension'
+const advice = 'narrow the date range, filter to fewer events or properties, or query one bounded period at a time with posthog_exec'
 export function posthogFailure(detail: unknown, status?: number, retryAfter?: string | null, correlationId = toolCorrelationId()): Error {
     // An MCP tool error arrives as {content:[{type:'text',text}], isError}: match on its text, not escaped JSON.
     const texts = detail && typeof detail === 'object' && Array.isArray((detail as { content?: unknown }).content)
@@ -29,7 +29,7 @@ export function posthogFailure(detail: unknown, status?: number, retryAfter?: st
     return new Error(message)
 }
 /** PostHog stopped the query at its own time limit (it scans too much data for one request on this server). */
-export const POSTHOG_LIMIT = 'PostHog stopped this query at its own time limit; repeating it will not help. Query a shorter range (for example one quarter at a time) or add filters. For dialog funnels and completion over long periods use Lens workflow_completion, and for counts by period use Lens aggregate_events: both read daily summaries and answer at any history length.'
+export const POSTHOG_LIMIT = 'PostHog stopped this query at its own time limit; repeating it will not help. Query a shorter range (for example one quarter at a time) or add filters. Use posthog_exec for each bounded period, then combine the returned data.'
 const USAGE_HELP = 'Run "tools" to list PostHog tools, "info <tool>" for one tool\'s input schema, then "call <tool> <json_input>".'
 export const TRENDS_CORRECTION = 'For query-trends use breakdownFilter.breakdowns: [{property: <property>, type: "event"}], not breakdownFilter.breakdown_type.'
 const TOOL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/

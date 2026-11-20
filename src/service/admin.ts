@@ -1,23 +1,19 @@
 import { readToolAudit } from '../mcp/toolaudit.ts'
-import { clientOutcomes, recordOutcome, OUTCOMES } from '../core/outcomes.ts'
-import { tasksDb } from '../core/tasks.ts'
-/** Clients seen in history, for picking one by name when recording an outcome. */
-const knownClients = (): { client: string; name: string }[] => {
-    try { return tasksDb.prepare("SELECT c.client,coalesce(n.name,c.client) AS name FROM (SELECT DISTINCT client FROM client_daily WHERE client!='') c LEFT JOIN client_names n USING(client) ORDER BY name LIMIT 2000").all() as { client: string; name: string }[] }
-    catch { return [] }
-}
-import { briefingDeliveryStatus } from '../core/briefingdelivery.ts'
 // Admin page for replay clip access: who can watch, who can download, the default for everyone
 // else, share links, clips and the activity log. Only admins reach it: PostHog owners and admins
 // of the organization that owns the project, plus anyone given the admin role here.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { privacyMode, anonymiseOn } from '../core/anonymise.ts'
 import { config } from '../core/config.ts'
 import { all } from '../core/db.ts'
 import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSurveyRole, resetSurveyRole, setSurveySettings, chatPolicy, setChatPolicy, SURVEY_ROLES, SURVEY_ROLE_TEXT, defaultSurveyRole, sharedTokenSurveyRole, surveyRoleOf, listMcpTokens, revokeMcpToken, chatUrl, setChatUrl, type SurveyRole, setSystemAccess, setInsightAccess, insightPeople, surveyPeople, systemViewers, type Role, type Viewer } from './access.ts'
 import { dashboardPeople, dashboardRoleOf, setDashboardRole, resetDashboardRole, setDashboardSettings, defaultDashboardRole, sharedTokenDashboardRole, DASHBOARD_ROLES, DASHBOARD_ROLE_TEXT, type DashboardRole } from './access.ts'
-import { adminTabs } from './privacy.ts'
+/** Admin sections (people, chat keys, clips, activity). The privacy page and client outcomes were removed with the thin Lens. */
+function adminTabs(): string {
+    const sections = [['people', 'People'], ['chat', 'Chat keys'], ['clips', 'Clips'], ['activity', 'Activity']]
+    const tabs = sections.map(([id, label], i) => `<button class="tab-link" type="button" role="tab" id="t-${id}" data-tab="${id}" aria-controls="tab-${id}" aria-selected="${i === 0}" tabindex="${i === 0 ? 0 : -1}">${label}</button>`).join('')
+    return `<div class="tabs"><div class="tab-group" role="tablist" aria-label="Admin sections">${tabs}</div></div>`
+}
 import { MAX_DAYS, MIN_DAYS, parseRetentionDays, previewRetention, retentionDays, retentionStatus, setRetentionDays } from './replayretention.ts'
 import { APP_NAME, deleteClip, headerHtml, PAGER_JS, listClips, PAGE_CSS, setSaved, storage } from './replays.ts'
 
@@ -84,16 +80,6 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         json(res,200,{audit:readToolAudit(Number(url.searchParams.get('limit') || 100),Number(url.searchParams.get('offset') || 0))}); return true
     }
 
-    if (p === '/replays/admin/api/outcomes') {
-        try {
-            if (req.method === 'GET') { json(res,200,clientOutcomes()); return true }
-            if (req.method === 'POST' || req.method === 'DELETE') {
-                if (req.headers['x-clip-page'] !== '1') { json(res,403,{error:'A page request header is required.'}); return true }
-                recordOutcome(v,await readJson(req),req.method === 'DELETE')
-                json(res,200,{ok:true}); return true
-            }
-        } catch(e) { json(res,400,{error:(e as Error).message}); return true }
-    }
 
     if (p === '/replays/admin/api/state' && req.method === 'GET') {
         const access = loadAccess()
@@ -315,7 +301,6 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
 }
 
 function adminHtml(v: Viewer): string {
-    const e = (value: unknown) => String(value).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c]!)
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Admin · ${APP_NAME}</title><style>${PAGE_CSS()}
 .badge.warn{background:var(--warn-bg);color:var(--warn)}
 .table-wrap{overflow-x:auto}
@@ -464,16 +449,11 @@ ${adminTabs()}
 <li>Clips attached to Jira tickets follow Jira's permissions. Share links work for anyone who has them until they expire, so turn them off below if you need tighter control.</li></ul></details>
 
 </div>
-<div class="tabpanel" role="tabpanel" aria-labelledby="t-outcomes" hidden id="tab-outcomes" data-panel="outcomes">
-<section class="card"><h2>Client outcomes</h2><p class="small muted">Clients that left, shrank, renewed or stayed. The Scorecard checks which warnings came first.</p><form id="outcome-form" class="toolbar"><div><label for="outcome-client">Client</label><input id="outcome-client" name="client" required maxlength="256" list="outcome-clients" placeholder="Find a client"><datalist id="outcome-clients">${knownClients().map(c=>`<option value="${e(c.client)}">${e(c.name)}</option>`).join('')}</datalist></div><div><label for="outcome-kind">Outcome</label><select id="outcome-kind" name="outcome">${OUTCOMES.map(o=>`<option value="${o}">${o === 'contracted' ? 'Reduced' : o.charAt(0).toUpperCase()+o.slice(1)}</option>`).join('')}</select></div><div><label for="outcome-date">Decision date</label><input id="outcome-date" name="decided_on" type="date" required></div><div><label for="outcome-note">Note (optional)</label><input id="outcome-note" name="note" maxlength="500"></div><button type="submit">Save outcome</button></form><p id="outcome-msg" role="status" aria-live="polite"></p><div class="table-wrap" role="region" aria-label="Recorded client outcomes" tabindex="0"><table><colgroup><col style="width:25%"><col style="width:16%"><col style="width:18%"><col style="width:25%"><col style="width:16%"></colgroup><caption>Recorded client outcomes</caption><thead><tr><th>Client</th><th>Outcome</th><th>Decision date</th><th>Note</th><th>Actions</th></tr></thead><tbody id="outcome-rows"></tbody></table></div></section>
-</div>
 <div class="tabpanel" role="tabpanel" aria-labelledby="t-chat" hidden id="tab-chat" data-panel="chat">
 <div class="card"><div class="chat-head"><h2>Chat keys</h2>
 <details class="settings"><summary>Copilot settings</summary>
-<p class="small muted">Briefing delivery: ${config.briefing.webhook ? `on (${e(config.briefing.kind)}, ${e(config.briefing.day)} at ${e(config.briefing.hour)}:00 UTC)` : 'off'} · Last sent: ${e(briefingDeliveryStatus().last_sent || 'never')}</p>
 <div class="toolbar" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label for="chat-url">Lens address for Copilot</label><input id="chat-url" placeholder="https://lens.example.com"></div><div><button type="button" id="chat-url-save">Save address</button></div></div>
 <p class="small muted">The Chat page gives people this address. Leave empty for the default.</p><p id="chat-url-msg" class="small" aria-live="polite"></p>
-<h3 style="font-size:15px;margin:18px 0 6px">Client privacy for AI</h3><p class="small">Privacy mode is <b>${privacyMode()}</b>${anonymiseOn() ? ': AI sees codenames, never client names or codes' : ''}. <a href="/replays/admin/privacy">Manage it and the codenames</a>.</p>
 <h3 style="font-size:15px;margin:18px 0 6px">Approved chat apps</h3>
 <p class="small muted">The Chat page warns everyone to connect their key only to these apps. One per line.</p>
 <label for="chat-apps">Approved apps</label><textarea id="chat-apps" rows="3" style="width:100%;box-sizing:border-box"></textarea>
@@ -597,7 +577,7 @@ const clipsPg=makePager({mount:$('clips-pager'),noun:'clips',size:25,draw:slice=
   const w=document.createElement('a');w.className='btn ghost';w.textContent='Watch';w.href='/replays?clip='+encodeURIComponent(c.name);const d=document.createElement('button');d.type='button';d.className='ghost danger';d.textContent='Delete';d.onclick=async()=>{if(!confirm('Delete this clip for everyone who has it? Its share links stop working.'))return;try{await api('/replays/admin/api/clips/'+encodeURIComponent(c.name),{method:'DELETE'});await load()}catch(e){msg('people-msg',e.message+' Try the action again.')}};
   const box=document.createElement('div');box.style.display='flex';box.style.gap='6px';box.style.flexWrap='wrap';box.append(w,d);cell(tr,box);cb.appendChild(tr)});guardControls()}});
 $('clip-filter').onchange=()=>renderClips(false);
-function clientLabel(value){const option=[...$('outcome-clients').options].find(o=>o.value===String(value));return option&&option.textContent!==String(value)?option.textContent+' ('+String(value)+')':String(value)}
+function clientLabel(value){const option=[...($('outcome-clients')?.options||[])].find(o=>o.value===String(value));return option&&option.textContent!==String(value)?option.textContent+' ('+String(value)+')':String(value)}
 function auditDetails(action,rest){const box=document.createElement('div'),technical=[];const labels={ip:'IP address',on:'Privacy',removed:'Outcome',decided_on:'Decision date',snooze_until:'Snoozed until',client:'Client',outcome:'Outcome',role:'Role',email:'Person',survey:'Survey',name:'Name',ticket:'Ticket',status:'Status',enabled:'Enabled'};
 const order=action.startsWith('privacy.')?['on','lens','posthog','triage','codes','emails']:action.startsWith('outcome.')?['removed','outcome','client','decided_on','note']:action.startsWith('rescue.')?['status','client','snooze_until','note']:['name','survey','client','email','role','note'];const rank=k=>order.includes(k)?order.indexOf(k):order.length;for(const [key,value] of Object.entries(rest).sort(([a],[b])=>rank(a)-rank(b))){if(value==null)continue;if(/(^id$|_id$|uuid|token|survey_id)/i.test(key)||/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(String(value))||typeof value==='object'){technical.push([key,value]);continue}const line=document.createElement('div');line.textContent=key==='on'?(value?'Enabled.':'Disabled.'):key==='removed'&&value?'Removed outcome.':(labels[key]||key.replace(/_/g,' ').replace(/^./,c=>c.toUpperCase()))+': '+(typeof value==='boolean'?(value?'Yes':'No'):key==='outcome'?(value==='contracted'?'Reduced':String(value).replace(/^./,c=>c.toUpperCase())):key==='role'?roleLabel(value,value):key==='client'?clientLabel(value):String(value));if(/note|comment|description/i.test(key)||String(value).length>100){const d=document.createElement('details'),summary=document.createElement('summary');summary.textContent=/note|comment/i.test(key)?'Note':'More information';d.append(summary,line);box.append(d)}else box.append(line)}if(technical.length){const d=document.createElement('details'),summary=document.createElement('summary'),pre=document.createElement('pre');summary.textContent='Technical details';pre.className='small muted';pre.textContent=technical.map(([k,v])=>k+': '+(typeof v==='object'?JSON.stringify(v):v)).join('\\n');d.append(summary,pre);box.append(d)}return box}
 function renderAudit(keep=false){auditPg.set(S.audit,keep);$('audit-more').hidden=S.audit.length%300!==0||!S.audit.length}
@@ -621,10 +601,6 @@ $('survey-shared').onchange=async()=>{try{await api('/replays/admin/api/settings
 $('dashboard-default').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({dashboard_default_role:$('dashboard-default').value})});msg('settings-msg','Saved.',true);await load()}catch(e){msg('settings-msg',e.message)}};
 $('dashboard-shared').onchange=async()=>{try{await api('/replays/admin/api/settings',{method:'POST',body:JSON.stringify({dashboard_shared_token_role:$('dashboard-shared').value})});msg('settings-msg','Saved.',true)}catch(e){msg('settings-msg',e.message)}};
 guardControls();
-async function loadOutcomes(){const rows=await api('/replays/admin/api/outcomes');const body=$('outcome-rows');body.replaceChildren();if(!rows.length){const tr=document.createElement('tr');const td=document.createElement('td');td.colSpan=5;td.className='muted';td.textContent='No outcomes recorded. Record a client decision above to compare it with earlier signals.';tr.append(td);body.append(tr)}for(const o of rows){const tr=document.createElement('tr');for(const key of ['client','outcome','decided_on','note']){const td=document.createElement('td');td.textContent=key==='outcome'?(o[key]==='contracted'?'Reduced':o[key].charAt(0).toUpperCase()+o[key].slice(1)):o[key];tr.append(td)}const td=document.createElement('td');for(const action of ['Edit','Remove']){const b=document.createElement('button');b.type='button';b.textContent=action;b.setAttribute('aria-label',action+' outcome for '+o.client);b.onclick=async()=>{try{if(action==='Edit'){for(const key of ['client','outcome','decided_on','note'])$('outcome-form').elements.namedItem(key).value=o[key];$('outcome-client').focus()}else{await api('/replays/admin/api/outcomes',{method:'DELETE',body:JSON.stringify({client:o.client})});await loadOutcomes()}}catch(e){$('outcome-msg').textContent=e.message}};td.append(b)}tr.append(td);body.append(tr)}}
-$('outcome-client').oninput=()=>{const field=$('outcome-client'),option=[...$('outcome-clients').options].find(o=>o.value===field.value);let helper=$('resolved-client');if(!helper){helper=document.createElement('div');helper.id='resolved-client';helper.className='small muted';field.parentElement.append(helper)}helper.textContent=option?option.textContent+' · '+option.value:''};
-$('outcome-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget;try{await api('/replays/admin/api/outcomes',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(form)))});$('outcome-msg').textContent='Outcome saved.';form.reset();await loadOutcomes()}catch(err){$('outcome-msg').textContent=err.message}}
-loadOutcomes().catch(e=>{$('outcome-msg').textContent=e.message})
 load().catch(e=>{msg('people-msg',e.message+' Reload the page to try again.');$('people').innerHTML='<tr><td colspan="7" class="err"></td></tr>';$('people').querySelector('td').textContent=e.message});
 (()=>{let shown=null,current=null
 const chosen=()=>$('ret-mode').value==='off'?'off':String($('ret-days').value).trim()

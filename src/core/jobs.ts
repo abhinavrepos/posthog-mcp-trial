@@ -166,7 +166,7 @@ export class JobRunner {
     get(owner: string, id: string, revision: string): JobRow {
         const row = this.db.prepare('SELECT * FROM analysis_jobs WHERE id=? AND owner=? AND expires>?').get(id, owner, this.now()) as unknown as JobRow | undefined
         if (!row) throw new Error('Unknown or expired job id.') // same response for another user's id
-        if (row.revision !== revision) throw new Error('Privacy or access settings changed. Submit the tool again.')
+        if (row.revision !== revision) throw new Error('Access settings changed. Submit the tool again.')
         return row
     }
     context(row: JobRow): unknown {

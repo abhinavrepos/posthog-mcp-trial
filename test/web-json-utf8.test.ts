@@ -5,7 +5,7 @@ import { Readable } from 'node:stream'
 import { test } from 'node:test'
 
 // Exercise each real page parser without starting the service or calling PostHog.
-for (const page of ['replays', 'admin', 'connect', 'dashboards', 'privacy', 'surveyspage']) {
+for (const page of ['replays', 'admin', 'connect', 'surveyspage']) {
     const source = readFileSync(`src/service/${page}.ts`, 'utf8')
     const start = source.indexOf('async function readJson(')
     const code = stripTypeScriptTypes(source.slice(start, source.indexOf('\n}', start) + 2))

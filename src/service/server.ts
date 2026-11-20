@@ -1,15 +1,5 @@
-import { startBriefingDelivery } from '../core/briefingdelivery.ts'
-// The triage service:
-//   POST /webhooks/jira   signed Jira webhook → 202 at once, triage runs in the background
-//   GET  /clips/<name>    signed, expiring clip links (with Range support so the video can seek)
-//   POST /mcp             the MCP tools over Streamable HTTP, behind a bearer token
-//   POST/GET/DELETE /posthog-mcp  PostHog MCP with Lens routing and replay refusal
-//   GET  /status          recent jobs
-//   GET  /replays         the replay clip page (PostHog login), see replays.ts
+// Lens HTTP and MCP: clips, Live, Surveys, Pinned, Admin and Connect.
 import { jobStates, plainReason } from '../core/jobhealth.ts'
-import { startPrewarm } from '../mcp/prewarm.ts'
-import { startReplaySignals } from '../core/experience.ts'
-import { startWatchlist } from '../core/watchlist.ts'
 import { existsSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { basename, join } from 'node:path'
@@ -18,41 +8,20 @@ import { brotliCompress, constants, gzip } from 'node:zlib'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 
-import { makeAi } from '../core/ai.ts'
 import { shutdownClips } from '../core/clip.ts'
 import { config, jiraConfigured, posthogMcpActive } from '../core/config.ts'
 import { verifyClipLink } from '../core/links.ts'
-import { renderReport } from '../core/report.ts'
-import { triage } from '../core/triage.ts'
-import { addAttachment, addComment, addLabels, getIssue, hasTriageComment, issueToTicket, verifyWebhookSignature } from '../jira/client.ts'
-import { bearerAuthorized, handlePosthogMcp, keepPosthogDocsWarm } from '../mcp/posthog-proxy.ts'
+import { bearerAuthorized, handlePosthogMcp } from '../mcp/posthog-proxy.ts'
 import { lensServerInfo } from '../mcp/server-info.ts'
-import { guardTransport, registryOf } from '../mcp/anonymise.ts'
-import { anonymiseOn } from '../core/anonymise.ts'
-import { refreshRoster } from '../core/anonroster.ts'
 import { serverInstructions } from '../mcp/instructions.ts'
-import { lensToolNames, registerTools, auditToolRefusal } from '../mcp/tools.ts'
+import { lensToolNames, registerTools } from '../mcp/tools.ts'
 import { appEvents } from '../core/appevents.ts'
-import { startTaskHistory } from '../core/tasks.ts'
 import { audit, chatCaller, loadAccess } from './access.ts'
-import { keptReleases, syncReleases, syncStatus } from '../core/releases.ts'
 import { captionedFile } from '../core/comments.ts'
 import { getClip, handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
 import { startReplayRetention } from './replayretention.ts'
 
-const ai = makeAi()
 
-interface Job {
-    key: string
-    event: string
-    state: 'queued' | 'running' | 'done' | 'skipped' | 'failed'
-    detail?: string
-    priority?: string
-    at: string
-    elapsed_s?: number
-}
-const jobs: Job[] = []
-const inFlight = new Set<string>()
 const log = (msg: string, extra: Record<string, unknown> = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), msg, ...extra }))
 
 async function readRaw(req: IncomingMessage, limit = 1_000_000): Promise<Buffer> {
@@ -72,70 +41,6 @@ function send(res: ServerResponse, status: number, body: unknown, headers: Recor
     res.end(text)
 }
 
-async function runJob(job: Job) {
-    if (inFlight.has(job.key)) {
-        job.state = 'skipped'
-        job.detail = 'already running'
-        return
-    }
-    inFlight.add(job.key)
-    job.state = 'running'
-    try {
-        const issue = await getIssue(job.key)
-        const ticket = issueToTicket(issue)
-        if (!ticket) {
-            job.state = 'skipped'
-            job.detail = `issue type "${issue.fields.issuetype?.name}" is not triaged`
-            return
-        }
-        // Jira retries deliveries. The marker comment makes a second delivery a no-op.
-        if (await hasTriageComment(job.key)) {
-            job.state = 'skipped'
-            job.detail = 'already triaged'
-            return
-        }
-        const report = await triage(ticket, { ai })
-        if (report.clip) await addAttachment(job.key, report.clip.file)
-        await addComment(job.key, renderReport(report))
-        await addLabels(job.key, ['triaged', `suggested-${report.severity.priority.toLowerCase()}`])
-        job.state = 'done'
-        job.priority = report.severity.priority
-        job.elapsed_s = report.elapsed_s
-        job.detail = report.incident ? `${report.incident.kind} in ${report.incident.session_id}` : report.struggle ? 'struggle session' : 'no session found'
-        log('triaged', { key: job.key, priority: job.priority, elapsed_s: job.elapsed_s })
-    } catch (e) {
-        job.state = 'failed'
-        job.detail = (e as Error).message
-        log('triage failed', { key: job.key, error: job.detail })
-    } finally {
-        inFlight.delete(job.key)
-    }
-}
-
-async function handleWebhook(req: IncomingMessage, res: ServerResponse) {
-    if (!jiraConfigured()) return send(res, 503, { error: 'Jira is not connected: set FEATURE_JIRA=on, JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN' })
-    const raw = await readRaw(req)
-    if (!verifyWebhookSignature(raw, req.headers['x-hub-signature'] as string | undefined)) {
-        log('webhook rejected: bad signature')
-        return send(res, 401, { error: 'invalid signature' })
-    }
-    let body: { webhookEvent?: string; issue?: { key?: string } }
-    try {
-        body = JSON.parse(raw.toString('utf8'))
-    } catch {
-        return send(res, 400, { error: 'invalid JSON' })
-    }
-    const key = body.issue?.key
-    const event = body.webhookEvent || ''
-    if (!key || !/^[A-Z][A-Z0-9_]*-\d+$/.test(key)) return send(res, 400, { error: 'no issue key' })
-    if (event !== 'jira:issue_created') return send(res, 200, { ignored: event })
-    const job: Job = { key, event, state: 'queued', at: new Date().toISOString() }
-    jobs.unshift(job)
-    jobs.length = Math.min(jobs.length, 100)
-    send(res, 202, { accepted: key })
-    void runJob(job)
-}
-
 async function serveClip(req: IncomingMessage, res: ServerResponse, url: URL) {
     const name = decodeURIComponent(url.pathname.slice('/clips/'.length))
     if (name !== basename(name) || !/^[A-Za-z0-9-]+_\d+-\d+\.mp4$/.test(name)) return send(res, 404, 'not found')
@@ -151,7 +56,7 @@ async function serveClip(req: IncomingMessage, res: ServerResponse, url: URL) {
 }
 
 function featureState() {
-    return { lens_mcp: config.features.lensMcp, posthog_mcp: posthogMcpActive(), posthog_mcp_switch: config.features.posthogMcp, jira: jiraConfigured(), ai: !!ai }
+    return { lens_mcp: config.features.lensMcp, posthog_mcp: posthogMcpActive(), posthog_mcp_switch: config.features.posthogMcp, jira: jiraConfigured() }
 }
 
 function bearerOk(req: IncomingMessage): boolean {
@@ -166,16 +71,13 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse) {
     if (!caller) return send(res, 401, { error: 'MCP needs Authorization: Bearer <MCP_TOKEN or your personal token from the Connect chat page>' })
     // Stateless: a fresh server and transport per request, with the tools this caller may use.
     const server = new McpServer(lensServerInfo, { instructions: serverInstructions(undefined, caller.surveyRole, caller.dashboardRole, caller.admin || caller.insights) })
-    registerTools(server, ai, caller)
+    registerTools(server, undefined, caller)
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
     res.on('close', () => {
         void transport.close()
         void server.close()
     })
     await server.connect(transport)
-    // Client anonymisation (Admin → Client privacy for AI): every message in and out goes through the guard.
-    if (anonymiseOn()) await refreshRoster()
-    guardTransport(transport, registryOf(server), (name,keys,result)=>auditToolRefusal(name,keys,result,caller))
     const body = req.method === 'POST' ? JSON.parse((await readRaw(req, 5_000_000)).toString('utf8') || 'null') : undefined
     await transport.handleRequest(req, res, body)
 }
@@ -263,7 +165,6 @@ const server = createServer((req, res) => {
                 res.writeHead(204, { 'cache-control': 'max-age=86400' })
                 return res.end()
             }
-            if (url.pathname === '/webhooks/jira' && req.method === 'POST') return await handleWebhook(req, res)
             if (url.pathname.startsWith('/clips/') && req.method === 'GET') return await serveClip(req, res, url)
             if (url.pathname === '/') {
                 res.writeHead(302, { location: '/replays' })
@@ -281,7 +182,7 @@ const server = createServer((req, res) => {
             if (url.pathname === '/mcp') return await handleMcp(req, res)
             if (url.pathname === '/status') {
                 if (!bearerOk(req)) return send(res, 401, { error: 'needs Authorization: Bearer <MCP_TOKEN>' })
-                return send(res, 200, { ai: !!ai, features: featureState(), jobs })
+                return send(res, 200, { features: featureState() })
             }
             send(res, 404, 'not found')
         } catch (e) {
@@ -294,7 +195,7 @@ const server = createServer((req, res) => {
     })
 })
 
-if (!jiraConfigured()) log('Jira is not connected: webhooks answer 503 and release outcomes keep their last numbers until FEATURE_JIRA=on, JIRA_BASE_URL, JIRA_EMAIL and JIRA_API_TOKEN are set')
+if (!jiraConfigured()) log('Jira is not connected; survey launch ticket checks use the ticket format only.')
 for (const [name, value] of Object.entries({ ...(jiraConfigured() ? { JIRA_WEBHOOK_SECRET: config.jira.webhookSecret } : {}), CLIP_LINK_SECRET: config.service.clipLinkSecret, ...(config.features.lensMcp ? { MCP_TOKEN: config.service.mcpToken } : {}) })) {
     if (!value) log(`warning: ${name} is not set; that feature refuses every request until it is`)
 }
@@ -305,42 +206,13 @@ pruneOldClips()
 process.on('uncaughtExceptionMonitor', (err, origin) => log('service crashed', { origin, reason: plainReason(err), error: String((err as Error)?.stack || err).split('\n').slice(0, 6).join(' | ') }))
 process.on('warning', (w) => { if (w.name !== 'ExperimentalWarning') log('node warning', { name: w.name, message: w.message.slice(0, 200) }) })
 
-// The task history behind the dashboards: day by day in the background (core/tasks.ts).
-if (appEvents()) startTaskHistory()
-if (appEvents()) startBriefingDelivery()
-if (appEvents() && config.features.lensMcp) startPrewarm()
-// PostHog's static docs (tools, info) for posthog_exec: built once and kept warm, never on an agent's clock.
-if (config.posthog.mcpViaLens && posthogMcpActive()) keepPosthogDocsWarm({ url: config.posthog.mcpUrl, apiKey: config.posthog.mcpApiKey, name: config.mcp.name })
-// Session replays read as structure only, into per-client experience signals (src/core/experience.ts).
-if (appEvents()) startReplaySignals()
-if (appEvents()) startWatchlist()
-// Client codenames (src/core/anonymise.ts): every client Lens sees gets one, also while anonymisation is off, so
-// it is ready the moment an admin turns it on. Every five minutes; requests refresh it too while it is on.
-if (config.features.lensMcp) {
-    setTimeout(() => void refreshRoster(0).catch(() => {}), 30_000).unref()
-    setInterval(() => void refreshRoster(5 * 60_000).catch(() => {}), 5 * 60_000).unref()
-}
 setInterval(() => pruneOldClips(), 6 * 3_600_000).unref()
-// Session replay retention set on the admin page (off by default): once a UTC day, see replayretention.ts.
-startReplayRetention()
-
-// The release dashboard reads Jira and PostHog at start (when its data is older than an hour)
-// and every 6 hours. Numbers for the latest release keep moving while it is new.
-const syncNow = async (why: string) => {
-    if (!jiraConfigured()) return
-    await syncReleases()
-        .then((r) => log('releases synced', { why, releases: r.releases.length, tickets: r.tickets, seconds: r.seconds, dropped: r.dropped }))
-        .catch((e) => log('release sync failed', { why, error: (e as Error).message }))
-}
-const last = syncStatus().at
-if (!keptReleases().length || !last || Date.now() - Date.parse(last) > 3_600_000) setTimeout(() => void syncNow('start'), 5_000).unref()
-setInterval(() => void syncNow('schedule'), 6 * 3_600_000).unref()
 
 server.keepAliveTimeout = 65_000
 server.headersTimeout = 70_000
 server.requestTimeout = 300_000
 
-server.listen(config.service.port, '0.0.0.0', () => log('triage service listening', { port: config.service.port, ai: !!ai, ai_model: ai ? config.anthropic.model : undefined, features: featureState() }))
+server.listen(config.service.port, '0.0.0.0', () => log('Lens listening', { port: config.service.port, features: featureState() }))
 
 const stop = async () => {
     server.close()
@@ -349,3 +221,5 @@ const stop = async () => {
 }
 process.on('SIGINT', stop)
 process.on('SIGTERM', stop)
+// Session replay retention set on the admin page (off by default): once a UTC day, see replayretention.ts.
+startReplayRetention()

@@ -261,16 +261,8 @@ const MIGRATIONS: string[] = [
         note TEXT NOT NULL DEFAULT '' CHECK(length(note) <= 500),
         recorded_by TEXT NOT NULL, recorded_at TEXT NOT NULL
     );`,
-    // Client anonymisation for AI (src/core/anonymise.ts): each client's codename, extra names it goes by, and
-    // counts of what was blocked (counts only: never the text that was blocked).
-    `CREATE TABLE client_codenames (
-        client TEXT PRIMARY KEY NOT NULL CHECK(length(client) BETWEEN 1 AND 256),
-        name TEXT NOT NULL DEFAULT '',
-        codename TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK(length(codename) BETWEEN 3 AND 40),
-        aliases TEXT NOT NULL DEFAULT '[]',
-        set_by TEXT NOT NULL, set_at TEXT NOT NULL
-    );
-    CREATE TABLE anon_blocks (day TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL, PRIMARY KEY(day, kind));`,
+    // Retired migration slot (keeps installed database version numbers stable).
+    `SELECT 1;`,
     // People an admin let see replay insights (how clients' people work, read from session replays: the
     // Client story section and the client_experience / friction_hotspots chat tools). Admins always can;
     // nobody else unless ticked here. Kept apart from every role, so no role change grants it.
@@ -282,20 +274,8 @@ const MIGRATIONS: string[] = [
     // When a personal token's PostHog-admin flag was last confirmed by its owner signing in to Lens.
     // A key cannot ask PostHog itself, so an unconfirmed flag stops counting after a while (access.ts).
     `ALTER TABLE mcp_tokens ADD COLUMN posthog_admin_seen_at TEXT;`,
-    `ALTER TABLE client_codenames ADD COLUMN rank INTEGER;
-     CREATE UNIQUE INDEX client_codename_rank ON client_codenames(rank);
-     CREATE TABLE retired_codenames(label TEXT PRIMARY KEY);`,
-    // A 40-character prefix plus a safe-integer suffix needs up to 57 characters.
-    `CREATE TABLE client_codenames_numbered (
-        client TEXT PRIMARY KEY NOT NULL CHECK(length(client) BETWEEN 1 AND 256),
-        name TEXT NOT NULL DEFAULT '',
-        codename TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK(length(codename) BETWEEN 3 AND 64),
-        aliases TEXT NOT NULL DEFAULT '[]', set_by TEXT NOT NULL, set_at TEXT NOT NULL,
-        rank INTEGER UNIQUE CHECK(rank IS NULL OR rank >= 0)
-     );
-     INSERT INTO client_codenames_numbered SELECT client,name,codename,aliases,set_by,set_at,rank FROM client_codenames;
-     DROP TABLE client_codenames;
-     ALTER TABLE client_codenames_numbered RENAME TO client_codenames;`,
+    `SELECT 1;`,
+    `SELECT 1;`,
     `CREATE TABLE client_outcome_episodes (
         client TEXT NOT NULL, outcome TEXT NOT NULL, decided_on TEXT NOT NULL,
         note TEXT NOT NULL, recorded_by TEXT NOT NULL, recorded_at TEXT NOT NULL,
@@ -306,7 +286,7 @@ const MIGRATIONS: string[] = [
         id INTEGER PRIMARY KEY, at TEXT NOT NULL, user_email TEXT NOT NULL, token_id TEXT NOT NULL,
         tool TEXT NOT NULL, argument_keys TEXT NOT NULL, resolved_window TEXT, client_ids TEXT NOT NULL,
         duration_ms INTEGER NOT NULL, result_chars INTEGER NOT NULL, is_error INTEGER NOT NULL,
-        error_kind TEXT, privacy_mode TEXT NOT NULL, correlation_id TEXT NOT NULL
+        error_kind TEXT, correlation_id TEXT NOT NULL
     );
     CREATE INDEX tool_audit_at ON tool_audit(at);
     CREATE INDEX tool_audit_user ON tool_audit(user_email,at);`,
@@ -404,3 +384,6 @@ migrate()
 // Only the default database takes over the old files; a test database must not.
 if (DB_FILE === join(ROOT, 'run/triage.db')) importLegacyFiles()
 keepOwner()
+
+// Upgrade existing audit databases; masking metadata is no longer collected.
+if (db.prepare('PRAGMA table_info(tool_audit)').all().some(c => c.name === 'privacy_mode')) db.exec('ALTER TABLE tool_audit DROP COLUMN privacy_mode')

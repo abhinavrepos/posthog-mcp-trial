@@ -1,118 +1,40 @@
 # PostHog Lens
 
-PostHog Lens is an internal tool for ION product managers and account teams. It sits next to a
-self-hosted PostHog that records how clients use Reval, and turns those events and session replays into
-answers: which clients need attention, where people struggle, what changed after a release. Everything
-runs on one machine, which can be fully offline.
+Lens is a thin display layer for Reval product managers. PostHog does the analysis; Lens queries it live and displays the results. Lens does not ingest days, build rollups, or maintain a task history.
 
-People use it in two ways:
-
-- **In the browser**, at `http://<server>:8080/`, signed in with their PostHog account.
-- **In chat**, from GitHub Copilot, through Lens's MCP server. Each person creates their own key on the
-  Chat page.
-
-Installing and upgrading are covered step by step in [SETUP.md](SETUP.md).
-
-## What it does
-
-| Page | What it answers |
+| Page | Purpose |
 |---|---|
-| Replay clips | Turn a replay into a short MP4 clip to share, with expiring signed links |
-| Watchlist | For chosen clients, every new replay as steps: hovering, pauses, back-and-forth, failed submits, slow answers, with links to the moment |
-| Live | Who is in Reval now, and each client's active and idle time per day and hour |
-| Dashboards | Monday briefing, Rescue Queue, Client Task Map, Flow time, Scorecard, Client story, pinned charts |
-| Surveys | Short in-app surveys for chosen users, with launch safeguards |
-| Chat | Personal keys for Copilot |
-| System | Health of PostHog, Lens and the machine |
-| Admin | Who may see what, client outcomes, clips, activity, and client privacy (codenames) |
+| Replays | Turn recordings into MP4 clips; save, comment, download and share according to your role |
+| Live | Current people and event-derived active/idle time, queried live from PostHog |
+| Surveys | Design, launch, stop and inspect surveys |
+| Pinned | Graph snapshots saved by agents; no automatic refresh |
+| Admin | People, access roles, personal keys and audit |
+| Connect | Create and revoke personal MCP keys |
 
-Copilot gets the same answers through about 40 MCP tools, for example `client_experience`, `rescue_queue`,
-`client_story`, `task_map`, `watch_highlights` and `session_moments`. Access follows the same roles as the
-pages: an admin grants replay insights, dashboards and surveys per person.
+The root redirects to `/replays`. Pinned graphs are at `/replays/pinned`. `/health` and `/healthz` remain available. Pages use PostHog sign-in and Lens roles.
 
-## Privacy
+## MCP
 
-- Replays never leave the machine. Lens reads their structure only: which control was used and when,
-  never typed values, screen text or pointer positions. Copilot gets rounded timings, counts and links,
-  and a person opens the replay in Lens.
-- Clients can be shown to AI by numbered codename only (Admin → Client privacy).
-- Every sign-in, clip, change of access and chat tool call is written to the audit log.
+Connect to `/mcp` with a personal token from Connect, or the configured shared token. Local clients may use `node --import tsx src/mcp/stdio.ts`.
 
-## When something goes down
+- `posthog_exec`: PostHog's own tools. Commands: `tools`, `info <tool>`, `call <tool> <json>`. Long calls return a job handle within about 20 seconds.
+- `get_job_result`: poll your job handle.
+- `resolve_client`: resolve a client code/name, user, email or distinct id. Includes the match reason, matched user, last seen, and event count for the requested window. The live roster is cached for at most ten minutes.
+- `find_sessions`: client, optional screen/action text/user, a window of up to one year, limit and cursor. Returns both PostHog replay and Lens clip page URLs. It reports missing recordings explicitly.
+- `get_replay_link`: PostHog replay and MP4 clip links; waits up to 25 seconds and finishes pending clips in the background.
+- `pin_graph`: save `{title, chart: {type: 'line'|'bar'|'table', x: [...], series: [{name, values: [...]}]}, note?}`. At most 20 series and 500 points; series lengths must match `x`.
+- `list_pinned`: list saved snapshots.
+- `unpin_graph`: delete your own graph; an admin may delete any graph.
+- `design_survey`, `save_survey`, `stop_survey`, `list_surveys`, `survey_results`: survey tools, according to the caller's survey role. Launching stays on the Surveys page.
 
-The System page (and its status service, `deploy/status`) checks every 15 seconds: each PostHog container
-and health endpoint, whether events and replays are still arriving, the machine (disk, memory, CPU), and
-Lens's own background jobs (task history, replay analysis, Watchlist reader, replay retention, briefing
-delivery, chat pre-warm).
+PostHog tools require its upstream MCP URL/key. Survey tools require its survey key. Replay and person tools from PostHog are allowed. Results are not masked. `src/mcp/output-filter.ts` contains the single pass-through hook at the output boundary.
 
-- **Needs attention** says what is down, why, since when, and a first thing to check. A container shows
-  its exit code, an out-of-memory kill, its last failed health check or a restart loop. A health endpoint
-  says whether it refused the connection, timed out or answered with an error. Checks that only failed
-  because ClickHouse is down are grouped under it.
-- **Lens jobs** shows each background job with a plain reason ("PostHog is unreachable", "PostHog refused
-  Lens's API key", "ran out of memory", "PostHog settings are missing: …") and its last success.
-- **Recent changes** is the timeline: when each check went down, when it recovered, and for how long.
-- `GET /healthz` on the status service answers 503 when anything is down, for uptime monitors;
-  `STATUS_ALERT_WEBHOOK` sends Teams or Slack messages when a check stays down and when it recovers.
-- The Lens service log (`logs/service.log`, one JSON object per line) records when a job starts failing,
-  every tenth failure, and when it recovers, and the reason for a crash before the service restarts.
+## Configuration and development
 
-Nothing extra is queried for any of this: jobs report from memory, and the checks are the ones the status
-service already ran.
+Use `.env.example` and `config/app-events.reval.json`. Event/property names come from `APP_EVENTS_FILE`. Client identity uses `CLIENT_FROM_DISTINCT_ID=N`, otherwise `PROP_CLIENT_ID`. The user part is configured by `{user}` in `distinctIdParts`.
 
-## How it is built
+For the owner's IDs (`C1DEV|01|SEM|SEMOPS`), set `CLIENT_FROM_DISTINCT_ID=3`; the provided map identifies user part 4. `sem ops` resolves to client SEM with matched user SEMOPS, and session finding preserves that user filter. Screen names come from `dialog_name` and `tab_name`, codes from `dialog_id`; actions come from `action` and `action_name`.
 
-```
-src/core      what Lens knows: PostHog queries, task history, replay reading, rescue queue, surveys
-src/mcp       the MCP server and its tools
-src/service   the web pages and their APIs (server-rendered HTML, no framework, no outside assets)
-deploy        install and upgrade scripts: PostHog (pinned), Lens, Kafka tuning, offline kit
-test          the test suite (node:test)
-config        Reval's event dictionary (app-events.reval.json)
-```
+Run with `node --import tsx src/service/server.ts`. Check with `npx tsc --noEmit` and `npm test -- --test-concurrency=1`. The clip queue defaults to five concurrent renders and two per person. SQLite keeps access, audits, clips, survey metadata, jobs and pinned snapshots. Historical database migrations remain compatible with installed databases; retired history files are not read.
 
-- **Runtime:** Node 24, TypeScript run directly by `tsx`, SQLite for Lens's own data (`run/`), and
-  PostHog's API and HogQL for everything else.
-- **Deployment:** Docker. `deploy/offline/build-images.sh` builds every image on a machine with internet
-  and runs the full test suite inside the Lens image; `save-images.sh` packs them into one file;
-  `upgrade.sh` or `fresh-install.sh` installs them on the offline machine.
-- The build works from a git checkout or from a plain copy of the folder (a downloaded zip, or a clone
-  whose `.git` was removed).
-
-## Developing
-
-```bash
-pnpm install                 # once
-pnpm typecheck
-pnpm test                    # the whole suite
-pnpm service                 # the web service on SERVICE_PORT, settings from .secrets.env
-```
-
-Settings come from the environment, with `.secrets.env` filling anything unset. `.env.example` lists
-every setting with a comment. The ones most often changed:
-
-| Setting | Default | Meaning |
-|---|---|---|
-| `POSTHOG_HOST`, `POSTHOG_PROJECT_ID`, `POSTHOG_PERSONAL_API_KEY` | | where PostHog is and how Lens reads it |
-| `APP_EVENTS_FILE` | | the app's event dictionary (`config/app-events.reval.json`) |
-| `FEATURE_LENS_MCP`, `FEATURE_SURVEYS`, `FEATURE_JIRA` | | turn chat, surveys and Jira on or off |
-| `TASKS_HISTORY_DAYS` | 1500 | how far back task history goes |
-| `TASKS_BACKFILL_DAYS_PER_RUN` | 20 | days of history rebuilt every 10 minutes |
-| `WATCHLIST_DAYS` | 14 | how far back the Watchlist reads replays (at most 90) |
-| `WATCHLIST_PER_RUN` | 30 | replays read every 10 minutes |
-| `WATCHLIST`, `REPLAY_SIGNALS` | on | `off` stops the background replay reading |
-| `TEST_TIME_SLACK` | 1 | widens the speed limits in tests (the image build uses 3) |
-
-On an installed machine, settings are changed as described in SETUP.md (“Changing a setting”).
-
-## Upgrading an older PostHog
-
-`upgrade.sh` upgrades a self-hosted PostHog in place, including installs from 2025. It backs everything
-up first, moves Postgres 12 to 15, runs the extra migration older databases need, moves stored files
-from MinIO to SeaweedFS, and copies 2025 replays so they still play. Then it checks every count against
-the backup and prints `RESULT: PASS`.
-
-- PostHog is down for 2 to 3 hours, longer with many replays.
-- Apps can keep sending events. Events sent while PostHog is down are lost unless the sender retries.
-- `sudo posthog-lens rollback` returns to the backup. It refuses to start if the backup did not finish.
-- `sudo posthog-lens cleanup` deletes the backups once you are satisfied.
+Lab verification helpers are `tools/task-u-server.mts` (port 18371, isolated SQLite) and `tools/task-u-check.mts` (MCP and HTTP checks). Start the server with the lab's bridge preload. A stopped ClickHouse lab produces unavailable errors rather than invented data.

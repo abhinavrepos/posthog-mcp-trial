@@ -1,21 +1,18 @@
+import { toolContext } from '../core/toolcontext.ts'
 import { ToolInputError } from '../core/toolinputerror.ts'
-import { isPosthogQuery, posthogQueryWork } from './posthog-query.ts'
-import { analysisWorkers } from './jobpool.ts'
+import { posthogQueryWork } from './posthog-query.ts'
 import { DatabaseSync } from 'node:sqlite'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import { toolCorrelationId } from '../core/toolcontext.ts'
-import { privacyKey } from '../core/anonymise.ts'
 import { JobRunner, runningResult, waitForJob, type JobWork } from '../core/jobs.ts'
 import { db } from '../core/db.ts'
 import type { ChatCaller } from '../service/access.ts'
 import type { TimeWindow } from '../core/timewindow.ts'
 
-export const JOB_TOOLS = new Set(['aggregate_events', 'workflow_completion', 'discover_workflows', 'signal_scorecard', 'describe_app_events', 'message_doctor', 'find_trade','find_sessions', 'top_pains', 'rescue_queue', 'dialog_friction', 'client_signals', 'client_activity_changes', 'compare_client_patterns'])
-export const FAST_TOOLS = new Set(['resolve_client','get_replay_link','find_task','list_dashboards','get_job_result','describe_tools','describe_config'])
-export function jobBacked(name: string, readOnly: boolean, args: {command?:unknown} = {}) {
-    if(name==='posthog_exec') return isPosthogQuery(args.command)
-    return readOnly && !FAST_TOOLS.has(name)
+export const JOB_TOOLS = new Set(['find_sessions'])
+export const FAST_TOOLS = new Set(['resolve_client','get_replay_link','get_job_result'])
+export function jobBacked(name: string, _readOnly: boolean, args: {command?:unknown} = {}) {
+    return name === 'posthog_exec' ? !/^\s*(tools|info |schema )/.test(String(args.command)) : JOB_TOOLS.has(name)
 }
 let runner: JobRunner | undefined
 const jobs = () => runner ??= new JobRunner(process.env.LENS_JOBS_DB ? new DatabaseSync(process.env.LENS_JOBS_DB) : db, {
@@ -36,8 +33,8 @@ export interface JobOptions {
 }
 export function createJobDispatch(caller?: Caller, options: JobOptions = {}) {
     const owner = caller?.who || 'stdio'
-    const revision = () => JSON.stringify([privacyKey(), caller?.admin || false, caller?.insights || false, caller?.dashboardRole, caller?.surveyRole])
-    const work = options.work ?? ((name, args, window) => analysisWorkers.run({ name, args, window, caller, correlationId: toolCorrelationId() }))
+    const revision = () => JSON.stringify([caller?.admin || false, caller?.insights || false, caller?.dashboardRole, caller?.surveyRole])
+    const work: NonNullable<JobOptions['work']> = options.work ?? ((_name, _args, _window, execute) => ({promise: execute()}))
     const getRunner = () => options.runner ?? jobs()
     const read = (id: string): JobAnswer => {
         const runner = getRunner(), row = runner.get(owner, id, revision())
@@ -53,16 +50,14 @@ export function createJobDispatch(caller?: Caller, options: JobOptions = {}) {
             return read(id)
         },
         async execute(name: string, args: Record<string, unknown>, window: TimeWindow | undefined, extra: unknown, execute: (context?: {signal: AbortSignal; timeoutMs: number}) => Promise<unknown>) {
-            // Policy refusals are immediate: a refused PostHog command never becomes a job handle.
-            if (name === 'posthog_exec') {
-                const { posthogExecPolicy } = await import('./posthog-proxy.ts')
-                const policy = await posthogExecPolicy(String(args.command ?? ''))
-                if ('refusal' in policy) return policy.refusal
-            }
             const runner = getRunner(), startedRevision = revision(), context = { name, args, window }
-            const job = runner.start(owner, name, args, startedRevision, () => name === 'posthog_exec' && isPosthogQuery(args.command) ? posthogQueryWork(execute) : work(name, args, window, execute), runner.ttlMs, context, name === 'posthog_exec')
+            const state=toolContext.getStore()
+            const job = runner.start(owner, name, args, startedRevision, () => {
+                const task=name==='posthog_exec' ? posthogQueryWork(execute) : work(name,args,window,execute)
+                return {...task,metadata:()=>({...task.metadata?.(),clients:[...(state?.clients || [])],window:state?.window || window})}
+            }, runner.ttlMs, context, name==='posthog_exec')
             await waitForJob(job, extra as never, options.budgetMs)
-            if (revision() !== startedRevision) throw new Error('Privacy or access settings changed. Submit the tool again.')
+            if (revision() !== startedRevision) throw new Error('Access settings changed. Submit the tool again.')
             runner.detach(owner, job.id, startedRevision)
             return read(job.id)
         },

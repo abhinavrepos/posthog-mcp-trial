@@ -7,7 +7,7 @@ import { PERIODS } from '../core/timewindow.ts'
 export const TIME_HELP = `Use period: ${PERIODS.join(', ')}; or inclusive UTC dates from/to (YYYY-MM-DD), e.g. {"from":"2024-11-01","to":"2025-11-30"}.`
 export const utcDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD').refine(s => Number.isFinite(Date.parse(s)) && new Date(s).toISOString().slice(0,10) === s, 'Use a real UTC date').refine(s => s <= new Date().toISOString().slice(0,10), 'Dates cannot be in the future')
 export const timeShape = {
-    period: z.enum(PERIODS).optional().describe('Named UTC window. Relative windows end on dataThrough; today/yesterday are literal days.'),
+    period: z.enum(PERIODS).optional().describe('Named UTC window ending today; today/yesterday are literal days.'),
     from: utcDate.optional().describe('Inclusive UTC start date (YYYY-MM-DD); requires to.'),
     to: utcDate.optional().describe('Inclusive UTC end date (YYYY-MM-DD); requires from.'),
     when: z.string().optional().describe('Deprecated: use period or from/to. Legacy natural-language window.'),
@@ -33,6 +33,7 @@ export function checkTime(input: Record<string, unknown>, ctx: z.RefinementCtx):
 export const timeInput = z.object(timeShape).superRefine(checkTime)
 export const inclusiveWindow = (w: TimeWindow) => ({from:w.from.toISOString().slice(0,10),to:new Date(+w.to-1).toISOString().slice(0,10)})
 export function resolveTime(input: Record<string, unknown>, fallback: number|string = 7): TimeWindow {
+    timeInput.parse(input)
     const text = input.period ? String(input.period) : input.from ? `${input.from} to ${input.to}` : input.when ? String(input.when) : input.days || input.weeks ? `last ${input.days || Number(input.weeks)*7} days` : typeof fallback === 'string' ? fallback : `last ${fallback} days`
     try { return parseTimeWindow(text, new Date(), (input.period || input.from) ? undefined : input.timezone as string|undefined) }
     catch { throw new ToolInputError('Invalid time arguments. ' + TIME_HELP) }

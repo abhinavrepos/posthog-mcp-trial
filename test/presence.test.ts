@@ -121,10 +121,11 @@ describe('the report', () => {
             running = false
             return result
         })
-        assert.deepEqual(r.totals, { clients: 2, people: 2, sessions: 4, actions: 9, open_s: 241, active_s: 121, idle_s: 120 })
+        // User parts are scoped to each client: acme/a and beta/a are different people.
+        assert.deepEqual(r.totals, { clients: 2, people: 3, sessions: 4, actions: 9, open_s: 241, active_s: 121, idle_s: 120 })
         assert.deepEqual(r.days, [
             { day: '2026-10-30', clients: 1, people: 2, sessions: 2, open_s: 181, active_s: 91, idle_s: 90 },
-            { day: '2026-10-31', clients: 2, people: 1, sessions: 2, open_s: 60, active_s: 30, idle_s: 30 },
+            { day: '2026-10-31', clients: 2, people: 2, sessions: 2, open_s: 60, active_s: 30, idle_s: 30 },
         ])
         assert.deepEqual(r.hours, [
             { day: '2026-10-30', hour: 9, people: 2, open_s: 180, active_s: 90, idle_s: 90 },
@@ -189,6 +190,7 @@ describe('the report', () => {
 
     test('an empty period is all zeros, not an error', async () => {
         const r = await presenceReport(parse({ tz: 'UTC' }) as PresenceQuery, SETTINGS, fake([]).run)
+        // User parts are scoped to each client: acme/a and beta/a are different people.
         assert.deepEqual(r.totals, { clients: 0, people: 0, sessions: 0, actions: 0, open_s: 0, active_s: 0, idle_s: 0 })
         assert.deepEqual(r.days, [])
     })

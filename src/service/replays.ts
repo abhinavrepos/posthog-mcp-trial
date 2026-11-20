@@ -1,3 +1,4 @@
+import { handlePinned } from './pinned.ts'
 // The replay clip page: paste a PostHog replay link, pick a start and a length, get an MP4.
 //
 // People sign in with their PostHog account (see access.ts). What they may do depends on the role
@@ -19,16 +20,12 @@ import { clipUrl } from '../core/links.ts'
 import { PostHogError, replayUrl } from '../core/posthog.ts'
 import { recordingInfo, type RecordingInfo } from '../core/recording-info.ts'
 import { downloadName, formatClock, HourlyLimit, parseReplayInput, parseStartTime } from '../core/replay-input.ts'
-import { audit, can, canSeeReplayInsights, canSeeSystem, canUseDashboards, canUseSurveys, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
-import { handleAdmin } from './admin.ts'
-import { codenameRedirect, handlePrivacy } from './privacy.ts'
-import { handleLive, liveHtml } from './live.ts'
-import { handleWatch, watchHtml } from './watch.ts'
 import { handleSystem } from './system.ts'
+import { audit, can, canSeeSystem, canUseSurveys, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
+import { handleAdmin } from './admin.ts'
+import { handleLive, liveHtml } from './live.ts'
 import { handleSurveys } from './surveyspage.ts'
 import { canConnect, handleConnect } from './connect.ts'
-import { handleDashboards } from './dashboards.ts'
-import { appEvents } from '../core/appevents.ts'
 
 const RETENTION_DAYS = Number(process.env.CLIP_RETENTION_DAYS || 14)
 const AUDIT_RETENTION_DAYS = Number(process.env.AUDIT_RETENTION_DAYS || 365)
@@ -379,35 +376,23 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         return true
     }
 
+    if (/^\/replays\/(watch|dashboards|codenames)(?:\/|$)/.test(p) || p.startsWith('/replays/admin/privacy')) {json(res,404,{error:'Not found.'});return true}
+
     const viewer = await currentViewer(req)
     if (p === '/replays' || p === '/replays/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
         res.end(!viewer ? loginHtml() : can(viewer.role, 'watch') ? pageHtml(viewer) : noAccessHtml(viewer))
         return true
     }
-    if (!viewer && (p === '/replays/system' || p === '/replays/system/')) {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
-        res.end(loginHtml('System'))
-        return true
-    }
+    if (!viewer && (p === '/replays/pinned' || p === '/replays/pinned/')) {res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});res.end(loginHtml('Pinned'));return true}
     if (!viewer && (p === '/replays/connect' || p === '/replays/connect/')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
         res.end(loginHtml('Chat'))
         return true
     }
-    if (!viewer && (p === '/replays/dashboards' || p.startsWith('/replays/dashboards/')) && !p.includes('/api/')) {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
-        res.end(loginHtml('Dashboards'))
-        return true
-    }
     if (!viewer && (p === '/replays/surveys' || p === '/replays/surveys/')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
         res.end(loginHtml('Surveys'))
-        return true
-    }
-    if (p === '/replays/watch' || p === '/replays/watch/') {
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
-        res.end(!viewer ? loginHtml('Watchlist') : can(viewer.role, 'watch') && canSeeReplayInsights(viewer) ? watchHtml(viewer) : noWatchHtml(viewer))
         return true
     }
     if (p === '/replays/live' || p === '/replays/live/') {
@@ -419,20 +404,21 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         json(res, 401, { error: 'Sign in first.' })
         return true
     }
-    // Links from an AI carry codenames where clients go (client anonymisation): open the real client.
-    if (codenameRedirect(req, res, url)) return true
-    if (p === '/replays/codenames' || p.startsWith('/replays/codenames/') || p.startsWith('/replays/admin/privacy')) return handlePrivacy(req, res, url, viewer)
+    if (!viewer && (p === '/replays/system' || p === '/replays/system/')) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
+        res.end(loginHtml('System'))
+        return true
+    }
     if (p.startsWith('/replays/admin')) return handleAdmin(req, res, url, viewer)
     if (p === '/replays/system' || p.startsWith('/replays/system/')) return handleSystem(req, res, url, viewer)
     if (p === '/replays/surveys' || p.startsWith('/replays/surveys/')) return handleSurveys(req, res, url, viewer)
     if (p === '/replays/connect' || p.startsWith('/replays/connect/')) return handleConnect(req, res, url, viewer)
-    if (p === '/replays/dashboards' || p.startsWith('/replays/dashboards/')) return handleDashboards(req, res, url, viewer)
     if (!can(viewer.role, 'watch')) {
         json(res, 403, { error: 'You do not have access to replay clips. Ask an admin.' })
         return true
     }
+    if (p === '/replays/pinned' || p.startsWith('/replays/pinned/')) return handlePinned(req,res,url,viewer)
     if (p.startsWith('/replays/live/')) return handleLive(req, res, url, viewer)
-    if (p.startsWith('/replays/watch/')) return handleWatch(req, res, url, viewer)
     const need = (role: Role): boolean => {
         if (can(viewer.role, role)) return true
         json(res, 403, { error: `This needs the "${ROLE_TEXT[role]}" role. Ask an admin.` })
@@ -836,18 +822,17 @@ return{set(list,keep){items=list||[];if(!keep)page=0;draw()},redraw:draw,get pag
 
 export const APP_NAME = config.app.name
 export const APP_TAG = config.app.tag
-export type Section = 'Replay clips' | 'Watchlist' | 'Live' | 'Dashboards' | 'Surveys' | 'Chat' | 'System' | 'Admin'
+export type Section = 'Replay clips' | 'Pinned' | 'Live'  | 'Surveys' | 'Chat' | 'System' | 'Admin'
 
 /** The header on every page: the product name, the sections this person may open, and sign out. */
 // Line icons (24px grid, 1.75 stroke), inline so the app needs nothing from the internet.
 const ICON: Record<string, string> = {
     'Replay clips': '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/>',
-    Watchlist: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    Pinned: '<path d="M4 4h16v16H4z"/>',
     Live: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
-    Dashboards: '<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
     Surveys: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/>',
     Chat: '<path d="M12 3v3M12 18v3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M3 12h3M18 12h3"/><circle cx="12" cy="12" r="3.5"/>',
-    System: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+
     Admin: '<path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
 }
 const icon = (name: string) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[name] || ''}</svg>`
@@ -868,16 +853,15 @@ keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeou
     const tabs = (
         [
             ['Replay clips', '/replays', 'watch'],
-            ['Watchlist', '/replays/watch', 'watchlist'],
             ['Live', '/replays/live', 'watch'],
-            ['Dashboards', '/replays/dashboards', 'dashboards'],
+            ['Pinned', '/replays/pinned', 'watch'],
             ['Surveys', '/replays/surveys', 'surveys'],
             ['Chat', '/replays/connect', 'connect'],
             ['System', '/replays/system', 'system'],
             ['Admin', '/replays/admin', 'admin'],
         ] as const
     )
-        .filter(([, , need]) => (need === 'watchlist' ? can(v.role, 'watch') && canSeeReplayInsights(v) : need === 'system' ? canSeeSystem(v) : need === 'surveys' ? config.surveys.enabled && canUseSurveys(v) : need === 'dashboards' ? !!appEvents() && canUseDashboards(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need as Role)))
+        .filter(([, , need]) => need === 'system' ? canSeeSystem(v) : need === 'surveys' ? config.surveys.enabled && canUseSurveys(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need as Role))
         .map(([name, href]) => `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${icon(name)}<span>${name}</span></a>`)
         .join('')
     const initials = (v.name || v.email).split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('')
@@ -896,13 +880,6 @@ export function loginHtml(section: Section = 'Replay clips'): string {
 <script>document.getElementById('reload-lens').href=location.href;document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('go');if(b.disabled)return;b.disabled=true;const msg=document.getElementById('msg'),status=document.getElementById('signin-status');msg.textContent='';status.textContent='Signing in…';
 try{const r=await fetch('/replays/login',{method:'POST',headers:{'content-type':'application/json','x-clip-page':'1'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('pw').value})});
 const d=await r.json().catch(()=>({}));if(!r.ok){msg.textContent=d.error||'Couldn’t reach PostHog. Try again.';return}location.reload()}catch{msg.textContent='Couldn’t reach PostHog. Try again.'}finally{status.textContent='';b.disabled=false}}</script></body></html>`
-}
-
-function noWatchHtml(v: Viewer): string {
-    if (!can(v.role, 'watch')) return noAccessHtml(v)
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Watchlist · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
-<body>${headerHtml(v, 'Watchlist')}<main id="main" tabindex="-1" style="max-width:560px"><div class="card"><h1 style="font-size:24px;margin-bottom:12px">Request access to the Watchlist</h1>
-<p class="small muted">Signed in as <b>${esc(v.email)}</b>.</p><p>The Watchlist shows how people worked, step by step, from replays. Ask a Lens admin for replay insights on the admin page.</p></div></main></body></html>`
 }
 
 function noAccessHtml(v: Viewer): string {

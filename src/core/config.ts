@@ -84,13 +84,6 @@ function loadScreens(): Screen[] | undefined {
 }
 
 export const config = {
-    tasks: {
-        db: env('TASKS_DB', 'run/tasks.db'),
-        workerMemoryMb: intSetting('TASKS_WORKER_MEMORY_MB', 1536, 64, 32768),
-        intervalMinutes: intSetting('TASKS_INTERVAL_MINUTES', 10, 1, 1440),
-        backfillDaysPerRun: intSetting('TASKS_BACKFILL_DAYS_PER_RUN', 20, 0, 1500),
-        historyDays: intSetting('TASKS_HISTORY_DAYS', 1500, 1, 1500),
-    },
     mcp: { name: mcpName(env('LENS_MCP_NAME', 'lens')) },
     posthog: {
         // Where this service reaches the PostHog API (same machine, through Caddy).
@@ -107,7 +100,7 @@ export const config = {
         // https://mcp.posthog.com/mcp for PostHog Cloud, or your own copy for a self-hosted PostHog.
         mcpUrl: env('POSTHOG_MCP_URL'),
         mcpViaLens: flag('POSTHOG_MCP_VIA_LENS', true),
-        mcpApiKey: env('POSTHOG_MCP_API_KEY'), // a separate personal key, without session_recording:read
+        mcpApiKey: env('POSTHOG_MCP_API_KEY'), // a personal key for PostHog MCP
         // Lens surveys: a key with survey read and write only (deploy/posthog/survey-engine/key.sh).
         surveyApiKey: env('POSTHOG_SURVEY_API_KEY'),
         // Sent with every survey API call; PostHog's proxy refuses survey calls without it, which closes
@@ -161,12 +154,6 @@ export const config = {
         // Issue types that get triaged, and how each is reported.
         rciIssueType: env('JIRA_RCI_ISSUE_TYPE', 'RCI'),
         riskIssueType: env('JIRA_RISK_ISSUE_TYPE', 'MMT Risk'),
-    },
-    briefing: {
-        webhook: env('LENS_BRIEFING_WEBHOOK'),
-        kind: env('LENS_BRIEFING_WEBHOOK_KIND', 'teams'),
-        day: env('LENS_BRIEFING_DAY', 'mon'),
-        hour: Number(env('LENS_BRIEFING_HOUR', '8')),
     },
     service: {
         port: Number(env('SERVICE_PORT', '8080')),

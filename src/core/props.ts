@@ -11,15 +11,11 @@ export function clientExpr(prop: typeof p = p): string {
     return `properties.${prop.client}`
 }
 
-const client = clientExpr()
-
 export const P = {
-    client,
-    // The display name when events carry one, else the client id itself.
-    clientName: p.clientName ? `coalesce(nullIf(toString(properties.${p.clientName}), ''), toString(${client}))` : `toString(${client})`,
-    // Without a release property, queries see an empty release.
-    version: p.version ? `properties.${p.version}` : `''`,
-    email: `person.properties.${p.personEmail}`,
+    get client() { return clientExpr() },
+    get clientName() { return p.clientName ? `coalesce(nullIf(toString(properties.${p.clientName}), ''), toString(${clientExpr()}))` : `toString(${clientExpr()})` },
+    get version() { return p.version ? `properties.${p.version}` : `''` },
+    get email() { return `person.properties.${p.personEmail}` },
 }
 
 /** How the client is found, in words, for the MCP instructions and the doctor. */

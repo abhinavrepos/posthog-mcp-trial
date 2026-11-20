@@ -1,135 +1,47 @@
-// Works out which client and which screen a ticket is about, from PostHog's own data.
-// Clients are the `client_id` / `client_name` super properties the app registers on every event,
-// so this works for any product that tags events that way, not just the demo.
-import { SCREENS, type Screen } from './catalog.ts'
+// Live client/user roster; cached for no longer than ten minutes per time window.
 import { hogql } from './posthog.ts'
-import { containsPhrase, tokens } from './text.ts'
 import { P } from './props.ts'
-
-export interface ClientMatch {
-    id: string
-    name: string
-    confidence: number // 0..1
-    via: 'email' | 'email-domain' | 'name' | 'id'
-    events_90d: number
+import { normalise, userExpr } from './identity.ts'
+import { config } from './config.ts'
+export interface KnownClient { id:string; name:string; events:number; last_seen:string; users:string[]; emails?:string[]; distinct_ids?:string[] }
+export interface ClientMatch extends KnownClient { confidence:number; via:string; matched_user?:string }
+const cache = new Map<string,{at:number; value:Promise<KnownClient[]>}>()
+export function clearClientCache() { cache.clear() }
+export async function knownClients(from = new Date(Date.now()-90*86400000), to = new Date()): Promise<KnownClient[]> {
+    const key = [from.toISOString().slice(0,10),to.toISOString().slice(0,10)].join('|')
+    const hit = cache.get(key)
+    if(hit && Date.now()-hit.at < 600000) return hit.value
+    const value = hogql(`SELECT toString(${P.client}) AS id, any(toString(${P.clientName})) AS name,
+        count() AS events, max(timestamp) AS last_seen, groupUniqArray(5000)(${userExpr()}) AS users, groupUniqArray(5000)(toString(${P.email})) AS emails, groupUniqArray(5000)(toString(distinct_id)) AS distinct_ids
+        FROM events WHERE timestamp >= {from} AND timestamp < {to} AND notEmpty(toString(${P.client}))
+        GROUP BY id ORDER BY events DESC LIMIT 10000`, {from:from.toISOString(),to:to.toISOString()}).then(rows=>rows.map(r=>({
+            id:String(r.id),name:String(r.name || r.id),events:Number(r.events),last_seen:new Date(String(r.last_seen)).toISOString(),users:(r.users as string[] || []).map(String),emails:(r.emails as string[] || []).map(String),distinct_ids:(r.distinct_ids as string[] || []).map(String)})))
+    cache.set(key,{at:Date.now(),value}); value.catch(()=>cache.delete(key))
+    if(cache.size>20) cache.delete(cache.keys().next().value!)
+    return value
 }
-
-export interface KnownClient {
-    id: string
-    name: string
-    events: number
-}
-
-export async function knownClients(): Promise<KnownClient[]> {
-    const { refreshRoster } = await import('./anonroster.ts')
-    const { storedClients } = await import('./clientroster.ts')
-    await refreshRoster()
-    // Event counts from Lens's own daily rollups (no PostHog scan): shown with each candidate.
-    const { tasksDb } = await import('./tasks.ts')
-    // Every stored client is a candidate (an idle one must still resolve); the count shown is events_90d, so 90 days.
-    const since = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10)
-    const events = new Map((tasksDb.prepare('SELECT client, sum(events) AS n FROM user_daily WHERE day >= ? GROUP BY client').all(since) as { client: string; n: number }[]).map((r) => [r.client, Number(r.n) || 0]))
-    return storedClients().map((c) => ({ id: c.id, name: c.name || c.id, events: events.get(c.id) || 0 })).sort((a, b) => b.events - a.events || a.id.localeCompare(b.id))
-}
-
-/** Which client(s) a person with this email has used the product as. Matched over 1500 days so a quiet user still
- * resolves; `events` counts only the last 90 days (it is shown as events_90d). */
-export async function clientsForEmail(email: string): Promise<{ id: string; name: string; events: number }[]> {
-    const rows = await hogql(
-        `SELECT toString(${P.client}) AS id, any(toString(${P.clientName})) AS name, countIf(timestamp > now() - INTERVAL 90 DAY) AS events
-         FROM events
-         WHERE timestamp > now() - INTERVAL 1500 DAY
-           AND (lower(toString(${P.email})) = {email} OR lower(distinct_id) = {email})
-           AND notEmpty(toString(${P.client}))
-         GROUP BY id ORDER BY count() DESC LIMIT 5`,
-        { email: email.toLowerCase() }
-    )
-    return rows.map((r) => ({ id: String(r.id), name: String(r.name), events: Number(r.events) }))
-}
-
-async function clientsForDomain(domain: string): Promise<{ id: string; name: string; events: number }[]> {
-    const rows = await hogql(
-        `SELECT toString(${P.client}) AS id, any(toString(${P.clientName})) AS name, countIf(timestamp > now() - INTERVAL 90 DAY) AS events
-         FROM events
-         WHERE timestamp > now() - INTERVAL 1500 DAY
-           AND endsWith(lower(toString(${P.email})), {domain})
-           AND notEmpty(toString(${P.client}))
-         GROUP BY id ORDER BY count() DESC LIMIT 5`,
-        { domain: '@' + domain.toLowerCase() }
-    )
-    return rows.map((r) => ({ id: String(r.id), name: String(r.name), events: Number(r.events) }))
-}
-
-/** Scores how well free text names a client. Pure, so it is unit-tested. */
-export function scoreClientName(text: string, client: { id: string; name: string }): number {
-    const hay = tokens(text)
-    const nameToks = tokens(client.name)
-    if (!nameToks.length) return 0
-    if (containsPhrase(hay, nameToks)) return 1
-    if (hay.includes(client.id.toLowerCase())) return 0.95
-    // Partial: the first, most distinctive word of the name ("Brightwater" for "Brightwater Logistics").
-    const hits = nameToks.filter((t) => t.length > 2 && hay.includes(t))
-    if (!hits.length) return 0
-    const lead = hay.includes(nameToks[0]) ? 0.25 : 0
-    return Math.min(0.9, 0.45 + lead + (0.2 * hits.length) / nameToks.length)
-}
-
-export async function resolveClient(input: { text: string; emails?: string[]; clientHint?: string }): Promise<ClientMatch[]> {
-    const out = new Map<string, ClientMatch>()
-    const add = (m: ClientMatch) => {
-        const prev = out.get(m.id)
-        if (!prev || prev.confidence < m.confidence) out.set(m.id, m)
-    }
-
-    for (const email of input.emails || []) {
-        const byEmail = await clientsForEmail(email)
-        // An email is the strongest evidence: it is added first, and a name match never displaces it.
-        for (const c of byEmail) add({ ...c, confidence: 1, via: 'email', events_90d: c.events })
-        if (!byEmail.length) {
-            const domain = email.split('@')[1]
-            for (const c of domain ? await clientsForDomain(domain) : []) {
-                add({ ...c, confidence: 0.85, via: 'email-domain', events_90d: c.events })
-            }
+export function matchClients(query:string, clients:KnownClient[]): ClientMatch[] {
+    const n = normalise(query.trim()), parts = query.split(config.properties.distinctIdSeparator)
+    const clientPart = config.properties.clientFromDistinctId || 3
+    const extracted = parts.length >= clientPart ? normalise(parts[clientPart-1]) : ''
+    const local = normalise(query.split('@')[0])
+    const out:ClientMatch[]=[]
+    for(const c of clients) {
+        let confidence=0, via='', matched_user:string|undefined
+        for(const [label,raw] of [['id',c.id],['name',c.name]] as const) {
+            const v=normalise(raw), score=n===v ? 1 : extracted && extracted===v ? .99 : local===v ? .98 : v.startsWith(n) ? .85 : v.includes(n) ? .7 : 0
+            if(n && score>confidence) {confidence=score;via=label+(score===1 ? ':exact' : ':normalised/prefix/contains')}
         }
-    }
-
-    const all = await knownClients()
-    const text = [input.clientHint, input.text].filter(Boolean).join(' ')
-    for (const c of all) {
-        const score = scoreClientName(text, c)
-        // An id that is also a word of the name ("nordlicht") reads better as a name match.
-        const viaId = score === 0.95 && !tokens(c.name).includes(c.id.toLowerCase())
-        if (score >= 0.5) add({ id: c.id, name: c.name, confidence: score, via: viaId ? 'id' : 'name', events_90d: c.events })
-        // An explicit hint (a structured Jira field) that names the id exactly wins outright.
-        if (input.clientHint && input.clientHint.trim().toLowerCase() === c.id) {
-            add({ id: c.id, name: c.name, confidence: 1, via: 'id', events_90d: c.events })
+        for(const u of c.users) {
+            const v=normalise(u), score=n===v || local===v ? 1 : v.startsWith(n) ? .84 : v.includes(n) ? .69 : 0
+            if(n && score>=confidence) {confidence=score;via='user';matched_user=u}
         }
+        if(c.emails?.some(e=>normalise(e)===n)) {confidence=1;via='email';matched_user=query}
+        if(c.distinct_ids?.some(d=>normalise(d)===n)) {confidence=1;via='distinct_id';matched_user=query.split(config.properties.distinctIdSeparator).at(-1)}
+        if(confidence) out.push({...c,confidence,via,matched_user})
     }
-    return [...out.values()].sort((a, b) => b.confidence - a.confidence || b.events_90d - a.events_90d)
+    return out.sort((a,b)=>b.confidence-a.confidence || b.events-a.events).slice(0,10)
 }
-
-export interface ScreenMatch {
-    path: string
-    name: string
-    confidence: number
-}
-
-/** Maps ticket words to a screen. Pure, so it is unit-tested. */
-export function resolveScreen(text: string, screens: Screen[] = SCREENS): ScreenMatch[] {
-    const hay = tokens(text, { keepStop: true })
-    const raw = text.toLowerCase()
-    const out: ScreenMatch[] = []
-    for (const s of screens) {
-        let score = 0
-        if (raw.includes(s.path)) score = 1
-        else if (containsPhrase(hay, tokens(s.name, { keepStop: true }))) score = 0.9
-        else {
-            for (const alias of s.aliases) {
-                const a = tokens(alias, { keepStop: true })
-                if (containsPhrase(hay, a)) score = Math.max(score, a.length > 1 ? 0.8 : 0.6)
-            }
-        }
-        if (score > 0) out.push({ path: s.path, name: s.name, confidence: score })
-    }
-    return out.sort((a, b) => b.confidence - a.confidence)
+export async function resolveClient(input:{text:string; emails?:string[]; clientHint?:string; from?:Date; to?:Date}) {
+    return matchClients(input.clientHint || input.text, await knownClients(input.from,input.to))
 }

@@ -15,6 +15,8 @@ import { hogql, type Row } from './posthog.ts'
 
 type Run = typeof hogql
 import { P } from './props.ts'
+import { userExpr } from './identity.ts'
+import { appEvents } from './appevents.ts'
 
 const DAY = 86_400_000
 const SESSION_TIMEOUT_MS = 30 * 60_000
@@ -93,7 +95,7 @@ export function dayIn(d: Date, tz: string): string {
 export const includesToday = (q: PresenceQuery, now = new Date()) => q.to >= dayIn(now, q.tz)
 
 // ------------------------------------------------------------------ the queries
-const USER = `coalesce(nullIf(toString(${P.email}), ''), distinct_id)`
+const USER = () => `coalesce(nullIf(toString(${P.email}), ''), ${userExpr()})`
 
 /** Every action in the range, with the time until the next action in its session (`gap`, ms).
  * `detail` adds what each action was (event, screen, element), for one person's timeline. */
@@ -102,12 +104,12 @@ export function timedEvents(q: PresenceQuery, detail = false, options: { names?:
     const nameColumn = options.names === false ? '' : ', client_name'
     const more = detail ? ', event, etype, chain, screen' : ''
     const moreInner = detail
-        ? `, event, toString(properties.$event_type) AS etype, if(event = '$autocapture', elements_chain, '') AS chain, toString(properties.$pathname) AS screen`
+        ? `, event, toString(properties.$event_type) AS etype, if(event = '$autocapture', elements_chain, '') AS chain, coalesce(nullIf(toString(properties.${appEvents()?.properties.dialogName?.name || '$pathname'}), ''), toString(properties.$pathname)) AS screen`
         : ''
     // Earlier actions cannot affect a forward gap. Start at local midnight, keeping the original
     // following-day margin for the next action across midnight; the outer WHERE keeps the range.
     return `SELECT client${nameColumn}, user, sid, ts, day, hour, gap${more} FROM (
-        SELECT toString(${P.client}) AS client${name}, ${USER} AS user,
+        SELECT toString(${P.client}) AS client${name}, ${USER()} AS user,
                toString(properties.$session_id) AS sid, timestamp AS ts${moreInner},
                toDate(toTimeZone(timestamp, {tz})) AS day, toHour(toTimeZone(timestamp, {tz})) AS hour,
                least(greatest(dateDiff('millisecond', timestamp,
@@ -162,7 +164,7 @@ function add(b: Bucket, r: Row) {
     b.active_ms += Number(r.active_ms || 0)
     b.actions += Number(r.actions || 0)
     b.clients.add(String(r.client))
-    b.people.add(String(r.user))
+    b.people.add(String(r.client) + '\u0000' + String(r.user))
     b.sessions.add(String(r.sid))
     const first = iso(r.first)!, last = iso(r.last)!
     if (!b.first || first < b.first) b.first = first
@@ -281,7 +283,7 @@ export async function liveNow(tz: string, gap_s: number, settings = presenceSett
     const minutes = settings.live_minutes
     const ignore = settings.ignore_events.length ? settings.ignore_events : ['-']
     const live = await run(
-        `SELECT toString(${P.client}) AS client, argMax(toString(${P.clientName}), timestamp) AS client_name, ${USER} AS user,
+        `SELECT toString(${P.client}) AS client, argMax(toString(${P.clientName}), timestamp) AS client_name, ${USER()} AS user,
                 argMax(toString(properties.$session_id), timestamp) AS sid, max(timestamp) AS last_seen
          FROM events
          WHERE timestamp > now() - toIntervalMinute({minutes}) AND notEmpty(toString(${P.client})) AND event NOT IN {ignore}

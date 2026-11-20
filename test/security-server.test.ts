@@ -17,7 +17,7 @@ const server = new Function('createServer', 'compressResponse', 'send', 'log', '
     res.writeHead(status); res.end(typeof body === 'string' ? body : JSON.stringify(body))
 }, () => { if (failLog) throw new Error('logging failed') }, () => false, () => { throw new Error('should not read body') }, () => false, () => { throw new Error('handler failed') }) as Server
 
-test('malformed raw request gets 400, health stays live, Jira off gets 503, and handler failures get 500', async () => {
+test('malformed raw request gets 400, health stays live, handler failures get 500', async () => {
     server.listen(0, '127.0.0.1')
     await once(server, 'listening')
     const port = (server.address() as { port: number }).port
@@ -32,9 +32,6 @@ test('malformed raw request gets 400, health stays live, Jira off gets 503, and 
     try {
         assert.match(await request('//['), /^HTTP\/1.1 400/)
         assert.match(await request('/healthz'), /^HTTP\/1.1 200/)
-        const jira = await request('/webhooks/jira', 'POST')
-        assert.match(jira, /^HTTP\/1.1 503/)
-        for (const setting of ['FEATURE_JIRA=on', 'JIRA_BASE_URL', 'JIRA_EMAIL', 'JIRA_API_TOKEN']) assert.ok(jira.includes(setting))
         assert.match(await request('/broken'), /^HTTP\/1.1 500/)
         failLog = true
         assert.match(await request('/broken'), /^HTTP\/1.1 500/)

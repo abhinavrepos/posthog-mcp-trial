@@ -81,11 +81,8 @@ function parseClock(text: string): { h: number; min: number } | undefined {
     return { h, min }
 }
 
-let completedThrough: () => string | null | undefined = () => undefined
-export function setWindowDataThrough(read: () => string | null | undefined): void { completedThrough=read }
-
-/** Validated UTC analytical windows. `through` is an inclusive completed day. */
-export function analyticalWindow(text: string, now = new Date(), through: string | null | undefined = completedThrough()): TimeWindow | undefined {
+/** Validated UTC windows over live PostHog data. */
+export function analyticalWindow(text: string, now = new Date()): TimeWindow | undefined {
     const value = text.trim().toLowerCase().replaceAll('_', ' ')
     const make = (from: Date, to: Date): TimeWindow => {
         const days = (+to - +from) / DAY
@@ -127,7 +124,7 @@ export function analyticalWindow(text: string, now = new Date(), through: string
     if (m) {
         const n = !m[1] || ['a','one'].includes(m[1]) ? 1 : +m[1]
         if (!Number.isSafeInteger(n) || n < 1 || n > 1500) throw new ToolInputError('Invalid relative window')
-        const end = new Date(Math.min(Math.floor(+now / DAY)*DAY, through ? +date(through)+DAY : Infinity))
+        const end = new Date(now)
         const start = new Date(end)
         if (/year/.test(m[2])) start.setUTCFullYear(start.getUTCFullYear()-n)
         else if (/month|quarter/.test(m[2])) {
@@ -140,8 +137,8 @@ export function analyticalWindow(text: string, now = new Date(), through: string
     }
     if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return make(date(value),new Date(+date(value)+DAY))
     // Calendar-to-date and open-ended phrases PMs use ("this month", "year to date", "since March 2024",
-    // "all time"). They end at the last fully processed day, like the relative windows above.
-    const end = new Date(Math.min(Math.floor(+now / DAY)*DAY, through ? +date(through)+DAY : Infinity))
+    // "all time"). They end at the current time.
+    const end = new Date(now)
     const startOf = (unit: 'week'|'month'|'quarter'|'year') => {
         const d = today
         if (unit === 'week') return new Date(+d - ((d.getUTCDay() + 6) % 7) * DAY)
@@ -157,7 +154,7 @@ export function analyticalWindow(text: string, now = new Date(), through: string
     if (/^(?:all(?:\s+(?:time|data|history))?|ever|since\s+(?:the\s+)?(?:beginning|start)(?:\s+of\s+(?:our\s+|the\s+)?data)?|everything)$/.test(value)) return make(new Date(+end - 1500 * DAY), end)
     m = /^since\s+(.+)$/.exec(value)
     if (m) {
-        const from = analyticalWindow(m[1], now, through)?.from
+        const from = analyticalWindow(m[1], now)?.from
         if (from) return make(from, end)
     }
     return undefined

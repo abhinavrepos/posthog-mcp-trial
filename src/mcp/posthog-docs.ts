@@ -33,7 +33,6 @@ export class PosthogDocsCache {
 }
 export const posthogDocsCache = new PosthogDocsCache()
 /** The docs agents read most (graded runs): built at startup and kept warm, so no one waits ~10 s for a compact info. */
-export const PREWARM_DOCS = ['tools', 'info execute-sql', 'info query-trends', 'info query-funnel', 'info query-retention', 'info query-paths', 'info query-lifecycle', 'info read-data-schema']
 export const posthogServerKey = (url: string, apiKey: string) => createHash('sha256').update(url).update('\0').update(apiKey).digest('hex')
 export function metadataCommand(command: string): { raw: string; tool?: string; compact: boolean } | undefined {
     const match = /^\s*(tools|info|schema)(?:[ \t]+(?:posthog:)?([\w-]+))?((?:[ \t]+[\w.$-]+)*)[ \t]*$/i.exec(command)
@@ -90,10 +89,10 @@ function fields(schema: Doc, root: Doc): Map<string, { schema: Doc; required: bo
 export const HOGQL_DIGEST = `HogQL essentials (PostHog's SQL, mostly ClickHouse):
 - Prefer typed tools (query-trends, query-funnel, query-retention, query-paths, query-lifecycle) when they fit; SQL for custom grouping, cross-event logic, record inspection and system.* entities (insights, dashboards, cohorts, flags, experiments).
 - Always bound time: timestamp >= '2026-01-01' AND timestamp < '2026-02-01' (end-exclusive, UTC). Add event IN (...) and property filters early.
-- Properties: properties.dialog_id, properties.client_id, person.properties.x; session: $session_id. Verify names with read-data-schema or describe_app_events; columns of other tables via system.information_schema.
+- Properties: properties.dialog_id, properties.client_id, person.properties.x; session: $session_id. Verify names with read-data-schema; columns of other tables via system.information_schema.
 - Scan events once: countIf/uniqIf/sumIf/argMax or a window function instead of self-joins, repeated subqueries or UNIONs of the same range. No raw joins on events; a subquery used as a join source must pre-filter and pre-aggregate. LEFT ANY JOIN for one-match lookups. CTEs are inlined (a CTE used twice runs twice).
 - Name aggregates (count() AS events_count, uniq(person_id) AS people) so results stay readable; add LIMIT for row lists.
-- Out of memory or time limit: narrow the range, filter earlier, or use Lens aggregate_events / workflow_completion.`
+- Out of memory or time limit: narrow the range, filter earlier, or query one bounded period at a time.`
 export async function compactInfo(text: string, tool: string, fetchSchema: (path: string) => Promise<Doc | undefined>): Promise<string> {
     const root = infoSchema(text)
     if (!root) return text // Unknown formats stay usable, and never silently lose their contract.

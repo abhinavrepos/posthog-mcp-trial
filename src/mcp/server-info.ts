@@ -6,5 +6,5 @@ export const lensServerInfo = {
     name: config.mcp.name,
     version: '0.1.0',
     title: 'PostHog Lens',
-    description: `PostHog Lens: ${appEvents()?.app || 'your app'} clients, screens, errors, trades, sessions, tickets, releases`,
+    description: `PostHog Lens: ${appEvents()?.app || 'your app'} live PostHog queries, replay clips, surveys and pinned graph snapshots`,
 }

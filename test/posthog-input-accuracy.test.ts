@@ -99,7 +99,7 @@ test('exec fetches real upstream tool names on unknown-tool errors and reuses th
     assert.equal(seen.filter(c => c === 'tools').length, 1)
 })
 
-test('successful query results gain property warnings while retaining data privacy', async t => {
+test('successful query results gain property warnings without masking data', async t => {
     const { config } = await import('../src/core/config.ts')
     const { posthogExec } = await import('../src/mcp/posthog-proxy.ts')
     const previous = config.appEventsFile
@@ -116,7 +116,7 @@ test('successful query results gain property warnings while retaining data priva
     const text = JSON.stringify(result)
     assert.match(text, /Did you mean dialog_id/)
     assert.match(text, /events_count/)
-    assert.doesNotMatch(text, /private@example.com|SECRET/)
+    assert.match(text, /private@example.com/)
     assert.equal(result.isError, undefined)
 })
 
@@ -131,7 +131,7 @@ test('unknown event checks use one cached name-only read and fail open on unavai
     let reads = 0
     t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
         reads++
-        assert.equal(JSON.parse(String(init.body)).query.query, 'SELECT DISTINCT event FROM events LIMIT 1000')
+        assert.match(JSON.parse(String(init.body)).query.query, /timestamp >= now\(\) - INTERVAL 7 DAY/)
         return Response.json({ columns: ['event'], results: [['PageView'], ['Event']] })
     })
     const cmd = command({ series: [{ event: '$pageview' }] })

@@ -2,7 +2,6 @@ import { isPublicToolError } from './publicerror.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { JobWork } from '../core/jobs.ts'
 
-// Match one static command only: chains, arguments containing commands and every call keep data privacy.
 export const isPosthogMetadata = (command: unknown): boolean => typeof command === 'string' && /^[ \t]*(?:tools|(?:info|schema)[ \t]+(?:posthog:)?[\w-]+(?:[ \t]+[\w.$-]+)*)[ \t]*$/i.test(command)
 
 /** Inspect only command/tool names and compute flags, never SQL text. */
