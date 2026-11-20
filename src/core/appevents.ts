@@ -201,7 +201,8 @@ export async function findSessions(q: SessionQuery) {
         const span = spans.get(sid)
         // Recordings run on the browser clock: offset from the event's client time when it has one.
         const matchMs = Number(first?.ctime)>1e9 ? Number(first!.ctime)*1000 : Date.parse(String(first?.ts))
-        const offset = span && Number.isFinite(matchMs) ? Math.max(0,(matchMs-Date.parse(span.start))/1000) : 0
+        // Start 5 s before the match so the viewer sees what led up to it.
+        const offset = span && Number.isFinite(matchMs) ? Math.max(0,(matchMs-Date.parse(span.start))/1000-5) : 0
         const dialogIds = new Set(ev.map(e=>String(e.dialog || '')))
         const humanName = (v: unknown) => {
             const name = String(v || '').trim()

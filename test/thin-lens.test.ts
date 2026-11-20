@@ -95,8 +95,8 @@ test('find_sessions uses names, action text, user and bounded newest paging; ret
     })
     const result=await findSessions({clientId:'SEM',screen:'cash positions',what:'failed to save',user:'sem ops',limit:1,...window})
     const s=result.sessions[0];assert.equal(s.user,'SEMOPS');assert.equal(s.error_messages_in_session,1);assert.equal(s.recording,true)
-    assert.match(s.replay_url,/https:\/\/ph.example\/project\/7\/replay\/session-one\?t=12/)
-    assert.match(s.clip_url,/https:\/\/lens.example\/replays\?url=/);assert.match(decodeURIComponent(s.clip_url),/session-one\?t=12/)
+    assert.match(s.replay_url,/https:\/\/ph.example\/project\/7\/replay\/session-one\?t=7/)
+    assert.match(s.clip_url,/https:\/\/lens.example\/replays\?url=/);assert.match(decodeURIComponent(s.clip_url),/session-one\?t=7/)
     assert.deepEqual(s.screens,['Chart of Accounts']);assert.equal(s.matched_actions[0].message,'Failed to save');assert.ok(calls>=3)
 })
 test('find_sessions explicitly reports missing recordings, validates cursors and the year bound',async t=>{
@@ -259,7 +259,7 @@ test('find_sessions retains action screens, orders matches chronologically and a
     assert.equal(s.matched_actions[2].outcome,null)
     assert.equal(s.session_start,timeline[0].ts);assert.equal(s.session_end,timeline.at(-1)!.ts)
     assert.equal(s.recording_start,'2026-11-18T08:59:50.000Z');assert.equal(s.recording_end,'2026-11-18T09:00:40.000Z');assert.equal(s.recording_duration_s,50)
-    assert.equal(s.offset_s,22);assert.match(s.replay_url,/t=22/)
+    assert.equal(s.offset_s,17);assert.match(s.replay_url,/t=17/)
     assert.equal(s.events_in_session,6);assert.equal(s.error_messages_in_session,2)
 })
 
