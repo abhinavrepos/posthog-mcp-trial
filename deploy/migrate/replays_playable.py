@@ -26,6 +26,14 @@ def ch(sql):
 
 
 rows = ch("SELECT team_id, session_id, groupArrayArray(block_urls) FROM session_replay_events GROUP BY team_id, session_id")
+# Block files the old storage no longer had (recorded by fix_legacy_replays.py): those replays could not play
+# before the upgrade either, so they are reported apart and do not count against the upgrade.
+MISSING = set()
+if ch("EXISTS TABLE _upgrade_missing_legacy_blocks")[0][0]:
+    MISSING = {k for (k,) in ch("SELECT key FROM _upgrade_missing_legacy_blocks")}
+gone = [r for r in rows if any((m := URL.match(u)) and m.group(1) in MISSING for u in r[2])]
+gone_blocks = sum(1 for r in gone for u in r[2] if (m := URL.match(u)) and m.group(1) in MISSING)
+rows = [r for r in rows if r not in gone]
 
 
 async def main():
@@ -66,6 +74,8 @@ async def main():
                 ok_recordings += 1
 
         await asyncio.gather(*(one(t, s, u) for t, s, u in rows))
+    if gone:
+        print(f"  progress: not counted: {len(gone)} recordings whose block files ({gone_blocks}) were already gone from the old storage before the upgrade", flush=True)
     print(f"PLAYABLE: {ok_recordings} of {len(rows)} recordings, {ok_blocks} of {total_blocks} blocks, {total_bytes / 1e6:.1f} MB")
     for f in failures:
         print(f"  failed: {f}")

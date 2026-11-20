@@ -33,6 +33,7 @@ sys.stdout.reconfigure(line_buffering=True)
 PERIODS = [("30d", 30), ("90d", 90), ("1y", 365), ("5y", 1825)]
 LEGACY = "session_recording_batches/"
 BACKUP = "_upgrade_backup_session_replay_events"
+MISSING = "_upgrade_missing_legacy_blocks"  # block files metadata named but the old storage no longer had
 LEGACY_ROWS = f"arrayExists(u -> position(u, '/{LEGACY}') > 0, block_urls)"
 env = os.environ.get
 
@@ -86,7 +87,15 @@ for team, oldest, sessions, urls in rows:
 
     def copy(name):
         old, new = f"{LEGACY}{name}", f"session_recordings/{period}/{name}"
-        size = s3.head_object(Bucket=bucket, Key=old)["ContentLength"]
+        try:
+            size = s3.head_object(Bucket=bucket, Key=old)["ContentLength"]
+        except ClientError as e:
+            # Metadata can name a block file the old MinIO no longer has (expired or removed before the
+            # upgrade). That part of the replay was already unplayable; nothing can bring it back, so it is
+            # counted and reported instead of stopping every other replay from being fixed.
+            if e.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+                return "missing before the upgrade"
+            raise
         try:
             if s3.head_object(Bucket=bucket, Key=new)["ContentLength"] == size:
                 return "already there"
@@ -98,10 +107,13 @@ for team, oldest, sessions, urls in rows:
         return "copied"
 
     results = {}
+    missing = []
     done, last = 0, time.time()
     with ThreadPoolExecutor(16) as pool:
-        for r in pool.map(copy, files):
+        for name, r in zip(files, pool.map(copy, files)):
             results[r] = results.get(r, 0) + 1
+            if r == "missing before the upgrade":
+                missing.append(f"session_recordings/{period}/{name}")
             done += 1
             if time.time() - last >= 30:
                 print(f"      ... project {team}: {done} of {len(files)} block files renamed")
@@ -113,7 +125,16 @@ for team, oldest, sessions, urls in rows:
         f"WHERE team_id = {int(team)} AND {LEGACY_ROWS}",
         fmt=None,
     )
+    if missing:
+        # Recorded so phase verify can tell "gone before the upgrade" from "broken by the upgrade".
+        ch(f"CREATE TABLE IF NOT EXISTS {MISSING} (key String) ENGINE = MergeTree ORDER BY key", fmt=None)
+        for i in range(0, len(missing), 500):
+            values = ",".join("('" + k.replace("\\", "").replace("'", "") + "')" for k in missing[i:i + 500])
+            ch(f"INSERT INTO {MISSING} (key) VALUES {values}", fmt=None)
     left = ch(f"SELECT count() FROM session_replay_events WHERE team_id = {int(team)} AND {LEGACY_ROWS}")[0][0]
     if left:
         raise SystemExit(f"project {team}: {left} replay rows still point at {LEGACY}")
     print(f"    project {team}: {sessions} legacy replays (oldest {oldest[:10]}) kept for {period} (project setting {setting}); {len(files)} block files {results}; metadata updated")
+    if results.get("missing before the upgrade"):
+        print(f"    project {team}: {results['missing before the upgrade']} block files named by replay metadata were already gone from the old storage;"
+              " the replays (or parts) they belong to cannot play, as before the upgrade. Every other replay was fixed.")
