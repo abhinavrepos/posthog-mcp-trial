@@ -34,7 +34,7 @@
 #   IMAGE_SOURCE     local: the images were loaded onto this machine beforehand (Ubuntu without AWS:
 #                    sudo docker load -i posthog-lens-images-<kit>.tar); registry: pulled from REGISTRY [registry]
 #   REGISTRY, REGION where the images are       [555011114032.dkr.ecr.ca-central-1.amazonaws.com, ca-central-1]
-#   MIGRATE_REPLAYS  copy old session replays during a PostHog upgrade (yes/no)                    [no]
+#   MIGRATE_REPLAYS  copy old session replays during a PostHog upgrade (yes/no)                    [yes]
 #   SITE             this machine's folder in deploy/offline/sites, set by setup when one exists: its
 #                    site.env is added here, and its docker-compose.site.yml goes to the PostHog folder
 #   ALLOW_LIVE       1: a PostHog upgrade goes ahead while apps keep sending events
@@ -309,7 +309,7 @@ POSTHOG_DIR=$ph
 REGISTRY=${REGISTRY:-555011114032.dkr.ecr.ca-central-1.amazonaws.com}
 REGION=${REGION:-ca-central-1}
 IMAGE_SOURCE=${IMAGE_SOURCE:-registry}
-MIGRATE_REPLAYS=no
+MIGRATE_REPLAYS=yes
 EOF
         site="$(hostname -s)"
         if [ -f "$(dirname "$self")/sites/$site/site.env" ]; then
