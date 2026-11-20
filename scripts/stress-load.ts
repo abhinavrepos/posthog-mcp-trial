@@ -44,7 +44,7 @@ async function one(kind: Kind, phase: string) {
     const key = `${phase}:${kind}`
     ;(lat[key] ||= []).push(performance.now() - t)
     requests++
-    if (err) errors[`${key} ${err}`] = (errors[`${key} ${err}`] || 0) + 1
+    if (err) { if (!errors[`${key} ${err}`]) console.log(JSON.stringify({ msg: 'new error', key, err })); errors[`${key} ${err}`] = (errors[`${key} ${err}`] || 0) + 1 }
 }
 function mix(): Kind[] {
     const kinds: Kind[] = []

@@ -18,12 +18,15 @@ import { monitorEventLoopDelay } from 'node:perf_hooks'
 
 const DAYS = Number(process.argv[2] || 60), CLIENTS = Number(process.argv[3] || 50), PER = Number(process.argv[4] || 55), TASKS = 40
 const dir = mkdtempSync(join(tmpdir(), 'lens-stress-'))
-const PORT = 18097
+const PORT = Number(process.env.STRESS_PORT) || 18097
 Object.assign(process.env, {
     TRIAGE_DB: join(dir, 'main.db'), TASKS_DB: join(dir, 'tasks.db'), APP_EVENTS_FILE: 'config/app-events.reval.json',
     SERVICE_PORT: String(PORT), SERVICE_PUBLIC_URL: `http://127.0.0.1:${PORT}`, MCP_TOKEN: 'stress-shared-' + Date.now(),
     CLIP_LINK_SECRET: 'stress-secret-0123456789abcdef', TASKS_INTERVAL_MINUTES: '1440', TASKS_BACKFILL_DAYS_PER_RUN: '0',
     LENS_PREWARM_MINUTES: '0', FEATURE_SURVEYS: 'off', LENS_HTTP_COMPRESSION: process.env.LENS_HTTP_COMPRESSION || 'on',
+    // The service ingests in a worker thread that queries PostHog over HTTP: a stand-in PostHog on the next port.
+    POSTHOG_HOST: `http://127.0.0.1:${PORT + 1}`, POSTHOG_PUBLIC_HOST: `http://127.0.0.1:${PORT + 1}`, POSTHOG_PROJECT_ID: '1', POSTHOG_PERSONAL_API_KEY: 'stress-key',
+    REPLAY_SIGNALS: 'off', WATCHLIST: 'off',
 })
 const DAY = 86_400_000
 const dayStr = (n: number) => new Date(Date.now() - n * DAY).toISOString().slice(0, 10)
@@ -77,6 +80,7 @@ const notAfter = (e: Ev, sid: string, ts: string, uuid: string) => !after(e, sid
 let queries = 0
 async function fakePosthog(sql: string, values: Record<string, unknown> = {}): Promise<Record<string, unknown>[]> {
     queries++
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(values.from ?? ''))) return [] // first-event and other lookups: nothing to report
     const g = generate(String(values.from))
     await new Promise((r) => setTimeout(r, 30)) // network/ClickHouse latency stand-in
     if (/GROUP BY sid/.test(sql)) return g.sessions
@@ -91,6 +95,24 @@ async function fakePosthog(sql: string, values: Record<string, unknown> = {}): P
     return g.events.slice(from, from + limit).map(({ sid, ts, event_uuid }) => ({ sid, ts, event_uuid }))
 }
 
+// ---------------------------------------------------------------- the stand-in PostHog (HogQL over HTTP)
+const { createServer } = await import('node:http')
+const fakeHost = createServer(async (req, res) => {
+    let body = ''
+    for await (const c of req) body += c
+    const send = (status: number, v: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(v)) }
+    if (req.method === 'POST' && /\/api\/(?:projects|environments)\/[^/]+\/query\/?$/.test(req.url || '')) {
+        try {
+            const q = JSON.parse(body).query || {}
+            const rows = q.kind === 'HogQLQuery' ? await fakePosthog(String(q.query || ''), q.values || {}) : []
+            const columns = rows.length ? Object.keys(rows[0]) : []
+            return send(200, { columns, results: rows.map((r) => columns.map((c) => (r as Record<string, unknown>)[c])) })
+        } catch (e) { return send(500, { detail: String((e as Error).message) }) }
+    }
+    send(404, { detail: 'not in the stress stand-in' })
+})
+await new Promise<void>((r) => fakeHost.listen(PORT + 1, '127.0.0.1', () => r()))
+
 // ---------------------------------------------------------------- start Lens with this source, seed older history
 const tasks = await import('../src/core/tasks.ts')
 tasks.setTaskQuery(fakePosthog)
@@ -98,7 +120,7 @@ tasks.setTaskQuery(fakePosthog)
     const hist = JSON.stringify(Array.from({ length: 21 }, (_, i) => (i === 4 ? 6 : i === 5 ? 3 : i === 6 ? 1 : 0)))
     const row = tasks.tasksDb.prepare('INSERT OR REPLACE INTO task_daily VALUES (?,?,?,?,?,?,?,?,?)')
     const users = tasks.tasksDb.prepare('INSERT OR IGNORE INTO task_users_daily VALUES (?,?,?,?)')
-    const ingest = tasks.tasksDb.prepare('INSERT OR REPLACE INTO task_ingest VALUES (?,?,?,?,0,1,?)')
+    const ingest = tasks.tasksDb.prepare('INSERT OR REPLACE INTO task_ingest(day,sessions,events,attempts,truncated,seconds,done_at,finalized) VALUES (?,?,?,?,0,1,?,1)')
     const names = tasks.tasksDb.prepare('INSERT OR REPLACE INTO client_names VALUES (?,?)')
     tasks.tasksDb.exec('BEGIN')
     for (let c = 0; c < CLIENTS; c++) names.run(clientId(c), `Client ${pad(c + 1)}`)
@@ -142,8 +164,15 @@ const perDay: { day: string; ms: number; events: number; attempts: number }[] = 
 const t0 = Date.now()
 for (let i = DAYS; i >= 1; i--) {
     const d = dayStr(i), s = Date.now()
-    await tasks.ingestDay(d)
-    const info = tasks.tasksDb.prepare('SELECT events, attempts FROM task_ingest WHERE day = ?').get(d) as { events: number; attempts: number }
+    // The service's own scheduled run may hold the worker: wait for it, then ingest this day.
+    let info: { events: number; attempts: number } | undefined
+    for (let tries = 0; !info && tries < 600; tries++) {
+        while (tasks.ingestStatus().running) await new Promise((r) => setTimeout(r, 200))
+        await tasks.ingestDay(d)
+        info = tasks.tasksDb.prepare('SELECT events, attempts FROM task_ingest WHERE day = ?').get(d) as typeof info
+        if (!info) await new Promise((r) => setTimeout(r, 200))
+    }
+    if (!info) throw new Error(`day ${d} was never ingested`)
     perDay.push({ day: d, ms: Date.now() - s, events: info.events, attempts: info.attempts })
     if ((DAYS - i) % 10 === 0) console.log(JSON.stringify({ msg: 'ingested', day: d, ms: Date.now() - s, events: info.events, attempts: info.attempts, loop_max_ms: Math.round(loop.max / 1e6) }))
 }
