@@ -134,7 +134,7 @@ export async function recordingSpans(ids: string[]) {
 export interface SessionQuery { clientId: string; screen?: string; what?: string; user?: string; email?: string; from: Date; to: Date; limit?: number; cursor?: string; recordedOnly?: boolean }
 export async function findSessions(q: SessionQuery) {
     if (!Number.isFinite(+q.from) || !Number.isFinite(+q.to) || q.to <= q.from || +q.to - +q.from > 366 * 86400000) throw new ToolInputError('Choose a time window of at most one year.')
-    const reg = required(), limit = Math.max(1, Math.min(q.limit ?? 10, 30))
+    const reg = required(), limit = Math.max(1, Math.min(q.limit ?? 10, 20))
     let after: {ts:string; sid:string} | undefined
     if (q.cursor) {
         const i = q.cursor.indexOf('|'), ts = q.cursor.slice(0,i), sid = q.cursor.slice(i+1)
@@ -159,30 +159,74 @@ export async function findSessions(q: SessionQuery) {
     const more = hits.length > limit; hits.length = Math.min(hits.length,limit)
     let spans: Awaited<ReturnType<typeof recordingSpans>> = new Map(), recordingCheckFailed = false
     try { spans = await recordingSpans(hits.map(h=>String(h.sid))) } catch { recordingCheckFailed = true }
+    // MCP carries both JSON text and structuredContent: budget their combined serialized size.
+    const pageSize = (sessions: unknown[]) => {
+        const json=JSON.stringify({sessions})
+        return json.length + JSON.stringify(json).length + 100
+    }
+    let truncatedBySize = false
     const sessions = []
     for (const h of hits) {
         const sid = String(h.sid)
+        const dialog=prop(reg,'dialog'), message=prop(reg,'button')
+        const outcomeValues=Object.fromEntries(reg.outcomes.map((o,i)=>[`outcome_${i}`,`(?i)${o.match}`]))
+        const defaultError=`if(${dialog} IN {message_dialogs}, ${Number(reg.messageOutcome==='error')}, ${Number(reg.noticeOutcome==='error')})`
+        const configuredError=reg.outcomes.reduceRight((rest,o,i)=>`if(match(${message}, {outcome_${i}}), ${Number(o.outcome==='error')}, ${rest})`,defaultError)
+        const errorMessage=`(${dialog} IN {message_dialogs} OR ${dialog} IN {notice_dialogs}) AND (${configuredError} OR match(${message}, '(?i)error|failed|could not|invalid|missing'))`
         const ev = await hogql(`SELECT timestamp AS ts, toString(distinct_id) AS distinct_id, ${userExpr()} AS user,
+            min(timestamp) OVER () AS session_start, max(timestamp) OVER () AS session_end,
+            count() OVER () AS events_in_session, countIf(${errorMessage}) OVER () AS error_messages_in_session,
             ${prop(reg,'dialog')} AS dialog, ${prop(reg,'dialogName')} AS name, ${prop(reg,'tab')} AS tab,
-            ${prop(reg,'action')} AS action, ${prop(reg,'button')} AS message, toFloat(properties.$time) AS ctime, toString(properties.$pathname) AS path, event
+            ${prop(reg,'action')} AS action, ${prop(reg,'button')} AS message, ${prop(reg,'control')} AS control, toFloat(properties.$time) AS ctime, toString(properties.$pathname) AS path, event
             FROM events WHERE timestamp >= {from} AND timestamp < {to} AND properties.$session_id = {sid}
             AND toString(${P.client}) = {client} AND ${userFilter} ORDER BY timestamp LIMIT 5000`,
-            {...values,sid,from:q.from.toISOString(),to:q.to.toISOString()})
-        const matches = ev.filter(e => (!q.screen || [e.dialog,e.name,e.tab,e.path].some(v=>String(v || '').toLowerCase().includes(q.screen!.toLowerCase()))) && (!q.what || [e.action,e.message,e.event].some(v=>String(v || '').toLowerCase().includes(q.what!.toLowerCase()))))
-        const first = matches[0] || ev.find(e=>!q.what || String(e.message || e.action || '').toLowerCase().includes(q.what.toLowerCase())) || ev[0]
+            {...values,...outcomeValues,message_dialogs:reg.dialogs.messages,notice_dialogs:reg.dialogs.notices,sid,from:q.from.toISOString(),to:q.to.toISOString()})
+        const onScreen = (e: Record<string, unknown>) => !q.screen || [e.dialog,e.name,e.tab,e.path].some(v=>String(v || '').toLowerCase().includes(q.screen!.toLowerCase()))
+        const isMessage = (e: Record<string, unknown>) => [...reg.dialogs.messages,...reg.dialogs.notices].includes(String(e.dialog))
+        const isError = (e: Record<string, unknown>) => {
+            const text = String(e.message || '')
+            const rule = reg.outcomes.find(o=>new RegExp(o.match,'i').test(text))
+            const outcome = rule?.outcome ?? (reg.dialogs.messages.includes(String(e.dialog)) ? reg.messageOutcome : reg.noticeOutcome)
+            return outcome === 'error' || /error|failed|could not|invalid|missing/i.test(text)
+        }
+        // With only a screen, the matches are that screen's events; with both, target-screen matches come first.
+        const matches = ev.map((e,index)=>({e,index})).filter(({e})=>q.what ? [e.action,e.message,e.control,e.event].some(v=>String(v || '').toLowerCase().includes(q.what!.toLowerCase())) : onScreen(e))
+        if(q.screen && q.what) matches.sort((a,b)=>Number(onScreen(b.e))-Number(onScreen(a.e)) || a.index-b.index)
+        const first = matches.find(({e})=>onScreen(e))?.e || matches[0]?.e || ev[0]
         const span = spans.get(sid)
-        const matchMs = Number(first?.ctime)>1e9 ? Number(first!.ctime)*1000 : Date.parse(String(h.first_match || first?.ts))
+        // Recordings run on the browser clock: offset from the event's client time when it has one.
+        const matchMs = Number(first?.ctime)>1e9 ? Number(first!.ctime)*1000 : Date.parse(String(first?.ts))
         const offset = span && Number.isFinite(matchMs) ? Math.max(0,(matchMs-Date.parse(span.start))/1000) : 0
-        sessions.push({session_id:sid, user:String(ev[0]?.user || ''), distinct_id:ev[0]?.distinct_id,
-            start:span?.start || ev[0]?.ts, end:span?.end || ev.at(-1)?.ts,
-            screens:[...new Set(ev.flatMap(e=>[e.name,e.tab,e.dialog,e.path]).filter(Boolean).map(String))],
-            matched_actions:ev.filter(e=>!q.what || [e.action,e.message,e.event].some(v=>String(v || '').toLowerCase().includes(q.what!.toLowerCase()))).slice(0,100).map(e=>({at:e.ts,action:e.action,message:e.message})),
-            error_count:ev.filter(e=>(reg.messageOutcome==='error' && reg.dialogs.messages.includes(String(e.dialog))) || (reg.noticeOutcome==='error' && reg.dialogs.notices.includes(String(e.dialog))) || /error|exception/i.test(String(e.event))).length,
+        const screens = [...new Set(ev.flatMap(e=>[e.name,e.tab,e.dialog,e.path]).filter(Boolean).map(String))]
+        const session = {session_id:sid, user:String(ev[0]?.user || ''), distinct_id:ev[0]?.distinct_id,
+            session_start:ev[0]?.session_start ?? ev[0]?.ts ?? null, session_end:ev[0]?.session_end ?? ev.at(-1)?.ts ?? null,
+            recording_start:span?.start ?? null, recording_end:span?.end ?? null,
+            recording_duration_s:span ? (Date.parse(span.end)-Date.parse(span.start))/1000 : null,
+            screens:screens.slice(0,15), screens_total:screens.length,
+            matched_actions:matches.slice(0,10).map(({e,index})=>{
+                const next = ev.slice(index+1,index+11).find(n=>Date.parse(String(n.ts))-Date.parse(String(e.ts)) <= 30000 && isMessage(n))
+                return {at:e.ts,event:e.event ?? '',action:e.action ?? '',message:e.message ?? '',screen:e.name || e.tab || '',dialog_id:e.dialog ?? '',
+                    ...(q.screen ? {on_target_screen:onScreen(e)} : {}),
+                    outcome:next ? {at:next.ts,text:next.message,is_error:isError(next)} : null}
+            }),
+            matched_actions_total:matches.length, matched_actions_truncated:matches.length>10,
+            ...(q.screen && q.what ? {matches_on_target_screen:matches.filter(({e})=>onScreen(e)).length,matches_elsewhere:matches.filter(({e})=>!onScreen(e)).length} : {}),
+            events_in_session:Number(ev[0]?.events_in_session ?? ev.length), error_messages_in_session:Number(ev[0]?.error_messages_in_session ?? ev.filter(e=>isMessage(e) && isError(e)).length),
             recording:span ? true : recordingCheckFailed ? 'unknown' : false, offset_s:offset,
             replay_url:replayUrl(sid,offset), clip_url:`${config.service.publicUrl}/replays?url=${encodeURIComponent(replayUrl(sid,offset))}`,
-            ...(ev.length===5000 ? {truncated:true} : {})})
+            ...(ev.length===5000 ? {truncated:true} : {})}
+        // A single unusually verbose session must still make progress through the cursor.
+        if(!sessions.length) {
+            while(pageSize([session]) > 18500 && session.matched_actions.length) session.matched_actions.pop()
+            while(pageSize([session]) > 18500 && session.screens.length) session.screens.pop()
+            session.matched_actions_truncated=session.matched_actions.length < session.matched_actions_total
+        }
+        // Leave room for the cursor and note. Never consume a session that the page did not return.
+        if(pageSize([...sessions,session]) > 19000) { truncatedBySize=true; break }
+        sessions.push(session)
     }
-    const last = hits.at(-1)
-    return {sessions, ...(more && last ? {next_cursor:`${last.last}|${last.sid}`} : {}),
-        note:recordingCheckFailed ? 'Recording availability could not be checked.' : sessions.length && !sessions.some(s=>s.recording===true) ? 'Sessions found, but none have a recording.' : 'Newest sessions first. Details are limited to 5000 events per session; matched actions to 100.'}
+    const last = hits[sessions.length-1]
+    return {sessions, ...((more || truncatedBySize) && last ? {next_cursor:`${last.last}|${last.sid}`} : {}),
+        ...(truncatedBySize ? {truncated_by_size:true} : {}),
+        note:recordingCheckFailed ? 'Recording availability could not be checked.' : sessions.length && !sessions.some(s=>s.recording===true) ? 'Sessions found, but none have a recording.' : 'Newest sessions first. Details are limited to 5000 events per session; matched actions to 10; screens to 15. Follow next_cursor for more sessions.'}
 }

@@ -1,5 +1,7 @@
 export const HEAVY_TOOLS = new Set(['find_sessions'])
-export class RateLimitError extends Error {}
+export class RateLimitError extends Error {
+    constructor(message:string, readonly retry_after_seconds=1, readonly limit:'minute'|'hour'|'concurrent'='minute') { super(message) }
+}
 type Bucket = { minute: number; hour: number; at: number; active: number }
 const positive = (value: string|undefined, fallback: number) => Number.isFinite(Number(value)) && Number(value)>0 ? Number(value) : fallback
 export class ToolLimiter {
@@ -19,14 +21,14 @@ export class ToolLimiter {
         // Say which limit refused the call: an agent told "calls in the last minute" when it actually ran too
         // many calls at once retries the wrong way (and so did the people reading the audit log).
         const busy = buckets.find(b=>b.active>=this.concurrent)
-        if(busy) throw new RateLimitError(`Too many calls at once: ${busy.active} of your Lens calls are still running (limit ${this.concurrent}). Wait for one to finish, then retry; try again in 1 seconds.`)
+        if(busy) throw new RateLimitError(`Too many calls at once: ${busy.active} of your Lens calls are still running (limit ${this.concurrent}). Wait for one to finish, then retry; try again in 1 seconds.`,1,'concurrent')
         const budget = (b: Bucket) => Math.max((weight-b.minute)*60000/this.minute,(weight-b.hour)*3600000/this.hour)
         const wait = Math.max(...buckets.map(budget))
         if(wait>0) {
             const hourly = buckets.some(b=>b.hour<weight)
             throw new RateLimitError(hourly
                 ? `Rate limit: the hourly budget (${this.hour} units; heavy tools cost 5) is used up; try again in ${Math.max(1,Math.ceil(wait/1000))} seconds.`
-                : `Rate limit: the per-minute budget (${this.minute} units; heavy tools cost 5) is used up; try again in ${Math.max(1,Math.ceil(wait/1000))} seconds.`)
+                : `Rate limit: the per-minute budget (${this.minute} units; heavy tools cost 5) is used up; try again in ${Math.max(1,Math.ceil(wait/1000))} seconds.`,Math.max(1,Math.ceil(wait/1000)),hourly ? 'hour' : 'minute')
         }
         for(const b of buckets) {b.minute-=weight;b.hour-=weight;b.active++}
         let released=false

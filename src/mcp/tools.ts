@@ -4,6 +4,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { config, posthogMcpActive } from '../core/config.ts'
 import { resolveClient } from '../core/resolve.ts'
+import { dataGuide, dataCoverage } from '../core/dataguide.ts'
 import { findSessions } from '../core/appevents.ts'
 import { replayUrl } from '../core/posthog.ts'
 import { renderClip, clipName, pendingRenders } from '../core/clip.ts'
@@ -25,7 +26,7 @@ import { createJobDispatch, installJobTools, JobAnswer, jobBacked, type JobOptio
 import { resolveTime, timeShape, inclusiveWindow } from './timeinput.ts'
 import { waitForReplayClip } from './replay-clip.ts'
 export const DIRECT_CALL = 'Call directly with JSON arguments.'
-export const CORE_TOOLS=['get_job_result','resolve_client','find_sessions','get_replay_link','pin_graph','list_pinned','unpin_graph']
+export const CORE_TOOLS=['get_job_result','data_guide','resolve_client','find_sessions','get_replay_link','pin_graph','list_pinned','unpin_graph']
 export const lensToolNames=()=>[...(posthogMcpActive() && config.posthog.mcpViaLens ? ['posthog_exec'] : []),...CORE_TOOLS,...surveyToolNames()]
 type Caller=Pick<ChatCaller,'who'|'surveyRole'> & Partial<ChatCaller>
 export function sessionIdOf(value:string) {return (/\/replay\/([\w-]+)/.exec(value)?.[1] || value).trim()}
@@ -68,16 +69,17 @@ export function wrapTools(server:McpServer, _insights=false, caller?:Caller, opt
 export function registerTools(server:McpServer,_ai?:unknown,caller?:Caller,_raw=false,replayDeps={render:renderClip,record:recordClip}) {
     installJobTools(server,wrapTools(server,false,caller))
     if(config.posthog.mcpViaLens && posthogMcpActive())server.registerTool('posthog_exec',{
-        description:'Run PostHog tools for analysis. Syntax: tools / info <tool> / call <tool> <json>. Long calls return a job_id within 20 seconds; poll get_job_result.',inputSchema:{command:z.string().max(100000)}
+        description:'Run PostHog tools for analysis. Call data_guide before SQL; use resolve_client for client and user codes (client codes are not screens). Syntax: tools / info <tool> / call <tool> <json>. Long calls return a job_id within 20 seconds; poll get_job_result.',inputSchema:{command:z.string().max(100000)}
     },async({command})=>posthogExec(command,{url:config.posthog.mcpUrl,apiKey:config.posthog.mcpApiKey,name:config.mcp.name}))
-    server.registerTool('resolve_client',{description:'Resolve a client name, code, email, user or distinct id from live PostHog events. Returns match reasons, matched user, last seen and event counts in the window.',inputSchema:{query:z.string().min(1).max(320),...timeShape},annotations:{readOnlyHint:true}},async args=>{
+    server.registerTool('data_guide',{description:'Call first before writing PostHog SQL. Returns configured event/property vocabulary, identity layout, project coverage and example HogQL. No time window.',inputSchema:{},annotations:{readOnlyHint:true}},async()=>jsonResult('Data guide',await dataGuide()))
+    server.registerTool('resolve_client',{description:'Resolve a client name, code, email, user or distinct id from live PostHog events. Returns match reasons, matched user, last seen, client_events (whole client), user_events (matched user only) and project coverage.',inputSchema:{query:z.string().min(1).max(320),...timeShape},annotations:{readOnlyHint:true}},async args=>{
         const window=resolveTime(args,90)
         const context=toolContext.getStore();if(context)context.window=window
         const matches=await resolveClient({text:args.query,from:window.from,to:window.to})
         for(const m of matches)auditClient(m.id)
-        return jsonResult('Client matches',matches.map(({users,emails,distinct_ids,...m})=>m))
+        return jsonResult('Client matches',{matches:matches.map(({users,emails,distinct_ids,user_event_counts,events,...m})=>({...m,client_events:events})),coverage:await dataCoverage().catch(()=>null)})
     })
-    server.registerTool('find_sessions',{description:'Find client sessions newest first. Optional screen matches dialog/tab name or code; what matches action/message text; user accepts email or distinct-id user. Up to one year. Returns PostHog replay and Lens clip links; use next_cursor for older sessions. When the person wants a replay to watch, set recorded_only: true so only sessions with a playable recording come back.',inputSchema:{client:z.string().min(1).max(320),recorded_only:z.boolean().optional().describe('Only sessions with a recording (set when asked for a replay to watch).'),screen:z.string().max(200).optional(),what:z.string().max(500).optional(),user:z.string().max(320).optional(),...timeShape,limit:z.number().int().min(1).max(30).default(10),cursor:z.string().max(250).optional()},annotations:{readOnlyHint:true}},async args=>{
+    server.registerTool('find_sessions',{description:'Find client sessions newest first. Optional screen matches dialog/tab name or code; what matches action/message text; user accepts email or distinct-id user. Up to one year. Returns PostHog replay and Lens clip links; use next_cursor for older sessions. Screen and what are independent session filters; actions show their own screen, target counts and next message outcome. Event and recording bounds are separate. Pages cap actions at 10, screens at 15 and size near 20,000 characters. When the person wants a replay to watch, set recorded_only: true so only sessions with a playable recording come back.',inputSchema:{client:z.string().min(1).max(320),recorded_only:z.boolean().optional().describe('Only sessions with a recording (set when asked for a replay to watch).'),screen:z.string().max(200).optional(),what:z.string().max(500).optional(),user:z.string().max(320).optional(),...timeShape,limit:z.number().int().min(1).max(20).default(10),cursor:z.string().max(250).optional()},annotations:{readOnlyHint:true}},async args=>{
         const w=resolveTime(args,30)
         const context=toolContext.getStore();if(context)context.window=w
         if(+w.to-+w.from>366*86400000)throw new ToolInputError('Choose a time window of at most one year.')
