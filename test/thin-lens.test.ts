@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 const dir=mkdtempSync(join(tmpdir(),'thin-lens-'))
 Object.assign(process.env,{TRIAGE_DB:join(dir,'main.db'),APP_EVENTS_FILE:'config/app-events.reval.json',CLIENT_FROM_DISTINCT_ID:'3',POSTHOG_HOST:'http://fake-posthog',POSTHOG_PROJECT_ID:'7',POSTHOG_PERSONAL_API_KEY:'test-key',POSTHOG_PUBLIC_HOST:'https://ph.example',SERVICE_PUBLIC_URL:'https://lens.example',FEATURE_POSTHOG_MCP:'on',POSTHOG_MCP_URL:'http://fake-mcp',POSTHOG_MCP_API_KEY:'fake',POSTHOG_SURVEY_API_KEY:'fake',FEATURE_SURVEYS:'on'})
 const {config}=await import('../src/core/config.ts')
+config.properties.clientName=''
 const {knownClients,matchClients,resolveClient,clearClientCache}=await import('../src/core/resolve.ts')
 const {findSessions}=await import('../src/core/appevents.ts')
 const {pinGraph,listPinned,unpinGraph,graphSchema}=await import('../src/core/pinned.ts')
@@ -34,10 +35,11 @@ for(const name of ['sem ops','semops','Sem-Ops','SEM','sem_operations','Sem Oper
 test('resolve_client reads live configured client/user expressions and caches at most ten minutes',async t=>{
     clearClientCache();let calls=0
     t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
-        calls++;const q=JSON.parse(String(init.body)).query
-        assert.match(q.query,/splitByChar\('\|', toString\(distinct_id\)\)\[3\]/)
+        const q=JSON.parse(String(init.body)).query
+        if(q.query.includes('FROM person_distinct_ids'))return response([])
+        calls++;assert.match(q.query,/splitByChar\('\|', toString\(distinct_id\)\)\[3\]/)
         assert.match(q.query,/splitByChar\('\|', toString\(distinct_id\)\)\[4\]/)
-        assert.ok(q.values.from && q.values.to);return response(roster)
+        assert.ok(q.values.from && q.values.to);return response([{id:'SEM',user:'SEMOPS',did:'C1DEV|01|SEM|SEMOPS',n:210,last_seen:roster[0].last_seen}])
     })
     assert.equal((await resolveClient({text:'sem ops'}))[0].matched_user,'SEMOPS')
     await resolveClient({text:'SEM'});assert.equal(calls,1)
@@ -46,20 +48,23 @@ test('resolve_client reads live configured client/user expressions and caches at
 })
 test('resolve_client tolerates null roster fields and preserves per-user counts',async t=>{
     clearClientCache();t.after(clearClientCache)
-    const rows=[{...roster[0],users:[null,'SEMOPS'],emails:[null,'different@example.com'],distinct_ids:[null,'C1DEV|01|SEM|SEMOPS'],
-        user_event_counts:[[null,null,null,99],['SEMOPS',null,'C1DEV|01|SEM|SEMOPS',64],['SEMOPS','different@example.com',null,6],[null,null,null,null]] as [string|null,string|null,string|null,number|null][]}]
-    t.mock.method(globalThis,'fetch',async()=>response(rows))
+    const rows=[{id:'SEM',user:null,did:null,n:99,last_seen:roster[0].last_seen},
+        {id:'SEM',user:'SEMOPS',did:'C1DEV|01|SEM|SEMOPS',n:64,last_seen:roster[0].last_seen},
+        {id:'SEM',user:'SEMOPS',did:'other-id',n:6,last_seen:roster[0].last_seen},
+        {id:'SEM',user:null,did:null,n:null,last_seen:roster[0].last_seen}]
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>response(
+        JSON.parse(String(init.body)).query.query.includes('FROM person_distinct_ids')
+            ? [{did:'other-id',email:'different@example.com'}] : rows))
     const clients=await knownClients()
-    assert.deepEqual(clients[0].user_event_counts,[['','','','99'],['SEMOPS','','C1DEV|01|SEM|SEMOPS','64'],['SEMOPS','different@example.com','','6'],['','','','']])
+    assert.deepEqual(clients[0].user_event_counts,[['','','','99'],['SEMOPS','','C1DEV|01|SEM|SEMOPS','64'],['SEMOPS','different@example.com','other-id','6'],['','','','']])
     assert.deepEqual(clients[0].users,['','SEMOPS']);assert.deepEqual(clients[0].emails,['','different@example.com'])
     for(const text of ['SEMOPS','different@example.com','C1DEV|01|SEM|SEMOPS']) {
-        assert.equal(matchClients(text,rows)[0].user_events,70)
         assert.equal((await resolveClient({text}))[0].user_events,70)
     }
 })
 test('resolve_client shares one roster query for windows within the same UTC days',async t=>{
     clearClientCache();t.after(clearClientCache);let calls=0
-    t.mock.method(globalThis,'fetch',async()=>{calls++;return response(roster)})
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{if(JSON.parse(String(init.body)).query.query.includes('FROM person_distinct_ids'))return response([]);calls++;return response([{id:'SEM',user:'SEMOPS',did:'one',n:210,last_seen:roster[0].last_seen}])})
     for(const minute of ['01','42']) await resolveClient({text:'SEM',from:new Date(`2026-11-18T08:${minute}:00Z`),to:new Date(`2026-11-20T12:${minute}:00Z`)})
     assert.equal(calls,1)
     await resolveClient({text:'SEM',from:new Date('2026-11-17T08:01:00Z'),to:new Date('2026-11-20T12:01:00Z')})
@@ -67,7 +72,7 @@ test('resolve_client shares one roster query for windows within the same UTC day
 })
 test('resolve_client supports the configured client property instead of distinct-id extraction',async t=>{
     clearClientCache();const previous=config.properties.clientFromDistinctId;config.properties.clientFromDistinctId=0;t.after(()=>{config.properties.clientFromDistinctId=previous;clearClientCache()})
-    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{assert.match(JSON.parse(String(init.body)).query.query,/properties.client_id/);return response([{...roster[0],id:'C88'}])})
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{const q=JSON.parse(String(init.body)).query.query;if(q.includes('FROM person_distinct_ids'))return response([]);assert.match(q,/properties.client_id/);return response([{id:'C88',user:'SEMOPS',did:'one',n:210,last_seen:roster[0].last_seen}])})
     assert.equal((await resolveClient({text:'c 88'}))[0].id,'C88')
 })
 const events=[
@@ -215,8 +220,11 @@ test('resolve_client finds a client with no events in the asked-for dates and ma
     t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
         const q=JSON.parse(String(init.body)).query
         // The asked-for window (August 2025) has no events; the wide lookback does.
+        if(q.query.includes('FROM person_distinct_ids'))return response([])
+        assert.doesNotMatch(q.query,/client_name|person\.properties/)
+        assert.match(q.query,/GROUP BY id, user, did LIMIT 100000/)
         if(String(q.values.from).startsWith('2025-08'))return response([])
-        return response([{id:'RIB',name:'RIB',events:42,last_seen:'2026-11-14T10:00:00Z',users:['RIBTRADER'],emails:[],distinct_ids:['C1DEV|01|RIB|RIBTRADER']}])
+        return response([{id:'RIB',user:'RIBTRADER',did:'C1DEV|01|RIB|RIBTRADER',n:42,last_seen:'2026-11-14T10:00:00Z'}])
     })
     const m=await resolveClient({text:'rib',from:new Date('2025-08-01'),to:new Date('2025-09-01')}) as {id:string;outside_window?:boolean}[]
     assert.equal(m[0]?.id,'RIB'); assert.equal(m[0]?.outside_window,true)
@@ -273,8 +281,9 @@ test('data_guide exposes configured version, identity, coverage cache and SQL; r
         const q=JSON.parse(String(init.body)).query
         if(q.query.includes('AS data_starts')){coverageCalls++;return response([{data_starts:'2025-11-15T08:00:05Z',data_ends:'2026-11-14T17:03:14Z'}])}
         if(q.query.endsWith('LIMIT 1'))return response([{distinct_id:'C1DEV|01|SEM|SEMOPS'}])
-        rosterCalls++;assert.match(q.query,/groupArray\(tuple\(user,email,did,n\)\)/)
-        return response([{...roster[0],user_event_counts:[['SEMOPS','different@example.com','C1DEV|01|SEM|SEMOPS',64],['SEMOTHER','','C1DEV|01|SEM|SEMOTHER',146]]}])
+        if(q.query.includes('FROM person_distinct_ids'))return response([{did:'C1DEV|01|SEM|SEMOPS',email:'different@example.com'}])
+        rosterCalls++;assert.match(q.query,/GROUP BY id, user, did/)
+        return response([{id:'SEM',user:'SEMOPS',did:'C1DEV|01|SEM|SEMOPS',n:64,last_seen:roster[0].last_seen},{id:'SEM',user:'SEMOTHER',did:'C1DEV|01|SEM|SEMOTHER',n:146,last_seen:roster[0].last_seen}])
     })
     const server=new McpServer({name:'test',version:'1'});registerTools(server)
     const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(a);const client=new Client({name:'test',version:'1'});await client.connect(b)

@@ -9,6 +9,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 
 import { shutdownClips } from '../core/clip.ts'
+import { warmClientNames } from '../core/resolve.ts'
 import { config, jiraConfigured, posthogMcpActive } from '../core/config.ts'
 import { verifyClipLink } from '../core/links.ts'
 import { bearerAuthorized, handlePosthogMcp } from '../mcp/posthog-proxy.ts'
@@ -200,6 +201,7 @@ for (const [name, value] of Object.entries({ ...(jiraConfigured() ? { JIRA_WEBHO
     if (!value) log(`warning: ${name} is not set; that feature refuses every request until it is`)
 }
 
+warmClientNames()
 pruneOldClips()
 // A crash says why in the log before the process ends (the service manager then restarts it). The monitor
 // hook only observes: what happens after an uncaught error is unchanged.

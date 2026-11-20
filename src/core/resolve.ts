@@ -6,26 +6,95 @@ import { config } from './config.ts'
 export interface KnownClient { id:string; name:string; events:number; last_seen:string; users:(string|null)[]; emails?:(string|null)[]; distinct_ids?:(string|null)[]; user_event_counts?:[string|null,string|null,string|null,string|number|null][] }
 export interface ClientMatch extends KnownClient { confidence:number; via:string; matched_user?:string; user_events?:number }
 const stringValue = (value:unknown) => String(value ?? '')
+const TEN_MINUTES = 600000, HOUR = 3600000
 const cache = new Map<string,{at:number; value:Promise<KnownClient[]>}>()
-export function clearClientCache() { cache.clear() }
+type Roster = Map<string,string>
+let emails: {at:number; value:Promise<Roster>} | undefined
+let recentNames: {at:number; value:Promise<Roster>} | undefined
+let names: {at:number; value:Roster} | undefined
+let namesFlight: Promise<void> | undefined
+let namesTimer: ReturnType<typeof setTimeout> | undefined
+let generation = 0
+export function clearClientCache() {
+    cache.clear(); emails = undefined; recentNames = undefined; names = undefined; namesFlight = undefined
+    clearTimeout(namesTimer); namesTimer = undefined; generation++
+}
+function namesQuery(days:number, timeoutMs:number): Promise<Roster> {
+    return hogql(`SELECT toString(${P.client}) AS id, argMax(toString(${P.clientName}), timestamp) AS name
+        FROM events WHERE timestamp >= {from} AND timestamp < {to} AND notEmpty(toString(${P.client}))
+        GROUP BY id LIMIT 100000`, {from:new Date(Date.now()-days*86400000).toISOString(),to:new Date().toISOString()},
+        {timeoutMs,retries:0}).then(rows=>new Map(rows.map(r=>[stringValue(r.id),stringValue(r.name || r.id)])))
+}
+/** Startup warm-up is deliberately detached from callers; keep the last good roster during refresh. */
+export function warmClientNames(): void {
+    if (!config.properties.clientName || !config.posthog.projectId || !config.posthog.personalApiKey || namesFlight) return
+    if (namesTimer) return
+    const gen = generation
+    namesFlight = namesQuery(400,60000).then(value=>{
+        if (generation === gen) names = {at:Date.now(),value}
+    }).catch(()=>{}).finally(()=>{
+        if (generation !== gen) return
+        namesFlight = undefined
+        // Refresh five minutes ahead of expiry; a failed refresh (a heavy query) waits ten minutes before retrying.
+        const delay = names && Date.now()-names.at < HOUR-300000 ? HOUR-300000 : TEN_MINUTES
+        namesTimer = setTimeout(()=>{ namesTimer = undefined; warmClientNames() },delay)
+        namesTimer.unref()
+    })
+}
+const readyNames = () => names && Date.now()-names.at < HOUR ? names.value : undefined
+async function clientNames(): Promise<Roster> {
+    if (!config.properties.clientName) return new Map()
+    const ready = readyNames()
+    if (ready) return ready
+    if (!recentNames || Date.now()-recentNames.at >= TEN_MINUTES) {
+        recentNames = {at:Date.now(),value:namesQuery(30,8000).catch(()=>new Map())}
+    }
+    const recent = await recentNames.value
+    return readyNames() ?? recent
+}
+function clientEmails(): Promise<Roster> {
+    if (!emails || Date.now()-emails.at >= TEN_MINUTES) {
+        emails = {at:Date.now(),value:hogql(`SELECT toString(pdi.distinct_id) AS did,
+            toString(p.properties.${config.properties.personEmail}) AS email
+            FROM person_distinct_ids pdi JOIN persons p ON p.id = pdi.person_id LIMIT 100000`, {},
+            {timeoutMs:8000,retries:0}).then(rows=>new Map(rows.map(r=>[stringValue(r.did),stringValue(r.email)]))).catch(()=>new Map())}
+    }
+    return emails.value
+}
 export async function knownClients(from?: Date, to?: Date): Promise<KnownClient[]> {
     const key = [from?.toISOString().slice(0,10) || 'last_90_days',to?.toISOString().slice(0,10) || 'now'].join('|')
     from ??= new Date(Date.now()-90*86400000); to ??= new Date()
-    const hit = cache.get(key)
-    if(hit && Date.now()-hit.at < 600000) return hit.value
-    const value = hogql(`SELECT id, any(name) AS name, sum(n) AS events, max(last_seen) AS last_seen,
-        groupUniqArray(5000)(user) AS users, groupUniqArray(5000)(email) AS emails, groupUniqArray(5000)(did) AS distinct_ids,
-        groupArray(tuple(user,email,did,n)) AS user_event_counts
-        FROM (SELECT toString(${P.client}) AS id, any(toString(${P.clientName})) AS name,
-            ${userExpr()} AS user, toString(${P.email}) AS email, toString(distinct_id) AS did,
-            count() AS n, max(timestamp) AS last_seen
+    let hit = cache.get(key)
+    if (!hit || Date.now()-hit.at >= TEN_MINUTES) {
+        const value = hogql(`SELECT toString(${P.client}) AS id, ${userExpr()} AS user,
+            toString(distinct_id) AS did, count() AS n, max(timestamp) AS last_seen
             FROM events WHERE timestamp >= {from} AND timestamp < {to} AND notEmpty(toString(${P.client}))
-            GROUP BY id, user, email, did)
-        GROUP BY id ORDER BY events DESC LIMIT 10000`, {from:from.toISOString(),to:to.toISOString()}).then(rows=>rows.map(r=>({
-            id:String(r.id),name:String(r.name || r.id),events:Number(r.events),last_seen:new Date(String(r.last_seen)).toISOString(),users:(r.users as string[] || []).map(stringValue),emails:(r.emails as string[] || []).map(stringValue),distinct_ids:(r.distinct_ids as string[] || []).map(stringValue),user_event_counts:((r.user_event_counts || []) as unknown[][]).map(([u,e,d,n])=>[stringValue(u),stringValue(e),stringValue(d),stringValue(n)] as [string,string,string,string])})))
-    cache.set(key,{at:Date.now(),value}); value.catch(()=>cache.delete(key))
-    if(cache.size>20) cache.delete(cache.keys().next().value!)
-    return value
+            GROUP BY id, user, did LIMIT 100000`, {from:from.toISOString(),to:to.toISOString()}).then(rows=>{
+            const clients = new Map<string,KnownClient>()
+            for (const r of rows) {
+                const id=stringValue(r.id), user=stringValue(r.user), did=stringValue(r.did), n=Number(r.n || 0)
+                const last_seen=new Date(String(r.last_seen)).toISOString()
+                let c=clients.get(id)
+                if (!c) { c={id,name:id,events:0,last_seen,users:[],distinct_ids:[],user_event_counts:[]}; clients.set(id,c) }
+                c.events+=n
+                if (last_seen>c.last_seen) c.last_seen=last_seen
+                c.user_event_counts!.push([user,'',did,stringValue(r.n)])
+            }
+            for (const c of clients.values()) {
+                c.users=[...new Set(c.user_event_counts!.map(r=>r[0]))]
+                c.distinct_ids=[...new Set(c.user_event_counts!.map(r=>r[2]))]
+            }
+            return [...clients.values()].sort((a,b)=>b.events-a.events).slice(0,10000)
+        })
+        hit={at:Date.now(),value}; cache.set(key,hit)
+        value.catch(()=>{ if(cache.get(key)?.value===value) cache.delete(key) })
+        if(cache.size>20) cache.delete(cache.keys().next().value!)
+    }
+    const [clients,emailRoster,nameRoster] = await Promise.all([hit.value,clientEmails(),clientNames()])
+    return clients.map(c=>{
+        const counts=c.user_event_counts!.map(([u,_e,d,n])=>[u,emailRoster.get(d || '') || '',d,n] as NonNullable<KnownClient['user_event_counts']>[number])
+        return {...c,name:nameRoster.get(c.id) || c.id,emails:[...new Set(counts.map(r=>r[1]))],user_event_counts:counts}
+    })
 }
 export function matchClients(query:string, clients:KnownClient[]): ClientMatch[] {
     const norm = (value:unknown) => normalise(stringValue(value))
