@@ -43,5 +43,9 @@ export function matchClients(query:string, clients:KnownClient[]): ClientMatch[]
     return out.sort((a,b)=>b.confidence-a.confidence || b.events-a.events).slice(0,10)
 }
 export async function resolveClient(input:{text:string; emails?:string[]; clientHint?:string; from?:Date; to?:Date}) {
-    return matchClients(input.clientHint || input.text, await knownClients(input.from,input.to))
+    const text = input.clientHint || input.text
+    const inWindow = matchClients(text, await knownClients(input.from,input.to))
+    if (inWindow.length || !input.from) return inWindow
+    // A client with no events in the asked-for dates still exists: say so, instead of "no client matches".
+    return matchClients(text, await knownClients(new Date(Date.now()-400*86400000), new Date())).map(m => ({...m, outside_window:true}))
 }

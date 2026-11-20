@@ -188,3 +188,15 @@ test('find_sessions recorded_only keeps only sessions that have a recording, and
     assert.match(seen[0]!,/IN \(SELECT session_id FROM raw_session_replay_events/)
     assert.doesNotMatch(seen[1]!,/raw_session_replay_events/)
 })
+
+test('resolve_client finds a client with no events in the asked-for dates and marks it outside_window',async t=>{
+    const {resolveClient}=await import('../src/core/resolve.ts')
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
+        const q=JSON.parse(String(init.body)).query
+        // The asked-for window (August 2025) has no events; the wide lookback does.
+        if(String(q.values.from).startsWith('2025-08'))return response([])
+        return response([{id:'RIB',name:'RIB',events:42,last_seen:'2026-11-14T10:00:00Z',users:['RIBTRADER'],emails:[],distinct_ids:['C1DEV|01|RIB|RIBTRADER']}])
+    })
+    const m=await resolveClient({text:'rib',from:new Date('2025-08-01'),to:new Date('2025-09-01')}) as {id:string;outside_window?:boolean}[]
+    assert.equal(m[0]?.id,'RIB'); assert.equal(m[0]?.outside_window,true)
+})

@@ -84,6 +84,7 @@ export function registerTools(server:McpServer,_ai?:unknown,caller?:Caller,_raw=
         const matches=await resolveClient({text:args.client,from:w.from,to:w.to}), best=matches[0]
         if(!best)throw new ToolInputError('No client matches. Try a client code or user.')
         auditClient(best.id)
+        if ((best as {outside_window?:boolean}).outside_window) return jsonResult('Sessions',{sessions:[],client:best.id,matched_user:best.matched_user,note:`${best.name || best.id} exists but has no events between ${w.from.toISOString().slice(0,10)} and ${new Date(+w.to-1).toISOString().slice(0,10)}. It was last seen ${String(best.last_seen).slice(0,10)}.`})
         return jsonResult('Sessions',await findSessions({clientId:best.id,from:w.from,to:w.to,screen:args.screen,what:args.what,user:args.user || best.matched_user,limit:args.limit,cursor:args.cursor,recordedOnly:args.recorded_only === true}))
     })
     server.registerTool('get_replay_link',{description:'Get PostHog replay and Lens MP4 clip links. Waits up to 25 seconds for rendering; unfinished clips complete in the background.',inputSchema:{session_id:z.string().min(1),start_s:z.number().min(0),duration_s:z.number().min(3).max(120).default(30)}},async({session_id:raw,start_s,duration_s})=>{
