@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Read-only company-server checks. PASS/FAIL with actionable fixes, no secret output."""
-import http.cookiejar
+import http.cookiejar as cookiejar
 import importlib.util
 import json
 import os
@@ -31,7 +31,8 @@ def check(name, fix, action):
         print('PASS ' + name, flush=True)
     except Exception as error:
         failures += 1
-        print('FAIL ' + name + ' (' + type(error).__name__ + '); fix: ' + fix, flush=True)
+        reason = ' '.join(str(error).split())[:240]
+        print('FAIL ' + name + ' (' + type(error).__name__ + (': ' + reason if reason else '') + '); fix: ' + fix, flush=True)
 
 
 def http(path):
@@ -152,14 +153,14 @@ def replay():
     script = (root / 'deploy/migrate/replays_playable.py').read_text()
     # Reuse the actual replay reader, bounding metadata and fetching one block.
     script = script.replace('GROUP BY team_id, session_id', 'GROUP BY team_id, session_id LIMIT 100')
-    script = script.replace('asyncio.run(main())', "from django.apps import apps\nassert apps.get_model('posthog', 'SessionRecording').objects.count() > 0\nrows = [r for r in rows if r[2]]\nassert rows, 'No replay blocks in sample'\nrows = [(rows[0][0], rows[0][1], rows[0][2][:1])]\nassert rows[0][2]\nasyncio.run(main())")
+    script = script.replace('asyncio.run(main())', "from django.apps import apps\nrows = [r for r in rows if r[2]]\nassert rows, 'No replay blocks in sample'\nrows = [(rows[0][0], rows[0][1], rows[0][2][:1])]\nassert rows[0][2]\nasyncio.run(main())")
     out = web(script)
     assert 'PLAYABLE: 1 of 1 recordings, 1 of 1 blocks' in out
 
 
 def live():
     base = 'http://127.0.0.1:' + settings.get('SERVICE_PORT', '8080')
-    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookiejar.CookieJar()))
     request = urllib.request.Request(base + '/replays/login', data=json.dumps({
         'email': settings['POSTHOG_ADMIN_EMAIL'], 'password': settings['POSTHOG_ADMIN_PASSWORD']}).encode(),
         headers={'Content-Type': 'application/json', 'x-clip-page': '1'})

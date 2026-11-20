@@ -103,9 +103,10 @@ from posthog.models.personal_api_key import PersonalAPIKey
 from posthog.models.utils import generate_random_token_personal, hash_key_value, mask_key_value
 from posthog.scopes import GRANTABLE_API_SCOPE_OBJECTS
 
-# Anything that holds or opens a recording, or is made from one.
-NEVER = {"session_recording", "session_recording_playlist", "replay_scanner", "vision_action", "vision_alert",
-         "signal_scout", "export", "sharing_configuration", "survey"}
+# Lens is a display layer over PostHog: the agent may find and open session replays through PostHog's own
+# tools, so recording scopes are granted (read only). Still never: AI scanners, exports, sharing links, and
+# surveys (managed in Lens).
+NEVER = {"replay_scanner", "vision_action", "vision_alert", "signal_scout", "export", "sharing_configuration", "survey"}
 user = User.objects.get(email=os.environ["ADMIN_EMAIL"])
 PersonalAPIKey.objects.filter(user=user, label="posthog-mcp").delete()
 token = generate_random_token_personal()
@@ -123,17 +124,20 @@ PY
     key="$(echo "$out" | grep '^MCP_KEY=' | cut -d= -f2-)"
     [ -n "$key" ] || { echo "PostHog did not return the MCP key:"; echo "$out" | tail -5; exit 1; }
     put POSTHOG_MCP_API_KEY "$key"
-    echo "Made a read-only API key for the MCP server (no session replay scopes), label posthog-mcp."
+    echo "Made a read-only API key for the MCP server (session replays readable), label posthog-mcp."
 fi
 # In-app surveys are managed only in Lens: a key made before that rule loses its survey scopes.
 (cd "$POSTHOG_DIR" && env -u COMPOSE_FILE docker compose exec -T web python manage.py shell 2>/dev/null <<'PY'
 from posthog.models.personal_api_key import PersonalAPIKey
 for k in PersonalAPIKey.objects.filter(label="posthog-mcp"):
     kept = [s for s in (k.scopes or []) if not s.startswith("survey:")]
-    if kept != k.scopes:
-        k.scopes = kept
+    # Keys made when replays were hidden from the agent get read access to recordings and playlists.
+    for s in ("session_recording:read", "session_recording_playlist:read"):
+        if s not in kept: kept.append(s)
+    if sorted(kept) != sorted(k.scopes or []):
+        k.scopes = sorted(kept)
         k.save(update_fields=["scopes"])
-        print("Took the survey scopes off PostHog's MCP key: surveys are managed in Lens.")
+        print("Updated PostHog's MCP key: session replays readable, surveys managed in Lens.")
 PY
 ) || true
 # The address this machine reaches it on: 127.0.0.1 unless it listens on one other address only.
