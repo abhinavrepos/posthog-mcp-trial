@@ -97,7 +97,7 @@ test('find_sessions uses names, action text, user and bounded newest paging; ret
     const s=result.sessions[0];assert.equal(s.user,'SEMOPS');assert.equal(s.error_messages_in_session,1);assert.equal(s.recording,true)
     assert.match(s.replay_url,/https:\/\/ph.example\/project\/7\/replay\/session-one\?t=12/)
     assert.match(s.clip_url,/https:\/\/lens.example\/replays\?url=/);assert.match(decodeURIComponent(s.clip_url),/session-one\?t=12/)
-    assert.ok(s.screens.includes('Cash Positions'));assert.equal(s.matched_actions[0].message,'Failed to save');assert.ok(calls>=3)
+    assert.deepEqual(s.screens,['Chart of Accounts']);assert.equal(s.matched_actions[0].message,'Failed to save');assert.ok(calls>=3)
 })
 test('find_sessions explicitly reports missing recordings, validates cursors and the year bound',async t=>{
     t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
@@ -197,6 +197,7 @@ test('instructions and tool descriptions stay short and direct',()=>{
     assert.doesNotMatch(instructions,/private|mask|aggregate_events|reval_brief/)
     assert.match(instructions,/"the year", "last year" or "all data".*data_guide coverage continuous_from\.\.continuous_to.*exact UTC bounds/)
     assert.match(instructions,/complete weeks use only fully covered weeks/)
+    assert.match(instructions,/Resolve any person\/client phrase.*resolve_client before reinterpreting the question/);assert.match(instructions,/Report only what tools returned; no speculation about variation or significance/ )
     const descriptions:string[]=[]
     const server={registerTool:(_name:string,cfg:{description:string})=>{descriptions.push(cfg.description)}} as unknown as McpServer
     registerTools(server);assert.ok(descriptions.length>=8);assert.ok(descriptions.every(s=>s.length<2048))
@@ -232,7 +233,7 @@ test('resolve_client finds a client with no events in the asked-for dates and ma
     assert.equal(m[0]?.id,'RIB'); assert.equal(m[0]?.outside_window,true)
 })
 
-test('find_sessions retains action screens, prioritises target matches and attaches only nearby configured outcomes',async t=>{
+test('find_sessions retains action screens, orders matches chronologically and attaches only nearby configured outcomes',async t=>{
     const timeline=[
         {...events[0],ts:'2026-11-18T09:00:00Z',name:'Other',action:'CLICK',message:'Save'},
         {...events[1],ts:'2026-11-18T09:00:01Z',name:'Other',dialog:'toast',message:'Missing account'},
@@ -248,8 +249,13 @@ test('find_sessions retains action screens, prioritises target matches and attac
     })
     const {sessions:[s]}=await findSessions({clientId:'SEM',screen:'Chart of Accounts',what:'Save',...window})
     assert.equal(s.matches_on_target_screen,1);assert.equal(s.matches_elsewhere,2)
-    assert.deepEqual(s.matched_actions[0],{at:timeline[2].ts,event:'PageView',action:'CLICK',message:'Save',screen:'Chart of Accounts',dialog_id:'DlgLedger',on_target_screen:true,outcome:{at:timeline[3].ts,text:'Trade Id Updated',is_error:false,screen:'Chart of Accounts',dialog_id:'toast',after_s:1,basis:'same screen, before any other action'},context:["09:00:00.000 CLICK 'Save' [Other]","09:00:01.000 CLICK 'Missing account' [Other]","09:00:13.000 CLICK 'Trade Id Updated' [Chart of Accounts]","09:00:14.000 CLICK 'Save' [Other]","09:00:50.000 CLICK 'Failed too late' [UNKNOWN]"]})
-    assert.equal(s.matched_actions[1].on_target_screen,false);assert.equal(s.matched_actions[1].outcome?.is_error,true)
+    assert.deepEqual(s.matched_actions.map(a=>a.at),[timeline[0].ts,timeline[2].ts,timeline[4].ts])
+    const target=s.matched_actions[1]
+    assert.equal(target.on_target_screen,true)
+    assert.deepEqual(target.outcome,{at:timeline[3].ts,text:'Trade Id Updated',is_error:false,screen:'Chart of Accounts',dialog_id:'toast',after_s:1,basis:'same screen, before any other action'})
+    assert.deepEqual(target.before,[{line:"09:00:00.000 CLICK 'Save' [Other]",dt_s:-12},{line:"09:00:01.000 MESSAGE is_error=true 'Missing account' [Other]",dt_s:-11}])
+    assert.deepEqual(target.after,[{line:"09:00:13.000 MESSAGE is_error=false 'Trade Id Updated' [Chart of Accounts]",dt_s:1},{line:"09:00:14.000 CLICK 'Save' [Other]",dt_s:2},{line:"09:00:50.000 MESSAGE is_error=true 'Failed too late' [UNKNOWN]",dt_s:38}])
+    assert.equal(s.matched_actions[0].on_target_screen,false);assert.equal(s.matched_actions[0].outcome?.is_error,true)
     assert.equal(s.matched_actions[2].outcome,null)
     assert.equal(s.session_start,timeline[0].ts);assert.equal(s.session_end,timeline.at(-1)!.ts)
     assert.equal(s.recording_start,'2026-11-18T08:59:50.000Z');assert.equal(s.recording_end,'2026-11-18T09:00:40.000Z');assert.equal(s.recording_duration_s,50)
@@ -292,11 +298,16 @@ test('data_guide exposes configured version, identity, coverage cache and SQL; r
     const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(a);const client=new Client({name:'test',version:'1'});await client.connect(b)
     try {
         const guide=payload(await client.callTool({name:'data_guide',arguments:{}}))
-        assert.equal(guide.run_sql,'posthog_exec command: call execute-sql {"query":"<HogQL>"}');assert.deepEqual(guide.sql_notes,['windowFunnel needs toDateTime(timestamp), not the DateTime64 timestamp','windowFunnel(...) returns the highest step each user reached: users at step N or beyond = sum of levels >= N (levels are not cumulative)'])
+        assert.equal(guide.run_sql,'posthog_exec command: call execute-sql {"query":"<HogQL>"}');assert.deepEqual(guide.sql_notes,['windowFunnel needs toDateTime(timestamp), not the DateTime64 timestamp','windowFunnel returns the max level reached, not per-stage counts; use countIf(level >= N) for cumulative stage counts'])
         assert.equal(guide.properties.version.name,'title');assert.equal(guide.events.screen,'PageView')
         assert.equal(guide.identity.CLIENT_FROM_DISTINCT_ID,3);assert.equal(guide.identity.separator,'|')
         assert.equal(guide.identity.client.part,3);assert.equal(guide.identity.client.value,'SEM')
         assert.equal(guide.identity.user.part,4);assert.equal(guide.identity.user.value,'SEMOPS')
+        assert.match(guide.examples[3],/SELECT countIf\(level >= 1\) AS stage_1, countIf\(level >= 2\) AS stage_2, countIf\(level >= 3\) AS stage_3/)
+        assert.match(guide.examples[3],/windowFunnel\(3600\)\(toDateTime\(timestamp\)/)
+        assert.match(guide.complete_weeks,/coverage.data_ends excludes sparse replay-fixture days/)
+        assert.ok(guide.examples[4].includes(guide.coverage.data_ends.slice(0,10)))
+        assert.match(guide.examples[4],/INTERVAL 4 WEEK AND timestamp < end_week GROUP BY week ORDER BY week/)
         assert.match(guide.examples[1],/OPEN/);assert.match(guide.examples[2],/properties.title/)
         const result=payload(await client.callTool({name:'resolve_client',arguments:{query:'SEMOPS',from:'2026-11-18',to:'2026-11-18'}}))
         assert.equal(result.matches[0].client_events,210);assert.equal(result.matches[0].user_events,64)
@@ -372,13 +383,21 @@ test('find_sessions scopes outcomes to screens before navigation and exposes bou
     assert.equal(s.matched_actions[0].outcome,null)
     assert.deepEqual(s.matched_actions[4].outcome,{at:timeline[5].ts,text:timeline[5].message,is_error:false,screen:'Chart of Accounts',dialog_id:'toast',after_s:1.234,basis:'same screen, before any other action'})
     for(const i of [3,5,6,7,8,9])assert.equal(s.matched_actions[i].outcome,null)
-    assert.deepEqual(s.matched_actions[4].context,[
-        "09:00:02.000 OPEN [Other]", "09:00:03.000 CLICK 'Open completed' [Other]",
-        `09:00:05.234 CLICK '${String(timeline[5].message).slice(0,80)}' [Chart of Accounts]`,
-        "09:00:06.000 CLICK 'Save' [Chart of Accounts]", "09:00:07.000 CLICK 'Wrong screen' [Other]",
+    assert.deepEqual(s.matched_actions[4].before,[
+        {line:"09:00:02.000 OPEN [Other]",dt_s:-2}, {line:"09:00:03.000 MESSAGE is_error=false 'Open completed' [Other]",dt_s:-1},
     ])
-    assert.equal(s.matched_actions[0].context.length,3);assert.equal(s.matched_actions[9].context.length,2)
-    assert.ok(s.matched_actions.every(a=>a.context.length<=5))
+    assert.deepEqual(s.matched_actions[4].after,[
+        {line:`09:00:05.234 MESSAGE is_error=false '${String(timeline[5].message).slice(0,80)}' [Chart of Accounts]`,dt_s:1.234},
+        {line:"09:00:06.000 CLICK 'Save' [Chart of Accounts]",dt_s:2}, {line:"09:00:07.000 MESSAGE is_error=false 'Wrong screen' [Other]",dt_s:3},
+    ])
+    assert.equal(s.matched_actions[0].before.length,0);assert.equal(s.matched_actions[0].after.length,3)
+    assert.equal(s.matched_actions[9].before.length,2);assert.equal(s.matched_actions[9].after.length,0)
+    for(const a of s.matched_actions) {
+        assert.ok(!('context' in a));assert.ok(a.before.length<=2 && a.after.length<=3)
+        assert.ok(a.before.every(n=>n.dt_s<0));assert.ok(a.after.every(n=>n.dt_s>0))
+        for(const list of [a.before,a.after])assert.deepEqual(list.map(n=>n.dt_s),list.map(n=>n.dt_s).sort((a,b)=>a-b))
+    }
+
 })
 
 test('find_sessions gives a shorter literal search hint when what has no matches',async t=>{
@@ -391,4 +410,41 @@ test('find_sessions gives a shorter literal search hint when what has no matches
     const result=await findSessions({clientId:'SEM',what:'market data error',from:new Date('2026-11-18'),to:new Date('2026-11-19')})
     assert.deepEqual(result.sessions,[])
     assert.match(result.hint ?? "",/No session in this window matched "market data error".*literal substring: try a shorter word/)
+})
+
+test('find_sessions lists only human screen names with tab fallback and labels messages',async t=>{
+    const timeline=[
+        {...events[0],name:'Trade Entry',tab:'Terms',dialog:'DlgTask04'},
+        {...events[0],name:'DlgTask04',tab:'Fallback tab',dialog:'DlgTask04'},
+        {...events[0],name:'',tab:'Cash Forecast',dialog:'DlgTask12'},
+        {...events[0],name:'DlgTask04',tab:'',dialog:'DlgTask04'},
+        {...events[0],name:'toast',tab:'Fake tab',dialog:'toast',action:'OPEN',message:'Saved'},
+        {...events[0],name:'messagebox',tab:'Fake tab',dialog:'messagebox',action:'OPEN',message:'Invalid entry'},
+    ].map((e,i)=>({...e,ts:`2026-11-18T09:00:0${i}.123Z`}))
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
+        const q=JSON.parse(String(init.body)).query.query
+        return response(q.includes('raw_session')?[]:q.includes('GROUP BY sid')?[{sid:'one',last:timeline.at(-1)!.ts}]:timeline)
+    })
+    const {sessions:[s]}=await findSessions({clientId:'SEM',...window})
+    assert.deepEqual(s.screens,['Trade Entry','Fallback tab','Cash Forecast']);assert.equal(s.screens_total,3)
+    assert.equal(s.matched_actions[4].action,'MESSAGE');assert.equal(s.matched_actions[4].is_error,false)
+    assert.equal(s.matched_actions[5].action,'MESSAGE');assert.equal(s.matched_actions[5].is_error,true)
+    assert.match(s.matched_actions[4].after[0].line,/09:00:05.123 MESSAGE is_error=true/)
+})
+
+
+test('find_sessions keeps target-screen matches when over 10 actions match, shown in time order',async t=>{
+    const timeline=[
+        ...Array.from({length:12},(_,i)=>({...events[0],ts:`2026-11-18T09:00:${String(i).padStart(2,'0')}Z`,name:'Other',action:'CLICK',message:'Save'})),
+        {...events[0],ts:'2026-11-18T09:00:30Z',action:'CLICK',message:'Save'},
+    ]
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
+        const q=JSON.parse(String(init.body)).query
+        if(q.query.includes('raw_session'))return response([])
+        return response(q.query.includes('GROUP BY sid')?[{sid:'one',last:timeline.at(-1)!.ts}]:timeline)
+    })
+    const {sessions:[s]}=await findSessions({clientId:'SEM',screen:'Chart of Accounts',what:'Save',...window})
+    assert.equal(s.matched_actions.length,10);assert.equal(s.matched_actions_total,13)
+    assert.equal(s.matched_actions.at(-1)!.at,timeline.at(-1)!.ts);assert.equal(s.matched_actions.at(-1)!.on_target_screen,true)
+    const at=s.matched_actions.map(a=>String(a.at));assert.deepEqual(at,[...at].sort())
 })

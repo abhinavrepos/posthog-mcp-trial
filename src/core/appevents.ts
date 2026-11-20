@@ -185,7 +185,7 @@ export async function findSessions(q: SessionQuery) {
         const isMessage = (e: Record<string, unknown>) => [...reg.dialogs.messages,...reg.dialogs.notices].includes(String(e.dialog))
         const screenOf = (e: Record<string, unknown>) => String(e.name || e.tab || '')
         const contextLine = (e: Record<string, unknown>) => [
-            new Date(String(e.ts)).toISOString().slice(11,23), e.action || e.event,
+            new Date(String(e.ts)).toISOString().slice(11,23), isMessage(e) ? `MESSAGE is_error=${isError(e)}` : e.action || e.event,
             e.message ? `'${String(e.message).replace(/\s+/g,' ').slice(0,80)}'` : '',
             screenOf(e) ? `[${screenOf(e)}]` : '',
         ].filter(Boolean).join(' ')
@@ -195,32 +195,38 @@ export async function findSessions(q: SessionQuery) {
             const outcome = rule?.outcome ?? (reg.dialogs.messages.includes(String(e.dialog)) ? reg.messageOutcome : reg.noticeOutcome)
             return outcome === 'error' || /error|failed|could not|invalid|missing/i.test(text)
         }
-        // With only a screen, the matches are that screen's events; with both, target-screen matches come first.
+        // Lists are oldest to newest; when capping, target-screen matches are kept first.
         const matches = ev.map((e,index)=>({e,index})).filter(({e})=>q.what ? [e.action,e.message,e.control,e.event].some(v=>String(v || '').toLowerCase().includes(q.what!.toLowerCase())) : onScreen(e))
-        if(q.screen && q.what) matches.sort((a,b)=>Number(onScreen(b.e))-Number(onScreen(a.e)) || a.index-b.index)
         const first = matches.find(({e})=>onScreen(e))?.e || matches[0]?.e || ev[0]
         const span = spans.get(sid)
         // Recordings run on the browser clock: offset from the event's client time when it has one.
         const matchMs = Number(first?.ctime)>1e9 ? Number(first!.ctime)*1000 : Date.parse(String(first?.ts))
         const offset = span && Number.isFinite(matchMs) ? Math.max(0,(matchMs-Date.parse(span.start))/1000) : 0
-        const screens = [...new Set(ev.flatMap(e=>[e.name,e.tab,e.dialog,e.path]).filter(Boolean).map(String))]
+        const dialogIds = new Set(ev.map(e=>String(e.dialog || '')))
+        const humanName = (v: unknown) => {
+            const name = String(v || '').trim()
+            return name && !dialogIds.has(name) && !/^(?:Dlg\w*|toast|messagebox|UNKNOWN)$/i.test(name) ? name : ''
+        }
+        const screens = [...new Set(ev.filter(e=>!isMessage(e)).map(e=>humanName(e.name) || humanName(e.tab)).filter(Boolean))]
         const session = {session_id:sid, user:String(ev[0]?.user || ''), distinct_id:ev[0]?.distinct_id,
             session_start:ev[0]?.session_start ?? ev[0]?.ts ?? null, session_end:ev[0]?.session_end ?? ev.at(-1)?.ts ?? null,
             recording_start:span?.start ?? null, recording_end:span?.end ?? null,
             recording_duration_s:span ? (Date.parse(span.end)-Date.parse(span.start))/1000 : null,
             screens:screens.slice(0,15), screens_total:screens.length,
-            matched_actions:matches.slice(0,10).map(({e,index})=>{
+            matched_actions:(q.screen && q.what ? [...matches].sort((a,b)=>Number(onScreen(b.e))-Number(onScreen(a.e)) || a.index-b.index).slice(0,10).sort((a,b)=>a.index-b.index) : matches.slice(0,10)).map(({e,index})=>{
                 let next: Record<string, unknown> | undefined
                 if (!isMessage(e)) for (const n of ev.slice(index+1)) {
                     const afterMs = Date.parse(String(n.ts))-Date.parse(String(e.ts))
                     if (!isMessage(n) || afterMs > 30000) break
                     if (afterMs >= 0 && screenOf(e) && screenOf(n) === screenOf(e)) { next=n; break }
                 }
-                return {at:e.ts,event:e.event ?? '',action:e.action ?? '',message:e.message ?? '',screen:screenOf(e),dialog_id:e.dialog ?? '',
+                const neighbour = (n: Record<string, unknown>) => ({line:contextLine(n),dt_s:Number(((Date.parse(String(n.ts))-Date.parse(String(e.ts)))/1000).toFixed(3))})
+                return {at:e.ts,event:e.event ?? '',action:isMessage(e) ? 'MESSAGE' : e.action ?? '',...(isMessage(e) ? {is_error:isError(e)} : {}),message:e.message ?? '',screen:screenOf(e),dialog_id:e.dialog ?? '',
                     ...(q.screen ? {on_target_screen:onScreen(e)} : {}),
                     outcome:next ? {at:next.ts,text:next.message,is_error:isError(next),screen:screenOf(next),dialog_id:next.dialog ?? '',
                         after_s:Number(((Date.parse(String(next.ts))-Date.parse(String(e.ts)))/1000).toFixed(3)),basis:'same screen, before any other action'} : null,
-                    context:[...ev.slice(Math.max(0,index-2),index),...ev.slice(index+1,index+4)].map(contextLine)}
+                    before:ev.slice(Math.max(0,index-2),index).map(neighbour),
+                    after:ev.slice(index+1,index+4).map(neighbour)}
             }),
             matched_actions_total:matches.length, matched_actions_truncated:matches.length>10,
             ...(q.screen && q.what ? {matches_on_target_screen:matches.filter(({e})=>onScreen(e)).length,matches_elsewhere:matches.filter(({e})=>!onScreen(e)).length} : {}),

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-Object.assign(process.env,{POSTHOG_HOST:'http://fake-posthog',POSTHOG_PROJECT_ID:'7',POSTHOG_PERSONAL_API_KEY:'test-key'})
-const {dataCoverage}=await import('../src/core/dataguide.ts')
+Object.assign(process.env,{APP_EVENTS_FILE:'config/app-events.reval.json',POSTHOG_HOST:'http://fake-posthog',POSTHOG_PROJECT_ID:'7',POSTHOG_PERSONAL_API_KEY:'test-key'})
+const {dataCoverage,dataGuide}=await import('../src/core/dataguide.ts')
 const {clearPosthogCache}=await import('../src/core/posthog.ts')
 const now=Date.parse('2026-11-20T16:00:00Z'), dayMs=86400000
 const bounds={data_starts:'2025-11-15T08:00:05.918000Z',data_ends:'2026-11-20T14:14:18.450000Z'}
@@ -17,7 +17,9 @@ test('coverage separates a five-day outage and sparse replay day from the histor
     rows.push({day:'2026-11-20',n:3})
     let calls=0
     t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
-        calls++;const sql=JSON.parse(String(init.body)).query.query
+        const sql=JSON.parse(String(init.body)).query.query
+        if(sql.endsWith('LIMIT 1'))return response([{distinct_id:'C1DEV|01|SEM|SEMOPS'}])
+        calls++
         if(sql.includes('AS data_starts'))return response([bounds])
         assert.equal(sql,'SELECT toDate(timestamp) AS day, count() AS n FROM events WHERE timestamp >= now() - INTERVAL 400 DAY GROUP BY day ORDER BY day LIMIT 1000')
         return response(rows)
@@ -26,6 +28,8 @@ test('coverage separates a five-day outage and sparse replay day from the histor
     assert.deepEqual(coverage.gaps,[{from:'2026-11-15',to:'2026-11-19',days:5}])
     assert.equal(coverage.gaps_total,1)
     assert.deepEqual(coverage.sparse_days,[{day:'2026-11-20',events:3}])
+    assert.equal(coverage.latest_event,bounds.data_ends)
+    assert.equal(coverage.data_ends,'2026-11-14T23:59:59.999999Z')
     assert.equal(coverage.continuous_from,bounds.data_starts)
     assert.equal(coverage.continuous_to,'2026-11-14T23:59:59.999999Z')
     assert.match(coverage.note,/No or sparse data on 2026-11-15\.\.2026-11-20 \(6 days\)/)
@@ -33,6 +37,15 @@ test('coverage separates a five-day outage and sparse replay day from the histor
     assert.deepEqual(await dataCoverage(),coverage);assert.equal(calls,2)
     t.mock.method(Date,'now',()=>now+600001)
     await dataCoverage();assert.equal(calls,4)
+    const guide=await dataGuide()
+    assert.equal(guide.coverage.data_ends,'2026-11-14T23:59:59.999999Z')
+    assert.match(guide.examples[4],/toStartOfWeek\(toDateTime\('2026-11-14', 'UTC'\), 1\)/)
+    assert.match(guide.examples[4],/timestamp >= end_week - INTERVAL 4 WEEK AND timestamp < end_week/)
+    // Nov 14's week is incomplete: use Oct 12 through Nov 9 exclusive, excluding the Nov 20 fixture.
+    const end=new Date(String(guide.coverage.data_ends))
+    end.setUTCDate(end.getUTCDate()-(end.getUTCDay()+6)%7);end.setUTCHours(0,0,0,0)
+    assert.equal(end.toISOString(),'2026-11-09T00:00:00.000Z')
+    assert.equal(new Date(+end-4*7*dayMs).toISOString(),'2026-10-12T00:00:00.000Z')
 })
 test('failed daily query preserves min/max and reports unknown continuity',async t=>{
     clearPosthogCache();t.after(clearPosthogCache)

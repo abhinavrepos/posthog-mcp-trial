@@ -7,7 +7,7 @@ import { P } from './props.ts'
 export async function dataCoverage() {
     const [row] = await hogql('SELECT min(timestamp) AS data_starts, max(timestamp) AS data_ends FROM events', {}, {cache:true,ttlMs:600000})
     const bounds={data_starts:row?.data_starts ?? null,data_ends:row?.data_ends ?? null}
-    const unavailable={...bounds,gaps:null,gaps_total:null,sparse_days:null,continuous_from:null,continuous_to:null,note:'Daily coverage unavailable; first/last events do not establish continuous coverage.'}
+    const unavailable={...bounds,latest_event:bounds.data_ends,gaps:null,gaps_total:null,sparse_days:null,continuous_from:null,continuous_to:null,note:'Daily coverage unavailable; first/last events do not establish continuous coverage.'}
     try {
         const rows=await hogql('SELECT toDate(timestamp) AS day, count() AS n FROM events WHERE timestamp >= now() - INTERVAL 400 DAY GROUP BY day ORDER BY day LIMIT 1000',{}, {cache:true,ttlMs:600000})
         const dayMs=86400000, day=(ms:number)=>new Date(ms).toISOString().slice(0,10)
@@ -58,7 +58,7 @@ export async function dataCoverage() {
         const short=gaps.filter(g=>!breaks.some(b=>g.from>=b.from && g.to<=b.to)).length
         const issues=breaks.slice(0,10).map(b=>`No or sparse data on ${b.from}..${b.to} (${b.days} days)`)
         if(short)issues.push(`${short} shorter quiet gap(s), such as weekends, do not break continuity`)
-        return {...bounds,gaps:gaps.slice(0,10),gaps_total:gaps.length,sparse_days:sparse.slice(0,10),continuous_from,continuous_to,
+        return {...bounds,latest_event:bounds.data_ends,data_ends:continuous_to,gaps:gaps.slice(0,10),gaps_total:gaps.length,sparse_days:sparse.slice(0,10),continuous_from,continuous_to,
             note:`${issues.join('; ') || 'No gaps or sparse days detected'}; daily coverage checked only for the last 400 days; for year or week analyses use continuous_from..continuous_to (inclusive UTC bounds) and state it.`}
     } catch {return unavailable}
 }
@@ -80,11 +80,14 @@ export async function dataGuide() {
             user:{part:userPart || null,value:userPart ? example.split(separator)[userPart-1] ?? null : example || null,expression:userExpr()}},
         coverage,
         run_sql:'posthog_exec command: call execute-sql {"query":"<HogQL>"}',
-        sql_notes:['windowFunnel needs toDateTime(timestamp), not the DateTime64 timestamp','windowFunnel(...) returns the highest step each user reached: users at step N or beyond = sum of levels >= N (levels are not cumulative)'],
+        sql_notes:['windowFunnel needs toDateTime(timestamp), not the DateTime64 timestamp','windowFunnel returns the max level reached, not per-stage counts; use countIf(level >= N) for cumulative stage counts'],
+        complete_weeks:'Last N complete weeks: replace N (4 below); coverage.data_ends excludes sparse replay-fixture days. Use the Monday containing data_ends as the exclusive upper bound, and keep the lower bound within continuous_from. If coverage is unknown, do not infer complete weeks.',
         examples:[
             `SELECT ${screen} AS screen, uniq(properties.$session_id) AS sessions FROM events WHERE event = ${literal(reg.events.screen)} GROUP BY screen LIMIT 20`,
             `SELECT ${screen} AS screen, count() AS opens FROM events WHERE event = ${literal(reg.events.screen)} AND ${action} = ${literal(reg.screenActions.open[0] || 'OPEN')} GROUP BY screen LIMIT 20`,
             `SELECT ${version} AS version, uniq(distinct_id) AS users FROM events WHERE notEmpty(${version}) GROUP BY version LIMIT 20`,
+            `SELECT countIf(level >= 1) AS stage_1, countIf(level >= 2) AS stage_2, countIf(level >= 3) AS stage_3 FROM (SELECT distinct_id, properties.$session_id AS session_id, windowFunnel(3600)(toDateTime(timestamp), event = ${literal(reg.events.screen)} AND ${action} = ${literal(reg.screenActions.open[0] || 'OPEN')}, ${action} = 'CHANGE', ${prop(reg,'button')} = ${literal(reg.submitButtons[0] || 'Save')}) AS level FROM events GROUP BY distinct_id, session_id)`,
+            `WITH toStartOfWeek(toDateTime(${literal(coverage.data_ends ? String(coverage.data_ends).slice(0,10) : 'REPLACE_WITH_coverage.data_ends')}, 'UTC'), 1) AS end_week SELECT toStartOfWeek(timestamp, 1) AS week, uniq(distinct_id) AS users FROM events WHERE timestamp >= end_week - INTERVAL 4 WEEK AND timestamp < end_week GROUP BY week ORDER BY week`,
         ],
     }
 }
