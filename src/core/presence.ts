@@ -152,7 +152,9 @@ export interface PresenceReport {
 
 // All distinct counts and millisecond sums stay in PostHog. Each response is bounded below
 // PostHog's 50,000-row cap; separate aggregates are supported by HogQL without CTE reuse.
-const readOptions = (q: PresenceQuery) => (Date.parse(q.to) - Date.parse(q.from)) / DAY + 1 > 31 ? { timeoutMs: 300_000 } : {}
+// Longer than a week (including every year chunk): PostHog itself stops a query at 60 s, so a slow server
+// must not be cut off earlier by our default 30 s.
+const readOptions = (q: PresenceQuery) => (Date.parse(q.to) - Date.parse(q.from)) / DAY + 1 > 7 ? { timeoutMs: 300_000 } : {}
 const counts = (r: Row) => ({ clients: Number(r.clients || 0), people: Number(r.people || 0), sessions: Number(r.sessions || 0) })
 
 /** The client picker covers every client, even with filters. Round only after SQL sums. */

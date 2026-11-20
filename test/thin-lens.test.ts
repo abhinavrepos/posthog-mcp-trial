@@ -125,14 +125,15 @@ test('Live time endpoint reads fake PostHog directly and returns activity withou
     const queries:string[]=[]
     t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
         const q=JSON.parse(String(init.body)).query;queries.push(q.query)
-        if(q.query.includes('AS client_name'))return response([{client:'SEM',client_name:'Sem Operations'}])
-        return response([{client:'SEM',user:'SEMOPS',sid:'session-one',day:'2026-11-18',hour:9,actions:2,first:events[0].ts,last:events[1].ts,open_ms:12000,active_ms:12000}])
+        assert.match(q.query,/GROUP BY GROUPING SETS/)
+        const base={d:'',h1:0,c:'',u:'',actions:2,people:1,sessions:1,clients:1,open_ms:12000,active_ms:12000}
+        return response([base,{...base,c:'SEM',client_name:'Sem Operations',all_people:1,all_sessions:1,all_open_ms:12000,all_active_ms:12000,all_first:events[0].ts,all_last:events[1].ts}])
     })
     let status=0,body=''
     const res={writeHead:(s:number)=>{status=s},end:(s:string)=>{body=s}} as ServerResponse
     await handleLive({method:'GET'} as IncomingMessage,res,new URL('http://lens/replays/live/api/time?from=2026-11-18&to=2026-11-18&client=SEM'),viewer)
     assert.equal(status,200);const data=JSON.parse(body);assert.equal(data.totals.actions,2);assert.equal(data.totals.active_s,12);assert.equal(data.clients[0].client_id,'SEM')
-    assert.ok(queries.length>0);assert.match(queries[0],/splitByChar/);assert.ok(!existsSync(join(dir,'tasks.db')))
+    assert.equal(queries.length,1);assert.match(queries[0],/splitByChar/);assert.ok(!existsSync(join(dir,'tasks.db')))
 })
 test('MCP publishes only retained tools and pin/list/delete and surveys work through the real SDK boundary',async t=>{
     t.mock.method(globalThis,'fetch',async()=>Response.json({results:[]}))
