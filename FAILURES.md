@@ -3,6 +3,22 @@
 What went wrong while rehearsing today's deployment and load test, what caused it, and what was done.
 Newest first. Times are UTC.
 
+## 6. 200 session replays for 5 minutes (04:35-04:41): passed
+
+- 200 screens, each sending a replay batch every 2 s (full snapshots, DOM changes, mouse moves, clicks,
+  scrolls) plus page views: 81,466 rrweb events accepted, 0 failed requests.
+- **200 of 200 recordings stored, 81,466 of 81,466 rrweb events, 0 incomplete**; stored in 12 s after the
+  load stopped (126 MB); a sample of 20 read back through PostHog's API: all complete, in order and
+  starting with a full snapshot. No ingestion warnings, no container restarts.
+- Lens over MCP at the same time (Codex as the client, 48 tools): 42 calls, 0 crashes, 0 busy or rate
+  limits. Slowest `aggregate_events` 1.8 s, `find_trade` ~1 s, everything else under 0.15 s. Answers were
+  mostly "no data" because the test traffic goes to the separate "Load test" project. Codex's own
+  approval setting blocked tools that change things (`monday_brief`, `watch_client`); Lens never saw them.
+- Small follow-ups (wording only, not blockers):
+  - `client_story` / `client_experience` with an unknown client say "Choose a client id." with an empty
+    candidate list; they should say no client matches (as the watch tools now do).
+  - `error_blast_radius`'s validation message shows an example without the fields it asks for.
+
 ## 5. Hard reset of the whole PostHog stack (04:27-04:37): works, with one trap
 
 - `cd /opt/posthog && docker compose down` removed every PostHog container (data volumes kept) in 44 s.
