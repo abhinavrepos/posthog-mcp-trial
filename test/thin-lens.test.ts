@@ -195,7 +195,8 @@ test('instructions and tool descriptions stay short and direct',()=>{
     const instructions=serverInstructions();assert.ok(instructions.length<=INSTRUCTIONS_LIMIT)
     for(const phrase of ['posthog_exec','tools / info <tool> / call <tool> <json>','resolve_client','find_sessions','pin_graph','both'])assert.ok(instructions.includes(phrase))
     assert.doesNotMatch(instructions,/private|mask|aggregate_events|reval_brief/)
-    assert.match(instructions,/"the year", "last year" or "all data".*data_guide coverage bounds.*exact UTC bounds/)
+    assert.match(instructions,/"the year", "last year" or "all data".*data_guide coverage continuous_from\.\.continuous_to.*exact UTC bounds/)
+    assert.match(instructions,/complete weeks use only fully covered weeks/)
     const descriptions:string[]=[]
     const server={registerTool:(_name:string,cfg:{description:string})=>{descriptions.push(cfg.description)}} as unknown as McpServer
     registerTools(server);assert.ok(descriptions.length>=8);assert.ok(descriptions.every(s=>s.length<2048))
@@ -277,10 +278,11 @@ test('find_sessions bounds actions, screens and serialized pages without skippin
 test('data_guide exposes configured version, identity, coverage cache and SQL; resolve_client scopes counts through MCP',async t=>{
     clearClientCache()
     const {clearPosthogCache}=await import('../src/core/posthog.ts');clearPosthogCache()
-    let coverageCalls=0,rosterCalls=0
+    let coverageCalls=0,dailyCalls=0,rosterCalls=0
     t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
         const q=JSON.parse(String(init.body)).query
         if(q.query.includes('AS data_starts')){coverageCalls++;return response([{data_starts:'2025-11-15T08:00:05Z',data_ends:'2026-11-14T17:03:14Z'}])}
+        if(q.query.includes('GROUP BY day')){dailyCalls++;return response([{day:'2025-11-15',n:100},{day:'2026-11-14',n:100}])}
         if(q.query.endsWith('LIMIT 1'))return response([{distinct_id:'C1DEV|01|SEM|SEMOPS'}])
         if(q.query.includes('FROM person_distinct_ids'))return response([{did:'C1DEV|01|SEM|SEMOPS',email:'different@example.com'}])
         rosterCalls++;assert.match(q.query,/GROUP BY id, user, did/)
@@ -290,7 +292,7 @@ test('data_guide exposes configured version, identity, coverage cache and SQL; r
     const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(a);const client=new Client({name:'test',version:'1'});await client.connect(b)
     try {
         const guide=payload(await client.callTool({name:'data_guide',arguments:{}}))
-        assert.equal(guide.run_sql,'posthog_exec command: call execute-sql {"query":"<HogQL>"}');assert.deepEqual(guide.sql_notes,['windowFunnel needs toDateTime(timestamp), not the DateTime64 timestamp'])
+        assert.equal(guide.run_sql,'posthog_exec command: call execute-sql {"query":"<HogQL>"}');assert.deepEqual(guide.sql_notes,['windowFunnel needs toDateTime(timestamp), not the DateTime64 timestamp','windowFunnel(...) returns the highest step each user reached: users at step N or beyond = sum of levels >= N (levels are not cumulative)'])
         assert.equal(guide.properties.version.name,'title');assert.equal(guide.events.screen,'PageView')
         assert.equal(guide.identity.CLIENT_FROM_DISTINCT_ID,3);assert.equal(guide.identity.separator,'|')
         assert.equal(guide.identity.client.part,3);assert.equal(guide.identity.client.value,'SEM')
@@ -300,9 +302,9 @@ test('data_guide exposes configured version, identity, coverage cache and SQL; r
         assert.equal(result.matches[0].client_events,210);assert.equal(result.matches[0].user_events,64)
         assert.equal(result.matches[0].last_seen_in_window,new Date(roster[0].last_seen).toISOString());assert.ok(!('last_seen' in result.matches[0]));
         assert.equal(result.matches[0].events,undefined);assert.deepEqual(result.coverage,guide.coverage)
-        assert.equal(rosterCalls,1);assert.equal(coverageCalls,1)
+        assert.equal(rosterCalls,1);assert.equal(coverageCalls,1);assert.equal(dailyCalls,1)
         const now=Date.now();t.mock.method(Date,'now',()=>now+600001)
-        await client.callTool({name:'data_guide',arguments:{}});assert.equal(coverageCalls,2)
+        await client.callTool({name:'data_guide',arguments:{}});assert.equal(coverageCalls,2);assert.equal(dailyCalls,2)
     } finally {await client.close();await server.close();clearClientCache();clearPosthogCache()}
 })
 
