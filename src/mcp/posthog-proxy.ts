@@ -7,7 +7,7 @@ import { toolLimiter } from './ratelimit.ts'
 import { writeToolAudit } from './toolaudit.ts'
 import type { ChatCaller } from '../service/access.ts'
 import { isPosthogMetadata, isPosthogQuery, posthogQueryGate, posthogQueryContext } from './posthog-query.ts'
-import { posthogFailure, posthogPublicMessage } from './posthog-error.ts'
+import { posthogFailure, posthogPublicMessage, UNKNOWN_COMMAND_MESSAGE, HOGQL_HINT, looksLikeSqlTool } from './posthog-error.ts'
 import { toolError } from './toolerror.ts'
 import { createHash, randomUUID } from 'node:crypto'
 // Routing text is pure; the HTTP adapter only handles authentication and transport.
@@ -392,8 +392,12 @@ async function posthogExecRaw(call: unknown, command: string, options: Pick<Prox
                     upstreamToolNames.set(key, cached)
                 } catch { /* suggestions are optional */ }
                 const requested = /^\s*(?:(?:call|info|schema)\s+)?(?:posthog:)?([\w-]+)/i.exec(command)?.[1] || ''
-                const suggestions = closestNames(requested, cached?.names || [])
+                const sql = looksLikeSqlTool(requested) && (!cached?.names.length || cached.names.includes('execute-sql'))
+                const closest = closestNames(requested, cached?.names || [])
+                const suggestions = sql ? ['execute-sql', ...closest.filter(n => n !== 'execute-sql')].slice(0,3) : closest
+                failure.message = UNKNOWN_COMMAND_MESSAGE
                 if (suggestions.length) failure.message += ` Closest tools: ${suggestions.join(', ')}.`
+                if (sql) failure.message += ' ' + HOGQL_HINT
             }
             if (id === 2 && failure.message.startsWith('PostHog rejected the input')) {
                 const correction = obsoleteCorrection(command)

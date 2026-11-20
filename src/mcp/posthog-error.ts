@@ -32,6 +32,9 @@ export function posthogFailure(detail: unknown, status?: number, retryAfter?: st
 export const POSTHOG_LIMIT = 'PostHog stopped this query at its own time limit; repeating it will not help. Query a shorter range (for example one quarter at a time) or add filters. Use posthog_exec for each bounded period, then combine the returned data.'
 const USAGE_HELP = 'Run "tools" to list PostHog tools, "info <tool>" for one tool\'s input schema, then "call <tool> <json_input>".'
 export const TRENDS_CORRECTION = 'For query-trends use breakdownFilter.breakdowns: [{property: <property>, type: "event"}], not breakdownFilter.breakdown_type.'
+export const UNKNOWN_COMMAND_MESSAGE = `PostHog does not know that command. ${USAGE_HELP}`
+export const HOGQL_HINT = 'For HogQL use: call execute-sql {"query":"SELECT ..."}'
+export const looksLikeSqlTool = (name:string) => /^(?:sql|hogql|query|runsql|execute|select)$/i.test(name.replace(/[_-]/g, ''))
 const TOOL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/
 /** PostHog's own MCP answers a wrongly formed command with a tool error. Those are the agent's mistakes, not
  * outages: map them to fixed, server-authored corrections instead of "unavailable" (which made agents give up).
@@ -39,7 +42,10 @@ const TOOL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/
 export function posthogUsageMessage(raw: string): string | undefined {
     const tool = /"([a-z0-9-]+)" is a tool, not a command/i.exec(raw)?.[1]
     if (tool && TOOL_NAME.test(tool)) return `PostHog command format: "${tool}" is a tool. Use: call ${tool} <json_input>. ${USAGE_HELP}`
-    if (/unknown (?:command|tool)|is not a (?:known )?(?:command|tool)|no such (?:command|tool)/i.test(raw)) return `PostHog does not know that command. ${USAGE_HELP}`
+    if (/unknown (?:command|tool)|is not a (?:known )?(?:command|tool)|no such (?:command|tool)/i.test(raw)) {
+        const requested = /(?:unknown (?:command|tool)|is not a (?:known )?(?:command|tool)|no such (?:command|tool))[:\s]*[\\"']*([\w-]+)/i.exec(raw)?.[1] || ''
+        return UNKNOWN_COMMAND_MESSAGE + (looksLikeSqlTool(requested) ? ` Closest tools: execute-sql. ${HOGQL_HINT}` : '')
+    }
     const validation = validationDetails(raw)
     if (validation || /invalid (?:input|arguments?|json)|validation[_ ](?:error|failed)|expected [a-z]+, received|required property|is required|unexpected token/i.test(raw)) return `PostHog rejected the input for this command. ${validation}${USAGE_HELP}`
     const sql = /(syntax error|unknown (?:table|field|function|identifier)|unable to resolve field|unknown column|illegal type|illegal_type_of_argument|number of arguments|no such column|cannot convert|type mismatch|there is no supertype|missing columns|not an aggregate function|aggregate function .{0,40}is found inside)[^"\\]{0,200}/i.exec(raw)?.[0]
@@ -49,7 +55,8 @@ export function posthogUsageMessage(raw: string): string | undefined {
     if (sql) return `PostHog could not run the SQL: ${sql.replace(/'[^']*'?/g, "'…'").replace(/[^A-Za-z0-9 _.,:()'=<>*…-]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160)}. Fix the query and retry.`
 }
 const usagePublic = (message: string): boolean => {
-    const raw = message.endsWith(' ' + TRENDS_CORRECTION) ? message.slice(0, -TRENDS_CORRECTION.length - 1) : message
+    let raw = message.endsWith(' ' + TRENDS_CORRECTION) ? message.slice(0, -TRENDS_CORRECTION.length - 1) : message
+    if (raw.endsWith(' ' + HOGQL_HINT)) raw = raw.slice(0, -HOGQL_HINT.length - 1)
     const suggestions = / Closest tools: [a-z0-9-]{1,64}(?:, [a-z0-9-]{1,64}){0,2}\.$/.exec(raw)
     if (suggestions) return raw.slice(0, suggestions.index) === `PostHog does not know that command. ${USAGE_HELP}`
     return /^PostHog command format: "[a-z0-9-]{1,64}" is a tool\. Use: call [a-z0-9-]{1,64} <json_input>\. /.test(raw) && raw.endsWith(USAGE_HELP)

@@ -149,3 +149,34 @@ test('unknown commands suggest tools about the same subject, with get-all and li
     assert.ok(!closestNames('experiments-get-all', names).includes('endpoints-get-all'))
     assert.equal(closestNames('dashboard-list', names)[0], 'dashboards-get-all')
 })
+
+
+test('unknown SQL aliases prioritize execute-sql when listed or the list is unavailable', async t => {
+    const { posthogExec } = await import('../src/mcp/posthog-proxy.ts')
+    for (const mode of ['listed','unavailable','absent']) {
+        t.mock.method(globalThis, 'fetch', async (_url: unknown, init: RequestInit) => {
+            if (init.method === 'DELETE') return new Response(null, { status: 202 })
+            const body = JSON.parse(String(init.body))
+            if (body.method === 'initialize') return Response.json({ id: 1, result: { protocolVersion: '2025-03-26' } })
+            if (body.method === 'notifications/initialized') return new Response(null, { status: 202 })
+            const cmd = body.params.arguments.command
+            if (cmd === 'tools') return Response.json({ id:body.id, result: mode === 'unavailable'
+                ? {isError:true,content:[{type:'text',text:'tools unavailable'}]}
+                : {content:[{type:'text',text:JSON.stringify(['query-logs','query-paths','query-trends',...(mode === 'listed' ? ['execute-sql'] : [])])}]} })
+            return Response.json(cmd.includes('query')
+                ? {id:body.id,result:{isError:true,content:[{type:'text',text:'Unknown command: query'}]}}
+                : {id:body.id,error:{code:-32601,message:'Unknown tool: "run_sql"'}})
+        })
+        for (const alias of ['query','run_sql','RUN-SQL']) await assert.rejects(posthogExec(`call ${alias} {}`, {url:`http://sql-alias-${mode}/mcp`,apiKey:'synthetic',name:'lens'}), e => {
+            assert.ok(e instanceof Error)
+            if (mode === 'absent') assert.doesNotMatch(e.message,/execute-sql|For HogQL/)
+            else {
+                assert.match(e.message,/Closest tools: execute-sql[,.]/)
+                assert.ok(e.message.endsWith('For HogQL use: call execute-sql {"query":"SELECT ..."}'))
+            }
+            assert.equal(posthogPublicMessage(e.message),e.message)
+            assert.equal(toolError(e,'posthog_exec').kind,'validation')
+            return true
+        })
+    }
+})

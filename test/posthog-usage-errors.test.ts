@@ -47,3 +47,16 @@ test('SQL type and argument errors from PostHog are corrections, not "unavailabl
     assert.match(e.message, /^PostHog could not run the SQL: Illegal type DateTime64/)
     assert.equal(toolError(e, 'posthog_exec').kind, 'validation')
 })
+
+
+test('upstream unknown SQL tool errors retain the HogQL correction through public error mapping', () => {
+    for (const name of ['query','run_sql','run-sql','RUN_SQL','sql','HogQL','execute','select']) {
+        for (const detail of [mcpError(`Unknown tool: "${name}"`), {code:-32601,message:`Unknown tool: "${name}"`}]) {
+            const e=posthogFailure(detail)
+            assert.match(e.message,/Closest tools: execute-sql\./)
+            assert.ok(e.message.endsWith('For HogQL use: call execute-sql {"query":"SELECT ..."}'))
+            assert.equal(posthogPublicMessage(e.message),e.message)
+            assert.equal(toolError(e,'posthog_exec').kind,'validation')
+        }
+    }
+})

@@ -10,7 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 const dir=mkdtempSync(join(tmpdir(),'thin-lens-'))
 Object.assign(process.env,{TRIAGE_DB:join(dir,'main.db'),APP_EVENTS_FILE:'config/app-events.reval.json',CLIENT_FROM_DISTINCT_ID:'3',POSTHOG_HOST:'http://fake-posthog',POSTHOG_PROJECT_ID:'7',POSTHOG_PERSONAL_API_KEY:'test-key',POSTHOG_PUBLIC_HOST:'https://ph.example',SERVICE_PUBLIC_URL:'https://lens.example',FEATURE_POSTHOG_MCP:'on',POSTHOG_MCP_URL:'http://fake-mcp',POSTHOG_MCP_API_KEY:'fake',POSTHOG_SURVEY_API_KEY:'fake',FEATURE_SURVEYS:'on'})
 const {config}=await import('../src/core/config.ts')
-const {matchClients,resolveClient,clearClientCache}=await import('../src/core/resolve.ts')
+const {knownClients,matchClients,resolveClient,clearClientCache}=await import('../src/core/resolve.ts')
 const {findSessions}=await import('../src/core/appevents.ts')
 const {pinGraph,listPinned,unpinGraph,graphSchema}=await import('../src/core/pinned.ts')
 const {pinnedHtml}=await import('../src/service/pinned.ts')
@@ -43,6 +43,27 @@ test('resolve_client reads live configured client/user expressions and caches at
     await resolveClient({text:'SEM'});assert.equal(calls,1)
     const now=Date.now();t.mock.method(Date,'now',()=>now+600001)
     await resolveClient({text:'SEM'});assert.equal(calls,2)
+})
+test('resolve_client tolerates null roster fields and preserves per-user counts',async t=>{
+    clearClientCache();t.after(clearClientCache)
+    const rows=[{...roster[0],users:[null,'SEMOPS'],emails:[null,'different@example.com'],distinct_ids:[null,'C1DEV|01|SEM|SEMOPS'],
+        user_event_counts:[[null,null,null,99],['SEMOPS',null,'C1DEV|01|SEM|SEMOPS',64],['SEMOPS','different@example.com',null,6],[null,null,null,null]] as [string|null,string|null,string|null,number|null][]}]
+    t.mock.method(globalThis,'fetch',async()=>response(rows))
+    const clients=await knownClients()
+    assert.deepEqual(clients[0].user_event_counts,[['','','','99'],['SEMOPS','','C1DEV|01|SEM|SEMOPS','64'],['SEMOPS','different@example.com','','6'],['','','','']])
+    assert.deepEqual(clients[0].users,['','SEMOPS']);assert.deepEqual(clients[0].emails,['','different@example.com'])
+    for(const text of ['SEMOPS','different@example.com','C1DEV|01|SEM|SEMOPS']) {
+        assert.equal(matchClients(text,rows)[0].user_events,70)
+        assert.equal((await resolveClient({text}))[0].user_events,70)
+    }
+})
+test('resolve_client shares one roster query for windows within the same UTC days',async t=>{
+    clearClientCache();t.after(clearClientCache);let calls=0
+    t.mock.method(globalThis,'fetch',async()=>{calls++;return response(roster)})
+    for(const minute of ['01','42']) await resolveClient({text:'SEM',from:new Date(`2026-11-18T08:${minute}:00Z`),to:new Date(`2026-11-20T12:${minute}:00Z`)})
+    assert.equal(calls,1)
+    await resolveClient({text:'SEM',from:new Date('2026-11-17T08:01:00Z'),to:new Date('2026-11-20T12:01:00Z')})
+    assert.equal(calls,2)
 })
 test('resolve_client supports the configured client property instead of distinct-id extraction',async t=>{
     clearClientCache();const previous=config.properties.clientFromDistinctId;config.properties.clientFromDistinctId=0;t.after(()=>{config.properties.clientFromDistinctId=previous;clearClientCache()})
@@ -259,6 +280,7 @@ test('data_guide exposes configured version, identity, coverage cache and SQL; r
     const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(a);const client=new Client({name:'test',version:'1'});await client.connect(b)
     try {
         const guide=payload(await client.callTool({name:'data_guide',arguments:{}}))
+        assert.equal(guide.run_sql,'posthog_exec command: call execute-sql {"query":"<HogQL>"}');assert.deepEqual(guide.sql_notes,['windowFunnel needs toDateTime(timestamp), not the DateTime64 timestamp'])
         assert.equal(guide.properties.version.name,'title');assert.equal(guide.events.screen,'PageView')
         assert.equal(guide.identity.CLIENT_FROM_DISTINCT_ID,3);assert.equal(guide.identity.separator,'|')
         assert.equal(guide.identity.client.part,3);assert.equal(guide.identity.client.value,'SEM')

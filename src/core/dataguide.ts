@@ -25,6 +25,8 @@ export async function dataGuide() {
             client:{part:clientPart || null,property:clientPart ? null : config.properties.client,value:clientPart ? example.split(separator)[clientPart-1] ?? null : null,expression:`toString(${P.client})`},
             user:{part:userPart || null,value:userPart ? example.split(separator)[userPart-1] ?? null : example || null,expression:userExpr()}},
         coverage,
+        run_sql:'posthog_exec command: call execute-sql {"query":"<HogQL>"}',
+        sql_notes:['windowFunnel needs toDateTime(timestamp), not the DateTime64 timestamp'],
         examples:[
             `SELECT ${screen} AS screen, uniq(properties.$session_id) AS sessions FROM events WHERE event = ${literal(reg.events.screen)} GROUP BY screen LIMIT 20`,
             `SELECT ${screen} AS screen, count() AS opens FROM events WHERE event = ${literal(reg.events.screen)} AND ${action} = ${literal(reg.screenActions.open[0] || 'OPEN')} GROUP BY screen LIMIT 20`,
