@@ -840,6 +840,10 @@ if s.count(old) != 1:
     sys.exit("PostHog's migrate-minio-to-seaweedfs.js is not the one this script was tested with; stopping before copying.")
 open(p, "w").write(s.replace(old, "excludePrefixes: ['session_recordings/', 'session_recordings_lts/', 'session_recording_batches/', 'query_cache/'],"))
 PYEOF
+    # The file is bind-mounted into the plugins container, where Node runs as PostHog's non-root user. Created
+    # under a strict umask (077 is common for domain accounts), it was 0600 and the copier failed with EACCES.
+    # It holds PostHog's own script only (no secrets), so it can be world-readable.
+    chmod 0644 "$js"
     printf 'services:\n    plugins:\n        volumes:\n            - %s:/code/nodejs/bin/migrate-minio-to-seaweedfs.js:ro\n' "$js" > "$STATE/storage-copier.yml"
 }
 hobby_storage() { echo y | COMPOSE_FILE="$(grep -E '^COMPOSE_FILE=' .env | cut -d= -f2-):$STATE/storage-copier.yml" bash posthog/bin/migrate-storage-hobby --volume "$(recall minio_volume)" "$1"; }
