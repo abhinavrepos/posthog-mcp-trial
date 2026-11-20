@@ -147,9 +147,12 @@ if (ph.mcpUrl && f.posthogMcp) {
         const key = await get(`${ph.host}/api/personal_api_keys/@current/`, { authorization: `Bearer ${ph.mcpApiKey}` }).catch(() => null)
         const scopes: string[] = key?.body?.scopes || []
         if (key?.status !== 200) say('warn', 'PostHog MCP key', 'could not be checked here (is it for another PostHog?)')
-        else if (scopes.includes('*') || scopes.includes('session_recording:read') || scopes.includes('session_recording:write'))
-            say('fail', 'PostHog MCP key can read replays', 'make a key without session_recording scopes: Claude must never see replays')
-        else say('ok', 'PostHog MCP key has no replay access', scopes.join(', '))
+        // Lens is a display layer: the agent finds and opens replays through PostHog's own tools, read only.
+        else if (scopes.includes('*') || scopes.some(s => s.endsWith(':write')))
+            say('fail', 'PostHog MCP key can write', 'make a read-only key: bash deploy/posthog-mcp/up.sh --new-key')
+        else if (!scopes.includes('session_recording:read'))
+            say('fail', 'PostHog MCP key cannot read replays', 'run bash deploy/posthog-mcp/up.sh, which adds session_recording:read')
+        else say('ok', 'PostHog MCP key is read-only and can read replays', scopes.join(', '))
     }
 }
 
