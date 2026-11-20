@@ -3,6 +3,30 @@
 What went wrong while rehearsing today's deployment and load test, what caused it, and what was done.
 Newest first. Times are UTC.
 
+## 5. Hard reset of the whole PostHog stack (04:27-04:37): works, with one trap
+
+- `cd /opt/posthog && docker compose down` removed every PostHog container (data volumes kept) in 44 s.
+  Two containers stay (the status page and PostHog's MCP server are separate compose projects on
+  PostHog's network), so "network still in use" is expected.
+- **Trap:** `systemctl start posthog` afterwards does nothing: the unit is `Type=oneshot` with
+  `RemainAfterExit=yes`, so systemd still thinks PostHog is running. Use **`systemctl restart posthog`**.
+- After `systemctl restart posthog`: PostHog healthy in about 8 min, `posthog-lens check` READY, nothing
+  restarting, a new event reached ClickHouse in about 6 s.
+- **Hard-reset procedure for production:** `cd /opt/posthog && sudo docker compose down` then
+  `sudo systemctl restart posthog`, then `sudo posthog-lens restart` and `sudo posthog-lens check`.
+
+## 4. 1,000 events per second for 5 minutes (04:11-04:24): passed, nothing lost
+
+- 299,997 sent, 299,997 accepted, 0 failed requests; capture latency p50 34 ms, p99 104 ms, max 305 ms.
+- All 299,997 in ClickHouse (missing 0); webhook destination 14,944 of 14,944 delivered, none twice;
+  no transformation or destination failures; no container restarts.
+- Kafka lag peaked at ~188,000 for ClickHouse ingestion; the pipeline needed 7.2 min after the load
+  stopped to catch up. **This machine (8 cores, 30 GB) takes 1,000/s as a burst without loss, but its
+  sustained processing rate is lower (roughly 400-700/s).** Size production for the sustained rate.
+- Lens over MCP during the peak (Codex as the client): 17 calls, 0 crashes, 0 rate limits, slowest 5.4 s,
+  no private data. Small bug: `error_blast_radius`'s validation message gives an example without the
+  fields it asks for.
+
 ## 3. Status page could not reach Lens behind ufw (04:10, fixed 04:12)
 
 - Fresh install on the main machine finished at 04:07 (58 min of PostHog's first database setup).
