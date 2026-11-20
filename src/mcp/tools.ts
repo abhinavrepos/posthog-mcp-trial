@@ -6,7 +6,7 @@ import { config, posthogMcpActive } from '../core/config.ts'
 import { resolveClient } from '../core/resolve.ts'
 import { dataGuide, dataCoverage } from '../core/dataguide.ts'
 import { findSessions } from '../core/appevents.ts'
-import { replayUrl } from '../core/posthog.ts'
+import { replayUrl, markPartial } from '../core/posthog.ts'
 import { renderClip, clipName, pendingRenders } from '../core/clip.ts'
 import { pinGraph, listPinned, unpinGraph, graphSchema, pinnedUrl } from '../core/pinned.ts'
 import { ToolInputError } from '../core/toolinputerror.ts'
@@ -77,13 +77,14 @@ export function registerTools(server:McpServer,_ai?:unknown,caller?:Caller,_raw=
         const context=toolContext.getStore();if(context)context.window=window
         const matches=await resolveClient({text:args.query,from:window.from,to:window.to})
         for(const m of matches)auditClient(m.id)
-        return jsonResult('Client matches',{matches:matches.map(({users,emails,distinct_ids,user_event_counts,events,last_seen,...m})=>({...m,last_seen_in_window:last_seen,client_events:events})),coverage:await dataCoverage().catch(()=>null)})
+        return jsonResult('Client matches',{...markPartial({}, !!matches.truncated), matches:matches.map(({users,emails,distinct_ids,user_event_counts,events,last_seen,...m})=>({...m,last_seen_in_window:last_seen,client_events:events})),coverage:await dataCoverage().catch(()=>null)})
     })
     server.registerTool('find_sessions',{description:'Find client sessions newest first. Optional screen matches dialog/tab name or code; what is a literal case-insensitive substring of action/message/control/event text; user accepts email or distinct-id user. Up to one year. Returns PostHog replay and Lens clip links; use next_cursor for older sessions. Screen and what are independent session filters; actions show their own screen, target counts and outcomes from same-screen messages before any other action; before/after list neighbouring events oldest to newest with millisecond times and signed dt_s. Event and recording bounds are separate. Pages cap actions at 10, screens at 15 and size near 20,000 characters. When the person wants a replay to watch, set recorded_only: true so only sessions with a playable recording come back.',inputSchema:{client:z.string().min(1).max(320),recorded_only:z.boolean().optional().describe('Only sessions with a recording (set when asked for a replay to watch).'),screen:z.string().max(200).optional(),what:z.string().max(500).optional(),user:z.string().max(320).optional(),...timeShape,limit:z.number().int().min(1).max(20).default(10),cursor:z.string().max(250).optional()},annotations:{readOnlyHint:true}},async args=>{
         const w=resolveTime(args,30)
         const context=toolContext.getStore();if(context)context.window=w
         if(+w.to-+w.from>366*86400000)throw new ToolInputError('Choose a time window of at most one year.')
         const matches=await resolveClient({text:args.client,from:w.from,to:w.to}), best=matches[0]
+        if(!best && matches.truncated)return jsonResult('Sessions',{sessions:[],...markPartial({},true)})
         if(!best)throw new ToolInputError('No client matches. Try a client code or user.')
         auditClient(best.id)
         if ((best as {outside_window?:boolean}).outside_window) return jsonResult('Sessions',{sessions:[],client:best.id,matched_user:best.matched_user,note:`${best.name || best.id} exists but has no events between ${w.from.toISOString().slice(0,10)} and ${new Date(+w.to-1).toISOString().slice(0,10)}. It was last seen ${String(best.last_seen).slice(0,10)}.`})

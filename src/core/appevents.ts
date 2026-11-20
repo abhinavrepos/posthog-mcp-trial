@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { config, ROOT } from './config.ts'
-import { hogql, replayUrl } from './posthog.ts'
+import { hogql, replayUrl, isTruncated, markPartial, type Completeness } from './posthog.ts'
 import { P } from './props.ts'
 import { userExpr, normalise } from './identity.ts'
 import { ToolInputError } from './toolinputerror.ts'
@@ -109,11 +109,14 @@ export async function observedAppEventNames(): Promise<string[] | undefined> {
     const rows = await hogql(`SELECT event FROM events WHERE timestamp >= now() - INTERVAL 7 DAY GROUP BY event LIMIT 1000`, {}, {cache:true,ttlMs:600000})
     return rows.map(r => String(r.event))
 }
-export async function newestSessions(sql: string, values: Record<string, unknown>, from: Date, to: Date, limit: number, by: 'first' | 'last'): Promise<Record<string, unknown>[]> {
+export async function newestSessions(sql: string, values: Record<string, unknown>, from: Date, to: Date, limit: number, by: 'first' | 'last'): Promise<Record<string, unknown>[] & Completeness> {
     const found = new Map<string, Record<string, unknown>>()
+    let partial = false
     for (let end = to, days = 7; end > from && found.size < limit; days = Math.min(days * 2, 90)) {
         const start = new Date(Math.max(+from, +end - days * 86_400_000))
-        for (const r of await hogql(sql, { ...values, from: start.toISOString(), to: end.toISOString() })) {
+        const rows = await hogql(sql, { ...values, from: start.toISOString(), to: end.toISOString() }, +to - +from > 31 * 86_400_000 ? { timeoutMs: 300_000 } : {})
+        partial ||= isTruncated(rows)
+        for (const r of rows) {
             const old = found.get(String(r.sid)), t = String(r[by])
             // A session crossing a slice edge: keep its earliest first / latest last.
             if (!old || (by === 'first' ? t < String(old[by]) : t > String(old[by]))) found.set(String(r.sid), r)
@@ -121,15 +124,15 @@ export async function newestSessions(sql: string, values: Record<string, unknown
         end = start
     }
     // Ties broken by session id, so a page boundary (find_trade's cursor) is stable.
-    return [...found.values()].sort((a, b) => String(b[by]).localeCompare(String(a[by])) || String(b.sid).localeCompare(String(a.sid))).slice(0, limit)
+    return markPartial([...found.values()].sort((a, b) => String(b[by]).localeCompare(String(a[by])) || String(b.sid).localeCompare(String(a.sid))).slice(0, limit), partial)
 }
 
 
-export async function recordingSpans(ids: string[]) {
+export async function recordingSpans(ids: string[]): Promise<Map<string, { start: string; end: string }> & Completeness> {
     if (!ids.length) return new Map<string, {start: string; end: string}>()
     const rows = await hogql(`SELECT session_id, min(min_first_timestamp) AS start, max(max_last_timestamp) AS end
         FROM raw_session_replay_events WHERE session_id IN {ids} GROUP BY session_id LIMIT 100`, {ids})
-    return new Map(rows.map(r => [String(r.session_id), {start: new Date(String(r.start)).toISOString(), end: new Date(String(r.end)).toISOString()}]))
+    return markPartial(new Map(rows.map(r => [String(r.session_id), {start: new Date(String(r.start)).toISOString(), end: new Date(String(r.end)).toISOString()}])), isTruncated(rows))
 }
 export interface SessionQuery { clientId: string; screen?: string; what?: string; user?: string; email?: string; from: Date; to: Date; limit?: number; cursor?: string; recordedOnly?: boolean }
 export async function findSessions(q: SessionQuery) {
@@ -165,6 +168,7 @@ export async function findSessions(q: SessionQuery) {
         return json.length + JSON.stringify(json).length + 100
     }
     let truncatedBySize = false
+    let partial = !!hits.truncated || !!spans.truncated
     const sessions = []
     for (const h of hits) {
         const sid = String(h.sid)
@@ -180,7 +184,8 @@ export async function findSessions(q: SessionQuery) {
             ${prop(reg,'action')} AS action, ${prop(reg,'button')} AS message, ${prop(reg,'control')} AS control, toFloat(properties.$time) AS ctime, toString(properties.$pathname) AS path, event
             FROM events WHERE timestamp >= {from} AND timestamp < {to} AND properties.$session_id = {sid}
             AND toString(${P.client}) = {client} AND ${userFilter} ORDER BY timestamp LIMIT 5000`,
-            {...values,...outcomeValues,message_dialogs:reg.dialogs.messages,notice_dialogs:reg.dialogs.notices,sid,from:q.from.toISOString(),to:q.to.toISOString()})
+            {...values,...outcomeValues,message_dialogs:reg.dialogs.messages,notice_dialogs:reg.dialogs.notices,sid,from:q.from.toISOString(),to:q.to.toISOString()}, +q.to - +q.from > 31 * 86_400_000 ? { timeoutMs: 300_000 } : {})
+        partial ||= isTruncated(ev) || ev.length >= 5000
         const onScreen = (e: Record<string, unknown>) => !q.screen || [e.dialog,e.name,e.tab,e.path].some(v=>String(v || '').toLowerCase().includes(q.screen!.toLowerCase()))
         const isMessage = (e: Record<string, unknown>) => [...reg.dialogs.messages,...reg.dialogs.notices].includes(String(e.dialog))
         const screenOf = (e: Record<string, unknown>) => String(e.name || e.tab || '')
@@ -234,7 +239,7 @@ export async function findSessions(q: SessionQuery) {
             events_in_session:Number(ev[0]?.events_in_session ?? ev.length), error_messages_in_session:Number(ev[0]?.error_messages_in_session ?? ev.filter(e=>isMessage(e) && isError(e)).length),
             recording:span ? true : recordingCheckFailed ? 'unknown' : false, offset_s:offset,
             replay_url:replayUrl(sid,offset), clip_url:`${config.service.publicUrl}/replays?url=${encodeURIComponent(replayUrl(sid,offset))}`,
-            ...(ev.length===5000 ? {truncated:true} : {})}
+            ...markPartial({}, isTruncated(ev) || ev.length >= 5000)}
         // A single unusually verbose session must still make progress through the cursor.
         if(!sessions.length) {
             while(pageSize([session]) > 18500 && session.matched_actions.length) session.matched_actions.pop()
@@ -246,7 +251,7 @@ export async function findSessions(q: SessionQuery) {
         sessions.push(session)
     }
     const last = hits[sessions.length-1]
-    return {sessions, ...(q.what && !sessions.length ? {hint:`No session in this window matched "${q.what}"${q.screen ? ` with screen "${q.screen}"` : ''}. what is a literal substring: try a shorter word or one distinctive word (for example the first word of the phrase), or drop the screen filter.`} : {}), ...((more || truncatedBySize) && last ? {next_cursor:`${last.last}|${last.sid}`} : {}),
+    return {sessions, ...markPartial({}, partial), ...(q.what && !sessions.length ? {hint:`No session in this window matched "${q.what}"${q.screen ? ` with screen "${q.screen}"` : ''}. what is a literal substring: try a shorter word or one distinctive word (for example the first word of the phrase), or drop the screen filter.`} : {}), ...((more || truncatedBySize) && last ? {next_cursor:`${last.last}|${last.sid}`} : {}),
         ...(truncatedBySize ? {truncated_by_size:true} : {}),
         note:recordingCheckFailed ? 'Recording availability could not be checked.' : sessions.length && !sessions.some(s=>s.recording===true) ? 'Sessions found, but none have a recording.' : 'Newest sessions first. Details are limited to 5000 events per session; matched actions to 10; screens to 15. Follow next_cursor for more sessions.'}
 }

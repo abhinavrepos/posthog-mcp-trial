@@ -32,7 +32,8 @@ export function resetPosthogBreaker(): void { consecutiveTimeouts = 0; breakerOp
 async function api<T>(path: string, init: RequestInit = {}, timeoutMs = 30_000): Promise<T> {
     requirePosthog()
     if (Date.now() < breakerOpenUntil) throw new PostHogError('PostHog is not answering: Lens paused calls to it for 30 s', 503)
-    let res: Response
+    let res: Response, responseText: string
+    const signal = AbortSignal.timeout(timeoutMs)
     try {
         res = await fetch(`${config.posthog.host}${path}`, {
             ...init,
@@ -41,22 +42,24 @@ async function api<T>(path: string, init: RequestInit = {}, timeoutMs = 30_000):
                 'content-type': 'application/json',
                 ...init.headers,
             },
-            signal: AbortSignal.timeout(timeoutMs),
+            signal,
         } as RequestInit)
+        // Consume the body under the same deadline, before counting this as an answer.
+        responseText = await res.text()
     } catch (error) {
-        if ((error as { name?: string })?.name === 'TimeoutError' && ++consecutiveTimeouts >= BREAKER_TIMEOUTS) breakerOpenUntil = Date.now() + BREAKER_OPEN_MS
+        if (((error as { name?: string })?.name === 'TimeoutError' || (signal.aborted && signal.reason?.name === 'TimeoutError')) && ++consecutiveTimeouts >= BREAKER_TIMEOUTS) breakerOpenUntil = Date.now() + BREAKER_OPEN_MS
         throw error
     }
-    consecutiveTimeouts = 0
+    resetPosthogBreaker()
     if (!res.ok) {
-        const body = await res.text().catch(() => '')
+        const body = responseText
         let detail = body.slice(0, 300)
         try {
             detail = JSON.parse(body).detail ?? detail
         } catch {}
         throw new PostHogError(`PostHog ${init.method || 'GET'} ${path.split('?')[0]} → ${res.status}: ${detail}`, res.status)
     }
-    const text = await res.text()
+    const text = responseText
     try { return JSON.parse(text) as T }
     catch { throw new PostHogError(`PostHog ${init.method || 'GET'} ${path.split('?')[0]} → ${res.status}: unreadable answer (not JSON)`, 502) }
 }
@@ -64,6 +67,17 @@ async function api<T>(path: string, init: RequestInit = {}, timeoutMs = 30_000):
 const projectPath = (p: string) => `/api/projects/${config.posthog.projectId}${p}`
 
 export type Row = Record<string, unknown>
+
+export const POSTHOG_ROW_CAP = 50_000
+export interface Completeness { truncated?: boolean; warning?: string }
+export const PARTIAL_WARNING = 'Results are partial because a row limit was reached. Pick a shorter range or narrower filters.'
+/** Array metadata preserves existing callers; JSON endpoints must copy it onto their response. */
+export function isTruncated(rows: unknown[] & Completeness): boolean {
+    return rows.truncated === true || rows.length >= POSTHOG_ROW_CAP
+}
+export function markPartial<T extends object>(value: T, partial: boolean): T & Completeness {
+    return partial ? Object.assign(value, { truncated: true, warning: PARTIAL_WARNING }) : value
+}
 
 /** Runs a HogQL query and returns rows as objects keyed by column name. Give every query that can
  * return more than 100 rows its own LIMIT: without one, PostHog returns only the first 100. */
@@ -158,16 +172,18 @@ async function readSlot<T>(work: () => Promise<T>): Promise<T> {
     try { return await work() }
     finally { const next = readers.shift(); if (next) next(); else activeReads-- }
 }
-export async function hogql(query: string, values: Record<string, unknown> = {}, options: HogqlOptions = {}): Promise<Row[]> {
+export async function hogql(query: string, values: Record<string, unknown> = {}, options: HogqlOptions = {}): Promise<Row[] & Completeness> {
     const read = async () => {
         for (let attempt = 0; ; attempt++) {
             try {
                 return await readSlot(async () => {
-                    const out = await api<{ columns: string[]; results: unknown[][] }>(projectPath('/query/'), {
+                    const out = await api<{ columns: string[]; results: unknown[][]; hasMore?: boolean; has_more?: boolean; limit?: number; row_limit?: number }>(projectPath('/query/'), {
                         method: 'POST',
                         body: JSON.stringify({ query: { kind: 'HogQLQuery', query, values }, refresh: 'force_blocking' }),
                     }, options.timeoutMs ?? 30_000)
-                    return out.results.map((r) => Object.fromEntries(out.columns.map((c, i) => [c, r[i]])))
+                    const rows = out.results.map((r) => Object.fromEntries(out.columns.map((c, i) => [c, r[i]])))
+                    const limit = out.limit ?? out.row_limit
+                    return markPartial(rows, rows.length >= POSTHOG_ROW_CAP || out.hasMore === true || out.has_more === true || (typeof limit === 'number' && limit > 0 && rows.length >= limit))
                 })
             } catch (error) {
                 if (attempt >= (options.retries ?? 1) || !retryable(error)) throw error

@@ -11,7 +11,7 @@
 // Automatic events that are not a person doing something (LIVE_IGNORE_EVENTS) are left out.
 //
 // Every query has its own LIMIT: without one, PostHog's query API returns only the first 100 rows.
-import { hogql, type Row } from './posthog.ts'
+import { hogql, isTruncated, markPartial, type Completeness, type Row } from './posthog.ts'
 
 type Run = typeof hogql
 import { P } from './props.ts'
@@ -141,7 +141,7 @@ const iso = (v: unknown) => (v ? new Date(String(v)).toISOString() : undefined)
 
 export interface PresenceReport {
     query: PresenceQuery
-    truncated?: boolean // the report covers only the first grouped rows when the safety limit is reached
+    truncated?: boolean // a query or a breakdown reached its row limit
     warning?: string
     totals: Time & { clients: number; people: number; sessions: number; actions: number }
     days: (Time & { day: string; clients: number; people: number; sessions: number })[]
@@ -150,80 +150,122 @@ export interface PresenceReport {
     people?: (Time & { user: string; sessions: number; first: string; last: string })[]
 }
 
-// One row per session/hour keeps exact distinct counts without returning individual actions.
-const REPORT_ROW_LIMIT = 200_000
+// All distinct counts and millisecond sums stay in PostHog. Each response is bounded below
+// PostHog's 50,000-row cap; separate aggregates are supported by HogQL without CTE reuse.
+const readOptions = (q: PresenceQuery) => (Date.parse(q.to) - Date.parse(q.from)) / DAY + 1 > 31 ? { timeoutMs: 300_000 } : {}
+const counts = (r: Row) => ({ clients: Number(r.clients || 0), people: Number(r.people || 0), sessions: Number(r.sessions || 0) })
 
-type Bucket = {
-    open_ms: number; active_ms: number; actions: number
-    clients: Set<string>; people: Set<string>; sessions: Set<string>
-    first: string; last: string
-}
-const bucket = (): Bucket => ({ open_ms: 0, active_ms: 0, actions: 0, clients: new Set(), people: new Set(), sessions: new Set(), first: '', last: '' })
-function add(b: Bucket, r: Row) {
-    b.open_ms += Number(r.open_ms || 0)
-    b.active_ms += Number(r.active_ms || 0)
-    b.actions += Number(r.actions || 0)
-    b.clients.add(String(r.client))
-    b.people.add(String(r.client) + '\u0000' + String(r.user))
-    b.sessions.add(String(r.sid))
-    const first = iso(r.first)!, last = iso(r.last)!
-    if (!b.first || first < b.first) b.first = first
-    if (!b.last || last > b.last) b.last = last
-}
-function at(map: Map<string, Bucket>, key: string): Bucket {
-    let b = map.get(key)
-    if (!b) map.set(key, b = bucket())
-    return b
-}
-
-/** One window for the whole range. The client picker covers every client, even with filters. */
+/** The client picker covers every client, even with filters. Round only after SQL sums. */
 export async function presenceReport(q: PresenceQuery, settings = presenceSettings(), run: Run = hogql): Promise<PresenceReport> {
+    return spanDays(q) > CHUNK_DAYS ? longReport(q, settings, run) : rangeReport(q, settings, run)
+}
+
+const CHUNK_DAYS = 31
+// Finished chunks (ending before yesterday in UTC) do not change: keep them 6 h so a repeated year view
+// only recomputes the current month and the distinct pass. Bounded to a few years of chunks.
+const chunkCache = new Map<string, { at: number; value: Promise<PresenceReport> }>()
+const CHUNK_TTL_MS = 6 * 3600_000
+function cachedChunk(q: PresenceQuery, settings: PresenceSettings, run: Run): Promise<PresenceReport> {
+    const done = q.to < new Date(Date.now() - DAY).toISOString().slice(0, 10)
+    if (!done || run !== hogql) return rangeReport(q, settings, run)
+    const key = JSON.stringify([q, settings.ignore_events])
+    const hit = chunkCache.get(key)
+    if (hit && Date.now() - hit.at < CHUNK_TTL_MS) return hit.value
+    const value = rangeReport(q, settings, run)
+    value.catch(() => chunkCache.delete(key))
+    chunkCache.set(key, { at: Date.now(), value })
+    if (chunkCache.size > 100) chunkCache.delete(chunkCache.keys().next().value!)
+    return value
+}
+const spanDays = (q: PresenceQuery) => Math.round((Date.parse(q.to) - Date.parse(q.from)) / DAY) + 1
+const addDays = (d: string, n: number) => new Date(Date.parse(d) + n * DAY).toISOString().slice(0, 10)
+
+/** Long ranges: PostHog stops one query at 60 s and a memory limit, so a year runs as month-sized exact
+ * chunks (time and actions add up exactly; days never overlap) plus one cheap distinct-count pass over the
+ * whole range for sessions, people and clients, which cannot be added across chunks. */
+async function longReport(q: PresenceQuery, settings: PresenceSettings, run: Run): Promise<PresenceReport> {
+    const chunks: PresenceQuery[] = []
+    for (let from = q.from; from <= q.to; from = addDays(from, CHUNK_DAYS)) {
+        const to = addDays(from, CHUNK_DAYS - 1)
+        chunks.push({ ...q, from, to: to < q.to ? to : q.to })
+    }
+    const parts: PresenceReport[] = new Array(chunks.length)
+    let next = 0
+    // Two at a time: PostHog refuses more concurrent heavy queries per project (429).
+    await Promise.all([0, 1].map(async () => { while (next < chunks.length) { const i = next++; parts[i] = await cachedChunk(chunks[i]!, settings, run) } }))
     const v = values(q, settings)
-    const all = timedEvents({ ...q, client: undefined, user: undefined }, false, { names: false })
-    const rows = await run(
-        `SELECT client, user, sid, toString(day) AS day, hour, count() AS actions, min(ts) AS first, max(ts) AS last, ${TIME}
-         FROM (${all}) GROUP BY client, user, sid, day, hour ORDER BY day, hour, client, user, sid LIMIT ${REPORT_ROW_LIMIT + 1}`, v)
-    // Look up names after aggregation: no display strings pass through the window sort.
-    const clientIds = [...new Set(rows.slice(0, REPORT_ROW_LIMIT).map((r) => String(r.client)))]
-    const names = clientIds.length ? await run(
-        `SELECT toString(${P.client}) AS client, argMax(toString(${P.clientName}), timestamp) AS client_name
-         FROM events WHERE timestamp >= toDateTime({from}, {tz})
-           AND timestamp < toDateTime({to}, {tz}) + toIntervalDay(1)
-           AND client IN {clients} AND notEmpty(toString(properties.$session_id)) AND event NOT IN {ignore}
-         GROUP BY client LIMIT ${REPORT_ROW_LIMIT}`, { ...v, clients: clientIds }) : []
-    const nameOf = new Map(names.map((r) => [String(r.client), String(r.client_name || r.client)]))
-    const total = bucket()
-    const days = new Map<string, Bucket>(), hours = new Map<string, Bucket>()
-    const clients = new Map<string, Bucket>(), people = new Map<string, Bucket>()
-    for (const r of rows.slice(0, REPORT_ROW_LIMIT)) {
-        add(at(clients, String(r.client)), r)
-        if ((q.client && r.client !== q.client) || (q.user && r.user !== q.user)) continue
-        add(total, r)
-        add(at(days, String(r.day)), r)
-        add(at(hours, JSON.stringify([String(r.day), Number(r.hour)])), r)
-        if (q.client) add(at(people, String(r.user)), r)
+    // Users come from the distinct id here: the person-email join makes a year-wide pass exceed PostHog's 60 s cap.
+    const distinct = await run(
+        `SELECT c, u, uniqExactIf(client, keep) AS clients, uniqExactIf(tuple(client, user), keep) AS people, uniqExactIf(sid, keep) AS sessions,
+                uniqExact(tuple(client, user)) AS all_people, uniqExact(sid) AS all_sessions
+         FROM (SELECT toString(${P.client}) AS client, ${userExpr()} AS user, toString(properties.$session_id) AS sid, client AS c, concat('u:', user) AS u,
+                      ${q.client ? 'client = {client}' : '1'} AND ${q.user ? 'user = {user}' : '1'} AS keep
+               FROM events
+               WHERE timestamp >= toDateTime({from}, {tz}) AND timestamp < toDateTime({to}, {tz}) + toIntervalDay(1)
+                 AND notEmpty(toString(${P.client})) AND notEmpty(toString(properties.$session_id)) AND event NOT IN {ignore})
+         GROUP BY GROUPING SETS ((), (c), (u)) LIMIT 20000`, v, readOptions(q))
+    const dTotal = distinct.find((r) => !r.c && !r.u) || {}
+    const dClient = new Map(distinct.filter((r) => r.c).map((r) => [String(r.c), r]))
+    const dUser = new Map(distinct.filter((r) => r.u).map((r) => [String(r.u).slice(2), r]))
+    const sum = <T extends Time>(xs: T[]) => xs.reduce((a, x) => ({ open_s: a.open_s + x.open_s, active_s: a.active_s + x.active_s, idle_s: a.idle_s + x.idle_s }), { open_s: 0, active_s: 0, idle_s: 0 })
+    const clients = new Map<string, PresenceReport['clients'][number]>()
+    for (const c of parts.flatMap((p) => p.clients)) {
+        const prev = clients.get(c.client_id)
+        if (!prev) { clients.set(c.client_id, { ...c }); continue }
+        Object.assign(prev, sum([prev, c]), { first: c.first < prev.first ? c.first : prev.first, last: c.last > prev.last ? c.last : prev.last, client_name: c.last > prev.last ? c.client_name : prev.client_name })
     }
-    const counts = (b: Bucket) => ({ clients: b.clients.size, people: b.people.size, sessions: b.sessions.size })
-    // Round only after summing milliseconds, matching the former SQL aggregates.
-    const duration = (b: Bucket) => time({ open_ms: b.open_ms, active_ms: b.active_ms })
-    const byTime = ([, a]: [string, Bucket], [, b]: [string, Bucket]) => b.open_ms - a.open_ms
-    return {
+    const people = new Map<string, NonNullable<PresenceReport['people']>[number]>()
+    for (const u of parts.flatMap((p) => p.people || [])) {
+        const prev = people.get(u.user)
+        if (!prev) { people.set(u.user, { ...u }); continue }
+        Object.assign(prev, sum([prev, u]), { first: u.first < prev.first ? u.first : prev.first, last: u.last > prev.last ? u.last : prev.last })
+    }
+    const byOpen = (a: Time, b: Time) => b.open_s - a.open_s
+    return markPartial({
         query: q,
-        ...(rows.length > REPORT_ROW_LIMIT ? { truncated: true, warning: 'Report is partial. Pick a shorter date range.' } : {}),
-        totals: { ...counts(total), actions: total.actions, ...duration(total) },
-        days: [...days].sort(([a], [b]) => a.localeCompare(b)).map(([day, b]) => ({ day, ...counts(b), ...duration(b) })),
-        hours: [...hours].map(([key, b]) => {
-            const [day, hour] = JSON.parse(key) as [string, number]
-            return { day, hour, people: b.people.size, ...duration(b) }
-        }).sort((a, b) => a.day.localeCompare(b.day) || a.hour - b.hour),
-        clients: [...clients].sort(byTime).slice(0, 2000).map(([client, b]) => ({
-            client_id: client, client_name: nameOf.get(client) || client, people: b.people.size,
-            sessions: b.sessions.size, first: b.first, last: b.last, ...duration(b),
-        })),
-        people: q.client ? [...people].sort(byTime).slice(0, 2000).map(([user, b]) => ({
-            user, sessions: b.sessions.size, first: b.first, last: b.last, ...duration(b),
-        })) : undefined,
-    }
+        totals: { clients: Number(dTotal.clients || 0), people: Number(dTotal.people || 0), sessions: Number(dTotal.sessions || 0),
+            actions: parts.reduce((a, p) => a + p.totals.actions, 0), ...sum(parts.map((p) => p.totals)) },
+        days: parts.flatMap((p) => p.days),
+        hours: parts.flatMap((p) => p.hours),
+        clients: [...clients.values()].map((c) => ({ ...c, people: Number(dClient.get(c.client_id)?.all_people || 0), sessions: Number(dClient.get(c.client_id)?.all_sessions || 0) })).sort(byOpen).slice(0, 2000),
+        people: q.client ? [...people.values()].map((u) => ({ ...u, sessions: Number(dUser.get(u.user)?.sessions || 0) })).sort(byOpen).slice(0, 2000) : undefined,
+    }, parts.some((p) => p.truncated) || isTruncated(distinct) || distinct.length >= 20000)
+}
+
+async function rangeReport(q: PresenceQuery, settings: PresenceSettings, run: Run): Promise<PresenceReport> {
+    const v = values(q, settings), options = readOptions(q)
+    // ONE pass over the range: GROUPING SETS give totals, days, day×hour, clients and (with a client) people.
+    // Parallel per-breakdown queries each re-ran the window over a year and PostHog refused them (429).
+    // Key columns are strings or hour+1, so an empty value means "not grouped by this key".
+    // `keep` applies the client/user selection; the client picker (c rows) always covers every client.
+    const sets = '(), (d), (d, h1), (c), (u)'
+    const rows = await run(
+        `SELECT d, h1, c, u,
+                uniqExactIf(client, keep) AS clients, uniqExactIf(tuple(client, user), keep) AS people, uniqExactIf(sid, keep) AS sessions,
+                countIf(keep) AS actions, sumIf(gap, keep) AS open_ms, sumIf(least(gap, {gap_ms}), keep) AS active_ms, minIf(ts, keep) AS first, maxIf(ts, keep) AS last,
+                uniqExact(tuple(client, user)) AS all_people, uniqExact(sid) AS all_sessions, sum(gap) AS all_open_ms, sum(least(gap, {gap_ms})) AS all_active_ms,
+                min(ts) AS all_first, max(ts) AS all_last, argMax(client_name, ts) AS client_name
+         FROM (SELECT *, toString(day) AS d, hour + 1 AS h1, client AS c, concat('u:', user) AS u,
+                      ${q.client ? 'client = {client}' : '1'} AND ${q.user ? 'user = {user}' : '1'} AS keep
+               FROM (${timedEvents({ ...q, client: undefined, user: undefined })}))
+         GROUP BY GROUPING SETS (${sets}) LIMIT 20000`, v, options)
+    const key = (r: Row) => [r.d ? 'd' : '', Number(r.h1) ? 'h' : '', r.c ? 'c' : '', r.u ? 'u' : ''].join('')
+    const of = (k: string) => rows.filter((r) => key(r) === k)
+    const all = (r: Row) => ({ open_ms: r.all_open_ms, active_ms: r.all_active_ms })
+    const total = of('')[0] || {}
+    const days = of('d').filter((r) => Number(r.actions) > 0).sort((x, y) => String(x.d).localeCompare(String(y.d)))
+    const hours = of('dh').filter((r) => Number(r.actions) > 0).sort((x, y) => String(x.d).localeCompare(String(y.d)) || Number(x.h1) - Number(y.h1))
+    const clients = of('c').sort((x, y) => Number(y.all_open_ms) - Number(x.all_open_ms) || String(x.c).localeCompare(String(y.c))).slice(0, 2000)
+    const people = of('u').filter((r) => Number(r.actions) > 0).sort((x, y) => Number(y.open_ms) - Number(x.open_ms) || String(x.u).localeCompare(String(y.u))).slice(0, 2000)
+    return markPartial({
+        query: q,
+        totals: { ...counts(total), actions: Number(total.actions || 0), ...time(total) },
+        days: days.map(r => ({ day: String(r.d), ...counts(r), ...time(r) })),
+        hours: hours.map(r => ({ day: String(r.d), hour: Number(r.h1) - 1, people: Number(r.people || 0), ...time(r) })),
+        clients: clients.map(r => ({ client_id: String(r.c), client_name: String(r.client_name || r.c),
+            people: Number(r.all_people || 0), sessions: Number(r.all_sessions || 0), first: iso(r.all_first)!, last: iso(r.all_last)!, ...time(all(r)) })),
+        people: q.client ? people.map(r => ({ user: String(r.u).slice(2), sessions: Number(r.sessions || 0), first: iso(r.first)!, last: iso(r.last)!, ...time(r) })) : undefined,
+    }, isTruncated(rows) || rows.length >= 20000)
 }
 
 export interface SessionRow extends Time {
@@ -237,13 +279,13 @@ export interface SessionRow extends Time {
 }
 
 /** The session log: every session in the range for one client (and optionally one person). */
-export async function presenceSessions(q: PresenceQuery, settings = presenceSettings(), limit = 1000, run: Run = hogql): Promise<SessionRow[]> {
+export async function presenceSessions(q: PresenceQuery, settings = presenceSettings(), limit = 1000, run: Run = hogql): Promise<SessionRow[] & Completeness> {
     const v = values(q, settings)
     // No display strings through the window sort; names are looked up for the few clients found.
     const rows = await run(
         `SELECT sid, any(user) AS user, any(client) AS client, min(ts) AS start, max(ts) AS end, count() AS actions, ${TIME}
          FROM (${timedEvents(q, false, { names: false })}) GROUP BY sid ORDER BY start DESC LIMIT {limit}`,
-        { ...v, limit }
+        { ...v, limit: limit + 1 }, readOptions(q)
     )
     const clientIds = [...new Set(rows.map((r) => String(r.client)))]
     const names = clientIds.length
@@ -252,11 +294,11 @@ export async function presenceSessions(q: PresenceQuery, settings = presenceSett
                FROM events WHERE timestamp >= toDateTime({from}, {tz}) AND timestamp < toDateTime({to}, {tz}) + toIntervalDay(1)
                  AND client IN {clients} AND notEmpty(toString(properties.$session_id)) AND event NOT IN {ignore}
                GROUP BY client LIMIT 2000`,
-              { ...v, clients: clientIds }
+              { ...v, clients: clientIds }, readOptions(q)
           )
         : []
     const nameOf = new Map(names.map((r) => [String(r.client), String(r.client_name || '')]))
-    return rows.map((r) => ({
+    return markPartial(rows.slice(0, limit).map((r) => ({
         session_id: String(r.sid),
         user: String(r.user),
         client_id: String(r.client),
@@ -265,7 +307,7 @@ export async function presenceSessions(q: PresenceQuery, settings = presenceSett
         end: iso(r.end)!,
         actions: Number(r.actions),
         ...time(r),
-    }))
+    })), isTruncated(rows) || isTruncated(names) || rows.length > limit)
 }
 
 export interface LivePerson {
@@ -371,7 +413,8 @@ export interface PersonDay {
     totals: Time & { sessions: number; actions: number; first?: string; last?: string; longest_pause_s: number }
     sessions: (SessionRow & { recording_start?: string })[]
     actions: PersonAction[]
-    truncated: boolean // more actions than `limit`: the list and the ticks stop there, the totals do not
+    warning?: string
+    truncated: boolean // action, session, or recording lookup reached a row limit
 }
 
 /** One person's day: their sessions with time in the app, active and idle, every action in order,
@@ -384,17 +427,17 @@ export async function personDay(q: PresenceQuery & { user: string }, settings = 
     const sessions = await presenceSessions(q, settings, 1000, run)
     const ids = sessions.map((x) => x.session_id).filter(Boolean)
     const rows = ids.length
-        ? await run(`SELECT ts, sid, client, event, etype, chain, screen, gap FROM (${timedEvents(q, true, { names: false, sessions: true })}) ORDER BY ts LIMIT {limit}`, { ...v, limit: limit + 1, sids: ids })
+        ? await run(`SELECT ts, sid, client, event, etype, chain, screen, gap FROM (${timedEvents(q, true, { names: false, sessions: true })}) ORDER BY ts LIMIT {limit}`, { ...v, limit: limit + 1, sids: ids }, readOptions(q))
         : []
     const recs = ids.length
         ? await run(
               `SELECT session_id, min(min_first_timestamp) AS start FROM raw_session_replay_events
                WHERE session_id IN {ids} GROUP BY session_id LIMIT 1000`,
-              { ids }
+              { ids }, readOptions(q)
           )
         : []
     const recStart = new Map(recs.map((r) => [String(r.session_id), iso(r.start)!]))
-    const truncated = rows.length > limit
+    const truncated = rows.length > limit || isTruncated(rows) || !!sessions.truncated || isTruncated(recs)
     const endOf = new Map(sessions.map((x) => [x.session_id, x.end]))
     const actions: PersonAction[] = rows.slice(0, limit).map((r) => ({
         t: iso(r.ts)!,
@@ -426,6 +469,7 @@ export async function personDay(q: PresenceQuery & { user: string }, settings = 
         },
         sessions: ordered.map((x) => (recStart.has(x.session_id) ? { ...x, recording_start: recStart.get(x.session_id) } : x)),
         actions,
+        ...markPartial({}, truncated),
         truncated,
     }
 }

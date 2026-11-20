@@ -26,7 +26,9 @@ function cached<T>(key: string, ttl: number, make: () => Promise<T>): Promise<T>
     if (cache.size > 300) for (const k of [...cache.keys()].slice(0, 100)) cache.delete(k)
     return value
 }
-const ttlFor = (q: PresenceQuery) => (includesToday(q) ? 30_000 : 10 * 60_000)
+// Ranges that ended before yesterday no longer change: a year view is computed once and kept 6 h.
+const finished = (q: PresenceQuery) => q.to < new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+const ttlFor = (q: PresenceQuery) => (includesToday(q) ? 30_000 : finished(q) ? 6 * 3600_000 : 10 * 60_000)
 
 export async function handleLive(req: IncomingMessage, res: ServerResponse, url: URL, _v: Viewer): Promise<boolean> {
     const p = url.pathname
@@ -59,7 +61,8 @@ export async function handleLive(req: IncomingMessage, res: ServerResponse, url:
                 return true
             }
             if (!q.client) return (json(res, 400, { error: 'Pick a client first.' }), true)
-            json(res, 200, { sessions: await cached(`sessions|${JSON.stringify(q)}`, ttlFor(q), () => presenceSessions(q)) })
+            const sessions = await cached(`sessions|${JSON.stringify(q)}`, ttlFor(q), () => presenceSessions(q))
+            json(res, 200, { sessions, ...(sessions.truncated ? { truncated: true, warning: sessions.warning } : {}) })
             return true
         }
     } catch (e) {
@@ -144,7 +147,7 @@ details.how summary{cursor:pointer;font-weight:500}details.how li{margin:4px 0}
 <div class="card"><div class="row" style="align-items:center;margin-bottom:8px"><h2 id="list-title" style="margin:0;flex:1">Clients</h2><span id="who-pill"></span><button class="ghost" id="list-csv" type="button" disabled>Download CSV</button></div>
 <div class="table-wrap" role="region" aria-label="Recent actions" tabindex="0"><table id="list"></table><div id="list-pager"></div></div><p class="small muted" id="list-note"></p></div>
 </div><div class="card hidden" id="sessions-card"><div class="row" style="align-items:center;margin-bottom:8px"><h2 style="margin:0;flex:1" id="sessions-title">Sessions</h2><button class="ghost" id="sessions-csv" type="button" disabled>Download CSV</button></div>
-<div class="table-wrap" role="region" aria-label="Sessions" tabindex="0"><table id="sessions"></table><div id="sessions-pager"></div></div><p class="small"><button class="ghost hidden" id="more" type="button">Show more</button></p></div>
+<p class="small" id="sessions-warning"></p><div class="table-wrap" role="region" aria-label="Sessions" tabindex="0"><table id="sessions"></table><div id="sessions-pager"></div></div><p class="small"><button class="ghost hidden" id="more" type="button">Show more</button></p></div>
 
 <details class="card how"><summary>How this works</summary><ul class="small">
 <li>Charts add everyone’s time: three people for an hour make 3 h.</li>
@@ -228,7 +231,7 @@ async function load(){syncUrl();const my=++busy,key=params(false).toString();$('
  finally{if(my===busy){$('report').classList.remove('loading');$('report').setAttribute('aria-busy','false')}}}
 async function loadSessions(){const my=++sbusy,key=params(true).toString();$('sessions-card').setAttribute('aria-busy','true');
  if(key!==sessionsKey){$('sessions-card').classList.add('hidden');$('sessions-csv').disabled=true}
- try{const r=await api('/replays/live/api/sessions?'+key);if(my!==sbusy||key!==params(true).toString())return;SESS=r.sessions;sessionsKey=key;renderSessions();liveStatus('sessions')}
+ try{const r=await api('/replays/live/api/sessions?'+key);if(my!==sbusy||key!==params(true).toString())return;SESS=r.sessions;$('sessions-warning').textContent=r.warning||'';sessionsKey=key;renderSessions();liveStatus('sessions')}
  catch(e){if(my===sbusy){if(key!==sessionsKey||!SESS.length)$('sessions-card').classList.add('hidden');liveStatus('sessions',e)}}
  finally{if(my===sbusy)$('sessions-card').setAttribute('aria-busy','false')}}
 
@@ -352,7 +355,7 @@ function tlModel(d){const acts=d.actions.map(a=>({...a,s:secOf(a.t)})).sort((a,b
  return{acts,sessions,lanes:Math.max(1,lanes.length)}}
 let TM=null;
 function renderTimeline(){const d=TL.data;TM=tlModel(d);const today=dayOf(new Date());
- if(d.actions.length&&d.client_name)TL.clientName=d.client_name;$('tl-title').textContent=d.user;$('tl-sub').className='small muted';$('tl-sub').removeAttribute('role');$('tl-sub').textContent=[TL.clientName||d.client_name,dayName(d.day)+(d.day===today?' (today)':'')].filter(Boolean).join(' · ');
+ if(d.actions.length&&d.client_name)TL.clientName=d.client_name;$('tl-title').textContent=d.user;$('tl-sub').className='small muted';$('tl-sub').removeAttribute('role');$('tl-sub').textContent=[TL.clientName||d.client_name,dayName(d.day)+(d.day===today?' (today)':''),d.warning].filter(Boolean).join(' · ');
  $('tl-day').value=d.day;$('tl-next').disabled=d.day>=today;$('tl-whole').checked=TL.whole;
  $('tl-facts').innerHTML='';const T=d.totals;
  if(!T.sessions){fact('No activity on','this day');}

@@ -1,14 +1,14 @@
 // Live client/user roster; cached for no longer than ten minutes per time window.
-import { hogql } from './posthog.ts'
+import { hogql, isTruncated, markPartial, type Completeness } from './posthog.ts'
 import { P } from './props.ts'
 import { normalise, userExpr } from './identity.ts'
 import { config } from './config.ts'
-export interface KnownClient { id:string; name:string; events:number; last_seen:string; users:(string|null)[]; emails?:(string|null)[]; distinct_ids?:(string|null)[]; user_event_counts?:[string|null,string|null,string|null,string|number|null][] }
+export interface KnownClient extends Completeness { id:string; name:string; events:number; last_seen:string; users:(string|null)[]; emails?:(string|null)[]; distinct_ids?:(string|null)[]; user_event_counts?:[string|null,string|null,string|null,string|number|null][] }
 export interface ClientMatch extends KnownClient { confidence:number; via:string; matched_user?:string; user_events?:number }
 const stringValue = (value:unknown) => String(value ?? '')
 const TEN_MINUTES = 600000, HOUR = 3600000
 const cache = new Map<string,{at:number; value:Promise<KnownClient[]>}>()
-type Roster = Map<string,string>
+type Roster = Map<string,string> & Completeness
 let emails: {at:number; value:Promise<Roster>} | undefined
 let recentNames: {at:number; value:Promise<Roster>} | undefined
 let names: {at:number; value:Roster} | undefined
@@ -23,7 +23,7 @@ function namesQuery(days:number, timeoutMs:number): Promise<Roster> {
     return hogql(`SELECT toString(${P.client}) AS id, argMax(toString(${P.clientName}), timestamp) AS name
         FROM events WHERE timestamp >= {from} AND timestamp < {to} AND notEmpty(toString(${P.client}))
         GROUP BY id LIMIT 100000`, {from:new Date(Date.now()-days*86400000).toISOString(),to:new Date().toISOString()},
-        {timeoutMs,retries:0}).then(rows=>new Map(rows.map(r=>[stringValue(r.id),stringValue(r.name || r.id)])))
+        {timeoutMs,retries:0}).then(rows=>markPartial(new Map(rows.map(r=>[stringValue(r.id),stringValue(r.name || r.id)])), isTruncated(rows)))
 }
 /** Startup warm-up is deliberately detached from callers; keep the last good roster during refresh. */
 export function warmClientNames(): void {
@@ -57,7 +57,7 @@ function clientEmails(): Promise<Roster> {
         emails = {at:Date.now(),value:hogql(`SELECT toString(pdi.distinct_id) AS did,
             toString(p.properties.${config.properties.personEmail}) AS email
             FROM person_distinct_ids pdi JOIN persons p ON p.id = pdi.person_id LIMIT 100000`, {},
-            {timeoutMs:8000,retries:0}).then(rows=>new Map(rows.map(r=>[stringValue(r.did),stringValue(r.email)]))).catch(()=>new Map())}
+            {timeoutMs:8000,retries:0}).then(rows=>markPartial(new Map(rows.map(r=>[stringValue(r.did),stringValue(r.email)])), isTruncated(rows))).catch(()=>new Map())}
     }
     return emails.value
 }
@@ -69,7 +69,7 @@ export async function knownClients(from?: Date, to?: Date): Promise<KnownClient[
         const value = hogql(`SELECT toString(${P.client}) AS id, ${userExpr()} AS user,
             toString(distinct_id) AS did, count() AS n, max(timestamp) AS last_seen
             FROM events WHERE timestamp >= {from} AND timestamp < {to} AND notEmpty(toString(${P.client}))
-            GROUP BY id, user, did LIMIT 100000`, {from:from.toISOString(),to:to.toISOString()}).then(rows=>{
+            GROUP BY id, user, did LIMIT 100000`, {from:from.toISOString(),to:to.toISOString()}, +to - +from > 31 * 86400000 ? { timeoutMs: 300_000 } : {}).then(rows=>{
             const clients = new Map<string,KnownClient>()
             for (const r of rows) {
                 const id=stringValue(r.id), user=stringValue(r.user), did=stringValue(r.did), n=Number(r.n || 0)
@@ -84,19 +84,19 @@ export async function knownClients(from?: Date, to?: Date): Promise<KnownClient[
                 c.users=[...new Set(c.user_event_counts!.map(r=>r[0]))]
                 c.distinct_ids=[...new Set(c.user_event_counts!.map(r=>r[2]))]
             }
-            return [...clients.values()].sort((a,b)=>b.events-a.events).slice(0,10000)
+            return markPartial([...clients.values()].sort((a,b)=>b.events-a.events).slice(0,10000).map(c=>markPartial(c, isTruncated(rows) || clients.size > 10000)), isTruncated(rows) || clients.size > 10000)
         })
         hit={at:Date.now(),value}; cache.set(key,hit)
         value.catch(()=>{ if(cache.get(key)?.value===value) cache.delete(key) })
         if(cache.size>20) cache.delete(cache.keys().next().value!)
     }
     const [clients,emailRoster,nameRoster] = await Promise.all([hit.value,clientEmails(),clientNames()])
-    return clients.map(c=>{
+    return markPartial(clients.map(c=>{
         const counts=c.user_event_counts!.map(([u,_e,d,n])=>[u,emailRoster.get(d || '') || '',d,n] as NonNullable<KnownClient['user_event_counts']>[number])
-        return {...c,name:nameRoster.get(c.id) || c.id,emails:[...new Set(counts.map(r=>r[1]))],user_event_counts:counts}
-    })
+        return markPartial({...c,name:nameRoster.get(c.id) || c.id,emails:[...new Set(counts.map(r=>r[1]))],user_event_counts:counts}, !!c.truncated || !!emailRoster.truncated || !!nameRoster.truncated)
+    }), isTruncated(clients) || clients.some(c=>c.truncated) || !!emailRoster.truncated || !!nameRoster.truncated)
 }
-export function matchClients(query:string, clients:KnownClient[]): ClientMatch[] {
+export function matchClients(query:string, clients:KnownClient[]): ClientMatch[] & Completeness {
     const norm = (value:unknown) => normalise(stringValue(value))
     const n = norm(query.trim()), parts = query.split(config.properties.distinctIdSeparator)
     const clientPart = config.properties.clientFromDistinctId || 3
@@ -123,12 +123,13 @@ export function matchClients(query:string, clients:KnownClient[]): ClientMatch[]
             out.push({...c,confidence,via,matched_user,...(matched_user ? {user_events} : {})})
         }
     }
-    return out.sort((a,b)=>b.confidence-a.confidence || b.events-a.events).slice(0,10)
+    return markPartial(out.sort((a,b)=>b.confidence-a.confidence || b.events-a.events).slice(0,10), isTruncated(clients) || clients.some(c=>c.truncated))
 }
 export async function resolveClient(input:{text:string; emails?:string[]; clientHint?:string; from?:Date; to?:Date}) {
     const text = input.clientHint || input.text
     const inWindow = matchClients(text, await knownClients(input.from,input.to))
-    if (inWindow.length || !input.from) return inWindow
+    if (inWindow.length || inWindow.truncated || !input.from) return inWindow
     // A client with no events in the asked-for dates still exists: say so, instead of "no client matches".
-    return matchClients(text, await knownClients(new Date(Date.now()-400*86400000), new Date())).map(m => ({...m, events:0, ...(m.matched_user ? {user_events:0} : {}), outside_window:true}))
+    const outside = matchClients(text, await knownClients(new Date(Date.now()-400*86400000), new Date()))
+    return markPartial(outside.map(m => ({...m, events:0, ...(m.matched_user ? {user_events:0} : {}), outside_window:true})), !!outside.truncated)
 }
