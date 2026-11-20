@@ -448,3 +448,22 @@ test('find_sessions keeps target-screen matches when over 10 actions match, show
     assert.equal(s.matched_actions.at(-1)!.at,timeline.at(-1)!.ts);assert.equal(s.matched_actions.at(-1)!.on_target_screen,true)
     const at=s.matched_actions.map(a=>String(a.at));assert.deepEqual(at,[...at].sort())
 })
+
+test('chat cannot change a running survey; nothing is sent to PostHog',async t=>{
+    const running={id:'s-run',name:'Live one',type:'popover',created_at:'2026-11-01T00:00:00Z',start_date:'2026-11-02T00:00:00Z',end_date:null,archived:false,questions:[{id:'q',question:'Easy?',type:'rating',scale:5}],conditions:{},appearance:{}}
+    const writes:string[]=[]
+    t.mock.method(globalThis,'fetch',async(url:unknown,init?:RequestInit)=>{
+        if(init?.method && init.method!=='GET')writes.push(`${init.method} ${String(url)}`)
+        return String(url).includes('/surveys/s-run/')?Response.json(running):Response.json({results:[]})
+    })
+    const server=new McpServer({name:'test',version:'1'});registerTools(server,undefined,{who:'pm@example.com',email:'pm@example.com',surveyRole:'launch'})
+    const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(a);const client=new Client({name:'test',version:'1'});await client.connect(b)
+    try {
+        const r=await client.callTool({name:'save_survey',arguments:{survey_id:'s-run',name:'Live one',questions:[{type:'rating',text:'Easy?'}],steps:[{opens:'DlgTask01'}]}})
+        const txt=(r.content as {text:string}[])[0]!.text
+        assert.match(txt,/drafts only/);assert.match(txt,/Nothing was saved/)
+        assert.deepEqual(writes.filter(w=>w.includes('/surveys')),[])
+        const names=(await client.listTools()).tools.map(t=>t.name)
+        assert.ok(!names.some(n=>/launch/.test(n)))
+    } finally {await client.close()}
+})

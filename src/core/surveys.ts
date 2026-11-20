@@ -539,6 +539,12 @@ export type Status = 'draft' | 'running' | 'stopped' | 'archived'
 export const statusOf = (s: Pick<PostHogSurvey, 'start_date' | 'end_date' | 'archived'>): Status =>
     s.archived ? 'archived' : !s.start_date ? 'draft' : s.end_date ? 'stopped' : 'running'
 
+/** One survey read fresh from PostHog (no cache), or null when it does not exist. */
+export async function freshSurvey(id: string): Promise<PostHogSurvey | null> {
+    try { return normalSurvey(await surveyApi<PostHogSurvey>(`${encodeURIComponent(id)}/`)) }
+    catch (e) { if (/\b404\b|not found/i.test(String((e as Error)?.message ?? e))) return null; throw e }
+}
+
 export function listSurveys(): Promise<PostHogSurvey[]> {
     return cachedSurvey(['list'], loadSurveys)
 }

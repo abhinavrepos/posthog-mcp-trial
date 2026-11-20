@@ -18,6 +18,7 @@ import {
     estimateReach,
     listSurveys,
     saveSurvey,
+    freshSurvey,
     stopSurvey,
     surveyOverview,
     surveyResults,
@@ -162,11 +163,17 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         'save_survey',
         {
             title: 'Save a survey as a draft, or change one',
-            description: `Save a ${app} survey draft, or update a Lens survey using survey_id and its complete spec. Running surveys change immediately. Launch only on the Surveys page.`,
+            description: `Save a ${app} survey draft, or update a Lens survey using survey_id and its complete spec. Only drafts can be changed here; launching and changing running surveys happen only on the Surveys page.`,
             inputSchema: { ...specShape, survey_id: z.string().optional().describe('Change this survey instead of making a new one') },
         },
         async (args) => {
             const { survey_id, ...spec } = args
+            if (survey_id) {
+                const current = await freshSurvey(survey_id)
+                if (!current) return text(`No survey ${survey_id}. Nothing was saved.`)
+                const status = viewOf(current).status
+                if (status !== 'draft') return text(`"${current.name}" is ${status}. Chat changes drafts only; change it on the Surveys page: ${pageUrl(survey_id)}. Nothing was saved.`)
+            }
             const { ids, unclear } = await clientIds(spec.clients)
             if (unclear.length) return json('Which clients? Nothing was saved:', unclear)
             const out = await saveSurvey(spec as SurveySpec, { id: survey_id, clientIds: ids })
