@@ -3,6 +3,20 @@
 What went wrong while rehearsing today's deployment and load test, what caused it, and what was done.
 Newest first. Times are UTC.
 
+## 3. Status page could not reach Lens behind ufw (04:10, fixed 04:12)
+
+- Fresh install on the main machine finished at 04:07 (58 min of PostHog's first database setup).
+  `posthog-lens check` then said: *Lens: Triage service: Health endpoint did not respond within 8 s*,
+  although Lens answered on the machine itself.
+- Cause: this machine runs **ufw with a default-deny INPUT policy**. The status service runs in a container
+  and reaches Lens on the host (`host.docker.internal:8080`, via the Docker bridge); ufw dropped that.
+- Fix here: `iptables -I INPUT -i docker0|br+ -p tcp --dport 8080 -j ACCEPT` (comment `lens-loadtest`).
+  After that: `READY: PostHog, PostHog Lens and every status-page check are fine.`
+- **For production:** if the server has ufw (or another firewall) with default deny, the System page will
+  wrongly show Lens as down. Allow port 8080 from the Docker networks, e.g.
+  `sudo ufw allow in on docker0 to any port 8080 proto tcp` and the same for the compose bridge
+  (`br-…`), or the equivalent iptables rule. Follow-up: make `posthog-lens doctor` detect and explain it.
+
 ## 2. Moving the load test to the main machine (02:45)
 
 - At the owner's request the rehearsal VM (`/var/lib/ubuntu-vm`, ~104 GB disk, 16 GB RAM) was shut down
