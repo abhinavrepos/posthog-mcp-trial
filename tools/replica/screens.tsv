@@ -1,0 +1,41 @@
+DlgList	Deal List
+DlgTask01	Cash Positions
+DlgTask02	Chart of Accounts
+DlgTask03	Amortization Report
+DlgTask04	Trade Entry
+DlgTask05	Hedge Designation
+DlgTask06	Journal Entries
+DlgTask07	FX Exposure
+DlgTask08	Asset/Liability & Revenue Recognition Report
+DlgTask09	Interest Rate Swap Valuation
+DlgTask10	Bank Accounts
+DlgTask11	Cash Forecast
+DlgTask12	Liquidity Analysis
+DlgTask13	Debt Portfolio
+DlgTask14	Investment Portfolio
+DlgTask15	FX Forward Valuation
+DlgTask16	Counterparty Limits
+DlgTask17	Payment Approvals
+DlgTask18	Bank Reconciliation
+DlgTask19	Hedge Effectiveness
+DlgTask20	Hedge Documentation
+DlgTask21	Market Data
+DlgTask22	Yield Curves
+DlgTask23	Accounting Periods
+DlgTask24	General Ledger Export
+DlgTask25	Intercompany Loans
+DlgTask26	Commodity Exposure
+DlgTask27	Commodity Hedge Valuation
+DlgTask28	Cash Flow Hedge Reserve
+DlgTask29	Fair Value Hedge Adjustments
+DlgTask30	Treasury Dashboard
+DlgTask31	Trade Confirmations
+DlgTask32	Settlement Instructions
+DlgTask33	Accrual Report
+DlgTask34	Collateral Management
+DlgTask35	Credit Risk Analysis
+DlgTask36	Scenario Analysis
+DlgTask37	Netting Proposals
+DlgTask38	Payment Factory
+DlgTask39	Audit Trail
+DlgTask40	Regulatory Reporting
