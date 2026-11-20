@@ -183,6 +183,12 @@ export async function findSessions(q: SessionQuery) {
             {...values,...outcomeValues,message_dialogs:reg.dialogs.messages,notice_dialogs:reg.dialogs.notices,sid,from:q.from.toISOString(),to:q.to.toISOString()})
         const onScreen = (e: Record<string, unknown>) => !q.screen || [e.dialog,e.name,e.tab,e.path].some(v=>String(v || '').toLowerCase().includes(q.screen!.toLowerCase()))
         const isMessage = (e: Record<string, unknown>) => [...reg.dialogs.messages,...reg.dialogs.notices].includes(String(e.dialog))
+        const screenOf = (e: Record<string, unknown>) => String(e.name || e.tab || '')
+        const contextLine = (e: Record<string, unknown>) => [
+            new Date(String(e.ts)).toISOString().slice(11,23), e.action || e.event,
+            e.message ? `'${String(e.message).replace(/\s+/g,' ').slice(0,80)}'` : '',
+            screenOf(e) ? `[${screenOf(e)}]` : '',
+        ].filter(Boolean).join(' ')
         const isError = (e: Record<string, unknown>) => {
             const text = String(e.message || '')
             const rule = reg.outcomes.find(o=>new RegExp(o.match,'i').test(text))
@@ -204,10 +210,17 @@ export async function findSessions(q: SessionQuery) {
             recording_duration_s:span ? (Date.parse(span.end)-Date.parse(span.start))/1000 : null,
             screens:screens.slice(0,15), screens_total:screens.length,
             matched_actions:matches.slice(0,10).map(({e,index})=>{
-                const next = ev.slice(index+1,index+11).find(n=>Date.parse(String(n.ts))-Date.parse(String(e.ts)) <= 30000 && isMessage(n))
-                return {at:e.ts,event:e.event ?? '',action:e.action ?? '',message:e.message ?? '',screen:e.name || e.tab || '',dialog_id:e.dialog ?? '',
+                let next: Record<string, unknown> | undefined
+                if (!isMessage(e)) for (const n of ev.slice(index+1)) {
+                    const afterMs = Date.parse(String(n.ts))-Date.parse(String(e.ts))
+                    if (!isMessage(n) || afterMs > 30000) break
+                    if (afterMs >= 0 && screenOf(e) && screenOf(n) === screenOf(e)) { next=n; break }
+                }
+                return {at:e.ts,event:e.event ?? '',action:e.action ?? '',message:e.message ?? '',screen:screenOf(e),dialog_id:e.dialog ?? '',
                     ...(q.screen ? {on_target_screen:onScreen(e)} : {}),
-                    outcome:next ? {at:next.ts,text:next.message,is_error:isError(next)} : null}
+                    outcome:next ? {at:next.ts,text:next.message,is_error:isError(next),screen:screenOf(next),dialog_id:next.dialog ?? '',
+                        after_s:Number(((Date.parse(String(next.ts))-Date.parse(String(e.ts)))/1000).toFixed(3)),basis:'same screen, before any other action'} : null,
+                    context:[...ev.slice(Math.max(0,index-2),index),...ev.slice(index+1,index+4)].map(contextLine)}
             }),
             matched_actions_total:matches.length, matched_actions_truncated:matches.length>10,
             ...(q.screen && q.what ? {matches_on_target_screen:matches.filter(({e})=>onScreen(e)).length,matches_elsewhere:matches.filter(({e})=>!onScreen(e)).length} : {}),
@@ -226,7 +239,7 @@ export async function findSessions(q: SessionQuery) {
         sessions.push(session)
     }
     const last = hits[sessions.length-1]
-    return {sessions, ...((more || truncatedBySize) && last ? {next_cursor:`${last.last}|${last.sid}`} : {}),
+    return {sessions, ...(q.what && !sessions.length ? {hint:`No session in this window matched "${q.what}"${q.screen ? ` with screen "${q.screen}"` : ''}. what is a literal substring: try a shorter word or one distinctive word (for example the first word of the phrase), or drop the screen filter.`} : {}), ...((more || truncatedBySize) && last ? {next_cursor:`${last.last}|${last.sid}`} : {}),
         ...(truncatedBySize ? {truncated_by_size:true} : {}),
         note:recordingCheckFailed ? 'Recording availability could not be checked.' : sessions.length && !sessions.some(s=>s.recording===true) ? 'Sessions found, but none have a recording.' : 'Newest sessions first. Details are limited to 5000 events per session; matched actions to 10; screens to 15. Follow next_cursor for more sessions.'}
 }

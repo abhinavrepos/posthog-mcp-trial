@@ -195,6 +195,7 @@ test('instructions and tool descriptions stay short and direct',()=>{
     const instructions=serverInstructions();assert.ok(instructions.length<=INSTRUCTIONS_LIMIT)
     for(const phrase of ['posthog_exec','tools / info <tool> / call <tool> <json>','resolve_client','find_sessions','pin_graph','both'])assert.ok(instructions.includes(phrase))
     assert.doesNotMatch(instructions,/private|mask|aggregate_events|reval_brief/)
+    assert.match(instructions,/"the year", "last year" or "all data".*data_guide coverage bounds.*exact UTC bounds/)
     const descriptions:string[]=[]
     const server={registerTool:(_name:string,cfg:{description:string})=>{descriptions.push(cfg.description)}} as unknown as McpServer
     registerTools(server);assert.ok(descriptions.length>=8);assert.ok(descriptions.every(s=>s.length<2048))
@@ -233,9 +234,9 @@ test('resolve_client finds a client with no events in the asked-for dates and ma
 test('find_sessions retains action screens, prioritises target matches and attaches only nearby configured outcomes',async t=>{
     const timeline=[
         {...events[0],ts:'2026-11-18T09:00:00Z',name:'Other',action:'CLICK',message:'Save'},
-        {...events[1],ts:'2026-11-18T09:00:01Z',dialog:'toast',message:'Missing account'},
+        {...events[1],ts:'2026-11-18T09:00:01Z',name:'Other',dialog:'toast',message:'Missing account'},
         {...events[0],ts:'2026-11-18T09:00:12Z',action:'CLICK',message:'Save'},
-        {...events[1],ts:'2026-11-18T09:00:13Z',dialog:'toast',message:'Trade Id Updated'},
+        {...events[1],ts:'2026-11-18T09:00:13Z',name:'Chart of Accounts',dialog:'toast',message:'Trade Id Updated'},
         {...events[0],ts:'2026-11-18T09:00:14Z',name:'Other',action:'CLICK',message:'Save'},
         {...events[1],ts:'2026-11-18T09:00:50Z',message:'Failed too late'},
     ]
@@ -246,7 +247,7 @@ test('find_sessions retains action screens, prioritises target matches and attac
     })
     const {sessions:[s]}=await findSessions({clientId:'SEM',screen:'Chart of Accounts',what:'Save',...window})
     assert.equal(s.matches_on_target_screen,1);assert.equal(s.matches_elsewhere,2)
-    assert.deepEqual(s.matched_actions[0],{at:timeline[2].ts,event:'PageView',action:'CLICK',message:'Save',screen:'Chart of Accounts',dialog_id:'DlgLedger',on_target_screen:true,outcome:{at:timeline[3].ts,text:'Trade Id Updated',is_error:false}})
+    assert.deepEqual(s.matched_actions[0],{at:timeline[2].ts,event:'PageView',action:'CLICK',message:'Save',screen:'Chart of Accounts',dialog_id:'DlgLedger',on_target_screen:true,outcome:{at:timeline[3].ts,text:'Trade Id Updated',is_error:false,screen:'Chart of Accounts',dialog_id:'toast',after_s:1,basis:'same screen, before any other action'},context:["09:00:00.000 CLICK 'Save' [Other]","09:00:01.000 CLICK 'Missing account' [Other]","09:00:13.000 CLICK 'Trade Id Updated' [Chart of Accounts]","09:00:14.000 CLICK 'Save' [Other]","09:00:50.000 CLICK 'Failed too late' [UNKNOWN]"]})
     assert.equal(s.matched_actions[1].on_target_screen,false);assert.equal(s.matched_actions[1].outcome?.is_error,true)
     assert.equal(s.matched_actions[2].outcome,null)
     assert.equal(s.session_start,timeline[0].ts);assert.equal(s.session_end,timeline.at(-1)!.ts)
@@ -267,7 +268,7 @@ test('find_sessions bounds actions, screens and serialized pages without skippin
     assert.equal(result.truncated_by_size,true);assert.ok(result.sessions.length>0 && result.sessions.length<20)
     const {jsonResult}=await import('../src/mcp/result.ts')
     assert.ok(JSON.stringify(jsonResult('Sessions',result)).length<=20000)
-    const s=result.sessions[0];assert.equal(s.matched_actions.length,10);assert.equal(s.matched_actions_total,30);assert.equal(s.matched_actions_truncated,true)
+    const s=result.sessions[0];assert.ok(s.matched_actions.length>0 && s.matched_actions.length<=10);assert.equal(s.matched_actions_total,30);assert.equal(s.matched_actions_truncated,true)
     assert.equal(s.screens.length,15);assert.ok(s.screens_total>15)
     const last=hits[result.sessions.length-1];assert.equal(result.next_cursor,`${last.last}|${last.sid}`)
     assert.equal(s.recording_start,null);assert.equal(s.recording_end,null);assert.equal(s.recording_duration_s,null)
@@ -297,6 +298,7 @@ test('data_guide exposes configured version, identity, coverage cache and SQL; r
         assert.match(guide.examples[1],/OPEN/);assert.match(guide.examples[2],/properties.title/)
         const result=payload(await client.callTool({name:'resolve_client',arguments:{query:'SEMOPS',from:'2026-11-18',to:'2026-11-18'}}))
         assert.equal(result.matches[0].client_events,210);assert.equal(result.matches[0].user_events,64)
+        assert.equal(result.matches[0].last_seen_in_window,new Date(roster[0].last_seen).toISOString());assert.ok(!('last_seen' in result.matches[0]));
         assert.equal(result.matches[0].events,undefined);assert.deepEqual(result.coverage,guide.coverage)
         assert.equal(rosterCalls,1);assert.equal(coverageCalls,1)
         const now=Date.now();t.mock.method(Date,'now',()=>now+600001)
@@ -320,9 +322,9 @@ test('rate limit errors retain text and expose retry seconds and the specific li
     }
 })
 
-test('find_sessions respects the ten-event outcome boundary, configured outcome rules and screen fallback',async t=>{
+test('find_sessions stops outcomes at other actions and respects configured rules and screen fallback',async t=>{
     const row=(second:number,extra:Record<string,unknown>={})=>({...events[0],ts:`2026-11-18T09:00:${String(second).padStart(2,'0')}Z`,action:'CLICK',message:'',...extra})
-    const timeline=[row(0,{message:'Save'}),...Array.from({length:10},(_,i)=>row(i+1)),row(11,{dialog:'toast',message:'Too far by event count'}),row(12,{message:'Save'}),row(13,{dialog:'messagebox',message:'No entry selected'}),row(14,{name:'',tab:'Fallback tab',message:'Save'}),row(15,{dialog:'toast',message:'Could not save'})]
+    const timeline=[row(0,{message:'Save'}),...Array.from({length:10},(_,i)=>row(i+1)),row(11,{dialog:'toast',message:'Too far by event count'}),row(12,{message:'Save'}),row(13,{dialog:'messagebox',message:'No entry selected'}),row(14,{name:'',tab:'Fallback tab',message:'Save'}),row(15,{name:'',tab:'Fallback tab',dialog:'toast',message:'Could not save'})]
     t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
         const q=JSON.parse(String(init.body)).query
         return response(q.query.includes('raw_session')?[]:q.query.includes('GROUP BY sid')?[{sid:'one',last:timeline.at(-1)!.ts}]:timeline)
@@ -347,4 +349,44 @@ test('find_sessions keeps full session bounds and counts when the detail timelin
     const {sessions:[s]}=await findSessions({clientId:'SEM',...window})
     assert.equal(s.session_start,summary.session_start);assert.equal(s.session_end,summary.session_end)
     assert.equal(s.events_in_session,6000);assert.equal(s.error_messages_in_session,17)
+})
+
+
+test('find_sessions scopes outcomes to screens before navigation and exposes bounded neighbouring context',async t=>{
+    const row=(ts:string,extra:Record<string,unknown>={})=>({...events[0],ts:`2026-11-18T09:00:${ts}Z`,action:'CLICK',message:'Save',...extra})
+    const timeline=[
+        row('00.000'), row('01.000',{action:'CLOSE',message:''}),
+        row('02.000',{name:'Other',action:'OPEN',message:''}),
+        row('03.000',{name:'Other',dialog:'toast',message:'Open completed'}),
+        row('04.000'), row('05.234',{dialog:'toast',message:'Saved '+ 'x'.repeat(100)}),
+        row('06.000'), row('07.000',{name:'Other',dialog:'toast',message:'Wrong screen'}),
+        row('08.000'), row('38.001',{dialog:'toast',message:'Too late'}),
+    ]
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
+        const q=JSON.parse(String(init.body)).query
+        return response(q.query.includes('raw_session')?[]:q.query.includes('GROUP BY sid')?[{sid:'one',last:timeline.at(-1)!.ts}]:timeline)
+    })
+    const {sessions:[s]}=await findSessions({clientId:'SEM',...window})
+    assert.equal(s.matched_actions[0].outcome,null)
+    assert.deepEqual(s.matched_actions[4].outcome,{at:timeline[5].ts,text:timeline[5].message,is_error:false,screen:'Chart of Accounts',dialog_id:'toast',after_s:1.234,basis:'same screen, before any other action'})
+    for(const i of [3,5,6,7,8,9])assert.equal(s.matched_actions[i].outcome,null)
+    assert.deepEqual(s.matched_actions[4].context,[
+        "09:00:02.000 OPEN [Other]", "09:00:03.000 CLICK 'Open completed' [Other]",
+        `09:00:05.234 CLICK '${String(timeline[5].message).slice(0,80)}' [Chart of Accounts]`,
+        "09:00:06.000 CLICK 'Save' [Chart of Accounts]", "09:00:07.000 CLICK 'Wrong screen' [Other]",
+    ])
+    assert.equal(s.matched_actions[0].context.length,3);assert.equal(s.matched_actions[9].context.length,2)
+    assert.ok(s.matched_actions.every(a=>a.context.length<=5))
+})
+
+test('find_sessions gives a shorter literal search hint when what has no matches',async t=>{
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
+        const q=JSON.parse(String(init.body)).query
+        assert.equal(q.values.what,'market data error')
+        assert.match(q.query,/positionCaseInsensitive/)
+        return response([])
+    })
+    const result=await findSessions({clientId:'SEM',what:'market data error',from:new Date('2026-11-18'),to:new Date('2026-11-19')})
+    assert.deepEqual(result.sessions,[])
+    assert.match(result.hint ?? "",/No session in this window matched "market data error".*literal substring: try a shorter word/)
 })
