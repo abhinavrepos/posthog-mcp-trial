@@ -33,89 +33,16 @@ const dayStr = (n: number) => new Date(Date.now() - n * DAY).toISOString().slice
 const pad = (n: number, w = 2) => String(n).padStart(w, '0')
 const clientId = (c: number) => `C${pad(c + 1)}`
 
-// ---------------------------------------------------------------- the event generator (deterministic per day)
-type Ev = { sid: string; ts: string; event: string; client: string; user: string; dialog: string; dialogName: string; tab: string; action: string; control: string; button: string; version: string; ctime: number; event_uuid: string; client_name: string }
-function rng(seed: number) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32) }
-const dayCache = new Map<string, { sessions: { sid: string; first_ts: string; first_ctime: number }[]; events: Ev[] }>()
-function generate(day: string) {
-    const hit = dayCache.get(day); if (hit) return hit
-    const ago = Math.round((Date.parse(dayStr(0)) - Date.parse(day)) / DAY)
-    const r = rng(Date.parse(day) / DAY), events: Ev[] = [], sessions: { sid: string; first_ts: string; first_ctime: number }[] = []
-    let uuid = 0
-    for (let c = 0; c < CLIENTS; c++) for (let s = 0; s < PER; s++) {
-        const sid = `${day}-${clientId(c)}-${pad(s, 3)}`, user = `ENV|01|${clientId(c)}|user${(s % 6) + 1}`
-        let t = Date.parse(`${day}T08:00:00Z`) + Math.floor(r() * 9 * 3600_000)
-        const add = (event: string, dialog: string, button = '', action = '', step = 1 + r() * 8) => {
-            t += Math.round(step * 1000)
-            const ts = new Date(t).toISOString()
-            events.push({ sid, ts, event, client: clientId(c), user, dialog, dialogName: dialog.replace('Dlg', ''), tab: '', action, control: '', button, version: 'Reval 26.3', ctime: t, event_uuid: `${sid}-${pad(uuid++, 6)}`, client_name: `Client ${pad(c + 1)}` })
-        }
-        add('PageView', 'DlgList', '', 'OPEN')
-        sessions.push({ sid, first_ts: events.at(-1)!.ts, first_ctime: t })
-        const attempts = 4 + Math.floor(r() * 4)
-        for (let a = 0; a < attempts; a++) {
-            let task = Math.floor(r() * TASKS)
-            if (c === 0 && task === 0 && ago <= 14) task = 1 // C01 stopped task 00 in the last fortnight
-            const dialog = `DlgTask${pad(task)}`, slow = c === 1 && task === 1 && ago <= 14 ? 1.6 : 1
-            add('PageView', dialog, '', 'OPEN')
-            for (let k = 0; k < 3; k++) add('Event', dialog, 'Field', 'CHANGE', 4 * slow + r() * 6 * slow)
-            if (r() < 0.12) add('Event', dialog, 'CSV Export', '', 1)
-            add('Event', dialog, 'Save', '', 2 * slow)
-            if (r() < 0.1) {
-                add('Event', 'messagebox', 'Invalid date', '', 1)
-                if (r() < 0.3) { add('Event', dialog, 'Export', '', 1); continue }
-                add('Event', dialog, 'Save', '', 5 * slow)
-            }
-            add('Event', 'toast', `Trade Id ${1000 + a} Updated`, '', 1)
-        }
-    }
-    events.sort((a, b) => (a.sid < b.sid ? -1 : a.sid > b.sid ? 1 : a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : a.event_uuid < b.event_uuid ? -1 : 1))
-    sessions.sort((a, b) => (a.sid < b.sid ? -1 : 1))
-    const out = { sessions, events }
-    dayCache.clear(); dayCache.set(day, out)
-    return out
-}
-const after = (e: Ev, sid: string, ts: string, uuid: string) => e.sid > sid || (e.sid === sid && (e.ts > ts || (e.ts === ts && e.event_uuid > uuid)))
-const notAfter = (e: Ev, sid: string, ts: string, uuid: string) => !after(e, sid, ts, uuid)
-let queries = 0
-async function fakePosthog(sql: string, values: Record<string, unknown> = {}): Promise<Record<string, unknown>[]> {
-    queries++
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(values.from ?? ''))) return [] // first-event and other lookups: nothing to report
-    const g = generate(String(values.from))
-    await new Promise((r) => setTimeout(r, 30)) // network/ClickHouse latency stand-in
-    if (/GROUP BY sid/.test(sql)) return g.sessions
-    const limit = Number(/LIMIT (\d+)/.exec(sql)?.[1] || 100)
-    const [sid, ts, uuid] = [String(values.sid ?? ''), String(values.ts ?? ''), String(values.uuid ?? '')]
-    const start = g.events.findIndex((e) => after(e, sid, ts, uuid)), from = start < 0 ? g.events.length : start
-    if (sql.includes('{end_sid}')) {
-        const out: Ev[] = []
-        for (let i = from; i < g.events.length && out.length < limit && notAfter(g.events[i], String(values.end_sid), String(values.end_ts), String(values.end_uuid)); i++) out.push(g.events[i])
-        return out.reverse() as never // unsorted, as ClickHouse may return them
-    }
-    return g.events.slice(from, from + limit).map(({ sid, ts, event_uuid }) => ({ sid, ts, event_uuid }))
-}
+// ---------------------------------------------------------------- the stand-in PostHog, in its own process
+const posthog = spawn(process.execPath, ['--import', 'tsx', 'scripts/stress-posthog.ts', String(PORT + 1), String(CLIENTS), String(PER)], { stdio: ['ignore', 'pipe', 'inherit'] })
+await new Promise<void>((resolve, reject) => { posthog.stdout!.on('data', (d) => { if (/ready/.test(String(d))) resolve() }); posthog.once('exit', (c) => reject(new Error(`stand-in PostHog exited (${c})`))) })
+process.on('exit', () => posthog.kill())
+const posthogQueries = async () => ((await (await fetch(`http://127.0.0.1:${PORT + 1}/stats`)).json()) as { queries: number }).queries
 
-// ---------------------------------------------------------------- the stand-in PostHog (HogQL over HTTP)
-const { createServer } = await import('node:http')
-const fakeHost = createServer(async (req, res) => {
-    let body = ''
-    for await (const c of req) body += c
-    const send = (status: number, v: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(v)) }
-    if (req.method === 'POST' && /\/api\/(?:projects|environments)\/[^/]+\/query\/?$/.test(req.url || '')) {
-        try {
-            const q = JSON.parse(body).query || {}
-            const rows = q.kind === 'HogQLQuery' ? await fakePosthog(String(q.query || ''), q.values || {}) : []
-            const columns = rows.length ? Object.keys(rows[0]) : []
-            return send(200, { columns, results: rows.map((r) => columns.map((c) => (r as Record<string, unknown>)[c])) })
-        } catch (e) { return send(500, { detail: String((e as Error).message) }) }
-    }
-    send(404, { detail: 'not in the stress stand-in' })
-})
-await new Promise<void>((r) => fakeHost.listen(PORT + 1, '127.0.0.1', () => r()))
 
 // ---------------------------------------------------------------- start Lens with this source, seed older history
 const tasks = await import('../src/core/tasks.ts')
-tasks.setTaskQuery(fakePosthog)
+// Ingestion queries the stand-in over HTTP, through the service's worker, as in production.
 {
     const hist = JSON.stringify(Array.from({ length: 21 }, (_, i) => (i === 4 ? 6 : i === 5 ? 3 : i === 6 ? 1 : 0)))
     const row = tasks.tasksDb.prepare('INSERT OR REPLACE INTO task_daily VALUES (?,?,?,?,?,?,?,?,?)')
@@ -161,6 +88,7 @@ let rssPeak = 0; const rssTimer = setInterval(() => { rssPeak = Math.max(rssPeak
 const loader = spawn(process.execPath, ['--import', 'tsx', 'scripts/stress-load.ts', `http://127.0.0.1:${PORT}`, join(dir, 'tokens.json'), join(dir, 'load.json'), String(CLIENTS)],
     { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, STRESS_COOKIE: cookie } })
 const perDay: { day: string; ms: number; events: number; attempts: number }[] = []
+let failedRuns = 0
 const t0 = Date.now()
 for (let i = DAYS; i >= 1; i--) {
     const d = dayStr(i), s = Date.now()
@@ -168,7 +96,8 @@ for (let i = DAYS; i >= 1; i--) {
     let info: { events: number; attempts: number } | undefined
     for (let tries = 0; !info && tries < 600; tries++) {
         while (tasks.ingestStatus().running) await new Promise((r) => setTimeout(r, 200))
-        await tasks.ingestDay(d)
+        // A failed day is reported and tried again, as the service's scheduler would.
+        try { await tasks.ingestDay(d) } catch (e) { failedRuns++; console.log(JSON.stringify({ msg: 'ingest failed, retrying', day: d, error: String((e as Error).message) })); await new Promise((r) => setTimeout(r, 2000)) }
         info = tasks.tasksDb.prepare('SELECT events, attempts FROM task_ingest WHERE day = ?').get(d) as typeof info
         if (!info) await new Promise((r) => setTimeout(r, 200))
     }
@@ -192,7 +121,7 @@ const audits = (db.one('SELECT count(*) AS n FROM audit WHERE action = ?', 'resc
 const rows = (db.one('SELECT count(*) AS n FROM rescue_actions') as { n: number }).n
 const events = perDay.reduce((s, d) => s + d.events, 0), ms = perDay.map((d) => d.ms).sort((a, b) => a - b)
 const summary = {
-    ingestion: { days: DAYS, events, attempts: perDay.reduce((s, d) => s + d.attempts, 0), total_s: Math.round(ingestMs / 1000), per_day_ms: { p50: ms[Math.floor(ms.length / 2)], max: ms.at(-1) }, events_per_s: Math.round(events / (ingestMs / 1000)), fake_posthog_queries: queries },
+    ingestion: { days: DAYS, events, attempts: perDay.reduce((s, d) => s + d.attempts, 0), total_s: Math.round(ingestMs / 1000), per_day_ms: { p50: ms[Math.floor(ms.length / 2)], max: ms.at(-1) }, events_per_s: Math.round(events / (ingestMs / 1000)), fake_posthog_queries: await posthogQueries(), failed_runs_retried: failedRuns },
     event_loop_during_ms: Object.fromEntries(Object.entries(loopDuring).map(([k, v]) => [k, Math.round(v)])),
     lens_rss_peak_mb: Math.round(rssPeak / 1048576),
     load,
