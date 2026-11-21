@@ -4,7 +4,12 @@
 #   sudo docker run --rm -v ~/posthog-mcp-trial:/out <registry>/posthog/kit:<tag>
 ARG BASE=alpine:3.22
 FROM ${BASE}
-COPY repo /kit/repo
-COPY files /kit/files
+# One layer per file, the ones that rarely change first: a new kit for the same PostHog version shares
+# them with the previous kit, and a patch (save-images.sh SINCE=...) carries only the project layer.
+COPY files/posthog-src.tar.gz /kit/files/
+COPY files/docker-compose /kit/files/
+COPY files/GeoLite2-City.mmdb /kit/files/
+COPY files/GeoLite2-City.json /kit/files/
 COPY unpack.sh /kit/unpack.sh
+COPY repo /kit/repo
 ENTRYPOINT ["/bin/sh", "/kit/unpack.sh"]

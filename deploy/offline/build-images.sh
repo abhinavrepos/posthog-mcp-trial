@@ -318,7 +318,9 @@ else
     git -C "$WORK/posthog" fetch -q --depth 1 origin "$TARGET_COMMIT"
     git -C "$WORK/posthog" checkout -q FETCH_HEAD
     [ "$(git -C "$WORK/posthog" rev-parse HEAD)" = "$TARGET_COMMIT" ] || die "Could not check out PostHog $TARGET_COMMIT."
-    tar -czf "$k/files/posthog-src.tar.gz" -C "$WORK/posthog" .
+    # Reproducible (sorted, fixed times and owners, no gzip timestamp): the same PostHog commit gives the same
+    # bytes, so the kit layer is identical and patches (save-images.sh SINCE=...) leave it out.
+    tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - -C "$WORK/posthog" . | gzip -n >"$k/files/posthog-src.tar.gz"
     rm -rf "$WORK/posthog"
     ok "PostHog's source ($(du -h "$k/files/posthog-src.tar.gz" | cut -f1))"
     say "the GeoIP database ..."
@@ -335,6 +337,7 @@ else
     echo "$sum  $k/files/docker-compose" | sha256sum -c --quiet - || die "Docker Compose does not match its checksum."
     chmod 755 "$k/files/docker-compose"
     ok "Docker Compose $COMPOSE_VERSION (checksum checked)"
+    touch -d @0 "$k/files"/*   # file times are part of each layer: fixed, so unchanged files keep their layer
     cp "$HERE/kit-image/Dockerfile" "$HERE/kit-image/unpack.sh" "$k/"
     build_push "posthog/kit:$KIT_TAG" "$k/Dockerfile" "$k" --build-arg "BASE=$ALPINE_IMAGE" >/dev/null
 fi

@@ -18,7 +18,13 @@ cp -a . "$out/"
 # cp -a also copies the kit folder's own owner and mode onto the mounted folder: put them back.
 chown "$owner" "$out"; chmod "$mode" "$out"
 mkdir -p "$out/deploy/offline/kit"
-cp /kit/files/* "$out/deploy/offline/kit/"
+if [ -n "$(ls -A /kit/files 2>/dev/null)" ]; then
+    cp /kit/files/* "$out/deploy/offline/kit/"
+else
+    # A patch kit (same PostHog version) carries no PostHog source, GeoIP or Compose: keep the machine's.
+    echo "Patch kit: kept PostHog's source, GeoIP database and Docker Compose already in deploy/offline/kit/."
+    mkdir -p /kit/files
+fi
 # Only what was unpacked changes owner, so the service user's data folders stay as they are.
 { find . -mindepth 1; (cd /kit/files && find . -mindepth 1 -type f | sed 's#^\./#./deploy/offline/kit/#'); echo ./deploy/offline/kit; } \
     | while read -r f; do chown -h "$owner" "$out/$f"; done
