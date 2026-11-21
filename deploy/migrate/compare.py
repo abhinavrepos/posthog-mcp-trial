@@ -13,7 +13,14 @@ import sys
 
 NO_REPLAYS = "--no-replays" in sys.argv
 LIVE = "--live" in sys.argv
-before, after = (json.load(open(p)) for p in [a for a in sys.argv[1:] if not a.startswith("--")][:2])
+# --missing-before FILE: block file names the old storage no longer had before the upgrade (deleted or
+# expired there); they are reported, not counted as missing.
+GONE = set()
+if "--missing-before" in sys.argv:
+    GONE = {l.strip().rsplit("/", 1)[-1] for l in open(sys.argv[sys.argv.index("--missing-before") + 1]) if l.strip()}  # file names
+positional = [a for i, a in enumerate(sys.argv[1:], 1) if not a.startswith("--") and sys.argv[i - 1] != "--missing-before"]
+before, after = (json.load(open(p)) for p in positional[:2])
+gone_before = lambda u: u.rstrip("/").rsplit("/", 1)[-1].split("?", 1)[0] in GONE
 problems = []
 
 
@@ -48,12 +55,14 @@ for team, r in before.get("replays", {}).items():
 replay_store = after.get("storage", {}).get("replays", {})
 if NO_REPLAYS:
     print(f"  skip  replay files not copied, as chosen: {len(before.get('replay_block_files', []))} files stay in the old MinIO volume")
-missing = [u for u in before.get("replay_block_files", []) if u.split("/", 3)[3] not in replay_store]
+missing = [u for u in before.get("replay_block_files", []) if u.split("/", 3)[3] not in replay_store and not gone_before(u)]
+if GONE and not NO_REPLAYS:
+    print(f"  note  {len(GONE)} replay block files were already gone from the old storage before the upgrade (not counted)")
 NO_REPLAYS or check(not missing, f"every replay block file is in the replay store ({len(before.get('replay_block_files', []))} files)" + (f"; {len(missing)} missing, e.g. {missing[:3]}" if missing else ""))
 # What the new replay reader (recording-api) accepts; it answers 400 to any other name.
 READER = re.compile(r"^session_recordings/(30d|90d|1y|5y)/\d+-[0-9a-f]{16}$")
 pointed = [u.split("/", 3)[3] for u in after.get("replay_block_files", [])]
-unplayable = [k for k in pointed if not READER.match(k) or k not in replay_store]
+unplayable = [k for k in pointed if (not READER.match(k) or k not in replay_store) and not gone_before(k)]
 NO_REPLAYS or check(not unplayable, f"every block a replay points at has a name the new replay reader accepts and is in the replay store ({len(pointed)} files)" + (f"; {len(unplayable)} not, e.g. {unplayable[:3]}" if unplayable else ""))
 
 print("stored files")

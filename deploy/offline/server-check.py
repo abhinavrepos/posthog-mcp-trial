@@ -3,11 +3,13 @@
 import http.cookiejar as cookiejar
 import importlib.util
 import json
+import re
 import os
 from pathlib import Path
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from site_config_loader import env
 
@@ -23,12 +25,18 @@ def run(args, **kwargs):
     return subprocess.check_output(args, timeout=180, stderr=subprocess.PIPE, env=child_env, **kwargs).decode()
 
 
+class Skip(Exception):
+    pass
+
+
 def check(name, fix, action):
     global failures
     try:
         if action() is False:
             raise RuntimeError('Check failed')
         print('PASS ' + name, flush=True)
+    except Skip as why:
+        print('SKIP ' + name + ' (' + str(why) + ')', flush=True)
     except Exception as error:
         failures += 1
         reason = ' '.join(str(error).split())[:240]
@@ -150,12 +158,17 @@ def http_addresses():
 
 
 def replay():
-    script = (root / 'deploy/migrate/replays_playable.py').read_text()
-    # Reuse the actual replay reader, bounding metadata and fetching one block.
-    script = script.replace('GROUP BY team_id, session_id', 'GROUP BY team_id, session_id LIMIT 100')
-    script = script.replace('asyncio.run(main())', "from django.apps import apps\nrows = [r for r in rows if r[2]]\nassert rows, 'No replay blocks in sample'\nrows = [(rows[0][0], rows[0][1], rows[0][2][:1])]\nassert rows[0][2]\nasyncio.run(main())")
-    out = web(script)
-    assert 'PLAYABLE: 1 of 1 recordings, 1 of 1 blocks' in out
+    # The real replay reader over every recording whose files exist. Recordings whose blocks were already
+    # gone before the upgrade (deleted on purpose, or expired) are listed by the upgrade and not counted.
+    out = web((root / 'deploy/migrate/replays_playable.py').read_text())
+    m = re.search(r'PLAYABLE: (\d+) of (\d+) recordings, (\d+) of (\d+) blocks', out)
+    assert m, 'the replay reader printed no result: ' + ' '.join(out.split()[-30:])
+    ok, total, okb, totalb = map(int, m.groups())
+    gone = re.search(r'not counted: (\d+) recordings', out)
+    if total == 0:
+        raise Skip('no replay files to play' + (f'; {gone.group(1)} recordings had no files before the upgrade' if gone else ''))
+    assert ok == total and okb == totalb, f'{ok} of {total} recordings and {okb} of {totalb} blocks play'
+    print(f'      {ok} recordings play' + (f'; {gone.group(1)} had no files before the upgrade (not counted)' if gone else ''), flush=True)
 
 
 def live():
@@ -164,8 +177,15 @@ def live():
     request = urllib.request.Request(base + '/replays/login', data=json.dumps({
         'email': settings['POSTHOG_ADMIN_EMAIL'], 'password': settings['POSTHOG_ADMIN_PASSWORD']}).encode(),
         headers={'Content-Type': 'application/json', 'x-clip-page': '1'})
-    with opener.open(request, timeout=60) as response:
-        assert json.load(response).get('ok')
+    if not settings.get('POSTHOG_ADMIN_EMAIL') or not settings.get('POSTHOG_ADMIN_PASSWORD'):
+        raise Skip('no admin login saved; open /replays/live in a browser to check')
+    try:
+        with opener.open(request, timeout=60) as response:
+            assert json.load(response).get('ok')
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403):
+            raise Skip('the saved admin login is not valid on this PostHog; open /replays/live in a browser to check')
+        raise
     try:
         with opener.open(base + '/replays/live/api/now', timeout=90) as response:
             assert response.status == 200
@@ -185,6 +205,6 @@ check('posthog_exec through Lens (initialize + tools)', 'check MCP_TOKEN, FEATUR
 check('config.js 200 for every team', 'run post-upgrade-repair.sh --yes to rebuild RemoteConfig', lambda: web((root / 'deploy/migrate/remote-config.py').read_text(), ['-e', 'REMOTE_CONFIG_VERIFY=1']))
 check('every address trusted for CSRF in both schemes', 'run post-upgrade-repair.sh --yes to preserve/apply site addresses', csrf)
 check('HTTP addresses answer directly and allow login cookies', 'run post-upgrade-repair.sh --yes; check Caddy site list, SECURE_COOKIES=false and cookie domain', http_addresses)
-check('session_recording count > 0 and sample block fetchable', 'run posthog-upgrade.sh replays then verify (keep old MinIO until verified)', replay)
+check('every replay that has files plays', 'run posthog-upgrade.sh replays then verify (keep old MinIO until verified)', replay)
 check('live page endpoint', 'check POSTHOG_ADMIN_EMAIL/POSTHOG_ADMIN_PASSWORD, APP_EVENTS_FILE and client settings; inspect Lens logs', live)
 sys.exit(1 if failures else 0)

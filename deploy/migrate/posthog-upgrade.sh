@@ -930,6 +930,11 @@ if phase verify; then
     web_python counts.py -e STORES=both > "$STATE/after.json"
     args=("$STATE/before.json" "$STATE/after.json"); [ "$replays_copied" = 1 ] || args+=(--no-replays)
     [ "$(recall live)" != yes ] || args+=(--live)
+    # Block files that were already gone from the old storage (recorded while copying): not upgrade damage.
+    if [ "$(dc exec -T clickhouse clickhouse-client -q "EXISTS TABLE posthog._upgrade_missing_legacy_blocks" < /dev/null)" = 1 ]; then
+        dc exec -T clickhouse clickhouse-client -q "SELECT key FROM posthog._upgrade_missing_legacy_blocks" < /dev/null > "$STATE/missing-before-upgrade.txt"
+        args+=(--missing-before "$STATE/missing-before-upgrade.txt")
+    fi
     python3 "$HERE/compare.py" "${args[@]}" > "$STATE/verify.txt" || true
     cat "$STATE/verify.txt"
     if [ "$replays_copied" = 1 ]; then
