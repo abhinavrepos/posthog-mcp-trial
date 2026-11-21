@@ -187,6 +187,23 @@ setting() {
 need() { [ -n "${!1}" ] || die "$1 is required when $2 is set: add it to the --config file."; }
 
 # ask KEY "question" default required(1/0) secret(1/0) validator
+# Interactive only, and only when the value is not already set: offer each candidate by number (or a typed
+# URL). The choice goes through ask() as if given, so it is validated and saved the same way.
+pick_url() {
+    local key="$1" q="$2" def="$3" opts="$4" i=1 o v cur
+    [ "$INTERACTIVE" = 1 ] && [ -z "${!key:-}" ] && { [ -z "$CONFIG" ] || [ -z "$(read_env_file "$CONFIG" "$key")" ]; } || return 0
+    cur="$(known "$key")"; [ -n "$cur" ] || cur="$def"
+    local -a list=(); for o in ${opts//,/ }; do [[ " ${list[*]} " == *" $o "* ]] || list+=("$o"); done
+    echo; echo "  ${B}$q${N}"
+    for o in "${list[@]}"; do echo "    $i) $o"; i=$((i+1)); done
+    while true; do
+        read -r -p "  Number, or type another address [${cur}]: " v </dev/tty
+        [ -n "$v" ] || v="$cur"
+        if [[ "$v" =~ ^[0-9]+$ ]] && [ "$v" -ge 1 ] && [ "$v" -le "${#list[@]}" ]; then v="${list[$((v-1))]}"; fi
+        is_url "$v" && break
+    done
+    printf -v "$key" '%s' "$v"
+}
 ask() {
     local key="$1" q="$2" def="$3" req="$4" secret="${5:-0}" check="${6:-}" cur v shown typed
     cur="$(known "$key")"; [ -n "$cur" ] || cur="$def"
@@ -316,6 +333,8 @@ collect_answers() {
     setting KEEP_PROJECT_SETTINGS no is_yesno
     # Where people open PostHog when that is not POSTHOG_ADDRESS (a load balancer in front): Lens's links use it.
     local link_default; link_default="$(known POSTHOG_PUBLIC_HOST)"
+    local link_opts="" u; for u in ${POSTHOG_ADDRESS//,/ }; do link_opts="${link_opts:+$link_opts,}${u%/}"; done
+    pick_url POSTHOG_LINK_URL "Which PostHog address should replay links point to?" "${link_default:-$(addr_kind "${POSTHOG_ADDRESS%%,*}")://$host}" "$link_opts"
     ask POSTHOG_LINK_URL "PostHog address used in links" "${link_default:-$(addr_kind "${POSTHOG_ADDRESS%%,*}")://$host}" 1 0 is_url
     # Only from the environment or --config: empty means PostHog records on every site that sends events.
     APP_URLS="${APP_URLS:-$(read_env_file "$CONFIG" APP_URLS)}"
@@ -376,6 +395,8 @@ collect_answers() {
     for candidate in $(hosts_of "$POSTHOG_ADDRESS" | tr , ' '); do
         if [[ "$candidate" =~ ^[0-9.]+$ ]]; then lens_host="$candidate"; break; fi
     done
+    local lens_opts="http://$lens_host:8080" h; for h in $(hosts_of "$POSTHOG_ADDRESS" | tr , ' '); do lens_opts="$lens_opts,http://$h:8080"; done
+    pick_url SERVICE_PUBLIC_URL "Which address should Lens links (clips, Pinned, /replays) use? Lens listens on port 8080." "http://$lens_host:8080" "$lens_opts"
     ask SERVICE_PUBLIC_URL "Lens address people open" "http://$lens_host:8080" 1 0 is_url
     setting CLIP_ALLOWED_HOSTS "$([ -n "$APP_URLS" ] && hosts_of "$APP_URLS" || echo localhost)"
     setting STATUS_PUBLIC no is_yesno
