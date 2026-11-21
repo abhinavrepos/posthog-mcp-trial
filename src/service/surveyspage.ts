@@ -276,7 +276,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const num=n=>n==null?'–':Number(n).toLocaleString('en-US')
 const when=t=>new Date(t).toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'})
 const color=c=>/^#[0-9a-fA-F]{3,6}$/.test(c||'')?c:null
-const api=(path,opts={})=>fetch(path,{...opts,headers:{'content-type':'application/json','x-clip-page':'1'}}).then(async r=>{const b=await r.json().catch(()=>({}));if(r.status===401)location.reload();if(!r.ok)throw Object.assign(new Error(b.error||('HTTP '+r.status)),{status:r.status});return b})
+const api=(path,opts={})=>fetch(path,{...opts,headers:{'content-type':'application/json','x-clip-page':'1'}}).then(async r=>{const b=await r.json().catch(()=>({}));if(r.status===401)location.reload();if(!r.ok)throw Object.assign(new Error(b.error||'The request could not complete. Try again.'),{status:r.status});return b})
 const STATUS={running:'Running',draft:'Draft',stopped:'Stopped',archived:'Archived'}
 let LIST=[],current=null,listRequest=0,busy=false
 const listPager=makePager({mount:$('list-pager'),noun:'surveys',size:25,draw:renderList})

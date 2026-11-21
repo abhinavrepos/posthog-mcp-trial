@@ -141,10 +141,21 @@ ask_domain() {
         [ -n "$raw" ] && info "Using the address from the existing install: $raw"
     fi
     while [ -z "$raw" ]; do
-        echo
-        echo "${BOLD}Which address will PostHog be hosted on?${RESET}"
-        echo "  A domain such as posthog.example.com gets HTTPS. An IP address or http://… runs plain HTTP."
-        read -r -p "> " raw </dev/tty || die "No address given."
+        local count index address answer
+        read -r -p "How many addresses do people use to reach PostHog? [1]: " count </dev/tty || die "No address given."
+        count="${count:-1}"
+        [[ "$count" =~ ^[1-9][0-9]*$ ]] && [ "$count" -le 100 ] || continue
+        for ((index=1; index<=count; index++)); do
+            read -r -p "Address $index (bare name = HTTPS, bare IP = HTTP): " address </dev/tty || die "No address given."
+            [ -n "$address" ] || die "No address given."
+            if [[ "$address" != *://* ]]; then
+                if is_ipv4 "$address"; then address="http://$address"; else address="https://$address"; fi
+            fi
+            raw="${raw:+$raw,}$address"
+        done
+        info "PostHog addresses: $raw (names answer HTTP and HTTPS with local certificates)."
+        read -r -p "Use these addresses? [Y/n]: " answer </dev/tty || die "No confirmation given."
+        case "$answer" in n|N|no|NO) raw="" ;; esac
     done
     raw="${raw// /}"
     ADDRESSES="$raw"
@@ -155,7 +166,7 @@ ask_domain() {
     for one in ${raw//,/ }; do
         d="$(normalize_domain "$one")"
         kind=https
-        if [[ "$one" == http://* ]] || [[ "$d" =~ ^[0-9.]+$ ]]; then
+        if [[ "$one" == http://* ]] || { [[ "$one" != https://* ]] && [[ "$d" =~ ^[0-9.]+$ ]]; }; then
             kind=http
         fi
         if [[ "$d" =~ ^[0-9.]+$ ]]; then
@@ -169,8 +180,10 @@ ask_domain() {
             DOMAIN="$d"
             HTTP_ONLY=0; [ "$kind" = http ] && HTTP_ONLY=1
         fi
-        CADDY_SITES+=("$kind://$d")
-        [ "$kind" != http ] || ANY_HTTP=1
+        # All names answer HTTP directly and HTTPS with a local certificate.
+        if ! is_ipv4 "$d" || [[ "$one" == https://* ]]; then CADDY_SITES+=("https://$d"); fi
+        CADDY_SITES+=("http://$d")
+        ANY_HTTP=1
         case " ${ALL_DOMAINS[*]} " in *" $d "*) ;; *) ALL_DOMAINS+=("$d") ;; esac
     done
     [ ${#ALL_DOMAINS[@]} -gt 0 ] || die "No address given."
@@ -374,7 +387,11 @@ fetch_posthog_repo() {
 # file. Without it, Caddy falls back to localhost:8000 and nothing answers on port 80 or 443.
 caddy_host() {
     local entry out=""
-    for entry in "${CADDY_SITES[@]}"; do out="${out}${out:+, }$entry"; done
+    local -A seen=()
+    for entry in "${CADDY_SITES[@]}"; do
+        [ -z "${seen[$entry]:-}" ] || continue
+        seen[$entry]=1; out="${out}${out:+, }$entry"
+    done
     echo "$out, http://"
 }
 
@@ -734,15 +751,15 @@ wait_for_health() {
 check_https() {
     local code
     for _ in $(seq 1 20); do
-        code=$(curl -s -o /dev/null -w '%{http_code}' -m 10 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/_health" || true)
+        code=$(curl -k -s -o /dev/null -w '%{http_code}' -m 10 --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/_health" || true)
         if [ "$code" = 200 ]; then
-            ok "HTTPS certificate issued for $DOMAIN"
+            ok "HTTPS answers with a local certificate for $DOMAIN"
             return 0
         fi
         sleep 15
     done
-    warn "No valid HTTPS certificate yet. Usually the DNS record or the security group (port 80/443) is wrong."
-    warn "Caddy keeps retrying on its own. Check with: cd $INSTALL_DIR && docker compose logs proxy"
+    warn "Local HTTPS did not answer. Check Caddy listeners and the local certificate configuration."
+    warn "Check with: cd $INSTALL_DIR && docker compose logs proxy"
 }
 
 print_summary() {
@@ -817,6 +834,7 @@ main() {
     fetch_posthog_repo
     write_env
     write_compose_files
+    python3 "$_HOBBY_HERE/../offline/site-config.py" "$INSTALL_DIR" --addresses "$ADDRESSES"
     ecr_compose_override "$INSTALL_DIR" || die "Some images are not in the registry (above)."
     download_geoip
 

@@ -85,3 +85,7 @@ What it already handles (each was a failure on dqposthog01):
 
 Then: Lens on `http://<ip>:8080` (open port 8080 in the firewall, or use a load-balancer name),
 PostHog on the addresses above. Keep the backup and the old storage until replays play.
+
+Addresses behind a load balancer: configure every name/IP people use in POSTHOG_ADDRESS.
+Names serve HTTP directly and HTTPS with Caddy local certificates; the balancer must trust the local certificate (or disable backend certificate verification). No public ACME access is required.
+Set SERVICE_PUBLIC_URL to the Lens browser address and POSTHOG_LINK_URL to the PostHog browser address; run posthog-lens check after updating.

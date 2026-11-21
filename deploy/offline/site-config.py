@@ -2,6 +2,7 @@
 """Preserve site environment before stock Compose replacement. No third-party modules."""
 import argparse
 import json
+import ipaddress
 import os
 from pathlib import Path
 import re
@@ -98,6 +99,31 @@ def preserve(folder, addresses='', offline=False, before_upgrade=False, stock_fo
             u = urlsplit(value)
             if u.scheme in ('http', 'https') and u.netloc and value not in sites:
                 sites.append(u.scheme + '://' + u.netloc)
+    # Names must serve both balancer modes: HTTP termination and TLS re-encryption.
+    # Keep the requested first address for SITE_URL; only expand the Caddy listeners.
+    requested_sites = []
+    for address in sites:
+        u = urlsplit(address)
+        try:
+            ipaddress.ip_address(u.hostname)
+        except ValueError:
+            # Expanded CADDY_HOST is an input on the next run; keep only the first
+            # requested scheme for each name so ADDRESSES does not grow on update.
+            if any(urlsplit(s).netloc == u.netloc for s in requested_sites):
+                continue
+        requested_sites.append(address)
+    first_address = sites[0] if sites else ''
+    listeners = []
+    for address in sites:
+        u = urlsplit(address)
+        try:
+            ipaddress.ip_address(u.hostname)
+            variants = [address] if u.scheme == 'https' else []
+        except ValueError:
+            variants = ['https://' + u.netloc]
+        variants.append('http://' + u.netloc)
+        listeners.extend(v for v in variants if v not in listeners)
+    sites = listeners
     trusted_sites = list(sites)
     for value in re.split(r'[,\s]+', ','.join(str(v or '') for v in trusted_raw)):
         value = value.strip("\"'[]")
@@ -111,7 +137,7 @@ def preserve(folder, addresses='', offline=False, before_upgrade=False, stock_fo
     if any(s.startswith('http://') for s in sites):
         keep['SECURE_COOKIES'] = 'false'
     if sites:
-        keep['SITE_URL'] = sites[0] if addresses else (keep.get('SITE_URL') or sites[0])
+        keep['SITE_URL'] = first_address
     # Merge existing site JSON/YAML through resolved services above; only replace these environments.
     out = root / 'docker-compose.site.yml'
     existing = {}
@@ -139,13 +165,26 @@ def preserve(folder, addresses='', offline=False, before_upgrade=False, stock_fo
             result.setdefault(name, {}).setdefault('environment', {}).update(custom)
     if before_upgrade:
         result.get('proxy', {}).get('environment', {}).pop('CADDYFILE', None)
+    # Merge TLS controls from both flows; Compose maps TLS_BLOCK to CADDY_TLS_BLOCK.
+    tls_lines = []
+    for block in (settings.get('TLS_BLOCK', ''), settings.get('CADDY_TLS_BLOCK', ''),
+                  services.get('proxy', {}).get('environment', {}).get('CADDY_TLS_BLOCK', '')):
+        for line in str(block or '').splitlines():
+            line = line.strip()
+            if line and '${' not in line and line not in tls_lines:
+                tls_lines.append(line)
+    # Replace incompatible auto_https modes rather than leaving duplicate directives.
+    tls_lines = [line for line in tls_lines if not re.match(r'^(?:auto_https|local_certs)\b', line)]
+    tls_lines += ['auto_https disable_redirects', 'local_certs']
+    tls_block = '\n'.join(tls_lines)
+    result.setdefault('proxy', {}).setdefault('environment', {})['CADDY_TLS_BLOCK'] = tls_block
     caddy_hosts = ', '.join([*sites, 'http://'])
     if sites:
         result.setdefault('proxy', {}).setdefault('environment', {})['CADDY_HOST'] = caddy_hosts
-    updates = {}
+    updates = {'TLS_BLOCK': tls_block, 'CADDY_TLS_BLOCK': tls_block}
     if sites:
         updates['CADDY_HOST'] = caddy_hosts
-        updates['ADDRESSES'] = ','.join(sites)
+        updates['ADDRESSES'] = ','.join(requested_sites)
         caddyfile = services.get('proxy', {}).get('environment', {}).get('CADDYFILE', '')
         if caddyfile and not before_upgrade:
             # Older upgrade renderers baked the site list into CADDYFILE. Updating CADDY_HOST
@@ -154,6 +193,15 @@ def preserve(folder, addresses='', offline=False, before_upgrade=False, stock_fo
                 caddyfile, count = re.subn(r'(?m)^[^\s#{}][^{}\n]*\{[ \t]*$', caddy_hosts + ' {', caddyfile, count=1)
                 if count != 1:
                     raise RuntimeError('Cannot locate Caddy site header; inspect proxy CADDYFILE before applying addresses')
+            # A pre-rendered global block cannot consume the new environment values.
+            def global_options(match):
+                lines = [line for line in match[1].splitlines()
+                         if not re.match(r'\s*(?:auto_https\b|local_certs\b|\$\{?CADDY_TLS_BLOCK)', line)]
+                return '{\n' + '\n'.join(lines).strip('\n') + '\n  auto_https disable_redirects\n  local_certs\n}'
+            if re.match(r'\s*\{', caddyfile):
+                caddyfile = re.sub(r'\A\s*\{(.*?)^[ \t]*\}', global_options, caddyfile, count=1, flags=re.M | re.S)
+            else:
+                caddyfile = '{\n  auto_https disable_redirects\n  local_certs\n}\n' + caddyfile
             result['proxy']['environment']['CADDYFILE'] = caddyfile
 
     for key, default in [('COMPOSE_FILE', 'docker-compose.yml'), ('EXTRA_COMPOSE_FILES', '')]:

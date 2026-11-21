@@ -99,6 +99,7 @@ site_files() {
     keep_addresses="$(conf KEEP_POSTHOG_ADDRESSES)"
     [ -n "$keep_addresses" ] || keep_addresses="$(conf_of "$LENS_DIR/deploy/offline/sites/$site/site.env" KEEP_POSTHOG_ADDRESSES)"
     [ "$keep_addresses" != yes ] || addresses=""
+    # Also repairs hand-rewritten http names: the helper expands both balancer modes.
     python3 "$LENS_DIR/deploy/offline/site-config.py" "$POSTHOG_DIR" --addresses "$addresses"
 }
 

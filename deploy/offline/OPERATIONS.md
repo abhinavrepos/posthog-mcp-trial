@@ -59,3 +59,7 @@ The Python suite uses fake folders/Compose responses and no running services. `s
 The 14 Python tests include fake old Compose/`.env` recovery, repeated edits, precedence, Reval detection, private-umask permissions, mixed addresses, baked Caddy site headers, RemoteConfig module fallback and per-team delivery, and real Compose CLI merges (no daemon or image pulls). The MCP test applies a legacy public HTTPS override and confirms the final API remains internal HTTP. Bash syntax, Python parsing, ShellCheck errors, and `git diff --check` pass.
 
 The requested Node tests were attempted with `node --import tsx --test`. This environment reports `spawnSync ... EPERM` for child processes. A diagnostic run with `--test-isolation=none` passed 25 tests; 8 encountered that restriction. Docker daemon access is denied here, so live Caddy/TLS/cookies, team config delivery, event/client queries, MCP execution, replay reads and live-page requests must be verified with `sudo posthog-lens doctor` on the server. No packages or images were installed for verification.
+
+Addresses behind a load balancer: configure every name/IP people use in POSTHOG_ADDRESS.
+Names serve HTTP directly and HTTPS with Caddy local certificates; the balancer must trust the local certificate (or disable backend certificate verification). No public ACME access is required.
+Set SERVICE_PUBLIC_URL to the Lens browser address and POSTHOG_LINK_URL to the PostHog browser address; run posthog-lens check after updating.

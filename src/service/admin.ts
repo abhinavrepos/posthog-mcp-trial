@@ -450,7 +450,7 @@ ${adminTabs()}
 
 </div>
 <div class="tabpanel" role="tabpanel" aria-labelledby="t-chat" hidden id="tab-chat" data-panel="chat">
-<div class="card"><div class="chat-head"><h2>Chat keys</h2>
+<div class="card"><div class="chat-head"><h2>Chat keys</h2><p id="chat-msg" class="small" aria-live="polite"></p>
 <details class="settings"><summary>Copilot settings</summary>
 <div class="toolbar" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label for="chat-url">Lens address for Copilot</label><input id="chat-url" placeholder="https://lens.example.com"></div><div><button type="button" id="chat-url-save">Save address</button></div></div>
 <p class="small muted">The Chat page gives people this address. Leave empty for the default.</p><p id="chat-url-msg" class="small" aria-live="polite"></p>
@@ -474,7 +474,7 @@ ${adminTabs()}
 <p id="ret-confirm-wrap" hidden><label class="check" for="ret-confirm"><input id="ret-confirm" type="checkbox"> <span id="ret-confirm-text">I understand these recordings will be permanently deleted.</span></label></p>
 <div><button type="button" id="ret-save">Save retention</button></div>
 <p id="ret-status" class="small muted"></p><details id="ret-details" hidden><summary>Technical details</summary><p id="ret-error" class="small"></p></details><p id="ret-msg" class="small" aria-live="polite"></p></div>
-<div class="card"><h2>Clips</h2><p class="small muted" id="space"></p>
+<div class="card"><h2>Clips</h2><p id="clips-msg" class="small" aria-live="polite"></p><p class="small muted" id="space"></p>
 <div class="toolbar"><div><label for="clip-filter">Show</label><select id="clip-filter"><option value="">All clips</option><option value="saved">Saved only</option><option value="expiring">Deleted within 3 days</option></select></div></div>
 <div class="table-wrap" role="region" aria-label="Clips" tabindex="0"><table><thead><tr><th scope="col">Clip</th><th scope="col">Who has it</th><th scope="col">Size</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="clips"><tr><td colspan="5">Loading clips…</td></tr></tbody></table></div><div id="clips-pager"></div></div>
 
@@ -491,7 +491,7 @@ tabs.forEach((t,i)=>{t.onclick=()=>{history.replaceState(null,'','#'+t.dataset.t
 show(location.hash.slice(1)||'people');addEventListener('hashchange',()=>show(location.hash.slice(1)))})()
 
 ${PAGER_JS}
-const $=id=>document.getElementById(id);const api=(path,opts={})=>fetch(path,{...opts,headers:{'content-type':'application/json','x-clip-page':'1'}}).then(async r=>{const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||('Error '+r.status));return b});
+const $=id=>document.getElementById(id);const api=(path,opts={})=>fetch(path,{...opts,headers:{'content-type':'application/json','x-clip-page':'1'}}).then(async r=>{const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||'The request could not complete. Try again.');return b});
 const when=t=>t?new Date(t).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}):'never';
 const day=t=>new Date(t).toLocaleDateString([], {dateStyle:'medium'});
 const mb=b=>!b?'0 KB':b>=1048576?(b/1048576).toFixed(1)+' MB':Math.max(1,Math.round(b/1024))+' KB';
@@ -499,7 +499,7 @@ const n=(k,w)=>Number(k).toLocaleString()+' '+w+(k===1?'':'s');
 const clock=s=>Math.floor(s/60)+':'+String(Math.floor(s%60)).padStart(2,'0');
 const short=e=>(e||'').replace(/@.*/,'');
 const cell=(tr,t,cls)=>{const td=document.createElement('td');if(t instanceof Node)td.appendChild(t);else td.textContent=t??'';if(cls)td.className=cls;tr.appendChild(td);return td};
-const msg=(id,t,ok)=>{$(id).textContent=t;$(id).className='small '+(ok?'ok':'err');$(id).setAttribute('role',ok?'status':'alert')};
+const msg=(id,t,ok)=>{if(id==='people-msg'&&$('tab-people').hidden){const panel=document.querySelector('.tabpanel:not([hidden])')?.id;id=panel==='tab-chat'?'chat-msg':panel==='tab-clips'?'clips-msg':'audit-msg'}$(id).textContent=t;$(id).className='small '+(ok?'ok':'err');$(id).setAttribute('role',ok?'status':'alert')};
 const ACTIONS={'privacy.anonymise_set':'Changed client privacy','outcome.recorded':'Recorded client outcome','rescue.updated':'Updated client follow-up','signin':'Signed in','signout':'Signed out','signin.failed':'Failed sign in','recording.inspected':'Looked up a recording','clip.requested':'Asked for a clip','clip.created':'Clip made','clip.viewed':'Watched a clip','clip.downloaded':'Downloaded a clip','clip.link_shared':'Created a share link','clip.deleted':'Deleted a clip','clip.saved':'Saved a clip','clip.unsaved':'Unsaved a clip','clip.comment_added':'Commented on a clip','clip.comment_edited':'Edited a clip comment','clip.comment_deleted':'Deleted a clip comment','clips.pruned':'Old clips deleted','access.role_set':'Changed a role','access.role_removed':'Removed a role','access.settings':'Changed settings','access.system_set':'Changed System page access','access.insights_set':'Changed replay insights access','access.surveys_set':'Changed Surveys page access','access.survey_role_set':'Changed a survey role','access.survey_role_reset':'Reset a survey role','access.survey_settings':'Changed survey settings','access.dashboard_role_set':'Changed a dashboard role','access.dashboard_role_reset':'Reset a dashboard role','access.dashboard_settings':'Changed dashboard settings','access.chat_url':'Changed the Copilot address','dashboard.pinned':'Pinned a dashboard','dashboard.changed':'Changed a dashboard','dashboard.deleted':'Deleted a dashboard','dashboard.shared':'Shared a dashboard','chat.token_created':'Made a chat token','chat.token_revoked':'Revoked a chat token','survey.created':'Made a survey','survey.changed':'Changed a survey','survey.launched':'Launched a survey','survey.stopped':'Stopped a survey','survey.archived':'Archived a survey'};
 let S=null;
 function identity(email){const box=document.createElement('div'),person=S?.people.find(p=>p.email===email),name=document.createElement('div');name.className='identity-name';name.textContent=person?.name||email;box.append(name);if(person?.name){const sub=document.createElement('div');sub.className='small muted';sub.textContent=email;box.append(sub)}if(email===S?.me){const badge=document.createElement('span');badge.className='badge';badge.textContent='You';name.append(badge)}return box}
@@ -631,7 +631,7 @@ if(risky(p)&&!$('ret-confirm').checked){msg('ret-msg','Read the preview and tick
 try{const r=await fetch('/replays/admin/api/replay-retention',{method:'POST',headers:{'content-type':'application/json','x-clip-page':'1'},body:JSON.stringify({days:v,confirm:risky(p)&&$('ret-confirm').checked})})
 const b=await r.json().catch(()=>({}))
 if(r.status===409&&b.preview){shown=b.preview;$('ret-preview').textContent=describe(b.preview);$('ret-confirm-wrap').hidden=false;$('ret-confirm').checked=false;msg('ret-msg','The numbers changed. Read the preview again and confirm.');return}
-if(!r.ok)throw new Error(b.error||('Error '+r.status))
+if(!r.ok)throw new Error(b.error||'The request could not complete. Try again.')
 status(b);reset();msg('ret-msg',b.unchanged?'Nothing changed.':'Saved.',true)}catch(e){msg('ret-msg',e.message)}}
 api('/replays/admin/api/replay-retention').then(status).catch(e=>msg('ret-msg',e.message))})();
 </script></body></html>`

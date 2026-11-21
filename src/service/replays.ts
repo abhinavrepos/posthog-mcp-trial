@@ -16,6 +16,7 @@ import { cleanRenderWork, clipRange, pruneCache, renderClip } from '../core/clip
 import { addComment, captionedFile, checkComment, commentCounts, cues, DEFAULT_DURATION, deleteComment, DURATIONS, getComment, listComments, MAX_TEXT, removeVariants, toVtt, updateComment, variantOf } from '../core/comments.ts'
 import { config } from '../core/config.ts'
 import { all, db, one, run, tx } from '../core/db.ts'
+import { userLabel } from '../core/identity.ts'
 import { clipUrl } from '../core/links.ts'
 import { PostHogError, replayUrl } from '../core/posthog.ts'
 import { recordingInfo, type RecordingInfo } from '../core/recording-info.ts'
@@ -60,6 +61,7 @@ const DAY = 86_400_000
 function fromRow(r: Record<string, unknown>): ClipRecord {
     const c: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(r)) if (v !== null) c[k] = v
+    if (typeof c.user === 'string') c.user = userLabel(c.user)
     c.holders = JSON.parse(String(r.holders))
     c.saved_by = JSON.parse(String(r.saved_by))
     if (!(c.saved_by as string[]).length) c.expires_at = new Date(Date.parse(String(r.last_requested_at)) + RETENTION_DAYS * DAY).toISOString()
@@ -235,6 +237,8 @@ export function createReplayWorker(queue: ReplayJob[], deps: {
                     job.state = 'failed'
                     job.error = /No usable sandbox|Failed to launch/.test(msg)
                         ? 'The clip renderer could not start on the server.'
+                        : /Snapshot download.*(?:404|500)|Recording deleted/i.test(msg)
+                          ? "PostHog can't load this recording's video (its files may have been deleted). Choose another replay."
                         : /no stored snapshots/i.test(msg)
                           ? 'This recording is still being saved. Try again in a minute.'
                           : msg.split('\n')[0].slice(0, 200)
@@ -400,13 +404,13 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
         res.end(!viewer ? loginHtml('Live') : can(viewer.role, 'watch') ? liveHtml(viewer) : noAccessHtml(viewer))
         return true
     }
-    if (!viewer) {
-        json(res, 401, { error: 'Sign in first.' })
-        return true
-    }
     if (!viewer && (p === '/replays/system' || p === '/replays/system/')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
         res.end(loginHtml('System'))
+        return true
+    }
+    if (!viewer) {
+        json(res, 401, { error: 'Sign in first.' })
         return true
     }
     if (p.startsWith('/replays/admin')) return handleAdmin(req, res, url, viewer)
@@ -939,7 +943,7 @@ ${PAGER_JS}
 const CFG=${boot};const $=id=>document.getElementById(id);
 const clock=s=>{s=Math.max(0,Math.floor(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=String(s%60).padStart(2,'0');return h?h+':'+String(m).padStart(2,'0')+':'+x:m+':'+x};
 const when=iso=>new Date(iso).toLocaleString([], {dateStyle:'medium',timeStyle:'short'});
-const api=(path,opts={})=>fetch(path,{...opts,headers:{'content-type':'application/json','x-clip-page':'1',...(opts.headers||{})}}).then(async r=>{const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||('Error '+r.status));return b});
+const api=(path,opts={})=>fetch(path,{...opts,headers:{'content-type':'application/json','x-clip-page':'1',...(opts.headers||{})}}).then(async r=>{const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.error||'The request could not complete. Try again.');return b});
 CFG.lengths.forEach(l=>{const o=document.createElement('option');o.value=l;o.textContent=l+' seconds';if(l===30)o.selected=true;$('length').appendChild(o)});
 $('retention').textContent='Clips are deleted '+CFG.retention+' days after they were last made, unless you click Save. Share links expire after '+Math.round(CFG.ttl/24)+' days. Every view and download is logged.';
 const day=iso=>new Date(iso).toLocaleDateString([], {dateStyle:'medium'});

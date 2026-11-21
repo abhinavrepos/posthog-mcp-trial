@@ -223,7 +223,7 @@ is_yesno() { [[ "$1" =~ ^(yes|no)$ ]] || { warn "yes or no"; return 1; }; }
 is_autoyesno() { [[ "$1" =~ ^(auto|yes|no)$ ]] || { warn "auto, yes or no"; return 1; }; }
 is_address() { [[ "$1" =~ ^(https?://)?[A-Za-z0-9.-]+$ ]] || { warn "a domain (posthog.example.com), an IP address, or http://name"; return 1; }; }
 is_private_ip() { [[ "$1" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)[0-9.]+$ ]]; }
-addr_kind() { local h="${1#*://}"; [[ "$1" == http://* ]] || [[ "$h" =~ ^[0-9.]+$ ]] && echo http || echo https; }
+addr_kind() { [[ "$1" == https://* ]] && { echo https; return; }; local h="${1#*://}"; [[ "$1" == http://* ]] || [[ "$h" =~ ^[0-9.]+$ ]] && echo http || echo https; }
 # One or more addresses, comma-separated; mixed HTTPS names and HTTP IPs are supported.
 is_addresses() {
     local a first=""
@@ -267,7 +267,30 @@ collect_answers() {
         [ -n "$(known ADMIN_EMAIL)" ] || def_admin="$(existing_admin)"
     fi
     [ $INTERACTIVE = 1 ] && say "Press Enter to keep the value in [brackets]."
-    ask POSTHOG_ADDRESS "Address(es) people use to reach PostHog, comma-separated (the first is the main one). Domains get HTTPS (DNS must point here, ports 80 and 443 open in the security group); IPs and http://names are plain HTTP." "$def_address" 1 0 is_addresses
+    # Explicit and saved settings keep their existing precedence and unattended path.
+    if [ "$INTERACTIVE" = 1 ] && [ -z "$(known POSTHOG_ADDRESS)" ]; then
+        local count address address_list confirmed
+        while true; do
+            read -r -p "How many addresses do people use to reach PostHog? [1]: " count </dev/tty
+            count="${count:-1}"
+            [[ "$count" =~ ^[1-9][0-9]*$ ]] && [ "$count" -le 100 ] || continue
+            address_list=""
+            for ((n=1; n<=count; n++)); do
+                while true; do
+                    read -r -p "Address $n (bare name = HTTPS, bare IP = HTTP): " address </dev/tty
+                    is_addresses "$address" && [[ "$address" != *,* ]] && break
+                done
+                [[ "$address" == *://* ]] || address="$(addr_kind "$address")://$address"
+                address_list="${address_list:+$address_list,}$address"
+            done
+            say "PostHog addresses: $address_list (names answer both HTTP and HTTPS)."
+            read -r -p "Use these addresses? [Y/n]: " confirmed </dev/tty
+            case "$confirmed" in n|N|no|NO) continue ;; esac
+            POSTHOG_ADDRESS="$address_list"; break
+        done
+    else
+        ask POSTHOG_ADDRESS "Addresses people use to reach PostHog (comma-separated)" "$def_address" 1 0 is_addresses
+    fi
     POSTHOG_ADDRESS="${POSTHOG_ADDRESS// /}"; save_answer POSTHOG_ADDRESS "$POSTHOG_ADDRESS"
     if [ "$MODE" = fresh ]; then
         ask ADMIN_EMAIL "Email for the first PostHog login" "" 1 0 is_email
@@ -292,7 +315,8 @@ collect_answers() {
     setting KEEP_POSTHOG_ADDRESSES no is_yesno
     setting KEEP_PROJECT_SETTINGS no is_yesno
     # Where people open PostHog when that is not POSTHOG_ADDRESS (a load balancer in front): Lens's links use it.
-    setting POSTHOG_LINK_URL "" is_url
+    local link_default; link_default="$(known POSTHOG_PUBLIC_HOST)"
+    ask POSTHOG_LINK_URL "PostHog address used in links" "${link_default:-$(addr_kind "${POSTHOG_ADDRESS%%,*}")://$host}" 1 0 is_url
     # Only from the environment or --config: empty means PostHog records on every site that sends events.
     APP_URLS="${APP_URLS:-$(read_env_file "$CONFIG" APP_URLS)}"
     [ -z "$APP_URLS" ] || is_urls "$APP_URLS" || die "APP_URLS: \"$APP_URLS\" is not a list of http(s):// addresses."
@@ -348,7 +372,11 @@ collect_answers() {
     # PostHog's MCP on the network as well (port 8787): by default when PostHog's address is a private IP.
     # On a public address the key would cross the internet in plain HTTP, so it stays on this machine.
     setting POSTHOG_MCP_NETWORK "$(is_private_ip "$host" && echo yes || echo no)" is_yesno
-    setting SERVICE_PUBLIC_URL "http://$host:8080" is_url
+    local lens_host="$host" candidate
+    for candidate in $(hosts_of "$POSTHOG_ADDRESS" | tr , ' '); do
+        if [[ "$candidate" =~ ^[0-9.]+$ ]]; then lens_host="$candidate"; break; fi
+    done
+    ask SERVICE_PUBLIC_URL "Lens address people open" "http://$lens_host:8080" 1 0 is_url
     setting CLIP_ALLOWED_HOSTS "$([ -n "$APP_URLS" ] && hosts_of "$APP_URLS" || echo localhost)"
     setting STATUS_PUBLIC no is_yesno
     # Alerts from the status page to a Teams/Slack channel (a webhook URL; empty: no alerts), and after how
@@ -373,7 +401,7 @@ show_plan() {
     for a in $(hosts_of "$POSTHOG_ADDRESS" | tr , ' '); do [ "$a" = "$host" ] || others="${others:+$others, }$scheme://$a"; done
     . "$HERE/migrate/versions/versions.env"
     step "Plan"
-    say "PostHog         $POSTHOG_PUBLIC_URL  ($([ $scheme = https ] && echo "HTTPS, certificate from Let's Encrypt" || echo "plain HTTP: private network or VPN only"))"
+    say "PostHog         $POSTHOG_PUBLIC_URL  ($([ $scheme = https ] && echo "HTTPS, local backend certificate" || echo "plain HTTP: private network or VPN only"))"
     say "Internet        $([ "$OFFLINE" = yes ] && echo "none here: every outside call will be refused at once" || echo "reachable")"
     local images_from="from Docker Hub and GitHub; PostHog Lens built here"
     if [ "$IMAGES_FROM" = ecr ] && [ "$IMAGE_SOURCE" = local ]; then images_from="on this machine already (lens-offline/..., from commit ${IMAGES_COMMIT:0:12})"
@@ -634,9 +662,9 @@ step_addresses() {
     CURRENT=addresses; step "PostHog addresses"
     if [ "$KEEP_POSTHOG_ADDRESSES" = yes ]; then
         POSTHOG_INSTALL_DIR="$POSTHOG_DIR" bash "$HERE/posthog/install-posthog-hobby.sh" --boot-service </dev/null
-        ok "PostHog's addresses stay as they are"
-    elif [ "$(read_env_file "$POSTHOG_DIR/.env" ADDRESSES)" = "$POSTHOG_ADDRESS" ] && ! lost_http_cookies; then
-        ok "PostHog answers on $POSTHOG_ADDRESS"
+        python3 "$HERE/offline/site-config.py" "$POSTHOG_DIR"
+        (cd "$POSTHOG_DIR" && docker compose up -d --no-build)
+        ok "PostHog's addresses preserved with direct HTTP and local TLS"
     else
         POSTHOG_INSTALL_DIR="$POSTHOG_DIR" bash "$HERE/posthog/install-posthog-hobby.sh" --addresses-only "$POSTHOG_ADDRESS" </dev/null
         wait_posthog "after the address change" || die "PostHog is not healthy after the address change. See: cd $POSTHOG_DIR && docker compose logs --tail 50 web"
@@ -789,7 +817,7 @@ PY
 APP_KEYS=(PROP_CLIENT_ID PROP_CLIENT_NAME PROP_APP_VERSION PROP_PERSON_EMAIL CLIENT_FROM_DISTINCT_ID DISTINCT_ID_SEPARATOR APP_EVENTS_FILE SCREENS_FILE JIRA_BASE_URL JIRA_EMAIL JIRA_API_TOKEN
     JIRA_RCI_ISSUE_TYPE JIRA_RISK_ISSUE_TYPE RELEASES_JIRA_PROJECT RELEASES_SUPPORT_JQL ANTHROPIC_API_KEY FEATURE_LENS_MCP LENS_MCP_NAME
     FEATURE_POSTHOG_MCP POSTHOG_MCP_VIA_LENS POSTHOG_MCP_URL POSTHOG_MCP_API_KEY SERVICE_PUBLIC_URL CLIP_ALLOWED_HOSTS STATUS_PASSWORD
-    FEATURE_SURVEYS POSTHOG_SURVEY_API_KEY POSTHOG_SURVEY_GATE SURVEY_BRAND)
+    POSTHOG_LINK_URL POSTHOG_ADDRESS FEATURE_SURVEYS POSTHOG_SURVEY_API_KEY POSTHOG_SURVEY_GATE SURVEY_BRAND)
 step_settings() {
     CURRENT=settings; step "Writing .secrets.env"
     local k v n=0 detected
@@ -806,6 +834,8 @@ step_settings() {
             fi
         fi
     done <<<"$detected"
+    # Account setup may be skipped on an update; public links still follow current answers.
+    set_secret POSTHOG_PUBLIC_HOST "$POSTHOG_PUBLIC_URL"
     for k in "${APP_KEYS[@]}"; do set_secret "$k" "${!k:-}"; n=$((n + 1)); done
     # Any other setting from .env.example that the --config file sets, copied as it is.
     if [ -n "$CONFIG" ]; then

@@ -3,6 +3,7 @@
 import http.cookiejar as cookiejar
 import importlib.util
 import json
+import ipaddress
 import re
 import os
 from pathlib import Path
@@ -157,6 +158,37 @@ def http_addresses():
     web("from django.conf import settings\nassert not settings.SESSION_COOKIE_SECURE, 'HTTP session cookie is secure-only'\nassert not settings.CSRF_COOKIE_SECURE, 'HTTP CSRF cookie is secure-only'\nassert not settings.SESSION_COOKIE_DOMAIN, 'A cookie domain prevents login by IP'\n")
 
 
+def address_responses():
+    from urllib.parse import urlsplit
+    conf = env(os.environ.get('POSTHOG_LENS_CONF', '/etc/posthog-lens/posthog-lens.env'))
+    addresses = conf.get('POSTHOG_ADDRESS') or env(ph / '.env').get('ADDRESSES', '')
+    assert addresses, 'No configured addresses'
+    seen = set()
+    for address in re.split(r'[,\s]+', addresses):
+        if not address:
+            continue
+        u = urlsplit(address if '://' in address else 'http://' + address)
+        host = u.hostname
+        assert host, 'Invalid configured address'
+        if host in seen:
+            continue
+        seen.add(host)
+        try:
+            ipaddress.ip_address(host)
+            schemes = ['http']
+        except ValueError:
+            schemes = ['http', 'https']
+        for scheme in schemes:
+            port = '443' if scheme == 'https' else '80'
+            # curl --resolve supplies both the Host header and TLS SNI, without the LB.
+            output = run(['curl', '--noproxy', '*', '-k', '-sS', '--max-time', '25',
+                          '--resolve', f'{host}:{port}:127.0.0.1', '-D', '-', '-o', '/dev/null',
+                          f'{scheme}://{host}/static/array.js'])
+            status = re.findall(r'^HTTP/\S+ (\d+)', output, re.M)
+            location = re.search(r'^Location:\s*(.*)', output, re.M | re.I)
+            assert status and status[-1] == '200', f'{scheme}://{host}: HTTP {status[-1] if status else "unknown"}' + (f' Location: {location[1].strip()}' if location else '')
+
+
 def replay():
     # The real replay reader over every recording whose files exist. Recordings whose blocks were already
     # gone before the upgrade (deleted on purpose, or expired) are listed by the upgrade and not counted.
@@ -175,7 +207,7 @@ def live():
     base = 'http://127.0.0.1:' + settings.get('SERVICE_PORT', '8080')
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookiejar.CookieJar()))
     request = urllib.request.Request(base + '/replays/login', data=json.dumps({
-        'email': settings['POSTHOG_ADMIN_EMAIL'], 'password': settings['POSTHOG_ADMIN_PASSWORD']}).encode(),
+        'email': settings.get('POSTHOG_ADMIN_EMAIL', ''), 'password': settings.get('POSTHOG_ADMIN_PASSWORD', '')}).encode(),
         headers={'Content-Type': 'application/json', 'x-clip-page': '1'})
     if not settings.get('POSTHOG_ADMIN_EMAIL') or not settings.get('POSTHOG_ADMIN_PASSWORD'):
         raise Skip('no admin login saved; open /replays/live in a browser to check')
@@ -205,6 +237,7 @@ check('posthog_exec through Lens (initialize + tools)', 'check MCP_TOKEN, FEATUR
 check('config.js 200 for every team', 'run post-upgrade-repair.sh --yes to rebuild RemoteConfig', lambda: web((root / 'deploy/migrate/remote-config.py').read_text(), ['-e', 'REMOTE_CONFIG_VERIFY=1']))
 check('every address trusted for CSRF in both schemes', 'run post-upgrade-repair.sh --yes to preserve/apply site addresses', csrf)
 check('HTTP addresses answer directly and allow login cookies', 'run post-upgrade-repair.sh --yes; check Caddy site list, SECURE_COOKIES=false and cookie domain', http_addresses)
+check('every address answers without a redirect', 'run post-upgrade-repair.sh --yes or posthog-lens update <kit>; proxy must serve both schemes with auto_https disable_redirects and local_certs', address_responses)
 check('every replay that has files plays', 'run posthog-upgrade.sh replays then verify (keep old MinIO until verified)', replay)
 check('live page endpoint', 'check POSTHOG_ADMIN_EMAIL/POSTHOG_ADMIN_PASSWORD, APP_EVENTS_FILE and client settings; inspect Lens logs', live)
 sys.exit(1 if failures else 0)

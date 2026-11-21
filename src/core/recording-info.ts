@@ -3,6 +3,7 @@
 import { elementLabel } from './incidents.ts'
 import { getRecording, hogql } from './posthog.ts'
 import { clockShift } from './replaynet.ts'
+import { userExpr, userLabel } from './identity.ts'
 import { P } from './props.ts'
 
 export interface Moment {
@@ -29,7 +30,7 @@ export async function recordingInfo(sessionId: string): Promise<RecordingInfo> {
     // Session-scoped: server-time bounds would discard moments when the browser clock is skewed.
     const rows = await hogql(
         `SELECT event, timestamp, toFloat(properties.$time) AS ctime, toString(properties.$pathname) AS path,
-                coalesce(nullIf(toString(${P.email}), ''), distinct_id) AS user,
+                coalesce(nullIf(toString(${P.email}), ''), ${userExpr()}) AS user,
                 toString(${P.clientName}) AS client, toString(${P.version}) AS version,
                 toString(properties.$exception_types[1]) AS etype, toString(properties.$exception_values[1]) AS evalue,
                 elements_chain
@@ -65,7 +66,7 @@ export async function recordingInfo(sessionId: string): Promise<RecordingInfo> {
         start: new Date(start).toISOString(),
         end: new Date(Date.parse(meta.end_time)).toISOString(),
         duration_s: Number(meta.recording_duration) || (Date.parse(meta.end_time) - start) / 1000,
-        user: first ? String(first.user) : meta.distinct_id,
+        user: userLabel(first ? String(first.user) : meta.distinct_id),
         client: first?.client ? String(first.client) : undefined,
         app_version: first?.version ? String(first.version) : undefined,
         pages,

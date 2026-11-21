@@ -83,13 +83,20 @@ function loadScreens(): Screen[] | undefined {
     return list.map((x) => ({ path: x.path, name: x.name, aliases: (x.aliases || []).map((a) => String(a).toLowerCase()) }))
 }
 
+// Public replay links must never inherit the container-only API endpoint.
+export function posthogLinkHost(settings: NodeJS.ProcessEnv): string {
+    const first = (settings.POSTHOG_ADDRESS || settings.ADDRESSES || '').split(/[,\s]+/).find(Boolean) || ''
+    const address = first && !first.includes('://') ? `${/^(?:\d+\.){3}\d+(?::\d+)?$/.test(first) || first.startsWith('[') ? 'http' : 'https'}://${first}` : first
+    return stripSlash(settings.POSTHOG_LINK_URL || settings.POSTHOG_PUBLIC_HOST || address || 'http://localhost')
+}
+
 export const config = {
     mcp: { name: mcpName(env('LENS_MCP_NAME', 'lens')) },
     posthog: {
         // Where this service reaches the PostHog API (same machine, through Caddy).
         host: stripSlash(env('POSTHOG_HOST', 'http://localhost')),
         // Where browsers reach PostHog, and the base for replay links in reports.
-        publicHost: stripSlash(env('POSTHOG_PUBLIC_HOST', env('POSTHOG_HOST', 'http://localhost'))),
+        publicHost: posthogLinkHost(process.env),
         projectId: env('POSTHOG_PROJECT_ID'),
         projectToken: env('POSTHOG_PROJECT_TOKEN'), // phc_… public ingestion token
         personalApiKey: env('POSTHOG_PERSONAL_API_KEY'), // phx_… read access for queries and snapshots

@@ -11,7 +11,7 @@ import { renderClip, clipName, pendingRenders } from '../core/clip.ts'
 import { pinGraph, listPinned, unpinGraph, graphSchema, pinnedUrl } from '../core/pinned.ts'
 import { ToolInputError } from '../core/toolinputerror.ts'
 import { toolContext, auditClient } from '../core/toolcontext.ts'
-import { recordClip } from '../service/replays.ts'
+import { recordClip, setSaved } from '../service/replays.ts'
 import { audit, type ChatCaller } from '../service/access.ts'
 import { registerSurveyTools, surveyToolNames } from './surveytools.ts'
 import { jsonResult } from './result.ts'
@@ -90,19 +90,19 @@ export function registerTools(server:McpServer,_ai?:unknown,caller?:Caller,_raw=
         if ((best as {outside_window?:boolean}).outside_window) return jsonResult('Sessions',{sessions:[],client:best.id,matched_user:best.matched_user,note:`${best.name || best.id} exists but has no events between ${w.from.toISOString().slice(0,10)} and ${new Date(+w.to-1).toISOString().slice(0,10)}. It was last seen ${String(best.last_seen).slice(0,10)}.`})
         return jsonResult('Sessions',await findSessions({clientId:best.id,from:w.from,to:w.to,screen:args.screen,what:args.what,user:args.user || best.matched_user,limit:args.limit,cursor:args.cursor,recordedOnly:args.recorded_only === true}))
     })
-    server.registerTool('get_replay_link',{description:'Get PostHog replay and Lens MP4 clip links. Waits up to 25 seconds for rendering; unfinished clips complete in the background.',inputSchema:{session_id:z.string().min(1),start_s:z.number().min(0),duration_s:z.number().min(3).max(120).default(30)}},async({session_id:raw,start_s,duration_s})=>{
+    server.registerTool('get_replay_link',{description:'Get PostHog replay and Lens MP4 clip links. Waits up to 25 seconds for rendering; unfinished clips complete in the background. Use save: true to keep a clip until unsaved. Always show both links.',inputSchema:{session_id:z.string().min(1),start_s:z.number().min(0),duration_s:z.number().min(3).max(120).default(30),save:z.boolean().default(false)}},async({session_id:raw,start_s,duration_s,save})=>{
         const session_id=sessionIdOf(raw), request={sessionId:session_id,startOffsetS:start_s,durationS:duration_s}
         const replay_url=replayUrl(session_id,start_s), refusal=mcpClipRefusal()
-        if(refusal)return jsonResult('Clip unavailable',{replay_url,reason:refusal})
+        if(refusal)return jsonResult('Clip unavailable',{replay_url,clip_url:`${config.service.publicUrl}/replays?url=${encodeURIComponent(replay_url)}`,reason:refusal})
         try {
-        const clip=await waitForReplayClip(request,caller?.email || caller?.who,{render:replayDeps.render,record:clip=>replayDeps.record(clip,caller?.email || caller?.who || 'stdio'),backgroundError:e=>{toolError(e,'get_replay_link')}})
+        const clip=await waitForReplayClip(request,caller?.email || caller?.who,{render:replayDeps.render,record:async clip=>{const owner=caller?.email || caller?.who || 'stdio';await replayDeps.record(clip,owner);if(save && setSaved(clip.name,owner,true))audit(owner,'clip.saved',{clip:clip.name})},backgroundError:e=>{toolError(e,'get_replay_link')}})
         return jsonResult(clip?'Clip ready':'Clip rendering; it will finish in the background',{replay_url,clip_url:`${config.service.publicUrl}/replays?clip=${encodeURIComponent(clip?.name || clipName(request))}`})
         } catch(e) {
             const error=toolError(e,'get_replay_link')
             return jsonResult('Clip unavailable',{replay_url,clip_url:`${config.service.publicUrl}/replays?url=${encodeURIComponent(replay_url)}`,error:error.result.content[0].text})
         }
     })
-    server.registerTool('pin_graph',{description:'Save a graph snapshot to Pinned. It does not refresh. At most 20 series and 500 points; each series must match x length.',inputSchema:graphSchema},async args=>{
+    server.registerTool('pin_graph',{description:'Save a graph or table snapshot to Pinned. For tables pass chart: {type:"table", rows:[{column:value}]}; for graphs pass x and series. It does not refresh. At most 20 series and 500 points; each series must match x length.',inputSchema:graphSchema},async args=>{
         const graph=pinGraph(args,caller?.email || caller?.who || 'stdio')
         audit(graph.saved_by,'graph.pinned',{id:graph.id,title:graph.title})
         return jsonResult('Graph saved',{id:graph.id,url:pinnedUrl(graph.id)})

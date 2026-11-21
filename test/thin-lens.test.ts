@@ -9,7 +9,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 const dir=mkdtempSync(join(tmpdir(),'thin-lens-'))
 Object.assign(process.env,{TRIAGE_DB:join(dir,'main.db'),APP_EVENTS_FILE:'config/app-events.reval.json',CLIENT_FROM_DISTINCT_ID:'3',POSTHOG_HOST:'http://fake-posthog',POSTHOG_PROJECT_ID:'7',POSTHOG_PERSONAL_API_KEY:'test-key',POSTHOG_PUBLIC_HOST:'https://ph.example',SERVICE_PUBLIC_URL:'https://lens.example',FEATURE_POSTHOG_MCP:'on',POSTHOG_MCP_URL:'http://fake-mcp',POSTHOG_MCP_API_KEY:'fake',POSTHOG_SURVEY_API_KEY:'fake',FEATURE_SURVEYS:'on'})
-const {config}=await import('../src/core/config.ts')
+const {config,posthogLinkHost}=await import('../src/core/config.ts')
 config.properties.clientName=''
 const {knownClients,matchClients,resolveClient,clearClientCache}=await import('../src/core/resolve.ts')
 const {findSessions}=await import('../src/core/appevents.ts')
@@ -121,6 +121,53 @@ test('pin_graph validates size and lengths, persists immutable snapshots, safely
     for(const chart of [ {...input.chart,x:Array(501).fill('x')}, {...input.chart,series:Array(21).fill(input.chart.series[0])}, {...input.chart,series:[{name:'bad',values:[1]}]}, {...input.chart,series:[{name:'bad',values:[NaN,2]}]} ])assert.equal(graphSchema.safeParse({...input,chart}).success,false)
     for(const type of ['table','bar'] as const){const s=pinGraph({...input,chart:{...input.chart,type}},'pm@example.com');assert.match(pinnedHtml(viewer), type==='bar'?/<rect /:/<table>/);unpinGraph(s.id,'pm@example.com')}
 })
+test('public PostHog link settings never fall back to the internal API host',()=>{
+    assert.equal(posthogLinkHost({POSTHOG_HOST:'http://web:8000',POSTHOG_ADDRESS:'ph.example,http://10.0.0.2'}),'https://ph.example')
+    assert.equal(posthogLinkHost({POSTHOG_HOST:'http://localhost:8000',ADDRESSES:'10.0.0.2,ph.example'}),'http://10.0.0.2')
+    assert.equal(posthogLinkHost({POSTHOG_HOST:'http://web:8000',POSTHOG_PUBLIC_HOST:'https://public',POSTHOG_LINK_URL:'https://links/'}),'https://links')
+    assert.notEqual(posthogLinkHost({POSTHOG_HOST:'http://web:8000'}),'http://web:8000')
+})
+test('table rows preserve text, missing cells and escaped values in Pinned',()=>{
+    const graph=pinGraph({title:'Rows',chart:{type:'table',rows:[{User:'<SEMOPS>',Events:12},{User:'Other'}]}},'pm@example.com')
+    assert.deepEqual(graph.chart.series,[{name:'User',values:['<SEMOPS>','Other']},{name:'Events',values:[12,null]}])
+    assert.match(pinnedHtml(viewer),/&lt;SEMOPS&gt;/)
+    assert.equal(graphSchema.safeParse({title:'Bad',chart:{type:'table',rows:[{}]}}).success,false)
+    unpinGraph(graph.id,'pm@example.com')
+})
+test('recording metadata uses the configured user part and clip failures hide snapshot HTTP codes',async t=>{
+    const {recordingInfo}=await import('../src/core/recording-info.ts')
+    const {createReplayWorker}=await import('../src/service/replays.ts')
+    t.mock.method(globalThis,'fetch',async(url:unknown)=>String(url).includes('/query/') ? response([]) : Response.json({start_time:events[0].ts,end_time:events[1].ts,distinct_id:'C1DEV|01|SEM|SEMOPS'}))
+    const info=await recordingInfo('session-one');assert.equal(info.user,'SEMOPS')
+    const job={id:'failed',state:'queued' as const,owner:'pm@example.com',session_id:'session-one',start_s:0,length_s:30,info,created_at:Date.now()}
+    const queue:import('../src/service/replays.ts').ReplayJob[]=[job]
+    const work=createReplayWorker(queue,{render:async()=>{throw Error('Snapshot download for session-one → 500')},store:()=>{throw Error('must not store')},audit:()=>{},prune:()=>{}})
+    work();await new Promise(resolve=>setImmediate(resolve))
+    assert.equal((job as import('../src/service/replays.ts').ReplayJob).error,"PostHog can't load this recording's video (its files may have been deleted). Choose another replay.")
+})
+test('page renderers produce valid browser scripts and System opens a sign-in page',async()=>{
+    const {handleAdmin}=await import('../src/service/admin.ts')
+    const {handleConnect}=await import('../src/service/connect.ts')
+    const {handleReplays}=await import('../src/service/replays.ts')
+    const {liveHtml}=await import('../src/service/live.ts')
+    const {surveysHtml}=await import('../src/service/surveyspage.ts')
+    const {systemHtml}=await import('../src/service/system.ts')
+    const admin={email:'admin@example.com',name:'Admin',role:'admin'} as never
+    const pages=[pinnedHtml(admin),liveHtml(admin),surveysHtml(admin),systemHtml(admin)]
+    for(const [path,handler] of [['/replays/admin',handleAdmin],['/replays/connect',handleConnect]] as const){
+        let body=''
+        const res={writeHead:()=>{},end:(text:string)=>{body=text}} as unknown as ServerResponse
+        await handler({method:'GET'} as IncomingMessage,res,new URL('http://lens'+path),admin)
+        pages.push(body)
+    }
+    let status=0,body=''
+    await handleReplays({method:'GET',headers:{}} as IncomingMessage,{writeHead:(s:number)=>{status=s},end:(text:string)=>{body=text}} as ServerResponse,new URL('http://lens/replays/system'))
+    assert.equal(status,200);assert.match(body,/Sign in to/);pages.push(body)
+    for(const page of pages){
+        assert.match(page,/<!doctype html>/)
+        for(const script of page.matchAll(/<script>([\s\S]*?)<\/script>/g))assert.doesNotThrow(()=>new Function(script[1]))
+    }
+})
 test('Live time endpoint reads fake PostHog directly and returns activity without tasks.db',async t=>{
     const queries:string[]=[]
     t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
@@ -146,9 +193,16 @@ test('MCP publishes only retained tools and pin/list/delete and surveys work thr
         assert.ok(names.includes('list_surveys'))
         assert.ok(!(await client.callTool({name:'list_surveys',arguments:{}})).isError)
         const result=await client.callTool({name:'pin_graph',arguments:{title:'Usage',chart:{type:'table',x:['Today'],series:[{name:'Events',values:[10]}]}}})
-        assert.ok(!result.isError);const {id,url}=payload(result);assert.match(url,/\/replays\/pinned#/)
+        assert.ok(!result.isError);const {id,url}=payload(result);assert.match(url,/^https:\/\/lens.example\/replays\/pinned#/)
         assert.equal(payload(await client.callTool({name:'list_pinned',arguments:{}}))[0].title,'Usage')
         assert.ok(payload(await client.callTool({name:'unpin_graph',arguments:{id}})).deleted)
+        const table=await client.callTool({name:'pin_graph',arguments:{title:'Table rows',chart:{type:'table',rows:[{User:'SEMOPS',Events:12}]}}})
+        assert.ok(!table.isError,JSON.stringify(table))
+        const invalid=await client.callTool({name:'pin_graph',arguments:{title:'Invalid table',chart:{type:'table',rows:'not rows'}}})
+        assert.ok(invalid.isError);assert.match(JSON.stringify(invalid),/rows|series/)
+
+        assert.match(payload(table).url,/^https:\/\/lens.example\/replays\/pinned#/)
+        await client.callTool({name:'unpin_graph',arguments:{id:payload(table).id}})
         assert.ok((await client.callTool({name:'pin_graph',arguments:{title:'Bad',chart:{type:'line',x:[1,2],series:[{name:'bad',values:[1]}]}}})).isError)
     } finally {await client.close();await server.close()}
 })
@@ -178,7 +232,28 @@ test('get_replay_link retains both links when MP4 rendering fails',async()=>{
     try {
         const result=await client.callTool({name:'get_replay_link',arguments:{session_id:'session-one',start_s:12}})
         const data=payload(result);assert.match(data.replay_url,/session-one\?t=12/);assert.match(data.clip_url,/\/replays\?url=/)
+        const previous=process.env.CLIPS_PER_HOUR;process.env.CLIPS_PER_HOUR='1'
+        try {
+            const refused=payload(await client.callTool({name:'get_replay_link',arguments:{session_id:'session-one',start_s:0}}))
+            assert.equal(refused.replay_url,'https://ph.example/project/7/replay/session-one?t=0')
+            assert.match(refused.clip_url,/^https:\/\/lens.example\/replays\?url=/)
+            assert.match(refused.reason,/limit/)
+        } finally {if(previous===undefined)delete process.env.CLIPS_PER_HOUR;else process.env.CLIPS_PER_HOUR=previous}
+
     } finally {await client.close();await server.close()}
+})
+test('get_replay_link saves a rendered clip for the caller and returns both public links at zero offset',async()=>{
+    const {storeClip,getClip,deleteClip}=await import('../src/service/replays.ts')
+    const clip={name:'saved-test.mp4',file:'/synthetic.mp4',size_bytes:0,session_id:'session-save',start_offset_s:0,end_offset_s:30,video_duration_s:30,cached:true,render_s:0}
+    const owner='pm@example.com'
+    const server=new McpServer({name:'test',version:'1'});registerTools(server,undefined,{who:owner,email:owner,surveyRole:'view'},false,{render:async()=>clip,record:async(c,by)=>{storeClip(c,undefined,by)}})
+    const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(a);const client=new Client({name:'test',version:'1'});await client.connect(b)
+    try {
+        const data=payload(await client.callTool({name:'get_replay_link',arguments:{session_id:'session-save',start_s:0,save:true}}))
+        assert.equal(data.replay_url,'https://ph.example/project/7/replay/session-save?t=0')
+        assert.equal(data.clip_url,'https://lens.example/replays?clip=saved-test.mp4')
+        assert.deepEqual(getClip(clip.name)?.saved_by,[owner])
+    } finally {deleteClip(clip.name);await client.close();await server.close()}
 })
 test('long PostHog calls return a job handle and can be polled, with owner isolation',async()=>{
     const db=new DatabaseSync(':memory:'),runner=new JobRunner(db),dispatch=createJobDispatch({who:'owner'},{runner,budgetMs:5})

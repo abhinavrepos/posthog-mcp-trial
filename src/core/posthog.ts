@@ -325,7 +325,7 @@ export function replayUrl(sessionId: string, offsetSeconds = 0): string {
     for (let i = 0; i < 3; i++) decoded = decoded.replace(/%([0-9a-f]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
     if (decoded.includes('@') || decoded.includes(config.properties.distinctIdSeparator)) return `${config.service.publicUrl}/replays`
     const t = Math.max(0, Math.floor(offsetSeconds))
-    return `${config.posthog.publicHost}/project/${config.posthog.projectId}/replay/${encodeURIComponent(sessionId)}${t ? `?t=${t}` : ''}`
+    return `${config.posthog.publicHost}/project/${config.posthog.projectId}/replay/${encodeURIComponent(sessionId)}?t=${t}`
 }
 
 export function issueUrl(issueId: string): string {

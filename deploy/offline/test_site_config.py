@@ -117,7 +117,47 @@ class SiteConfigTests(unittest.TestCase):
                 result = preserve(root)
             hosts = result['services']['proxy']['environment']['CADDY_HOST']
             self.assertIn('https://extra.example.com', hosts)
-            self.assertNotIn('https://plain.example.com', hosts)
+            self.assertIn('https://plain.example.com', hosts)
+            self.assertIn('http://extra.example.com', hosts)
+
+    def test_explicit_https_ip_keeps_tls_and_plain_http(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch('subprocess.check_output', return_value=b'{"services": {}}'):
+                result = preserve(directory, 'https://10.0.0.2')
+            proxy = result['services']['proxy']['environment']
+            self.assertEqual(proxy['CADDY_HOST'], 'https://10.0.0.2, http://10.0.0.2, http://')
+            self.assertEqual(result['services']['web']['environment']['SITE_URL'], 'https://10.0.0.2')
+
+    def test_local_tls_and_hand_rewritten_names_converge_twice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '.env').write_text('TLS_BLOCK="email ops@example.com"\n')
+            current = {'services': {'proxy': {'environment': {
+                'CADDY_HOST': 'http://c1devph.reval.com, http://dqposthog01, http://10.10.128.206, http://',
+                'CADDYFILE': '{\n admin off\n ${CADDY_TLS_BLOCK:-}\n}\nhttp://c1devph.reval.com {\n reverse_proxy web:8000\n}\n'}}}}
+            for _ in range(2):
+                with patch('subprocess.check_output', return_value=json.dumps(current).encode()):
+                    current = preserve(root)
+                proxy = current['services']['proxy']['environment']
+                for name in ('c1devph.reval.com', 'dqposthog01'):
+                    for scheme in ('http', 'https'):
+                        self.assertIn(scheme + '://' + name, proxy['CADDY_HOST'])
+                self.assertIn('http://10.10.128.206', proxy['CADDY_HOST'])
+                self.assertNotIn('https://10.10.128.206', proxy['CADDY_HOST'])
+                self.assertTrue(proxy['CADDY_HOST'].endswith('http://'))
+                for directive in ('auto_https disable_redirects', 'local_certs'):
+                    self.assertEqual(proxy['CADDY_TLS_BLOCK'].splitlines().count(directive), 1)
+                    self.assertEqual(env(root / '.env')['TLS_BLOCK'].splitlines().count(directive), 1)
+                    self.assertEqual(proxy['CADDYFILE'].count(directive), 1)
+                self.assertIn('email ops@example.com', proxy['CADDY_TLS_BLOCK'])
+                self.assertIn('admin off', proxy['CADDYFILE'])
+                self.assertIn(proxy['CADDY_HOST'] + ' {', proxy['CADDYFILE'])
+                if _ == 0:
+                    first = current
+                    first_env = env(root / '.env')
+                else:
+                    self.assertEqual(first, current)
+                    self.assertEqual(first_env, env(root / '.env'))
 
     def test_worker_company_settings_survive_without_resurrecting_old_services(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -175,7 +215,7 @@ class SiteConfigTests(unittest.TestCase):
             with patch('subprocess.check_output', return_value=json.dumps(config).encode()):
                 result = preserve(root, 'https://new.example.com,http://10.0.0.2')
                 caddy = result['services']['proxy']['environment']['CADDYFILE']
-                self.assertIn('https://new.example.com, http://10.0.0.2, http:// {', caddy)
+                self.assertIn('https://new.example.com, http://new.example.com, http://10.0.0.2, http:// {', caddy)
                 self.assertIn('reverse_proxy web:8000', caddy)
                 self.assertNotIn('old.example.com {', caddy)
                 result = preserve(root, 'https://new.example.com,http://10.0.0.2', before_upgrade=True)

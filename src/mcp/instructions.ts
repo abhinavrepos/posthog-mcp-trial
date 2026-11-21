@@ -9,7 +9,9 @@ Report only what tools returned; no speculation about variation or significance.
 For "the year", "last year" or "all data", use data_guide coverage continuous_from..continuous_to (not data_starts..data_ends when there are gaps) and state the exact UTC bounds used; for complete weeks use only fully covered weeks.
 On rate_limit wait retry_after_seconds once; do not repeat refused calls.
 For analysis use posthog_exec: tools / info <tool> / call <tool> <json>. Poll get_job_result when a call returns a job_id.
-For "what did client X do" or a replay of X doing Y: resolve_client, then find_sessions (recorded_only: true when they want a replay to watch). Preserve matched_user when resolution matches a user. Give both the PostHog replay URL and Lens clip page URL. Screen matches dialog/tab names or codes; what matches actions and messages. Windows may cover up to one year.
-To save a graph use pin_graph; snapshots do not refresh. list_pinned lists saved graphs; unpin_graph deletes your own graphs (admins may delete any).
+For "what did client X do" or a replay of X doing Y: resolve_client, then find_sessions (recorded_only: true when they want a replay to watch). Preserve matched_user when resolution matches a user. Screen matches dialog/tab names or codes; what matches actions and messages. Windows may cover up to one year.
+When you return a session or replay, always show both links: the PostHog replay link and the Lens clip link.
+When asked to save, pin or keep a chart or result, call pin_graph and show its Pinned link. Snapshots do not refresh. list_pinned lists saved graphs; unpin_graph deletes your own graphs (admins may delete any).
+To save a replay, call get_replay_link with save: true.
 Survey tools design, save, list, stop and read results. Launch surveys on the Surveys page.`
 }
