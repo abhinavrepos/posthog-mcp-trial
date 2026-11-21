@@ -567,3 +567,10 @@ test('every sidebar section has an icon',async()=>{
     const block=src.slice(src.indexOf('const ICON'),src.indexOf('const icon ='))
     for(const name of ['Replay clips','Live','Pinned','Surveys','Chat','System','Admin'])assert.match(block,new RegExp(`(?:'${name}'|\\b${name}):\\s*'<`),name)
 })
+
+test('pin_graph accepts a table as columns plus rows of values, and rejects ragged rows',async()=>{
+    const {graphSchema}=await import('../src/core/pinned.ts')
+    const ok=graphSchema.parse({title:'T',chart:{type:'table',columns:['Month','Opens'],rows:[['May',208],['Jun',201]]}})
+    assert.deepEqual(ok.chart.series,[{name:'Month',values:['May','Jun']},{name:'Opens',values:[208,201]}])
+    assert.throws(()=>graphSchema.parse({title:'T',chart:{type:'table',columns:['A','B'],rows:[[1]]}}))
+})
