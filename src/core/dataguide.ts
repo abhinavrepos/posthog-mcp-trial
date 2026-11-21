@@ -81,6 +81,20 @@ export async function dataGuide() {
         coverage,
         run_sql:'posthog_exec command: call execute-sql {"query":"<HogQL>"}',
         sql_notes:['windowFunnel needs toDateTime(timestamp), not the DateTime64 timestamp','windowFunnel returns the max level reached, not per-stage counts; use countIf(level >= N) for cumulative stage counts'],
+        posthog_tools:(()=>{
+            const msgs=[...reg.dialogs.messages,...reg.dialogs.notices]
+            const noMsg={key:reg.properties.dialog?.name || 'dialog_id',operator:'is_not',type:'event',value:msgs}
+            const clientFilter={type:'hogql',key:`toString(${P.client}) = '<CLIENT>'`}
+            const name=(k:string,d:string)=>(reg.properties as Record<string,{name?:string}|undefined>)[k]?.name || d
+            const screenProp=name('dialogName','dialog_name'), buttonProp=name('button','action_name'), versionProp=name('version','')
+            return {
+                funnel:{tool:'query-funnel',note:'Count per session with funnelAggregateByHogQL properties.$session_id (default counts people). Steps are EventsNode with property filters; filter a client with the hogql property below.',
+                    example:{kind:'FunnelsQuery',series:[{kind:'EventsNode',event:reg.events.screen,properties:[{key:screenProp,operator:'exact',type:'event',value:'<SCREEN>'}]},{kind:'EventsNode',event:reg.events.interaction,properties:[{key:screenProp,operator:'exact',type:'event',value:'<SCREEN>'},{key:buttonProp,operator:'exact',type:'event',value:reg.submitButtons[0] || 'Save'}]}],
+                        properties:[clientFilter],dateRange:{date_from:'<FROM>',date_to:'<TO>'},funnelsFilter:{funnelAggregateByHogQL:'properties.$session_id',funnelWindowInterval:1,funnelWindowIntervalUnit:'hour'},breakdownFilter:{breakdown:versionProp || screenProp,breakdown_type:'event'}}},
+                paths:{tool:'query-paths',note:`Screen-to-screen paths. "Users" counts path visits (a person's activity split at 30 minutes idle), NOT distinct people: say "visits". Leave out messages (${msgs.join(', ')}) with the property shown. A year across all clients can exceed PostHog's memory: filter to a client, or run one quarter at a time.`,
+                    example:{kind:'PathsQuery',dateRange:{date_from:'<FROM>',date_to:'<TO>'},properties:[clientFilter,noMsg],pathsFilter:{includeEventTypes:['hogql'],pathsHogQLExpression:`properties.${screenProp}`,startPoint:'<SCREEN>',stepLimit:3,edgeLimit:20}}},
+            }
+        })(),
         complete_weeks:'Last N complete weeks: replace N (4 below); coverage.data_ends excludes sparse replay-fixture days. Use the Monday containing data_ends as the exclusive upper bound, and keep the lower bound within continuous_from. If coverage is unknown, do not infer complete weeks.',
         examples:[
             `SELECT ${screen} AS screen, uniq(properties.$session_id) AS sessions FROM events WHERE event = ${literal(reg.events.screen)} GROUP BY screen LIMIT 20`,

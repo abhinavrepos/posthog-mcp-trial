@@ -38,6 +38,10 @@ test('coverage separates a five-day outage and sparse replay day from the histor
     t.mock.method(Date,'now',()=>now+600001)
     await dataCoverage();assert.equal(calls,4)
     const guide=await dataGuide()
+    const tools=(guide as any).posthog_tools
+    assert.equal(tools.funnel.tool,'query-funnel');assert.equal(tools.funnel.example.funnelsFilter.funnelAggregateByHogQL,'properties.$session_id')
+    assert.equal(tools.paths.tool,'query-paths');assert.match(tools.paths.note,/NOT distinct people/)
+    assert.deepEqual(tools.paths.example.properties.find((p:any)=>p.operator==='is_not')?.value?.slice().sort(),['messagebox','toast'])
     assert.equal(guide.coverage.data_ends,'2026-11-14T23:59:59.999999Z')
     assert.match(guide.examples[4],/toStartOfWeek\(toDateTime\('2026-11-14', 'UTC'\), 1\)/)
     assert.match(guide.examples[4],/timestamp >= end_week - INTERVAL 4 WEEK AND timestamp < end_week/)
