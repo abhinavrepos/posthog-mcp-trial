@@ -68,6 +68,13 @@ export async function dataGuide() {
         dataCoverage(),
         hogql('SELECT toString(distinct_id) AS distinct_id FROM events LIMIT 1',{}, {cache:true,ttlMs:600000}),
     ])
+    // The exact screen names people opened recently, so "Cash Forcast" or "hedge doc" map to a real name
+    // instead of a guess. One cheap grouped read, cached for an hour; optional.
+    const msgs=[...reg.dialogs.messages,...reg.dialogs.notices]
+    const screens=await hogql(`SELECT toString(${prop(reg,'dialogName')}) AS name, count() AS opens FROM events
+        WHERE event = {screen} AND timestamp >= now() - INTERVAL 30 DAY AND notEmpty(name) AND name NOT IN {skip}
+          AND toString(${prop(reg,'dialog')}) NOT IN {msgs}
+        GROUP BY name ORDER BY opens DESC LIMIT 200`,{screen:reg.events.screen,skip:['UNKNOWN','null',...msgs],msgs:msgs.length?msgs:['-']},{cache:true,ttlMs:3600000}).catch(()=>[])
     const example=String(rows[0]?.distinct_id || ''), separator=config.properties.distinctIdSeparator
     const clientPart=config.properties.clientFromDistinctId, userPart=(reg.distinctIdParts?.indexOf('{user}') ?? -1)+1
     const literal=(s:string)=>`'${s.replaceAll("'","''")}'`
@@ -75,6 +82,7 @@ export async function dataGuide() {
     return {
         app:reg.app,events:{...reg.events,messages:{event:reg.events.interaction,dialog_ids:reg.dialogs.messages},notices:{event:reg.events.interaction,dialog_ids:reg.dialogs.notices}},
         properties:reg.properties,
+        screen_names:{note:'Exact screen names opened in the last 30 days, most used first. Match what the person typed to one of these (spelling may differ) before filtering.',names:screens.map(r=>String(r.name))},
         identity:{CLIENT_FROM_DISTINCT_ID:clientPart,separator,parts:reg.distinctIdParts,example_distinct_id:example || null,
             client:{part:clientPart || null,property:clientPart ? null : config.properties.client,value:clientPart ? example.split(separator)[clientPart-1] ?? null : null,expression:`toString(${P.client})`},
             user:{part:userPart || null,value:userPart ? example.split(separator)[userPart-1] ?? null : example || null,expression:userExpr()}},

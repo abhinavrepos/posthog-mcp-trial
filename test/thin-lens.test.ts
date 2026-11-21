@@ -291,6 +291,7 @@ test('data_guide exposes configured version, identity, coverage cache and SQL; r
         if(q.query.includes('AS data_starts')){coverageCalls++;return response([{data_starts:'2025-11-15T08:00:05Z',data_ends:'2026-11-14T17:03:14Z'}])}
         if(q.query.includes('GROUP BY day')){dailyCalls++;return response([{day:'2025-11-15',n:100},{day:'2026-11-14',n:100}])}
         if(q.query.endsWith('LIMIT 1'))return response([{distinct_id:'C1DEV|01|SEM|SEMOPS'}])
+        if(q.query.includes('AS opens'))return response([{name:'Cash Positions',opens:9},{name:'Trade Entry',opens:4}])
         if(q.query.includes('FROM person_distinct_ids'))return response([{did:'C1DEV|01|SEM|SEMOPS',email:'different@example.com'}])
         rosterCalls++;assert.match(q.query,/GROUP BY id, user, did/)
         return response([{id:'SEM',user:'SEMOPS',did:'C1DEV|01|SEM|SEMOPS',n:64,last_seen:roster[0].last_seen},{id:'SEM',user:'SEMOTHER',did:'C1DEV|01|SEM|SEMOTHER',n:146,last_seen:roster[0].last_seen}])
@@ -301,6 +302,7 @@ test('data_guide exposes configured version, identity, coverage cache and SQL; r
         const guide=payload(await client.callTool({name:'data_guide',arguments:{}}))
         assert.equal(guide.run_sql,'posthog_exec command: call execute-sql {"query":"<HogQL>"}');assert.deepEqual(guide.sql_notes,['windowFunnel needs toDateTime(timestamp), not the DateTime64 timestamp','windowFunnel returns the max level reached, not per-stage counts; use countIf(level >= N) for cumulative stage counts'])
         assert.equal(guide.properties.version.name,'title');assert.equal(guide.events.screen,'PageView')
+        assert.deepEqual(guide.screen_names.names,['Cash Positions','Trade Entry'])
         assert.equal(guide.identity.CLIENT_FROM_DISTINCT_ID,3);assert.equal(guide.identity.separator,'|')
         assert.equal(guide.identity.client.part,3);assert.equal(guide.identity.client.value,'SEM')
         assert.equal(guide.identity.user.part,4);assert.equal(guide.identity.user.value,'SEMOPS')

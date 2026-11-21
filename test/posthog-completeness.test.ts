@@ -123,3 +123,12 @@ test('successful 56-second Live reads reset timeout history and leave other tool
     for (let i = 0; i < 3; i++) assert.deepEqual(await hogql('Live', {}, { timeoutMs: 300_000, retries: 0 }), [{ n: 1 }])
     assert.deepEqual(await hogql('other tool', {}, { retries: 0 }), [{ n: 1 }])
 })
+
+test('PostHog input rejections keep PostHog\'s own one-line reason so the agent can fix the call', async () => {
+    const { posthogUsageMessage, posthogPublicMessage } = await import('../src/mcp/posthog-error.ts')
+    const msg = posthogUsageMessage('Invalid input for "subscriptions-retrieve": missing required parameter: id (A unique integer value identifying this subscription.)')!
+    assert.match(msg, /missing required parameter: id/)
+    assert.equal(posthogPublicMessage(msg), msg)
+    const long = posthogUsageMessage(JSON.stringify({ text: 'Invalid input for "query-trends": parameter "series" must be of type array\n\n' + 'x'.repeat(2000) }))!
+    assert.match(long, /parameter "series" must be of type array/); assert.ok(long.length < 600); assert.equal(posthogPublicMessage(long), long)
+})

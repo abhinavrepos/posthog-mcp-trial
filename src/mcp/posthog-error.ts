@@ -46,7 +46,10 @@ export function posthogUsageMessage(raw: string): string | undefined {
         const requested = /(?:unknown (?:command|tool)|is not a (?:known )?(?:command|tool)|no such (?:command|tool))[:\s]*[\\"']*([\w-]+)/i.exec(raw)?.[1] || ''
         return UNKNOWN_COMMAND_MESSAGE + (looksLikeSqlTool(requested) ? ` Closest tools: execute-sql. ${HOGQL_HINT}` : '')
     }
-    const validation = validationDetails(raw)
+    // PostHog names the exact problem ("missing required parameter: id"); pass it on so the agent fixes the call
+    // instead of guessing. Privacy mode is gone; the text is PostHog's own schema message, trimmed.
+    const said = /Invalid input for \\?"[a-z0-9-]+\\?":\s*([^"\\]*(?:\\.[^"\\]*)*)/i.exec(raw)?.[1]
+    const validation = validationDetails(raw) || (said ? said.replace(/\\n/g, ' ').replace(/\\"/g, '"').replace(/\s+/g, ' ').trim().slice(0, 300) + ' ' : '')
     if (validation || /invalid (?:input|arguments?|json)|validation[_ ](?:error|failed)|expected [a-z]+, received|required property|is required|unexpected token/i.test(raw)) return `PostHog rejected the input for this command. ${validation}${USAGE_HELP}`
     const sql = /(syntax error|unknown (?:table|field|function|identifier)|unable to resolve field|unknown column|illegal type|illegal_type_of_argument|number of arguments|no such column|cannot convert|type mismatch|there is no supertype|missing columns|not an aggregate function|aggregate function .{0,40}is found inside)[^"\\]{0,200}/i.exec(raw)?.[0]
     // The first line names the field or function the agent wrote ("Unable to resolve field dialog"): it is what makes
@@ -115,5 +118,7 @@ function validDetailedUsage(raw: string): boolean {
     const prefix = 'PostHog rejected the input for this command. '
     if (!raw.startsWith(prefix) || !raw.endsWith(USAGE_HELP)) return false
     const detail = raw.slice(prefix.length, -USAGE_HELP.length)
+    // PostHog's own schema explanation (one line, trimmed) is allowed through: privacy mode was removed.
+    if (detail.length <= 320 && !/[\r\n\u0000-\u001f]/.test(detail)) return true
     return detail === '' || /^(?:[A-Za-z_$][\w$.-]{0,199}: (?:expected (?:string|number|integer|boolean|object|array|null|undefined|date)(?: \(required\))?|allowed [A-Za-z_$][\w$-]*(?:, [A-Za-z_$][\w$-]*)*|remove unsupported fields)\. ){1,6}$/.test(detail)
 }
