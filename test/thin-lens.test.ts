@@ -470,3 +470,19 @@ test('chat cannot change a running survey; nothing is sent to PostHog',async t=>
         assert.ok(!names.some(n=>/launch/.test(n)))
     } finally {await client.close()}
 })
+
+test('resolve_client understands "user at client" phrasing',async t=>{
+    const {resolveClient,clearClientCache}=await import('../src/core/resolve.ts') as any
+    clearClientCache?.()
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
+        const q=JSON.parse(String(init.body)).query
+        if(q.query.includes('FROM person_distinct_ids'))return response([])
+        return response([{id:'TR03',user:'TR03OPS',did:'C1DEV|01|TR03|TR03OPS',n:42,last_seen:'2026-11-14T10:00:00Z'},{id:'TR03',user:'TR03RISK',did:'C1DEV|01|TR03|TR03RISK',n:9,last_seen:'2026-11-14T10:00:00Z'},{id:'SEM',user:'SEMOPS',did:'C1DEV|01|SEM|SEMOPS',n:7,last_seen:'2026-11-14T10:00:00Z'}])
+    })
+    for(const phrase of ['tr03ops at tr03','TR03OPS from TR03','tr03 ops, tr03']){
+        const m=await resolveClient({text:phrase,from:new Date('2026-10-01'),to:new Date('2026-11-15')}) as {id:string;matched_user?:string}[]
+        assert.equal(m[0]?.id,'TR03',phrase);assert.equal(m[0]?.matched_user,'TR03OPS',phrase);assert.equal(m.length,1,phrase)
+    }
+    const sem=await resolveClient({text:'sem ops at sem',from:new Date('2026-10-01'),to:new Date('2026-11-15')}) as {id:string;matched_user?:string}[]
+    assert.equal(sem[0]?.matched_user,'SEMOPS')
+})

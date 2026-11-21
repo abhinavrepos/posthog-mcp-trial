@@ -125,11 +125,26 @@ export function matchClients(query:string, clients:KnownClient[]): ClientMatch[]
     }
     return markPartial(out.sort((a,b)=>b.confidence-a.confidence || b.events-a.events).slice(0,10), isTruncated(clients) || clients.some(c=>c.truncated))
 }
+/** PMs write "tr03ops at tr03", "SEMOPS from SEM" or "sem ops, sem". The whole phrase is tried first; when it
+ * matches nothing, each part is resolved and a user whose client is named in another part wins. */
+function matchPhrase(text: string, clients: Parameters<typeof matchClients>[1]): ReturnType<typeof matchClients> {
+    const whole = matchClients(text, clients)
+    const parts = text.split(/\s+(?:at|from|in|of|for|with|@)\s+|\s*,\s*/i).map(p => p.trim()).filter(Boolean)
+    if (whole.length || whole.truncated || parts.length < 2) return whole
+    const each = parts.map(p => matchClients(p, clients))
+    const users = each.flat().filter(m => m.matched_user)
+    const named = new Set(each.flat().filter(m => !m.matched_user).map(m => m.id))
+    const best = users.filter(m => named.has(m.id))
+    const pick = best.length ? best : users.length ? users : each.find(m => m.length) || whole
+    const seen = new Set<string>()
+    return markPartial(pick.filter(m => { const k = m.id + '|' + (m.matched_user || ''); return !seen.has(k) && (seen.add(k), true) }), each.some(m => !!m.truncated))
+}
+
 export async function resolveClient(input:{text:string; emails?:string[]; clientHint?:string; from?:Date; to?:Date}) {
     const text = input.clientHint || input.text
-    const inWindow = matchClients(text, await knownClients(input.from,input.to))
+    const inWindow = matchPhrase(text, await knownClients(input.from,input.to))
     if (inWindow.length || inWindow.truncated || !input.from) return inWindow
     // A client with no events in the asked-for dates still exists: say so, instead of "no client matches".
-    const outside = matchClients(text, await knownClients(new Date(Date.now()-400*86400000), new Date()))
+    const outside = matchPhrase(text, await knownClients(new Date(Date.now()-400*86400000), new Date()))
     return markPartial(outside.map(m => ({...m, events:0, ...(m.matched_user ? {user_events:0} : {}), outside_window:true})), !!outside.truncated)
 }
