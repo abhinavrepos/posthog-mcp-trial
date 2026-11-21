@@ -828,11 +828,11 @@ export type Section = 'Replay clips' | 'Pinned' | 'Live'  | 'Surveys' | 'Chat' |
 // Line icons (24px grid, 1.75 stroke), inline so the app needs nothing from the internet.
 const ICON: Record<string, string> = {
     'Replay clips': '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/>',
-    Pinned: '<path d="M4 4h16v16H4z"/>',
+    Pinned: '<path d="M9 3h6l-1 6 4 4H6l4-4z"/><path d="M12 13v8"/>',
     Live: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
     Surveys: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/>',
     Chat: '<path d="M12 3v3M12 18v3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M3 12h3M18 12h3"/><circle cx="12" cy="12" r="3.5"/>',
-
+    System: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M7 7.5h.01M7 16.5h.01M11 7.5h6M11 16.5h6"/>',
     Admin: '<path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6z"/><path d="m9 12 2 2 4-4"/>',
 }
 const icon = (name: string) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[name] || ''}</svg>`

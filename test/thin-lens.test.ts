@@ -486,3 +486,9 @@ test('resolve_client understands "user at client" phrasing',async t=>{
     const sem=await resolveClient({text:'sem ops at sem',from:new Date('2026-10-01'),to:new Date('2026-11-15')}) as {id:string;matched_user?:string}[]
     assert.equal(sem[0]?.matched_user,'SEMOPS')
 })
+
+test('every sidebar section has an icon',async()=>{
+    const src=(await import('node:fs')).readFileSync(new URL('../src/service/replays.ts',import.meta.url),'utf8')
+    const block=src.slice(src.indexOf('const ICON'),src.indexOf('const icon ='))
+    for(const name of ['Replay clips','Live','Pinned','Surveys','Chat','System','Admin'])assert.match(block,new RegExp(`(?:'${name}'|\\b${name}):\\s*'<`),name)
+})
