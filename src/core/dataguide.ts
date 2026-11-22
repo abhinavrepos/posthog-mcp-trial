@@ -104,12 +104,13 @@ export async function dataGuide() {
             }
         })(),
         complete_weeks:'Last N complete weeks: replace N (4 below); coverage.data_ends excludes sparse replay-fixture days. Use the Monday containing data_ends as the exclusive upper bound, and keep the lower bound within continuous_from. If coverage is unknown, do not infer complete weeks.',
+        dates:'Exact numbers: use uniqExact (uniq is approximate) and count() for events. Bounds in UTC as [from, to): timestamp >= toDateTime(\'YYYY-MM-DD\', \'UTC\') AND timestamp < the day after the last day. Weekday: toDayOfWeek(timestamp) (Monday=1 ... Sunday=7, no mode argument); weekend = toDayOfWeek(timestamp) IN (6, 7). Months: toStartOfMonth(timestamp); weeks starting Monday: toStartOfWeek(timestamp, 1).',
         examples:[
-            `SELECT ${screen} AS screen, uniq(properties.$session_id) AS sessions FROM events WHERE event = ${literal(reg.events.screen)} GROUP BY screen LIMIT 20`,
+            `SELECT ${screen} AS screen, uniqExact(properties.$session_id) AS sessions FROM events WHERE event = ${literal(reg.events.screen)} GROUP BY screen LIMIT 20`,
             `SELECT ${screen} AS screen, count() AS opens FROM events WHERE event = ${literal(reg.events.screen)} AND ${action} = ${literal(reg.screenActions.open[0] || 'OPEN')} GROUP BY screen LIMIT 20`,
-            `SELECT ${version} AS version, uniq(distinct_id) AS users FROM events WHERE notEmpty(${version}) GROUP BY version LIMIT 20`,
+            `SELECT ${version} AS version, uniqExact(distinct_id) AS users FROM events WHERE notEmpty(${version}) GROUP BY version LIMIT 20`,
             `SELECT countIf(level >= 1) AS stage_1, countIf(level >= 2) AS stage_2, countIf(level >= 3) AS stage_3 FROM (SELECT distinct_id, properties.$session_id AS session_id, windowFunnel(3600)(toDateTime(timestamp), event = ${literal(reg.events.screen)} AND ${action} = ${literal(reg.screenActions.open[0] || 'OPEN')}, ${action} = 'CHANGE', ${prop(reg,'button')} = ${literal(reg.submitButtons[0] || 'Save')}) AS level FROM events GROUP BY distinct_id, session_id)`,
-            `WITH toStartOfWeek(toDateTime(${literal(coverage.data_ends ? String(coverage.data_ends).slice(0,10) : 'REPLACE_WITH_coverage.data_ends')}, 'UTC'), 1) AS end_week SELECT toStartOfWeek(timestamp, 1) AS week, uniq(distinct_id) AS users FROM events WHERE timestamp >= end_week - INTERVAL 4 WEEK AND timestamp < end_week GROUP BY week ORDER BY week`,
+            `WITH toStartOfWeek(toDateTime(${literal(coverage.data_ends ? String(coverage.data_ends).slice(0,10) : 'REPLACE_WITH_coverage.data_ends')}, 'UTC'), 1) AS end_week SELECT toStartOfWeek(timestamp, 1) AS week, uniqExact(distinct_id) AS users FROM events WHERE timestamp >= end_week - INTERVAL 4 WEEK AND timestamp < end_week GROUP BY week ORDER BY week`,
         ],
     }
 }
