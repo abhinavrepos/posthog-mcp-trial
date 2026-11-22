@@ -358,7 +358,7 @@ function lensJobs(jobs,triage){const down=jobs.filter(r=>r.level==='down').lengt
   const summary=down||warn?down?down+' down'+(warn?' · '+plural(warn,'warning'):''):plural(warn,'warning'):waiting?waiting+' waiting':'All jobs healthy'
   $('jobs-summary').textContent='Lens jobs'+(jobs.length?' · '+summary:triage&&triage.level!=='ok'?' · Status unavailable':'')
   $('jobs').innerHTML=jobs.map(r=>{const detail=r.detail||'',last=detail.match(/(?:^| · )(last success .+ ago|no success yet)$/)
-    const reason=r.level==='info'&&r.key!=='replay_retention'?'Waiting for first run':last?detail.slice(0,last.index):detail
+    const reason=r.level==='info'&&r.key!=='replay_retention'&&r.key!=='survey_sync'?'Waiting for first run':last?detail.slice(0,last.index):detail
     const success=last?.[1]==='no success yet'?'No successful run yet':last?.[1]?.replace(/^last success /,'Last successful run · ')
     return checkRow(r,r.name,(reason?'<div class="d">'+esc(reason)+'</div>':'')+(success?'<div class="d">'+esc(success)+'</div>':''))
   }).join('')||(triage&&triage.level!=='ok'?'<p class="muted">Job status unavailable · triage health check failed</p>':'<p class="muted">No job status reported</p>')

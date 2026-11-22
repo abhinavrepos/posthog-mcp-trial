@@ -253,8 +253,9 @@ export async function checkHttp() {
                         const LEVEL = { ok: OK, warn: WARN, down: DOWN, waiting: INFO }
                         for (const j of Array.isArray(h.jobs) ? h.jobs.slice(0, 20) : []) {
                             const last = j.last_ok_at ? `last success ${ago(Date.now() - Date.parse(j.last_ok_at))} ago` : 'no success yet'
-                            jobs.push({ group: 'Lens jobs', ...(j.key === 'replay_retention' ? { key: j.key } : {}), name: String(j.label || j.key).slice(0, 60), level: LEVEL[j.level] || WARN,
-                                detail: j.key === 'replay_retention' ? String(j.detail || last).slice(0, 500) : String(j.reason ? `${j.reason} · ${last}` : j.detail ? `${j.detail} · ${last}` : last).slice(0, 240) })
+                            const hasRunDetail = j.key === 'replay_retention' || j.key === 'survey_sync'
+                            jobs.push({ group: 'Lens jobs', ...(hasRunDetail ? { key: j.key } : {}), name: String(j.label || j.key).slice(0, 60), level: LEVEL[j.level] || WARN,
+                                detail: hasRunDetail ? String(j.detail || last).slice(0, 500) : String(j.reason ? `${j.reason} · ${last}` : j.detail ? `${j.detail} · ${last}` : last).slice(0, 240) })
                         }
                     } catch {}
                 }

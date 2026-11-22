@@ -21,6 +21,7 @@ import { audit, chatCaller, loadAccess } from './access.ts'
 import { captionedFile } from '../core/comments.ts'
 import { getClip, handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
 import { retentionJobState, startReplayRetention } from './replayretention.ts'
+import { startSurveySync, surveySyncJobState } from './surveysync.ts'
 
 
 const log = (msg: string, extra: Record<string, unknown> = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), msg, ...extra }))
@@ -161,7 +162,7 @@ const server = createServer((req, res) => {
             if (url.pathname === '/healthz') return send(res, 200, 'ok')
             // For the status page: up, and which switches are on. No secrets, no data.
             // Jobs: name, level and a plain reason only (core/jobhealth.ts); the status service shows them.
-            if (url.pathname === '/health') return send(res, 200, { ok: true, features: featureState(), jobs: [retentionJobState(), ...jobStates()] })
+            if (url.pathname === '/health') return send(res, 200, { ok: true, features: featureState(), jobs: [retentionJobState(), surveySyncJobState(), ...jobStates()] })
             if (url.pathname === '/favicon.ico') {
                 res.writeHead(204, { 'cache-control': 'max-age=86400' })
                 return res.end()
@@ -216,7 +217,10 @@ server.requestTimeout = 300_000
 
 server.listen(config.service.port, '0.0.0.0', () => log('Lens listening', { port: config.service.port, features: featureState() }))
 
+const stopSurveySync = startSurveySync()
+
 const stop = async () => {
+    stopSurveySync()
     server.close()
     await shutdownClips().catch(() => {})
     process.exit(0)
