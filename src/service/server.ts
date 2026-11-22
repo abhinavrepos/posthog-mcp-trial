@@ -20,7 +20,7 @@ import { appEvents } from '../core/appevents.ts'
 import { audit, chatCaller, loadAccess } from './access.ts'
 import { captionedFile } from '../core/comments.ts'
 import { getClip, handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
-import { startReplayRetention } from './replayretention.ts'
+import { retentionJobState, startReplayRetention } from './replayretention.ts'
 
 
 const log = (msg: string, extra: Record<string, unknown> = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), msg, ...extra }))
@@ -161,7 +161,7 @@ const server = createServer((req, res) => {
             if (url.pathname === '/healthz') return send(res, 200, 'ok')
             // For the status page: up, and which switches are on. No secrets, no data.
             // Jobs: name, level and a plain reason only (core/jobhealth.ts); the status service shows them.
-            if (url.pathname === '/health') return send(res, 200, { ok: true, features: featureState(), jobs: jobStates() })
+            if (url.pathname === '/health') return send(res, 200, { ok: true, features: featureState(), jobs: [retentionJobState(), ...jobStates()] })
             if (url.pathname === '/favicon.ico') {
                 res.writeHead(204, { 'cache-control': 'max-age=86400' })
                 return res.end()

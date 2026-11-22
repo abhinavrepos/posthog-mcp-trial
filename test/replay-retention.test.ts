@@ -16,12 +16,14 @@ Object.assign(process.env, {
     POSTHOG_PROJECT_ID: '1',
     POSTHOG_PROJECT_TOKEN: 'phc_test',
     POSTHOG_PERSONAL_API_KEY: 'phx_read',
+    LENS_REPLAY_RETENTION_API_KEY: 'phx_delete',
 })
 mkdirSync(join(dir, 'clips'))
 const D = await import('../src/core/db.ts')
 const R = await import('../src/service/replayretention.ts')
 const { handleAdmin } = await import('../src/service/admin.ts')
 const { storeClip, setSaved, getClip, jobView } = await import('../src/service/replays.ts')
+const { pinGraph, listPinned } = await import('../src/core/pinned.ts')
 const { readAudit } = await import('../src/service/access.ts')
 after(() => { D.db.close(); rmSync(dir, { recursive: true, force: true }) })
 
@@ -30,6 +32,10 @@ interface Rec { id: string; start: string; deleted?: boolean }
 const ph = {
     sessions: [] as Rec[],
     projectId: 1,
+    period: '30d',
+    patches: [] as string[],
+    patchStatus: 200,
+    hideDeleted: false,
     deletes: [] as string[],
     queries: [] as { kind: 'list' | 'count'; values: Record<string, unknown> }[],
     calls: 0,
@@ -38,7 +44,7 @@ const ph = {
 }
 const older = (values: Record<string, unknown>) => ph.sessions
     // PostHog keeps listing a deleted recording during its grace period: the watermark must move past it.
-    .filter((s) => s.start < String(values.cutoff))
+    .filter((s) => (!ph.hideDeleted || !s.deleted) && s.start < String(values.cutoff))
     .filter((s) => s.start > String(values.after_start) || (s.start === String(values.after_start) && s.id > String(values.after_id)))
     .sort((a, b) => (a.start === b.start ? (a.id < b.id ? -1 : 1) : a.start < b.start ? -1 : 1))
 globalThis.fetch = async (input: string | URL | Request, init: RequestInit = {}) => {
@@ -48,6 +54,7 @@ globalThis.fetch = async (input: string | URL | Request, init: RequestInit = {})
     if (url.pathname === '/api/projects/1/query/' && method === 'POST') {
         assert.equal(auth, 'Bearer phx_read', 'queries use the read key')
         const { query } = JSON.parse(String(init.body))
+        assert.match(query.query, /OR is_deleted = 1[\s\S]*HAVING max\(is_deleted\) = 0/)
         const values = query.values as Record<string, unknown>
         if (/count\(\)/.test(query.query)) {
             ph.queries.push({ kind: 'count', values })
@@ -57,9 +64,15 @@ globalThis.fetch = async (input: string | URL | Request, init: RequestInit = {})
         ph.queries.push({ kind: 'list', values })
         return Response.json({ columns: ['session_id', 'start_key'], results: older(values).slice(0, Number(values.limit)).map((s) => [s.id, s.start]) })
     }
-    if (url.pathname === '/api/projects/1/' && method === 'GET') {
+    if (url.pathname === '/api/projects/1/' && (method === 'GET' || method === 'PATCH')) {
         assert.equal(auth, 'Bearer phx_delete', 'the project check uses the delete key')
-        return Response.json({ id: ph.projectId, api_token: 'phc_test' })
+        if (method === 'PATCH') {
+            const { session_recording_retention_period } = JSON.parse(String(init.body))
+            ph.patches.push(session_recording_retention_period)
+            if (ph.patchStatus !== 200) return new Response('{}', { status: ph.patchStatus })
+            ph.period = session_recording_retention_period
+        }
+        return Response.json({ id: ph.projectId, api_token: 'phc_test', session_recording_retention_period: ph.period })
     }
     const m = /^\/api\/projects\/1\/session_recordings\/([^/]+)\/$/.exec(url.pathname)
     if (m && method === 'DELETE') {
@@ -91,7 +104,8 @@ beforeEach(() => {
     D.run("DELETE FROM settings WHERE key LIKE 'replay_retention%'")
     D.run('DELETE FROM audit')
     D.run('DELETE FROM clips')
-    Object.assign(ph, { sessions: [], projectId: 1, deletes: [], queries: [], calls: 0, failDelete: undefined, attempts: new Map() })
+    D.run('DELETE FROM pinned_graphs')
+    Object.assign(ph, { sessions: [], projectId: 1, period: '30d', patches: [], patchStatus: 200, hideDeleted: false, deletes: [], queries: [], calls: 0, failDelete: undefined, attempts: new Map() })
     sleeps.length = 0; logs.length = 0
 })
 const setDays = (n: number | null) => D.setSetting(R.RETENTION_KEY, n)
@@ -245,6 +259,7 @@ function storeTestClip(session: string, recordingStart: string | undefined): str
 }
 test('the clip cache follows the cutoff; saved clips are kept until unsaved', async () => {
     setDays(14)
+    const pinned = pinGraph({ title: 'Saved', chart: { type: 'table', rows: [{ Value: 42 }] } }, 'keeper@example.com')
     const oldUnsaved = storeTestClip('old', '2026-10-20T10:00:00Z')
     const oldSaved = storeTestClip('old2', '2026-10-20T11:00:00Z')
     setSaved(oldSaved, 'keeper@example.com', true)
@@ -256,6 +271,7 @@ test('the clip cache follows the cutoff; saved clips are kept until unsaved', as
     const r = await R.runReplayRetention(deps())
     assert.equal(r.clips_deleted, 1); assert.equal(r.clips_kept_saved, 1)
     assert.equal(getClip(oldUnsaved), undefined); assert.equal(existsSync(join(dir, 'clips', oldUnsaved)), false)
+    assert.equal(listPinned()[0]?.id, pinned.id)
     assert.ok(getClip(oldSaved)); assert.ok(getClip(recent)); assert.ok(getClip(unknownStart))
     // Once unsaved, the next run removes it.
     setSaved(oldSaved, 'keeper@example.com', false)
@@ -323,7 +339,7 @@ test('admins preview, must confirm a destructive change, and the change is audit
     assert.equal(unconfirmed.status, 409); assert.equal(unconfirmed.body.preview.count, 3)
     assert.equal(R.retentionDays(), null)
     assert.equal((await call(admin, 'POST', '/replays/admin/api/replay-retention', { days: 14, confirm: true }, {})).status, 403, 'needs the page header')
-    const ok = await call(admin, 'POST', '/replays/admin/api/replay-retention', { days: 14, confirm: true })
+    const ok = await call(admin, 'POST', '/replays/admin/api/replay-retention', { days: 14, confirm: preview.body.confirmation })
     assert.equal(ok.status, 200); assert.equal(ok.body.days, 14)
     assert.equal(ph.deletes.length, 0, 'saving deletes nothing by itself; the daily job does')
     const set = readAudit({ action: 'replay_retention.set' })[0]!
@@ -338,11 +354,11 @@ test('admins preview, must confirm a destructive change, and the change is audit
     assert.equal(state.body.days, null); assert.equal(state.body.max_per_run, 2000)
 })
 
-test('confirmation is required when PostHog cannot count', async () => {
+test('enabling is blocked when PostHog cannot count', async () => {
     const saved = globalThis.fetch
     globalThis.fetch = async () => new Response('{}', { status: 400 })
     try {
-        const r = await call(admin, 'POST', '/replays/admin/api/replay-retention', { days: 14 })
+        const r = await call(admin, 'POST', '/replays/admin/api/replay-retention', { days: 14, confirm: true })
         assert.equal(r.status, 409); assert.equal(r.body.preview.count, null)
     } finally { globalThis.fetch = saved }
     assert.equal(R.retentionDays(), null)
@@ -352,7 +368,7 @@ test('the admin page shows the retention card, says deletion is permanent, and i
     const { Script } = await import('node:vm')
     const page = await call(admin, 'GET', '/replays/admin')
     assert.equal(page.status, 200)
-    for (const text of ['Session replay retention', 'does not bring deleted recordings back', 'ret-confirm', 'Event data is not affected']) assert.ok(page.text.includes(text), text)
+    for (const text of ['Session replay retention', 'does not bring deleted recordings back', 'ret-confirm', 'Analytics events outside replay are kept', 'Replay files stay on disk after deletion', 'Cancel decrease', 'Saved Lens clips and pinned graphs are kept']) assert.ok(page.text.includes(text), text)
     for (const s of page.text.matchAll(/<script>([\s\S]*?)<\/script>/g)) assert.doesNotThrow(() => new Script(s[1]!))
 })
 
@@ -420,4 +436,146 @@ test('regenerating a clip replaces old range metadata used by the page and comme
     const record = getClip(clip.name)!
     assert.equal(record.end_s, 60.003)
     assert.match(jobView({ id: 'metadata', state: 'done', owner: 'person', session_id: 'metadata', start_s: 0, length_s: 120, info: {} as never, created_at: Date.now(), clip: record }).clip!.range, /60.003 s/)
+})
+
+const path = '/replays/admin/api/replay-retention'
+
+test('a confirmed first enable tracks a years-old backlog across capped daily runs', async () => {
+    ph.hideDeleted = true
+    ph.sessions = [...sessions(5, '2022-01-01T00:00:00Z'), { id: 'already-deleted', start: '2021-01-01 00:00:00.000000', deleted: true }]
+    const p = await call(admin, 'GET', path + '/preview?days=30')
+    assert.equal(p.body.count, 5)
+    const saved = await call(admin, 'POST', path, { days: 30, confirm: p.body.confirmation })
+    assert.equal(saved.body.remaining, 5)
+    for (const [date, deleted, remaining] of [['15', 2, 3], ['16', 4, 1], ['17', 5, 0]] as const) {
+        const now = new Date('2026-11-' + date + 'T10:30:00Z')
+        const tick = R.createRetentionScheduler(deps({ LENS_REPLAY_RETENTION_MAX_PER_RUN: '2' }, now))
+        assert.ok(await tick())
+        assert.equal(await tick(), undefined)
+        const status = R.retentionStatus(now)
+        assert.equal(status.deleted_total, deleted)
+        assert.equal(status.remaining, remaining)
+        assert.equal(status.last_run?.at, now.toISOString())
+        assert.ok(Date.parse(status.next_run!) > now.getTime())
+        const job = R.retentionJobState(now)
+        assert.equal(job.level, 'ok')
+        assert.match(job.detail!, new RegExp(remaining + ' remaining'))
+    }
+})
+
+test('decreasing from 365 to 30 requires the current count, and Admin can cancel the 24-hour hold', async () => {
+    setDays(365)
+    const start = new Date(Date.now() - 120 * 86_400_000)
+    ph.sessions = sessions(2, start.toISOString())
+    const shown = (await call(admin, 'GET', path + '/preview?days=30')).body
+    assert.equal(shown.count, 2)
+    ph.sessions.push({ id: 'another', start: day(start.toISOString()) })
+    const stale = await call(admin, 'POST', path, { days: 30, confirm: shown.confirmation })
+    assert.equal(stale.status, 409)
+    assert.equal(stale.body.preview.count, 3)
+    assert.equal(R.retentionDays(), 365)
+    const saved = await call(admin, 'POST', path, { days: 30, confirm: stale.body.preview.confirmation })
+    assert.equal(saved.status, 200)
+    assert.equal(saved.body.hold.previous, 365)
+    const during = new Date(Date.parse(saved.body.hold.until) - 1)
+    assert.equal(await R.createRetentionScheduler(deps({}, during))(), undefined)
+    assert.equal(ph.deletes.length, 0)
+    assert.equal(R.retentionJobState(during).level, 'waiting')
+    assert.match(R.retentionJobState(during).detail!, /Decrease on hold/)
+    const cancelled = await call(admin, 'POST', path + '/cancel', {})
+    assert.equal(cancelled.body.days, 365)
+    assert.equal(cancelled.body.hold, null)
+    assert.equal((await R.createRetentionScheduler(deps({}, during))())?.deleted, 0)
+})
+
+test('at the end of the hold, the smaller policy deletes recordings the old policy kept', async () => {
+    setDays(365)
+    ph.sessions = sessions(2)
+    R.setRetentionDays(30, admin.email, await R.previewRetention(30, deps()), NOW)
+    assert.equal((await R.runReplayRetention(deps())).reason, 'decrease on hold')
+    const nextDay = new Date(NOW.getTime() + 86_400_000)
+    assert.equal(R.cancelRetentionDecrease(admin.email, nextDay), false)
+    assert.equal((await R.createRetentionScheduler(deps({}, nextDay))())?.deleted, 2)
+})
+
+test('raising Lens retention warns about earlier expiry and offers the smallest PostHog bucket', async () => {
+    setDays(30)
+    ph.sessions = sessions(1)
+    await R.runReplayRetention(deps())
+    const preview = (await call(admin, 'GET', path + '/preview?days=365')).body
+    assert.equal(preview.requires_confirm, false)
+    assert.match(preview.posthog.warning, /expire before the 365 days/)
+    assert.equal(preview.posthog.offer, '1y')
+    assert.equal((await call(admin, 'POST', path, { days: 365 })).status, 200)
+    assert.equal(ph.sessions[0]?.deleted, true)
+    assert.deepEqual(ph.patches, [], 'Lens changes do not patch PostHog')
+    const read = await call(admin, 'GET', path)
+    assert.equal(read.body.posthog.offer, '1y')
+    assert.equal((await call(admin, 'POST', path + '/posthog', { days: 365, period: '90d' })).status, 422)
+    ph.patchStatus = 403
+    assert.match((await call(admin, 'POST', path + '/posthog', { days: 365, period: '1y' })).body.error, /HTTP 403/)
+    assert.equal(ph.period, '30d')
+    ph.patchStatus = 200
+    assert.deepEqual((await call(admin, 'POST', path + '/posthog', { days: 365, period: '1y' })).body.posthog, { period: '1y' })
+    assert.deepEqual(ph.patches, ['1y', '1y'])
+    ph.period = '5y'
+    const longer = (await call(admin, 'GET', path + '/preview?days=3650')).body
+    assert.match(longer.posthog.warning, /at most 1,825 days/)
+    assert.equal(longer.posthog.offer, undefined)
+    await call(admin, 'POST', path + '/posthog', { days: 365, period: '1y' })
+    assert.deepEqual(ph.patches, ['1y', '1y'], 'never lower the PostHog setting')
+})
+
+test('turning off clears the schedule and leaves the deletion history visible', async () => {
+    setDays(30)
+    ph.sessions = sessions(1)
+    await R.createRetentionScheduler(deps())()
+    const off = (await call(admin, 'POST', path, { days: 'off' })).body
+    assert.equal(off.days, null)
+    assert.equal(off.next_run, null)
+    assert.equal(off.deleted_total, 1)
+    assert.equal(ph.sessions[0]?.deleted, true)
+    assert.match(R.retentionJobState(NOW).detail!, /No run scheduled/)
+})
+
+test('a failed DELETE is persisted as a job warning and subsequent success preserves the last error', async () => {
+    setDays(30)
+    ph.sessions = sessions(1)
+    ph.failDelete = () => 403
+    await R.createRetentionScheduler(deps())()
+    const failed = R.retentionStatus(NOW)
+    assert.equal(failed.last_error?.message, 'PostHog answered 403')
+    assert.equal(failed.next_run, '2026-11-15T11:30:00.000Z')
+    assert.equal(R.retentionJobState(NOW).level, 'warn')
+    assert.match(R.retentionJobState(NOW).detail!, /PostHog answered 403/)
+    ph.failDelete = undefined
+    const later = new Date(failed.next_run!)
+    await R.createRetentionScheduler(deps({}, later))()
+    assert.equal(R.retentionJobState(later).level, 'ok')
+    assert.deepEqual(R.retentionStatus(later).last_error, failed.last_error)
+})
+
+test('a backlog still advances after a week without restarting from the oldest batch', async () => {
+    setDays(30)
+    ph.sessions = sessions(10)
+    for (let i = 0; i < 10; i++) {
+        const now = new Date(NOW.getTime() + i * 86_400_000)
+        const r = await R.createRetentionScheduler(deps({ LENS_REPLAY_RETENTION_MAX_PER_RUN: '1' }, now))()
+        assert.equal(r?.deleted, 1)
+    }
+    assert.deepEqual(ph.deletes, sessions(10).map((s) => s.id))
+})
+
+test('a decrease saved during a run stops further recording and clip deletions', async () => {
+    setDays(30)
+    ph.sessions = sessions(2)
+    const clip = storeTestClip('in-flight', '2026-10-01T00:00:00Z')
+    ph.failDelete = () => { R.setRetentionDays(7, admin.email, undefined, NOW); return undefined }
+    const r = await R.createRetentionScheduler(deps())()
+    assert.equal(r?.deleted, 1)
+    assert.equal(r?.clips_deleted, 0)
+    assert.match(r?.reason ?? '', /policy changed/)
+    assert.ok(getClip(clip))
+    assert.equal(R.retentionStatus(NOW).hold?.previous, 30)
+    assert.equal(await R.createRetentionScheduler(deps())(), undefined)
 })
