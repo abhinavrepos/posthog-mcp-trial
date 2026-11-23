@@ -375,6 +375,7 @@ collect_answers() {
     setting LENS_MCP_NAME lens is_mcpname
     setting TUNE on is_onoff
     setting SURVEY_ENGINE on is_onoff
+    setting SURVEY_EARLY_CAPTURE on is_onoff
     setting SURVEY_BRAND "Survey by ION"
     # on: PostHog's own survey screens and API answer only Lens (surveys are managed in Lens).
     setting SURVEY_UI_LOCK on is_onoff
@@ -801,7 +802,8 @@ step_surveys() {
     fi
     POSTHOG_SURVEY_API_KEY="$(read_env_file "$SECRETS" POSTHOG_SURVEY_API_KEY)"
     POSTHOG_SURVEY_GATE="$(read_env_file "$SECRETS" POSTHOG_SURVEY_GATE)"
-    SURVEY_ENGINE="$SURVEY_ENGINE" SURVEY_BRAND="$SURVEY_BRAND" SURVEY_UI_LOCK="$SURVEY_UI_LOCK" SURVEY_GATE="$POSTHOG_SURVEY_GATE" LENS_URL="$SERVICE_PUBLIC_URL" \
+    SURVEY_ENGINE="$SURVEY_ENGINE" SURVEY_EARLY_CAPTURE="$SURVEY_EARLY_CAPTURE" SURVEY_BRAND="$SURVEY_BRAND" \
+        SURVEY_UI_LOCK="$SURVEY_UI_LOCK" SURVEY_GATE="$POSTHOG_SURVEY_GATE" LENS_URL="$SERVICE_PUBLIC_URL" \
         bash "$HERE/posthog/survey-engine/apply.sh" "$POSTHOG_DIR"
     finish surveys
 }

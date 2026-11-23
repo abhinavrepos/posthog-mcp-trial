@@ -2,11 +2,10 @@
    (lensSurveyQuiet: surveys the user closed or ignored, and until when to stay quiet; and posthog-js's own seenSurvey_ mark for a survey ignored too often); no DOM observers or external requests. */
 (function (factory) {
     try {
-        var api = factory();
-        if (typeof module === 'object' && module.exports) module.exports = api;
-        else if (typeof window !== 'undefined') api.install(window);
+        if (typeof module === 'object' && module.exports) module.exports = factory(require('./bootstrap.js'));
+        else if (typeof window !== 'undefined') factory().install(window);
     } catch (_) { /* A failed extension must never prevent surveys. */ }
-}(function () {
+}(function (installCapture) {
     'use strict';
     var MAX_TEXT = 8192;
     function object(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
@@ -135,8 +134,12 @@
             // A survey shown this many times without an answer or a close stops coming back (default 2).
             var shows = raw.maxShowsIgnored === undefined ? 2 : raw.maxShowsIgnored;
             if (!finite(shows) || shows < 1 || shows > 10 || Math.floor(shows) !== shows) return null;
+            var last = steps[steps.length - 1];
+            var dialogOpen = last.event === 'PageView' && last.filters.some(function (filter) {
+                return filter.key === 'action' && filter.operator === 'exact' && filter.values.length === 1 && filter.values[0] === 'OPEN';
+            }) && last.filters.some(function (filter) { return filter.key === 'dialog_id' && filter.operator === 'exact'; });
             return { id: raw.id, steps: steps, resetOn: resets, withinMs: within === undefined ? Infinity : within * 1000, audience: audience, limit: limit,
-                gapMs: gap * 3600000, quietMs: quiet * 86400000, maxShows: shows,
+                gapMs: gap * 3600000, quietMs: quiet * 86400000, maxShows: shows, dialogOpen: dialogOpen,
                 ready: { documentComplete: ready.documentComplete !== false, noVisibleMask: ready.noVisibleMask !== false, maxWaitMs: wait } };
         } catch (_) { return null; }
     }
@@ -184,6 +187,7 @@
         }
         return {
             identify: identify,
+            reset: function () { states.forEach(reset); },
             setSurveys: function (surveys) {
                 try {
                     if (!Array.isArray(surveys)) return;
@@ -195,10 +199,11 @@
                             var chain = normalizeChain(raw);
                             if (!chain || next.has(chain.id)) continue; // One event for a shared id; first valid definition wins.
                             var signature = JSON.stringify(raw), old = states.get(chain.id);
-                            var state = old && old.signature === signature ? old :
+                            var surveyId = typeof survey.id === 'string' ? survey.id : '';
+                            var state = old && old.signature === signature && old.surveyId === surveyId ? old :
                                 { chain: chain, signature: signature, index: 0, started: 0, pending: 0 };
                             // The survey launched first wins a user both want (one survey at a time).
-                            state.surveyId = typeof survey.id === 'string' ? survey.id : '';
+                            state.surveyId = surveyId;
                             state.launched = Date.parse(survey.start_date) || 0;
                             state.repeats = survey.schedule === 'always';
                             next.set(chain.id, state);
@@ -216,10 +221,14 @@
                         event.event[0] === '$' || event.event.indexOf('lens_chain:') === 0) return completed;
                     states.forEach(function (state, id) {
                         try {
-                            var chain = state.chain;
-                            if (chain.resetOn.some(function (step) { return matches(step, event); })) { reset(state); return; }
+                            var chain = state.chain, clientProperty = chain.audience && chain.audience.eventProperty;
+                            var allowed = inAudience(chain.audience, event, distinctId, id);
+                            if (!allowed && (!clientProperty || (object(event.properties) &&
+                                Object.prototype.hasOwnProperty.call(event.properties, clientProperty)))) reset(state);
                             if (state.pending) return;
-                            if (!inAudience(chain.audience, event, distinctId, id)) return;
+                            // resetOn only resets a sequence that is still in progress.
+                            if (chain.resetOn.some(function (step) { return matches(step, event); })) { reset(state); return; }
+                            if (!allowed) return;
                             if (state.index && now - state.started > chain.withinMs) reset(state);
                             if (!matches(chain.steps[state.index], event)) return;
                             if (!state.index) state.started = now;
@@ -272,33 +281,43 @@
             return '';
         } catch (_) { return 'error'; }
     }
-    function isReady(root, options) {
+    function hidden(root, element) {
+        var style = root.getComputedStyle(element), classes = element.classList;
+        return style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) <= 0 ||
+            style.contentVisibility === 'hidden' ||
+            (classes && (classes.contains('x-hidden-display') || classes.contains('x-hidden-offsets')));
+    }
+    function visibleMask(root, mask) {
+        var rect = mask.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0 || rect.right <= 0 || rect.bottom <= 0 ||
+            rect.left >= root.innerWidth || rect.top >= root.innerHeight) return false;
+        for (var element = mask; element; element = element.parentElement) if (hidden(root, element)) return false;
+        return true;
+    }
+    function readiness(root, options) {
         try {
             var doc = root.document;
-            if (!doc || (options.documentComplete && doc.readyState !== 'complete')) return false;
+            if (!doc) return 'document unavailable';
             if (options.noVisibleMask) {
                 var masks = doc.querySelectorAll('.x-mask, .x-mask-msg');
-                for (var i = 0; i < masks.length; i++) {
-                    var mask = masks[i];
-                    if (mask.offsetWidth > 0 || mask.offsetHeight > 0) {
-                        var style = root.getComputedStyle(mask);
-                        if (style.visibility !== 'hidden' && style.display !== 'none') return false;
-                    }
-                }
+                for (var i = 0; i < masks.length; i++) if (visibleMask(root, masks[i])) return 'visible loading mask';
             }
-            return true;
-        } catch (_) { return false; }
+            return options.documentComplete && doc.readyState !== 'complete' ? 'document to finish loading' : '';
+        } catch (_) { return 'page readiness check failed'; }
     }
+    function isReady(root, options) { return !readiness(root, options); }
     function install(root) {
         try {
             var extensions = root.__PosthogExtensions__, original = extensions && extensions.generateSurveys;
             if (typeof original !== 'function' || original.__lensSurveyEngine) return;
-            var instances = new WeakMap();
+            var instances = new WeakMap(), captureStream = installCapture ? installCapture(root) : root.__lensSurveyCapture;
+            // The 1.443 renderer factory can construct its manager without starting its first poll.
+            var canDeferDisplay = Function.prototype.toString.call(original).indexOf('.startAutomaticDisplay(') !== -1;
             // posthog-js writes seenSurvey_<id> when a user answers or dismisses a survey. Read only.
             function seen(surveyId) {
                 try { return !!surveyId && !!root.localStorage && root.localStorage.getItem('seenSurvey_' + surveyId) !== null; } catch (_) { return false; }
             }
-            var QUIET_KEY = 'lensSurveyQuiet', firedAt = 0;
+            var QUIET_KEY = 'lensSurveyQuiet', firedAt = 0, reserved;
             function store() {
                 var out = { lastSeen: 0, firedAt: firedAt, quietUntil: 0, closed: [], shown: {} };
                 try {
@@ -333,79 +352,208 @@
                 try { if (instance.config && instance.config.debug === true && root.console) root.console.debug('Lens survey engine', error); } catch (_) {}
             }
             function attach(instance) {
-                try {
-                    if (!instance || instances.has(instance) || typeof instance.on !== 'function' || typeof instance.getSurveys !== 'function') return;
-                    var machine = createMachine();
-                    instances.set(instance, machine);
-                    var getSurveys = instance.getSurveys;
-                    // Observe core/renderer survey loads too, preserving arguments, this and return values.
-                    instance.getSurveys = function (callback) {
-                        try {
-                            var args = Array.prototype.slice.call(arguments);
-                            args[0] = function (surveys) {
-                                try { machine.setSurveys(surveys); } catch (error) { debug(instance, error); }
-                                try { if (typeof callback === 'function') return callback.apply(this, arguments); } catch (error) { debug(instance, error); }
-                            };
-                            return getSurveys.apply(this, args);
-                        } catch (error) { debug(instance, error); }
-                    };
-                    function refresh() {
-                        try { instance.getSurveys(function () {}); } catch (error) { debug(instance, error); }
-                        try { root.setTimeout(refresh, 60000); } catch (error) { debug(instance, error); }
+                if (!instance || typeof instance.getSurveys !== 'function') return;
+                if (instances.has(instance)) return instances.get(instance);
+                var stream = captureStream && captureStream(instance);
+                if (!stream) return;
+                var machine = createMachine(), pending = new Map(), snapshot, cancelNative;
+                function report(item, reason) {
+                    if (reason === item.reason) return;
+                    item.reason = reason;
+                    debug(instance, item.id + ': ' + reason);
+                }
+                function finish(item, reason) {
+                    machine.finish(item.id, item.token);
+                    if (reserved === item) reserved = null;
+                    if (item.timer !== undefined && root.clearTimeout) root.clearTimeout(item.timer);
+                    if (pending.get(item.id) === item) {
+                        pending.delete(item.id);
+                        try { if (reason && item.armed && cancelNative) cancelNative(item.surveyId); }
+                        catch (error) { debug(instance, error); }
                     }
-                    function wait(completion) {
-                        var started = Date.now();
-                        function poll() {
-                            try {
-                                machine.identify(instance.get_distinct_id());
-                                if (!machine.pending(completion.id, completion.token)) return;
-                                var elapsed = Date.now() - started;
-                                if (completion.ready.maxWaitMs > 0 && elapsed > completion.ready.maxWaitMs) { machine.finish(completion.id, completion.token); return; }
-                                if (isReady(root, completion.ready)) {
-                                    // Finish before capture: it can synchronously invoke eventCaptured again.
-                                    if (!machine.finish(completion.id, completion.token)) return;
-                                    var info = machine.info(completion.id), now = Date.now();
-                                    var why = info ? quietReason(info.chain, info.surveyId, now, store(), seen(info.surveyId), info.repeats) : 'gone';
-                                    if (why) { debug(instance, 'survey held back: ' + why); return; }
-                                    firedAt = now;
-                                    instance.capture('lens_chain:' + completion.id, { $lens_chain_id: completion.id });
-                                } else if (elapsed >= completion.ready.maxWaitMs) machine.finish(completion.id, completion.token);
-                                else root.setTimeout(poll, 100);
-                            } catch (error) { machine.finish(completion.id, completion.token); debug(instance, error); }
-                        }
-                        // Let the event's other listeners (including ExtJS) finish before checking the DOM.
-                        try { root.setTimeout(poll, 0); } catch (error) { machine.finish(completion.id, completion.token); debug(instance, error); }
-                    }
-                    instance.on('eventCaptured', function (event) {
-                        var who;
-                        try { who = instance.get_distinct_id(); } catch (_) { who = undefined; }
+                    if (reason) report(item, reason);
+                }
+                function clearInvalid(reason) {
+                    pending.forEach(function (item) {
+                        if (!machine.pending(item.id, item.token)) finish(item, reason);
+                    });
+                }
+                function resetIdentity(reason) {
+                    machine.reset();
+                    clearInvalid(reason);
+                }
+                // In 1.443 the renderer and receiver both read the internal method, which the
+                // public getSurveys also delegates to.
+                var source = instance.surveys && typeof instance.surveys.getSurveys === 'function' ? instance.surveys : instance;
+                var getSurveys = source.getSurveys;
+                source.getSurveys = function (callback) {
+                    if (typeof callback !== 'function') return getSurveys.apply(this, arguments);
+                    var args = Array.prototype.slice.call(arguments);
+                    args[0] = function (surveys, context) {
                         try {
-                            if (event && object(event.properties) && /^survey (shown|sent|dismissed)$/.test(event.event)) {
-                                var hit = machine.bySurvey(event.properties.$survey_id);
-                                if (hit && event.event === 'survey shown') {
-                                    counted(hit.surveyId, 1);
-                                    // Shown this often with no answer or close: mark it seen the way posthog-js does
-                                    // after an answer, so PostHog does not bring it back either.
-                                    try { if ((store().shown[hit.surveyId] || 0) >= hit.chain.maxShows) root.localStorage.setItem('seenSurvey_' + hit.surveyId, 'true'); } catch (_) {}
-                                }
-                                if (hit && event.event === 'survey sent') counted(hit.surveyId, 0);
-                                if (hit && event.event === 'survey dismissed') { counted(hit.surveyId, 0); closed(hit.surveyId, hit.chain.quietMs, Date.now()); }
+                            if (Array.isArray(surveys) && (!context || context.isLoaded !== false) && surveys !== snapshot) {
+                                snapshot = surveys;
+                                machine.setSurveys(surveys);
+                                clearInvalid('survey definition changed');
+                                stream.listen(receive, resetIdentity);
                             }
                         } catch (error) { debug(instance, error); }
-                        // Finished, for the per-user limit: answered, closed, or shown too often with no reaction.
-                        var finished = function (surveyId) {
-                            if (seen(surveyId)) return true;
-                            var st = store(), hit = machine.bySurvey(surveyId);
-                            return st.closed.indexOf(surveyId) !== -1 || (!!hit && (st.shown[surveyId] || 0) >= hit.chain.maxShows);
-                        };
-                        try { machine.consume(event, Date.now(), who, finished).forEach(wait); } catch (error) { debug(instance, error); }
+                        return callback.apply(this, arguments);
+                    };
+                    return getSurveys.apply(this, args);
+                };
+                function registered(name, surveyId) {
+                    if (!instance.surveys) return true; // Older integrations with only the public method.
+                    var receiver = instance.surveys._surveyEventReceiver;
+                    var map = receiver && typeof receiver.getEventToSurveys === 'function' && receiver.getEventToSurveys();
+                    var ids = map && map.get(name);
+                    return Array.isArray(ids) && ids.indexOf(surveyId) !== -1;
+                }
+                function quiet(item, info, now) {
+                    if (reserved && reserved !== item) return 'another survey is waiting to display';
+                    return quietReason(info.chain, info.surveyId, now, store(), seen(info.surveyId), info.repeats);
+                }
+                function audienceAllowed(item, info) {
+                    var who = stream.current(), audience = info.chain.audience;
+                    if (!who || item.who !== who || !inAudience(audience, item.audienceEvent, who, item.id)) return false;
+                    var property = audience && audience.eventProperty;
+                    if (property && typeof instance.get_property === 'function') {
+                        var value;
+                        try { value = instance.get_property(property); } catch (_) { return false; }
+                        if (value !== undefined) {
+                            var properties = Object.create(null);
+                            properties[property] = value;
+                            return inAudience(audience, { properties: properties }, who, item.id);
+                        }
+                    }
+                    return true;
+                }
+                function readyReason(item, now) {
+                    return readiness(root, {
+                        documentComplete: item.ready.documentComplete && !(item.allowAfterTimeout && now >= item.readyBy),
+                        noVisibleMask: true
                     });
-                    refresh();
-                } catch (error) { debug(instance, error); }
+                }
+                function wait(item, time, who, event) {
+                    var info = machine.info(item.id), name = 'lens_chain:' + item.id;
+                    var maxWait = item.ready.maxWaitMs;
+                    // Existing Reval definitions carry the Lens default of 30 seconds.
+                    item.allowAfterTimeout = info.chain.dialogOpen && maxWait === 30000;
+                    if (item.allowAfterTimeout) maxWait = 180000;
+                    item.readyBy = time + maxWait;
+                    item.surveyId = info.surveyId;
+                    item.who = who;
+                    var property = info.chain.audience && info.chain.audience.eventProperty;
+                    var evidence = Object.create(null);
+                    if (property) evidence[property] = text(event.properties[property]);
+                    item.audienceEvent = { properties: evidence };
+                    pending.set(item.id, item);
+                    function poll() {
+                        try {
+                            if (!machine.pending(item.id, item.token)) return;
+                            if (!audienceAllowed(item, info)) {
+                                if (machine.pending(item.id, item.token)) finish(item, 'user or audience changed');
+                                return;
+                            }
+                            var now = Date.now(), blocked = readyReason(item, now);
+                            if (!blocked && !registered(name, info.surveyId)) blocked = 'PostHog activation registration';
+                            if ((blocked && now >= item.readyBy) || (!item.allowAfterTimeout && maxWait > 0 && now > item.readyBy)) {
+                                return finish(item, 'timed out waiting for ' + (blocked || item.reason || 'readiness'));
+                            }
+                            if (blocked) {
+                                report(item, 'waiting for ' + blocked);
+                                item.timer = root.setTimeout(poll, 100);
+                                return;
+                            }
+                            var why = quiet(item, info, now);
+                            if (why) return finish(item, 'survey held back: ' + why);
+                            // Keep the match until native display. The renderer can poll again after
+                            // the readiness deadline and still needs time for any native popup delay.
+                            item.armed = true;
+                            reserved = item;
+                            var survey = snapshot.find(function (survey) { return survey && survey.id === info.surveyId; });
+                            var delay = survey && survey.appearance && survey.appearance.surveyPopupDelaySeconds;
+                            item.displayBy = Math.max(item.readyBy, now + (finite(delay) && delay > 0 ? delay * 1000 : 0) + 2000);
+                            item.timer = root.setTimeout(function () {
+                                finish(item, 'timed out waiting for ' + (readyReason(item, Date.now()) || 'PostHog display'));
+                            }, Math.min(2147483647, item.displayBy - now));
+                            instance.capture(name, { $lens_chain_id: item.id });
+                        } catch (error) { finish(item); debug(instance, error); }
+                    }
+                    // Let ExtJS and the SDK finish the current capture and update the mask/receiver.
+                    item.timer = root.setTimeout(poll, 0);
+                }
+                function finished(surveyId) {
+                    if (seen(surveyId)) return true;
+                    var st = store(), hit = machine.bySurvey(surveyId);
+                    return st.closed.indexOf(surveyId) !== -1 || (!!hit && (st.shown[surveyId] || 0) >= hit.chain.maxShows);
+                }
+                function receive(event, now, who) {
+                    machine.identify(who);
+                    if (event && object(event.properties) && /^survey (shown|sent|dismissed)$/.test(event.event)) {
+                        var hit = machine.bySurvey(event.properties.$survey_id);
+                        if (hit && event.event === 'survey shown') {
+                            var item = pending.get(hit.chain.id);
+                            if (item && item.armed) { firedAt = now; finish(item); }
+                            counted(hit.surveyId, 1);
+                            try { if ((store().shown[hit.surveyId] || 0) >= hit.chain.maxShows) root.localStorage.setItem('seenSurvey_' + hit.surveyId, 'true'); } catch (_) {}
+                        }
+                        if (hit && event.event === 'survey sent') counted(hit.surveyId, 0);
+                        if (hit && event.event === 'survey dismissed') { counted(hit.surveyId, 0); closed(hit.surveyId, hit.chain.quietMs, now); }
+                    }
+                    var completed = machine.consume(event, now, who, finished);
+                    clearInvalid('audience client changed');
+                    completed.forEach(function (item) { wait(item, now, who, event); });
+                }
+                function displayBlock(survey, raw) {
+                    var info = machine.info(raw.id), item = pending.get(raw.id), now = Date.now();
+                    if (!info || info.surveyId !== survey.id || !item || !item.armed ||
+                        !machine.pending(item.id, item.token) || now > item.displayBy) return 'Lens activation expired or absent';
+                    if (!audienceAllowed(item, info)) {
+                        if (machine.pending(item.id, item.token)) finish(item, 'user or audience changed');
+                        return 'Lens user or audience changed';
+                    }
+                    var blocked = readyReason(item, now);
+                    if (blocked) { report(item, 'waiting for ' + blocked); return blocked; }
+                    var why = quiet(item, info, now);
+                    if (why) finish(item, 'survey held back: ' + why);
+                    return why;
+                }
+                function guard(renderer) {
+                    if (typeof renderer.cancelSurvey === 'function') cancelNative = renderer.cancelSurvey.bind(renderer);
+                    var popover = renderer.handlePopoverSurvey;
+                    if (typeof popover === 'function') renderer.handlePopoverSurvey = function (survey, options, automatic) {
+                        var raw = survey && survey.conditions && survey.conditions.lensChain;
+                        if (raw && displayBlock(survey, raw)) return;
+                        // Start a new popup delay if PostHog still has a timestamp for a previous match.
+                        if (raw && automatic && automatic.resumeDelayFromActivation) {
+                            return popover.call(this, survey, options, Object.assign({}, automatic, { resumeDelayFromActivation: false }));
+                        }
+                        return popover.apply(this, arguments);
+                    };
+                    var eligibility = renderer.checkSurveyEligibility;
+                    renderer.checkSurveyEligibility = function (survey) {
+                        var raw = survey && survey.conditions && survey.conditions.lensChain;
+                        var blocked = raw && displayBlock(survey, raw);
+                        if (blocked) return { eligible: false, reason: blocked };
+                        var result = eligibility.apply(this, arguments), item = raw && pending.get(raw.id);
+                        if (item && !result.eligible) report(item, result.reason || 'waiting for PostHog eligibility');
+                        return result;
+                    };
+                }
+                instances.set(instance, guard);
+                return guard;
             }
-            var wrapped = function (instance) {
-                try { attach(instance); } catch (_) {}
-                try { return original.apply(this, arguments); } catch (error) { debug(instance, error); }
+            var wrapped = function (instance, enabled) {
+                var guard;
+                try { guard = attach(instance); } catch (error) { debug(instance, error); }
+                if (!guard) return original.apply(this, arguments);
+                // Install the guard before the renderer's first synchronous eligibility check.
+                var renderer = canDeferDisplay ? original.call(this, instance, false) : original.apply(this, arguments);
+                if (renderer && typeof renderer.checkSurveyEligibility === 'function') guard(renderer);
+                if (canDeferDisplay && enabled !== false && renderer && typeof renderer.startAutomaticDisplay === 'function') renderer.startAutomaticDisplay();
+                else if (!renderer) instance.getSurveys(function () {});
+                return renderer;
             };
             wrapped.__lensSurveyEngine = true;
             extensions.generateSurveys = wrapped;

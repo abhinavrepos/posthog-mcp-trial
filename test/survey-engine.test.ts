@@ -2,15 +2,18 @@
 // browser, and the build that patches PostHog's survey renderer. Browser behaviour is covered by the
 // stress test (deploy/posthog/survey-engine/stress).
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, test } from 'node:test'
+import { promisify } from 'node:util'
+import { runInNewContext } from 'node:vm'
 import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 
 const dir = 'deploy/posthog/survey-engine'
+const run = promisify(execFile)
 const engine = createRequire(import.meta.url)(`../${dir}/engine.js`)
 const ex = (...values: string[]) => ({ operator: 'exact', values })
 const open = (d: string) => ({ event: 'PageView', properties: { dialog_id: ex(d), action: ex('OPEN') } })
@@ -191,8 +194,8 @@ describe('build', () => {
     const out = mkdtempSync(join(tmpdir(), 'lens-engine-'))
     after(() => rmSync(out, { recursive: true, force: true }))
     const original = `${dir}/fixtures/surveys-1.443.0.original.js`
-    test('patches the footer, appends the engine, keeps the licence and writes matching compressed copies', () => {
-        execFileSync('node', [`${dir}/build.mjs`, original, out, 'Survey by ION'], { stdio: 'pipe' })
+    test('patches the footer, appends the engine, keeps the licence and writes matching compressed copies', async () => {
+        await run(process.execPath, [`${dir}/build.mjs`, original, out, 'Survey by ION'])
         const js = readFileSync(join(out, 'surveys.js'))
         const text = js.toString()
         assert.match(text, /^\/\*! Survey renderer from posthog-js \(Copyright PostHog Inc\., Apache License 2\.0/)
@@ -206,8 +209,48 @@ describe('build', () => {
         const manifest = JSON.parse(readFileSync(join(out, 'manifest.json'), 'utf8'))
         assert.equal(manifest.brand, 'Survey by ION')
     })
-    test('refuses a file it does not recognise, and an already patched one', () => {
-        assert.throws(() => execFileSync('node', [`${dir}/build.mjs`, `${dir}/engine.js`, out], { stdio: 'pipe' }))
-        assert.throws(() => execFileSync('node', [`${dir}/build.mjs`, join(out, 'surveys.js'), join(out, 'again')], { stdio: 'pipe' }))
+    test('refuses a file it does not recognise, and an already patched one', async () => {
+        await assert.rejects(run(process.execPath, [`${dir}/build.mjs`, `${dir}/engine.js`, out]), { code: 1 })
+        await assert.rejects(run(process.execPath, [`${dir}/build.mjs`, join(out, 'surveys.js'), join(out, 'again')]), { code: 1 })
+    })
+    test('a modified 1.443.0 core with the right startup hook is left untouched', async () => {
+        const core = join(out, 'core-input.js')
+        const stub = 'var version={};version.LIB_VERSION="1.443.0";window.sdk={init(){this.config.loaded(this)}};'
+        writeFileSync(core, stub)
+        const unsupported = join(out, 'unsupported')
+        await run(process.execPath, [`${dir}/build.mjs`, original, unsupported, 'Survey by ION', core])
+        assert.throws(() => readFileSync(join(unsupported, 'array.js')), { code: 'ENOENT' })
+        assert.equal(readFileSync(core, 'utf8'), stub)
+        assert.ok(readFileSync(join(unsupported, 'surveys.js'), 'utf8').includes('Lens survey chains'))
+    })
+    const exactCore = process.env.LENS_TEST_POSTHOG_CORE
+    test('the exact hosted SDK hash permits the startup patch and the off switch omits it', {
+        skip: !exactCore && 'Set LENS_TEST_POSTHOG_CORE to the original PostHog 1.443.0 array.js',
+    }, async () => {
+        const core = exactCore!
+        const enabled = join(out, 'early-on')
+        const disabled = join(out, 'early-off')
+        await run(process.execPath, [`${dir}/build.mjs`, original, enabled, 'Survey by ION', core], {
+            env: { ...process.env, SURVEY_EARLY_CAPTURE: 'on' },
+        })
+        const js = readFileSync(join(enabled, 'array.js'))
+        assert.deepEqual(gunzipSync(readFileSync(join(enabled, 'array.js.gz'))), js)
+        assert.deepEqual(brotliDecompressSync(readFileSync(join(enabled, 'array.js.br'))), js)
+        const hook = js.toString().match(/\(function\(instance\)\{try\{[^}]+\}catch\(_\)\{\}\}\(this\),this\.config\.loaded\(this\)\)/)?.[0]
+        assert.ok(hook)
+        const calls: string[] = []
+        const sdk = { config: { loaded: () => calls.push('loaded') } }
+        const window = { __lensSurveyCapture: (instance: unknown) => {
+            assert.equal(instance, sdk)
+            calls.push('capture hook')
+            throw new Error('bootstrap runtime error')
+        } }
+        runInNewContext(`(function(){${hook}}).call(sdk)`, { window, sdk })
+        assert.deepEqual(calls, ['capture hook', 'loaded'])
+        await run(process.execPath, [`${dir}/build.mjs`, original, disabled, 'Survey by ION', core], {
+            env: { ...process.env, SURVEY_EARLY_CAPTURE: 'off' },
+        })
+        assert.throws(() => readFileSync(join(disabled, 'array.js')), { code: 'ENOENT' })
+        assert.ok(readFileSync(join(disabled, 'surveys.js'), 'utf8').includes('Lens survey chains'))
     })
 })

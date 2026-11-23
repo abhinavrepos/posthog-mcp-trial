@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Serves the Lens survey renderer from this machine's PostHog: PostHog's own surveys.js with
 # "Survey by ION" instead of the PostHog footer, plus Lens condition chains (build.mjs, engine.js).
-# Reval keeps loading the same /static/surveys.js from PostHog; no script is added to Reval.
+# On PostHog 1.443.0 the hosted /static/array.js also records startup events until surveys load.
+# Reval keeps its existing SDK and survey script URLs.
 #
 #   sudo deploy/posthog/survey-engine/apply.sh [POSTHOG_DIR]            # build and serve (idempotent)
 #   sudo deploy/posthog/survey-engine/apply.sh --remove [POSTHOG_DIR]   # back to PostHog's original file
 #
 # Settings (environment): SURVEY_ENGINE on|off (off = --remove), SURVEY_BRAND ["Survey by ION"],
+# SURVEY_EARLY_CAPTURE on|off [on] (off serves the original SDK and still patches the renderer),
 # LENS_IMAGE [posthog-lens:current] (runs the build with its node when this machine has none),
 # SURVEY_UI_LOCK on|off [on], SURVEY_GATE (POSTHOG_SURVEY_GATE from Lens's .secrets.env), LENS_URL
 # (where people reach Lens). The lock closes PostHog's own survey screens and API: PostHog's proxy
@@ -23,6 +25,7 @@ REMOVE=0
 POSTHOG_DIR="${1:-${POSTHOG_DIR:-/opt/posthog}}"
 [ "${SURVEY_ENGINE:-on}" = off ] && REMOVE=1
 BRAND="${SURVEY_BRAND:-Survey by ION}"
+EARLY_CAPTURE="${SURVEY_EARLY_CAPTURE:-on}"
 LENS_IMAGE="${LENS_IMAGE:-posthog-lens:current}"
 OUT="$POSTHOG_DIR/lens-survey-engine"
 OVERRIDE=docker-compose.lens-survey.yml
@@ -168,12 +171,22 @@ mkdir -p "$OUT/new"
 if ! docker run --rm --entrypoint cat "$image" /code/staticfiles/surveys.js > "$OUT/surveys.original.js" 2>/dev/null || [ ! -s "$OUT/surveys.original.js" ]; then
     warn "could not read surveys.js from $image; survey engine not applied"; remove; lock_apply; exit 0
 fi
+# An unsupported or unavailable core leaves the lazy renderer and its definition buffer usable.
+rm -f "$OUT/new/array.js" "$OUT/new/array.js.br" "$OUT/new/array.js.gz"
+core_arg=()
+if [ "$EARLY_CAPTURE" != off ]; then
+    if docker run --rm --entrypoint cat "$image" /code/staticfiles/array.js > "$OUT/array.original.js" 2>/dev/null && [ -s "$OUT/array.original.js" ]; then
+        core_arg=(array.original.js)
+    else
+        warn "hosted SDK unavailable for startup capture; serving the original array.js"
+    fi
+fi
 
 # 2. Build (node on this machine, or the Lens image's node).
 if command -v node >/dev/null 2>&1; then
-    node "$HERE/build.mjs" "$OUT/surveys.original.js" "$OUT/new" "$BRAND" >"$OUT/build.log" 2>&1
+    node "$HERE/build.mjs" "$OUT/surveys.original.js" "$OUT/new" "$BRAND" "${core_arg[@]/#/$OUT/}" >"$OUT/build.log" 2>&1
 else
-    docker run --rm --user 0 -v "$HERE:/engine:ro" -v "$OUT:/out" --entrypoint node "$LENS_IMAGE" /engine/build.mjs /out/surveys.original.js /out/new "$BRAND" >"$OUT/build.log" 2>&1
+    docker run --rm --user 0 -v "$HERE:/engine:ro" -v "$OUT:/out" --entrypoint node "$LENS_IMAGE" /engine/build.mjs /out/surveys.original.js /out/new "$BRAND" "${core_arg[@]/#//out/}" >"$OUT/build.log" 2>&1
 fi
 if [ $? -ne 0 ] || [ ! -s "$OUT/new/surveys.js" ]; then
     warn "survey engine build refused ($(tail -1 "$OUT/build.log")): serving PostHog's original survey renderer"
@@ -182,24 +195,30 @@ fi
 
 # 3. Swap the files in only when they changed, then make sure web mounts them.
 changed=0
-for f in surveys.js surveys.js.br surveys.js.gz; do
+files=(surveys.js surveys.js.br surveys.js.gz)
+if [ "$EARLY_CAPTURE" != off ] && [ -s "$OUT/new/array.js" ]; then
+    files+=(array.js array.js.br array.js.gz)
+elif [ "${#core_arg[@]}" -ne 0 ]; then
+    warn "$(grep -m1 'startup hook refused' "$OUT/build.log" || printf '%s' 'hosted SDK startup capture unavailable; serving the original array.js')"
+fi
+for f in "${files[@]}"; do
     if ! cmp -s "$OUT/new/$f" "$OUT/$f" 2>/dev/null; then cp "$OUT/new/$f" "$OUT/$f.tmp" && mv "$OUT/$f.tmp" "$OUT/$f"; changed=1; fi
+    # These files are bind-mounted into the non-root web container, even under umask 077.
+    chmod 0644 "$OUT/$f"
 done
 # The manifest records when it was built; it only follows the files above.
 [ "$changed" = 1 ] || [ ! -f "$OUT/manifest.json" ] && cp "$OUT/new/manifest.json" "$OUT/manifest.json"
 rm -rf "$OUT/new"
-# These files are bind-mounted into the non-root web container, even under umask 077.
-chmod 0644 "$OUT"/surveys.js "$OUT"/surveys.js.br "$OUT"/surveys.js.gz
 cat > "$OVERRIDE.tmp" <<EOF
 # Lens survey engine (deploy/posthog/survey-engine): PostHog's survey renderer with "$BRAND" and
 # Lens condition chains. Written by apply.sh; remove with apply.sh --remove.
 services:
     web:
         volumes:
-            - ./lens-survey-engine/surveys.js:/code/staticfiles/surveys.js:ro
-            - ./lens-survey-engine/surveys.js.br:/code/staticfiles/surveys.js.br:ro
-            - ./lens-survey-engine/surveys.js.gz:/code/staticfiles/surveys.js.gz:ro
 EOF
+for f in "${files[@]}"; do
+    printf '            - ./lens-survey-engine/%s:/code/staticfiles/%s:ro\n' "$f" "$f" >> "$OVERRIDE.tmp"
+done
 cmp -s "$OVERRIDE.tmp" "$OVERRIDE" 2>/dev/null || { mv "$OVERRIDE.tmp" "$OVERRIDE"; changed=1; }
 rm -f "$OVERRIDE.tmp"
 in_compose=0; grep -qE "^COMPOSE_FILE=.*$OVERRIDE" .env && in_compose=1
@@ -208,7 +227,13 @@ if [ "$in_compose" = 0 ] || ! grep -qE "^EXTRA_COMPOSE_FILES=.*$OVERRIDE" .env; 
     [ "$in_compose" = 0 ] && changed=1
 fi
 # Mounted already? A running web container started before the override has no such mount.
-docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$cid" 2>/dev/null | grep -q /code/staticfiles/surveys.js || changed=1
+mounts="$(docker inspect -f '{{range .Mounts}}{{.Destination}}{{println}}{{end}}' "$cid" 2>/dev/null)"
+grep -Fxq /code/staticfiles/surveys.js <<< "$mounts" || changed=1
+if [[ " ${files[*]} " == *" array.js "* ]]; then
+    grep -Fxq /code/staticfiles/array.js <<< "$mounts" || changed=1
+else
+    if grep -Fxq /code/staticfiles/array.js <<< "$mounts"; then changed=1; fi
+fi
 if [ "$changed" = 1 ]; then restart_web; fi
 say "survey renderer: \"$BRAND\" footer and Lens chains ($(python3 -c "import json;print(json.load(open('$OUT/manifest.json'))['output_sha256'][:12])" 2>/dev/null))"
 lock_apply

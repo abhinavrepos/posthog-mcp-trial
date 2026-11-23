@@ -1,0 +1,89 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Reval first-open regression</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/extjs/6.0.0/classic/theme-crisp/resources/theme-crisp-all.css">
+<style>
+    /* Keep the Ext hide modes and mask geometry meaningful if the optional theme fails to load. */
+    .x-hidden-display { display: none !important; }
+    .x-hidden-offsets { position: absolute !important; left: -10000px !important; top: -10000px !important; }
+    .x-window { background: white; }
+    .x-mask { position: absolute; background: rgba(0, 0, 0, 0.3); }
+    .x-mask-msg { position: absolute; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/extjs/6.0.0/ext-all.js"></script>
+<script src="/static/array.js"></script>
+<script>
+    window._POSTHOG_REMOTE_CONFIG = {
+        phc_first_open: { config: { surveys: true, hasFeatureFlags: false, sessionRecording: false } },
+    };
+    posthog.init('phc_first_open', {
+        api_host: location.origin,
+        persistence: 'memory',
+        bootstrap: { distinctID: 'ENV|SITE|SEM|first', isIdentifiedID: true },
+        opt_out_useragent_filter: true,
+        autocapture: false,
+        capture_pageview: false,
+        disable_session_recording: true,
+    });
+
+    Ext.onReady(function () {
+        const id = 'DlgHedgeDesigListReport';
+        const dialog = Ext.create('Ext.window.Window', {
+            title: 'Hedge Designation',
+            width: 480,
+            height: 260,
+            modal: false,
+            closeAction: 'hide',
+            html: 'Reval survey test',
+            listeners: {
+                close() { posthog.capture('PageView', { action: 'CLOSE', dialog_id: id }); },
+            },
+        });
+        let opens = 0, loadTimer;
+        const captured = [];
+        function visible(element) {
+            const rect = element.getBoundingClientRect();
+            if (rect.width <= 0 || rect.height <= 0 || rect.right <= 0 || rect.bottom <= 0 ||
+                rect.left >= innerWidth || rect.top >= innerHeight) return false;
+            for (; element; element = element.parentElement) {
+                const style = getComputedStyle(element);
+                if (style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) <= 0) return false;
+            }
+            return true;
+        }
+        function maskVisible() {
+            return Array.from(document.querySelectorAll('.x-mask, .x-mask-msg')).some(visible);
+        }
+        function startLoading(ms) {
+            clearTimeout(loadTimer);
+            const mask = dialog.setLoading('Loading Hedge Designation…');
+            if (!mask || !mask.isLoadMask) throw new Error('Ext.window.Window did not create an Ext.LoadMask');
+            loadTimer = setTimeout(function () {
+                loadTimer = undefined;
+                dialog.setLoading(false);
+            }, ms);
+        }
+        posthog.on('eventCaptured', function ({ event, properties }) {
+            if (event === 'survey shown' || event === 'lens_chain:first-open' || event === 'PageView') {
+                captured.push({
+                    event, action: properties.action, masked: maskVisible(), closed: dialog.isHidden(),
+                    who: posthog.get_distinct_id(),
+                });
+            }
+        });
+        window.reval = {
+            open() {
+                dialog.show();
+                startLoading(++opens === 1 ? 45000 : 1000);
+                posthog.capture('PageView', { action: 'OPEN', dialog_id: id });
+            },
+            close() { dialog.close(); },
+            reload(ms) { startLoading(ms); },
+            logout() { posthog.reset(); posthog.identify('ENV|SITE|SEM|next'); },
+            state() {
+                return { captured: captured.slice(), masked: maskVisible(), closed: dialog.isHidden(), loading: loadTimer !== undefined };
+            },
+        };
+    });
+</script>
