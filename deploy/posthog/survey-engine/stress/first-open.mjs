@@ -1,6 +1,7 @@
 // Run node first-open.mjs with Playwright 1.55 and Chromium installed.
 // FIRST_OPEN_ARRAY can point to the original 1.443.0 array.js from the PostHog web image.
 // FIRST_OPEN_REAL_TIME=1 uses wall-clock waits. The default advances the browser clock.
+// EXTJS_URL overrides the Ext JS Classic ext-all.js URL (defaults to cdnjs 6.0.0).
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { once } from 'node:events'
@@ -18,6 +19,7 @@ const surveyId = 'f7dd26ab-753b-401a-b31a-0a8dd0099fec'
 const trigger = 'lens_chain:first-open'
 const firstUser = 'ENV|SITE|SEM|first'
 const nextUser = 'ENV|SITE|SEM|next'
+const extJsUrl = process.env.EXTJS_URL || 'https://cdnjs.cloudflare.com/ajax/libs/extjs/6.0.0/ext-all.js'
 const exact = (value) => ({ operator: 'exact', values: [value] })
 const survey = {
     id: surveyId,
@@ -76,6 +78,8 @@ async function staticServer(work, corePath) {
         const file = assets.get(path)
         if (file) {
             response.writeHead(200, { 'Content-Type': file[0], 'Cache-Control': 'no-store' }).end(file[1])
+        } else if (path === '/static/ext-all.js') {
+            response.writeHead(302, { Location: extJsUrl }).end()
         } else if (path === '/flags/' || path.startsWith('/e/')) {
             request.resume()
             response.writeHead(200, { 'Content-Type': 'application/json' })
@@ -117,13 +121,13 @@ async function scenario(browser, origin, { late = false, delay = 0 }, test) {
             return current.closed && current.captured.some(({ action }) => action === 'CLOSE')
         }, undefined, { timeout: 5000 })
     }
-    const checkShown = async () => {
+    const checkShown = async (expectedUser = firstUser) => {
         assert.equal(await visible(), true, 'a real survey popover is visible')
         const current = await state()
         assert.equal(signals.activated(current).length, 1)
         const shown = signals.shown(current)
         assert.equal(shown.length, 1, 'exactly one survey shown')
-        assert.equal(shown[0].who, firstUser)
+        assert.equal(shown[0].who, expectedUser)
         assert.equal(shown[0].masked, false)
         return current
     }
@@ -136,7 +140,7 @@ async function scenario(browser, origin, { late = false, delay = 0 }, test) {
         await page.goto(origin, { waitUntil: 'domcontentloaded' })
         await page.waitForFunction(() => !!window.reval, undefined, { timeout: 15000 })
         assert.equal(await page.evaluate(() => posthog.version), '1.443.0')
-        assert.match(await page.evaluate(() => Ext.getVersion().version), /^6\.0\.0\b/)
+        if (!process.env.EXTJS_URL) assert.match(await page.evaluate(() => Ext.getVersion().version), /^6\.0\.0\b/)
         if (late) await page.waitForFunction(() => !!posthog.surveys?._surveyEventReceiver, undefined, { timeout: 15000 })
         else await registered()
         await test({ page, advance, state, visible, open, close, checkShown, registered, releaseDefinitions })
@@ -216,6 +220,35 @@ const cases = [
             assert.equal((await state()).masked, false)
             await advance(2500)
             await checkShown()
+        }],
+    ['g. In-page Reval logout drops a masked match and a fresh open shows once for the next user', {},
+        async ({ page, open, close, advance, state, visible, checkShown }) => {
+            await open()
+            await advance(2000)
+            assert.equal((await state()).masked, true)
+            await page.evaluate(() => {
+                Ext.loggedOut = true
+                posthog.capture('RevalRibbon', { action: 'Logout' })
+            })
+            assert.equal(await page.evaluate(() => posthog.get_distinct_id()), firstUser)
+            await advance(46000)
+            const loggedOut = await state()
+            assert.equal(loggedOut.masked, false)
+            assert.deepEqual(signals.activated(loggedOut), [])
+            assert.deepEqual(signals.shown(loggedOut), [])
+            assert.equal(await visible(), false)
+
+            await close()
+            await page.evaluate((id) => {
+                Ext.loggedOut = false
+                posthog.identify(id)
+            }, nextUser)
+            await advance(2500)
+            assert.equal(await visible(), false)
+            assert.deepEqual(signals.activated(await state()), [])
+            await open()
+            await advance(3500)
+            await checkShown(nextUser)
         }],
 ]
 

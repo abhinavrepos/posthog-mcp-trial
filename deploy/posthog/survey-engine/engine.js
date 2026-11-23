@@ -378,7 +378,7 @@
                         if (!machine.pending(item.id, item.token)) finish(item, reason);
                     });
                 }
-                function resetIdentity(reason) {
+                function invalidateMatches(reason) {
                     machine.reset();
                     clearInvalid(reason);
                 }
@@ -395,7 +395,7 @@
                                 snapshot = surveys;
                                 machine.setSurveys(surveys);
                                 clearInvalid('survey definition changed');
-                                stream.listen(receive, resetIdentity);
+                                stream.listen(receive, invalidateMatches);
                             }
                         } catch (error) { debug(instance, error); }
                         return callback.apply(this, arguments);
@@ -413,8 +413,8 @@
                     if (reserved && reserved !== item) return 'another survey is waiting to display';
                     return quietReason(info.chain, info.surveyId, now, store(), seen(info.surveyId), info.repeats);
                 }
-                function audienceAllowed(item, info) {
-                    var who = stream.current(), audience = info.chain.audience;
+                function audienceAllowed(item, info, who) {
+                    var audience = info.chain.audience;
                     if (!who || item.who !== who || !inAudience(audience, item.audienceEvent, who, item.id)) return false;
                     var property = audience && audience.eventProperty;
                     if (property && typeof instance.get_property === 'function') {
@@ -451,7 +451,7 @@
                     function poll() {
                         try {
                             if (!machine.pending(item.id, item.token)) return;
-                            if (!audienceAllowed(item, info)) {
+                            if (!audienceAllowed(item, info, stream.current())) {
                                 if (machine.pending(item.id, item.token)) finish(item, 'user or audience changed');
                                 return;
                             }
@@ -506,10 +506,10 @@
                     completed.forEach(function (item) { wait(item, now, who, event); });
                 }
                 function displayBlock(survey, raw) {
-                    var info = machine.info(raw.id), item = pending.get(raw.id), now = Date.now();
+                    var who = stream.current(), info = machine.info(raw.id), item = pending.get(raw.id), now = Date.now();
                     if (!info || info.surveyId !== survey.id || !item || !item.armed ||
                         !machine.pending(item.id, item.token) || now > item.displayBy) return 'Lens activation expired or absent';
-                    if (!audienceAllowed(item, info)) {
+                    if (!audienceAllowed(item, info, who)) {
                         if (machine.pending(item.id, item.token)) finish(item, 'user or audience changed');
                         return 'Lens user or audience changed';
                     }

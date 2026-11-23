@@ -93,6 +93,7 @@ function dialogBrowser(t: TestContext, input: Omit<typeof dialogSurvey, 'conditi
             resumeDelay.push(automatic.resumeDelayFromActivation),
     }
     const root = {
+        Ext: { loggedOut: undefined as boolean | undefined },
         __PosthogExtensions__: { generateSurveys: (_instance: unknown, _enabled?: boolean): typeof renderer | undefined => {
             // The test explicitly drives definitions and eligibility.
             return renderer
@@ -140,6 +141,7 @@ function dialogBrowser(t: TestContext, input: Omit<typeof dialogSurvey, 'conditi
         canShow: () => renderer.checkSurveyEligibility(input).eligible,
         schedulePopover: () => renderer.handlePopoverSurvey(input, undefined, { resumeDelayFromActivation: true }),
         shown: () => emit('survey shown', { $survey_id: input.id }),
+        loggedOut: (value: boolean | undefined) => { root.Ext.loggedOut = value },
         identify: (id: string) => instance.identify(id),
         reset: (restore?: string) => instance.reset(restore),
         setIdentity: (id: string, isIdentified = true) => { who = id; identified = isIdentified },
@@ -281,6 +283,72 @@ test('logout drops deferred and already activated work, including reset to the s
     assert.deepEqual(b.canceled, [dialogSurvey.id])
 })
 
+test('Ext logout drops a match during the mask wait and a fresh OPEN works for a different user', (t) => {
+    const b = dialogBrowser(t)
+    b.register(); b.load(); b.attach(); b.mask(true); b.open(); b.tick(0)
+    b.loggedOut(true); b.tick(100)
+    b.loggedOut(false); b.mask(false); b.tick(100)
+    assert.deepEqual(b.captured, [])
+
+    b.identify('ACME|bob'); b.tick(100)
+    assert.equal(b.canShow(), false)
+    assert.deepEqual(b.captured, [])
+    b.open(); b.tick(100)
+    assert.equal(b.canShow(), true)
+    assert.deepEqual(b.captured, [trigger])
+})
+
+test('native display drops a match when Ext reports logout and accepts a fresh OPEN after same-ID login', (t) => {
+    const b = dialogBrowser(t)
+    b.register(); b.load(); b.attach(); b.open(); b.tick(0)
+    assert.equal(b.canShow(), true)
+    b.loggedOut(true); b.schedulePopover()
+    assert.deepEqual(b.resumeDelay, [])
+    assert.deepEqual(b.canceled, [dialogSurvey.id])
+
+    b.open(); b.loggedOut(undefined); b.open(); b.tick(100)
+    assert.deepEqual(b.captured, [trigger], 'the SDK still has the old ID before login')
+    b.identify('ACME|ann')
+    assert.equal(b.canShow(), false)
+    b.open(); b.tick(100)
+    assert.equal(b.canShow(), true)
+    assert.deepEqual(b.captured, [trigger, trigger])
+})
+
+test('a logout capture clears pending matches even when Ext never reports logout', (t) => {
+    for (const [event, properties] of [
+        ['RevalRibbon', { action: 'Logout' }],
+        ['RevalRibbon', { action_name: 'Logout' }],
+        ['RevalRibbon', { label: 'Logout' }],
+        ['$autocapture', { $event_type: 'Logout' }],
+        ['Reval: LOGOUT', {}],
+    ] as const) {
+        const b = dialogBrowser(t)
+        b.register(); b.load(); b.attach(); b.mask(true); b.open(); b.tick(0)
+        b.emit(event, properties); b.open(); b.mask(false); b.tick(100)
+        assert.deepEqual(b.captured, [], `${event} ${JSON.stringify(properties)}`)
+        b.identify('ACME|ann'); b.tick(100)
+        assert.equal(b.canShow(), false)
+        assert.deepEqual(b.captured, [])
+        b.open(); b.tick(100)
+        assert.deepEqual(b.captured, [trigger])
+    }
+})
+
+test('startup history is wiped by either logout signal', (t) => {
+    for (const logout of [
+        (b: ReturnType<typeof dialogBrowser>) => { b.loggedOut(true); b.open(); b.loggedOut(false) },
+        (b: ReturnType<typeof dialogBrowser>) => b.emit('RevalRibbon', { label: 'Logout' }),
+    ]) {
+        const b = dialogBrowser(t)
+        b.bootstrap(); b.open(); logout(b); b.open(); b.identify('ACME|ann')
+        b.attach(); b.register(); b.load(); b.tick(100)
+        assert.deepEqual(b.captured, [])
+        b.open(); b.tick(100)
+        assert.deepEqual(b.captured, [trigger])
+    }
+})
+
 test('startup history is wiped by reset and captures from anonymous users are never replayed', (t) => {
     const b = dialogBrowser(t)
     b.bootstrap(); b.open(); b.reset(); b.open(); b.identify('ACME|ann'); b.attach(); b.register(); b.load(); b.tick(100)
@@ -299,6 +367,19 @@ test('logout clears a partial chain even when reset returns the same ID', (t) =>
     b.emit('Prepare', { action: 'OPEN', dialog_id: 'DlgHedgeDesigListReport' })
     b.reset('ACME|ann'); b.open(); b.tick(100)
     assert.deepEqual(b.captured, [])
+})
+
+test('a logout event clears a partial chain for the same user', (t) => {
+    const input = { ...dialogSurvey, conditions: { ...dialogSurvey.conditions, lensChain: { ...dialogChain, steps: [
+        { event: 'Prepare' }, ...dialogChain.steps,
+    ] } } }
+    const b = dialogBrowser(t, input)
+    b.register(); b.load(); b.attach()
+    b.emit('Prepare'); b.emit('RevalRibbon', { action: 'Logout' }); b.identify('ACME|ann')
+    b.open(); b.tick(100)
+    assert.deepEqual(b.captured, [])
+    b.emit('Prepare'); b.emit('Unrelated', { description: 'Logout' }); b.open(); b.tick(100)
+    assert.deepEqual(b.captured, [trigger])
 })
 
 test('native display rejects a changed event-property client on the same identity', (t) => {
