@@ -116,7 +116,15 @@ export function appEvents(): AppEvents | null {
     const file = config.appEventsFile
     if (!file) return (loaded = null)
     const path = isAbsolute(file) ? file : join(ROOT, file)
-    return (loaded = parseAppEvents(JSON.parse(readFileSync(path, 'utf8')), file))
+    // Still refuses to start, as before, but names the setting: a bare "Unexpected token } in JSON at position 34"
+    // or "ENOENT … open '/opt/…'" did not say which file or which setting to fix.
+    let text: string
+    try { text = readFileSync(path, 'utf8') }
+    catch (e) { throw new Error(`APP_EVENTS_FILE: cannot read ${file} (${(e as NodeJS.ErrnoException).code === 'ENOENT' ? 'the file does not exist' : (e as NodeJS.ErrnoException).code || 'unreadable'}); set APP_EVENTS_FILE to the app's event dictionary, e.g. config/app-events.reval.json`) }
+    let raw: unknown
+    try { raw = JSON.parse(text) }
+    catch (e) { throw new Error(`APP_EVENTS_FILE: ${file} is not valid JSON (${(e as Error).message.replace(/\s+/g, ' ').slice(0, 120)})`) }
+    return (loaded = parseAppEvents(raw, file))
 }
 
 // ------------------------------------------------------------------ reading single values

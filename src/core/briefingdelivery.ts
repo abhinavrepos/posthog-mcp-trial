@@ -34,7 +34,12 @@ export function createBriefingScheduler(options = config.briefing, injected: Par
         if (!options.webhook || busy) return
         const day = now.toISOString().slice(0,10)
         if (!DAYS.includes(options.day) || !['teams','slack'].includes(options.kind) || !Number.isInteger(options.hour) || options.hour < 0 || options.hour > 23) {
-            d.log('Briefing delivery configuration is invalid'); return
+            d.log('Briefing delivery configuration is invalid')
+            // Shown on the System page too: before, the job only sat at "first round not finished" for weeks.
+            const wrong = [!DAYS.includes(options.day) && 'LENS_BRIEFING_DAY (sun to sat)', !['teams','slack'].includes(options.kind) && 'LENS_BRIEFING_WEBHOOK_KIND (teams or slack)',
+                !(Number.isInteger(options.hour) && options.hour >= 0 && options.hour <= 23) && 'LENS_BRIEFING_HOUR (0 to 23)'].filter(Boolean)
+            jobFailed('briefing_delivery', new Error(`briefing settings are not valid: ${wrong.join(', ')}`))
+            return
         }
         if (DAYS[now.getUTCDay()] !== options.day || now.getUTCHours() !== options.hour) return
         busy = true

@@ -44,6 +44,18 @@ function intSetting(key: string, fallback: number, min: number, max: number): nu
     return n
 }
 
+/** A number setting that has always been read leniently. A value that is not a number at all used to become NaN
+ * and silently break what it controls (every clip link invalid, the clip cache never trimmed); it now keeps the
+ * default and says so on stderr (stdout belongs to the stdio MCP protocol). Numbers are taken as before. */
+function numberSetting(key: string, fallback: number): number {
+    const v = env(key).trim()
+    if (v === '') return fallback
+    const n = Number(v)
+    if (Number.isFinite(n)) return n
+    console.error(JSON.stringify({ t: new Date().toISOString(), msg: 'setting ignored', setting: key, reason: `${key} must be a number; using the default ${fallback}` }))
+    return fallback
+}
+
 // A one-character separator; it goes into HogQL as a string literal, so quotes and backslashes are refused.
 function separator(key: string, fallback: string): string {
     const v = env(key, fallback)
@@ -175,7 +187,7 @@ export const config = {
         // Bearer token for /mcp and signing key for clip links. Required for anything but localhost.
         mcpToken: env('MCP_TOKEN'),
         clipLinkSecret: env('CLIP_LINK_SECRET'),
-        clipLinkTtlHours: Number(env('CLIP_LINK_TTL_HOURS', '168')),
+        clipLinkTtlHours: numberSetting('CLIP_LINK_TTL_HOURS', 168),
         // The status page (deploy/status), which the System page reads.
         statusUrl: stripSlash(env('STATUS_URL', 'http://127.0.0.1:8090')),
         statusPassword: env('STATUS_PASSWORD'),
@@ -188,7 +200,7 @@ export const config = {
         // untrusted content. Comma-separated.
         allowedHosts: env('CLIP_ALLOWED_HOSTS', 'localhost'),
         snapshotMaxDays: Math.max(1, Number(env('CLIP_SNAPSHOT_MAX_DAYS', '7')) || 7),
-        maxCacheMb: Number(env('CLIP_CACHE_MAX_MB', '2048')),
+        maxCacheMb: numberSetting('CLIP_CACHE_MAX_MB', 2048),
     },
     anthropic: {
         apiKey: env('ANTHROPIC_API_KEY'),
