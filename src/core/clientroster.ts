@@ -1,5 +1,6 @@
 // One durable roster shared by anonymisation and name resolution.
 import { tasksDb } from './tasks.ts'
+import { rollback } from './sqlitetx.ts'
 import { hogql } from './posthog.ts'
 import { P } from './props.ts'
 export interface RosterClient { id: string; name: string; last_seen: string }
@@ -44,7 +45,7 @@ export async function scanClients(full: boolean, now = new Date()): Promise<void
         const from = new Date(Math.max(+since, +until - ROSTER_SLICE_DAYS * 86400000))
         const list = await scanSlice(from, until)
         tasksDb.exec('BEGIN')
-        try { upsert(list); tasksDb.exec('COMMIT') } catch (e) { tasksDb.exec('ROLLBACK'); throw e }
+        try { upsert(list); tasksDb.exec('COMMIT') } catch (e) { rollback(tasksDb); throw e }
         until = from
     }
     tasksDb.exec('BEGIN')
@@ -53,7 +54,7 @@ export async function scanClients(full: boolean, now = new Date()): Promise<void
         if (now.toISOString() > state('roster:scanned')) save('roster:scanned', now.toISOString())
         if (full) save('roster:full', now.toISOString())
         tasksDb.exec('COMMIT')
-    } catch (e) { tasksDb.exec('ROLLBACK'); throw e }
+    } catch (e) { rollback(tasksDb); throw e }
 }
 /** An empty roster with task history (a new install after its backfill, or a restored database): every client
  * with sessions is already in client_names, with its last active day. Seed from that and scan PostHog only from
@@ -68,7 +69,7 @@ function seedFromHistory(): boolean {
         upsert(rows.map((r) => ({ id: r.id, name: r.name || '', last_seen: `${r.day}T00:00:00.000Z` })))
         if (!state('roster:scanned')) save('roster:scanned', new Date(Date.parse(through) + 86400000).toISOString())
         tasksDb.exec('COMMIT')
-    } catch (e) { tasksDb.exec('ROLLBACK'); throw e }
+    } catch (e) { rollback(tasksDb); throw e }
     return true
 }
 export async function refreshClientStore(): Promise<void> {

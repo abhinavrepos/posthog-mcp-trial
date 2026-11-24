@@ -23,6 +23,11 @@ export function toolError(error: unknown, tool: string, id: string = toolCorrela
     // Lens's own key or project is wrong: retrying cannot help, so say who has to act. Only Lens's PostHog client
     // writes "PostHog <METHOD> <path> → <status>"; the status also survives a job's stored message this way.
     else if(lensPosthogStatus(error,raw)) {kind='unavailable';message=lensPosthogStatus(error,raw)!}
+    // Lens's own storage, not PostHog: the person cannot fix it by retrying sooner or asking a smaller question.
+    else if(/^Lens could not store this job's result because [a-z ]{1,60}\. Submit the tool again later\.$/.test(raw)) {kind='unavailable';message=raw}
+    else if(/database or disk is full|SQLITE_FULL|ENOSPC|no space left on device/i.test(raw)) {kind='unavailable';message="Lens's disk is full, so this could not finish. A Lens administrator must free disk space (the System page shows the disk); then retry."}
+    else if(/attempt to write a readonly database|SQLITE_READONLY|EROFS|read-only file system/i.test(raw)) {kind='unavailable';message='Lens cannot write its data (its storage is read-only). A Lens administrator must check the disk and the run/ folder; then retry.'}
+    else if(/database disk image is malformed|SQLITE_CORRUPT|file is not a database|SQLITE_NOTADB/i.test(raw)) {kind='unavailable';message="Lens's database file is damaged. A Lens administrator must restore it from a backup; then retry."}
     // A request that got no answer at all: PostHog may be overloaded, so narrowing the window is not the only fix.
     else if((error as {name?:string})?.name === 'TimeoutError' || /operation was aborted due to timeout/i.test(raw)) {kind='capacity';message='PostHog did not answer in time. Retry once; if it times out again, PostHog is overloaded or the question is heavy: use a narrower window, a coarser bucket, or fewer group_by dimensions.'}
     else if(error instanceof z.ZodError) {

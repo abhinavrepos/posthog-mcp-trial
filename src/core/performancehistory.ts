@@ -2,6 +2,7 @@ import { stored } from './ingestmessages.ts'
 import { errorDiagnostic } from './errordiagnostics.ts'
 // Upgrade retained history gradually. Each day is atomic; failures preserve the existing task evidence.
 import { tasksDb } from './tasks.ts'
+import { rollback } from './sqlitetx.ts'
 import { indexWorkflowDay, backfillGlobalFriction } from './analysishistory.ts'
 import { ingestAggregateDaily } from './aggregatedaily.ts'
 export async function backfillPerformanceHistory(limit: number, query: (sql: string, values: Record<string,unknown>) => Promise<Record<string,unknown>[]>) {
@@ -21,7 +22,7 @@ export async function backfillPerformanceHistory(limit: number, query: (sql: str
                     tasksDb.prepare('INSERT OR IGNORE INTO task_active_users_daily SELECT DISTINCT day,client,user FROM task_users_daily WHERE day=?').run(day)
                     tasksDb.prepare('INSERT INTO task_active_users_days VALUES (?)').run(day)
                     tasksDb.exec('COMMIT')
-                } catch(e) { tasksDb.exec('ROLLBACK'); throw e }
+                } catch(e) { rollback(tasksDb); throw e }
             }
             if (!tasksDb.prepare('SELECT 1 FROM aggregate_dimension_daily WHERE day=?').get(day) && !tasksDb.prepare('SELECT 1 FROM aggregate_dimension_skipped WHERE day=?').get(day)) await ingestAggregateDaily(tasksDb,String(day),query)
             stored({ type: 'stored', days: [String(day)], kinds: ['performance'] })

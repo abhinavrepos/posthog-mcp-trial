@@ -2,6 +2,7 @@
 // includes events without session IDs, unlike the session-owned workflow ingestion reader.
 import { brotliCompressSync, brotliDecompressSync, constants } from 'node:zlib'
 import type { DatabaseSync } from 'node:sqlite'
+import { rollback } from './sqlitetx.ts'
 import { required, prop } from './appevents.ts'
 import { P } from './props.ts'
 export const ROLLUP_DIMENSIONS = ['event', 'client', 'app_version', 'dialog', 'dialog_name', 'tab', 'action', 'button'] as const
@@ -76,7 +77,7 @@ function periodOf(day: string, bucket: string): string {
 function readSnapshot<T>(db: DatabaseSync, read: () => T): T {
     db.exec('BEGIN')
     try { const result = read(); db.exec('COMMIT'); return result }
-    catch (e) { db.exec('ROLLBACK'); throw e }
+    catch (e) { rollback(db); throw e }
 }
 export function dailyAggregate(db: DatabaseSync, q: DailyQuery) {
     return readSnapshot(db, () => aggregateSnapshot(db, q))

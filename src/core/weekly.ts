@@ -3,6 +3,7 @@
 // scorecard and client stories read them instead of recomputing a year of weeks on every request. Storing a day
 // drops the observations of weeks ending on or after it (src/core/tasks.ts), so they are recomputed when needed.
 import { coverage, historyGeneration, tasksDb } from './tasks.ts'
+import { rollback } from './sqlitetx.ts'
 import { rescueWindow, type RescueReason } from './rescue.ts'
 import { clientSignals } from './signals.ts'
 
@@ -40,7 +41,7 @@ export function weekObservation(w: string): Promise<WeekObservation> {
                 for (const r of rows) insert.run(w, r.client, r.source, r.kind, r.key, r.text)
                 tasksDb.prepare('INSERT OR REPLACE INTO week_done VALUES (?,?,?)').run(w, new Date().toISOString(), signals.coverage.complete ? 1 : 0)
                 tasksDb.exec('COMMIT')
-            } catch (e) { tasksDb.exec('ROLLBACK'); throw e }
+            } catch (e) { rollback(tasksDb); throw e }
             return { week_end: w, complete: true, signals_complete: signals.coverage.complete, rows }
         })().finally(() => pending.delete(w))
         pending.set(w, p)

@@ -5,6 +5,7 @@ import { analyticalWindow } from './timewindow.ts'
 // These tables share task_ingest's transaction, finalization and session ownership.
 import { brotliCompressSync, brotliDecompressSync, constants } from 'node:zlib'
 import { tasksDb, coverage, dataThrough } from './tasks.ts'
+import { rollback } from './sqlitetx.ts'
 import { frictionCandidates, finishFriction, clientSignals, required, type ClientPeriod, type AppEvents, type Step, type FrictionCandidate } from './appevents.ts'
 import { discoveryCandidates, finishDiscovery, completionAttempts, finishCompletion, workflowEpisodes, type WorkflowCandidate, type Workflow } from './workflows.ts'
 import type { EventWindow } from './liveevents.ts'
@@ -399,7 +400,7 @@ export function indexWorkflowDay(owner: string): void {
         tasksDb.prepare('DELETE FROM workflow_episodes_daily WHERE day=?').run(owner)
         storeIndexedEpisodes(owner, groups)
         tasksDb.exec('COMMIT')
-    } catch(e) { tasksDb.exec('ROLLBACK'); throw e }
+    } catch(e) { rollback(tasksDb); throw e }
 }
 
 export function historyCompletion(q: EventWindow, definition: Workflow) {

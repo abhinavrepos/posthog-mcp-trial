@@ -46,6 +46,8 @@ export function plainReason(e: unknown): string {
     if (/heap out of memory|err_worker_out_of_memory|out of memory|allocation failed|resourcelimits/.test(m)) return 'ran out of memory'
     if (/enospc|no space left|disk is full|database or disk is full/.test(m)) return 'the disk is full'
     if (/database is locked|sqlite_busy/.test(m)) return 'the history database was busy'
+    if (/attempt to write a readonly database|sqlite_readonly|erofs|read-only file system/.test(m)) return "Lens's storage is read-only"
+    if (/database disk image is malformed|sqlite_corrupt|file is not a database|sqlite_notadb/.test(m)) return "Lens's database file is damaged"
     if (/worker exited|worker .*terminated/.test(m)) return 'its worker stopped unexpectedly'
     if (/too large/.test(m)) return 'a recording was too large to read'
     // Anything else: the first line, without URLs, addresses or quoted text.

@@ -2,6 +2,7 @@ import { JOB_HANDLE_NOTE } from './jobnote.ts'
 // Persisted in-process jobs. Work may run in a worker thread so synchronous SQLite/decoding cannot
 // prevent the MCP event loop from returning its handle on time. No request abort signal owns a job.
 import { ToolInputError } from './toolinputerror.ts'
+import { plainReason } from './jobhealth.ts'
 import { randomBytes, createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { gzipSync, gunzipSync } from 'node:zlib'
@@ -19,7 +20,16 @@ export class JobQueueError extends Error {
 }
 const integerOption = (value: number, fallback: number, minimum: number) => Number.isFinite(value) ? Math.max(minimum, Math.floor(value)) : fallback
 const sqliteBusy = (error: unknown) => [5, 6].includes(Number((error as { errcode?: number })?.errcode) & 255)
-const skipBusy = (work: () => void) => { try { work() } catch (error) { if (!sqliteBusy(error)) throw error } }
+// Timer callbacks: a throw there is an uncaught exception that stops the whole service, and a full disk or a
+// read-only file system made every heartbeat throw (a restart loop). Busy is expected; anything else is logged.
+const skipBusy = (work: () => void) => { try { work() } catch (error) { if (!sqliteBusy(error)) storageTrouble(error) } }
+let lastTrouble = { at: 0, reason: '' }
+function storageTrouble(error: unknown): void {
+    const reason = plainReason(error)
+    if (reason === lastTrouble.reason && Date.now() - lastTrouble.at < 60_000) return // one line a minute, not one per tick
+    lastTrouble = { at: Date.now(), reason }
+    console.log(JSON.stringify({ t: new Date().toISOString(), msg: 'analysis jobs: database write failed', reason }))
+}
 export class JobRunner {
     private active = new Map<string, { resolve: (v: unknown) => void; work: () => JobWork; cancel?: () => void; running: boolean; independent: boolean; retry?: NodeJS.Timeout }>()
     private closed = false
@@ -100,6 +110,8 @@ export class JobRunner {
         this.get(owner, id, revision)
     }
     private waiters = new Map<string, Promise<unknown>>()
+    /** Jobs that finished but whose terminal state could not be written (full disk): id → the reason shown. */
+    private unsaved = new Map<string, string>()
     private foreignPolls = new Map<string,{timer:NodeJS.Timeout; resolve:(value:unknown)=>void}>()
     private wait(id: string): Promise<unknown> {
         let p = this.waiters.get(id)
@@ -151,13 +163,25 @@ export class JobRunner {
                     if (row) this.db.prepare('UPDATE analysis_job_context SET context=? WHERE id=?').run(JSON.stringify({...JSON.parse(String(row.context)), ...metadata}), id)
                 }
                 this.db.exec('RELEASE analysis_job_finish')
-            } catch (error) { this.db.exec('ROLLBACK TO analysis_job_finish; RELEASE analysis_job_finish'); throw error }
+            } catch (error) {
+                // SQLite may already have rolled the whole transaction back itself (a full disk does): then the
+                // savepoint is gone, and undoing it again would replace the real reason.
+                if (this.db.isTransaction) this.db.exec('ROLLBACK TO analysis_job_finish; RELEASE analysis_job_finish')
+                throw error
+            }
         } catch (failure) {
-            if (!sqliteBusy(failure)) throw failure
-            // Keep the completed value until SQLite can accept it. Never reject an unobserved .then().
-            if (!this.closed) { a.retry = setTimeout(() => { a.retry = undefined; this.finish(id, status, result, error, metadata) }, 100); return }
-            // Shutdown cannot keep retrying against a database its caller is about to close. The lease
-            // recovery path will mark an unwritten terminal state failed after restart.
+            if (sqliteBusy(failure)) {
+                // Keep the completed value until SQLite can accept it. Never reject an unobserved .then().
+                if (!this.closed) { a.retry = setTimeout(() => { a.retry = undefined; this.finish(id, status, result, error, metadata) }, 100); return }
+                // Shutdown cannot keep retrying against a database its caller is about to close. The lease
+                // recovery path will mark an unwritten terminal state failed after restart.
+            } else {
+                // The disk is full, the file system is read-only, or the file is damaged. Throwing here was an
+                // unhandled rejection that stopped the service. The caller still waiting gets its answer; a later
+                // poll of this id is told why there is no stored result.
+                storageTrouble(failure)
+                this.unsaved.set(id, `Lens could not store this job's result because ${plainReason(failure)}. Submit the tool again later.`)
+            }
         }
         this.active.delete(id); this.waiters.delete(id)
         a.resolve(result ?? { isError: true, content: [{ type: 'text', text: error || 'Job cancelled or expired.' }] })
@@ -167,7 +191,8 @@ export class JobRunner {
         const row = this.db.prepare('SELECT * FROM analysis_jobs WHERE id=? AND owner=? AND expires>?').get(id, owner, this.now()) as unknown as JobRow | undefined
         if (!row) throw new Error('Unknown or expired job id.') // same response for another user's id
         if (row.revision !== revision) throw new Error('Privacy or access settings changed. Submit the tool again.')
-        return row
+        const unsaved = row.status === 'working' && !this.active.has(id) ? this.unsaved.get(id) : undefined
+        return unsaved ? { ...row, status: 'failed', error: unsaved } : row
     }
     context(row: JobRow): unknown {
         const stored = this.db.prepare('SELECT context FROM analysis_job_context WHERE id=?').get(row.id)
@@ -192,6 +217,7 @@ export class JobRunner {
             if (!row || Number(row.expires) <= this.now()) { a.cancel?.(); this.finish(id, 'cancelled', undefined, 'Job expired.') }
         }
         this.db.prepare('DELETE FROM analysis_jobs WHERE expires<=?').run(this.now())
+        for (const id of this.unsaved.keys()) if (!this.db.prepare('SELECT 1 FROM analysis_jobs WHERE id=?').get(id)) this.unsaved.delete(id)
         this.db.exec('DELETE FROM analysis_job_context WHERE id NOT IN (SELECT id FROM analysis_jobs)')
     }
     close(): void {

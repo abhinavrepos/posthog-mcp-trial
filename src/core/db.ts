@@ -30,6 +30,7 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 
 import { config, ROOT } from './config.ts'
+import { rollback } from './sqlitetx.ts'
 
 export const DB_FILE = process.env.TRIAGE_DB || join(ROOT, 'run/triage.db')
 mkdirSync(dirname(DB_FILE), { recursive: true, mode: 0o700 })
@@ -323,7 +324,7 @@ export function tx<T>(fn: () => T): T {
         db.exec('COMMIT')
         return out
     } catch (e) {
-        db.exec('ROLLBACK')
+        rollback(db)
         throw e
     }
 }

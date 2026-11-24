@@ -16,6 +16,7 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { appEvents, columns, dialogLabel, required, toRaw, toSteps, type AppEvents, type Step, type RawEvent } from './appevents.ts'
 import { config, ROOT } from './config.ts'
+import { rollback } from './sqlitetx.ts'
 import { recordingSpans, type RecordingSpan } from './incidents.ts'
 import { clockShift } from './replaynet.ts'
 import { hogql, replayUrl } from './posthog.ts'
@@ -39,7 +40,7 @@ tasksDb.exec('PRAGMA busy_timeout = 30000; PRAGMA auto_vacuum = INCREMENTAL; PRA
 function transaction<T>(fn: () => T): T {
     tasksDb.exec('BEGIN IMMEDIATE')
     try { const value = fn(); tasksDb.exec('COMMIT'); return value }
-    catch (e) { tasksDb.exec('ROLLBACK'); throw e }
+    catch (e) { rollback(tasksDb); throw e }
 }
 transaction(() => {
     // Another process may have migrated while this one waited for the write lock.

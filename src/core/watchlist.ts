@@ -16,6 +16,7 @@ import { P } from './props.ts'
 import { MARK_TEXT, MARK_WEIGHT, MARKS, MOMENTS_VERSION, stepLine, type Mark, type SessionMoments, type Step } from './replaymoments.ts'
 import { tasksDb } from './tasks.ts'
 import { config } from './config.ts'
+import { rollback } from './sqlitetx.ts'
 
 tasksDb.exec(`
 CREATE TABLE IF NOT EXISTS watch_clients(client TEXT PRIMARY KEY, added_by TEXT NOT NULL, added_at TEXT NOT NULL, paused INTEGER NOT NULL DEFAULT 0,
@@ -68,7 +69,7 @@ export function changeWatch(client: string, action: WatchAction, by: string): { 
                 tasksDb.prepare('DELETE FROM watch_skips WHERE client=?').run(id)
                 tasksDb.prepare('DELETE FROM watch_clients WHERE client=?').run(id)
                 tasksDb.exec('COMMIT')
-            } catch (e) { tasksDb.exec('ROLLBACK'); throw e }
+            } catch (e) { rollback(tasksDb); throw e }
         } else tasksDb.prepare('UPDATE watch_clients SET paused=? WHERE client=?').run(action === 'pause' ? 1 : 0, id)
     }
     return { ok: true, client: id, action }
