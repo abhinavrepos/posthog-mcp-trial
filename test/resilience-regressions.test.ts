@@ -26,7 +26,7 @@ test('a successful HTTP answer with invalid query shape is unavailable, never em
     }
 })
 
-test('429 Retry-After is preserved as actionable advice without immediate retry', async t => {
+test('429 is retried as before; when retries run out, Retry-After is actionable advice', async t => {
     configured(t)
     let calls = 0
     t.mock.method(globalThis, 'fetch', async () => {
@@ -34,7 +34,7 @@ test('429 Retry-After is preserved as actionable advice without immediate retry'
         return new Response('busy', { status: 429, headers: { 'Retry-After': '60' } })
     })
     const error = await hogql('SELECT 1').catch(e => e)
-    assert.equal(calls, 1)
+    assert.ok(calls >= 2, `retried as thin-lens always did (${calls} calls)`)
     assert.match(toolError(error, 'find_sessions').result.content[0].text, /retry after 60 seconds/i)
 })
 

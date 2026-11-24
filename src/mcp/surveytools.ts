@@ -180,7 +180,6 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             if (unclear.length) return json('Which clients? Nothing was saved:', unclear)
             const out = await saveSurvey(spec as SurveySpec, { id: survey_id, clientIds: ids })
             if (!out.survey) return json('Nothing was saved. Fix these first:', out.compiled.problems)
-            out.compiled.problems.push(...await surveyEvidence(out.compiled.chain))
             audit(who, survey_id ? 'survey.changed' : 'survey.created', { survey: out.survey.id, name: out.survey.name })
             const v = viewOf(out.survey)
             const conflicts = conflictsFor(out.compiled.chain, out.survey, await listSurveys())

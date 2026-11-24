@@ -161,7 +161,7 @@ export async function cachedPosthogRead<T>(key: string, work: () => Promise<T>, 
 function retryable(error: unknown): boolean {
     if (!error || typeof error !== 'object') return false
     const e = error as { status?: number; name?: string }
-    return e.name === 'TimeoutError' || (e.status === 429 && !(e as PostHogError).retryAfter) || (e.status !== undefined && e.status >= 500 && e.status < 600)
+    return e.name === 'TimeoutError' || e.status === 429 || (e.status !== undefined && e.status >= 500 && e.status < 600)
 }
 let activeReads = 0
 const readers: (() => void)[] = []

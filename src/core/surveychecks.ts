@@ -15,11 +15,15 @@ import type { AppEvents } from './appevents.ts'
 import { appEvents } from './appevents.ts'
 import { config } from './config.ts'
 import type { Row } from './posthog.ts'
-import { stepSpecOf, surveyQuery, type LensChain, type Problem } from './surveys.ts'
+import { hogql } from './posthog.ts'
+import { stepSpecOf, type LensChain, type Problem } from './surveys.ts'
 
 export type EvidenceQuery = (query: string, values?: Record<string, unknown>) => Promise<Row[]>
 export const EVIDENCE_DAYS = 30
-const SINCE = 'timestamp > now() - toIntervalDay({days})' // surveyQuery turns this into the history window
+// Its own fixed window (the last EVIDENCE_DAYS days, never the caller's tool window, which may be a year) and a
+// short timeout, outside the survey query queue, so the check can never hold up survey_results or other reads.
+const evidenceQuery: EvidenceQuery = (query, values = {}) => hogql(query, values, { timeoutMs: 15_000 })
+const SINCE = 'timestamp > now() - toIntervalDay({days})' // always the last {days} days
 
 interface Wanted { where: string; kind: 'opens' | 'closes' | 'button' | 'field' | 'dialog' | 'event'; value: string }
 
@@ -87,7 +91,7 @@ export async function surveyEvidence(chain: LensChain, opts: { reg?: AppEvents |
     let timer: NodeJS.Timeout | undefined
     try {
         return await Promise.race([
-            check(chain, reg, days, opts.query ?? surveyQuery),
+            check(chain, reg, days, opts.query ?? evidenceQuery),
             new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error('timed out'), { name: 'TimeoutError' })), opts.timeoutMs ?? 20_000); timer.unref?.() }),
         ])
     } catch {

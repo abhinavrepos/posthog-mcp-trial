@@ -4,6 +4,7 @@ export const VOLT_CSS = String.raw`
 @font-face{font-family:'Geist Mono';src:url('/replays/assets/fonts/GeistMono-Variable.woff2') format('woff2');font-style:normal;font-weight:100 900;font-display:swap}
 :root,[data-theme=dark]{color-scheme:dark;--bg:#0a0a0b;--surface:#111113;--surface-2:#18181b;--border:#26262a;--border-strong:#66666f;--ink:#ededef;--ink-muted:#a0a0a8;--primary:#ededef;--on-primary:#0a0a0b;--volt:#1f1f23;--on-volt:#ededef;--signal:#d9a441;--success-ink:#6cc58a;--danger-ink:#f08a7a;--focus:#8ab4ff;--font-sans:Geist,system-ui,-apple-system,sans-serif;--font-mono:'Geist Mono',ui-monospace,monospace;--side-bg:var(--bg);--card:var(--surface);--muted:var(--ink-muted);--faint:var(--ink-muted);--line:var(--border);--line-strong:var(--border-strong);--control:var(--border-strong);--chip:var(--surface-2);--hover:var(--surface-2);--accent:var(--primary);--accent-ink:var(--on-primary);--accent-soft:var(--volt);--ok:var(--success-ink);--ok-bg:var(--surface-2);--warn:var(--signal);--warn-bg:var(--surface-2);--err:var(--danger-ink);--err-bg:var(--surface-2);--shadow:none;--pop:0 16px 40px -8px rgba(0,0,0,.7);--scrim:rgba(0,0,0,.65);--r-sm:8px;--r:20px;--side:220px;--text-small:13px;--text-body:15px;--text-section:18px;--text-title:32px;--text-metric:28px;--title-leading:38px;--section-leading:26px;--disabled-ink:var(--ink-muted);--disabled-bg:var(--surface-2);--disabled-border:var(--border)}
 [data-theme=light]{color-scheme:light;--bg:#fafafa;--surface:#fff;--surface-2:#f4f4f5;--border:#e4e4e7;--border-strong:#8b8b94;--ink:#09090b;--ink-muted:#5f5f68;--primary:#09090b;--on-primary:#fafafa;--volt:#f0f0f2;--on-volt:#09090b;--signal:#b7791f;--success-ink:#15803d;--danger-ink:#b91c1c;--focus:#2563eb;--pop:0 12px 32px -8px rgba(9,9,11,.14);--scrim:rgba(9,9,11,.4);--side-bg:var(--bg);--card:var(--surface);--muted:var(--ink-muted);--faint:var(--ink-muted);--line:var(--border);--line-strong:var(--border-strong);--control:var(--border-strong);--chip:var(--surface-2);--hover:var(--surface-2);--accent:var(--primary);--accent-ink:var(--on-primary);--accent-soft:var(--volt);--ok:var(--success-ink);--ok-bg:var(--surface-2);--warn:var(--signal);--warn-bg:var(--surface-2);--err:var(--danger-ink);--err-bg:var(--surface-2)}
+@media(prefers-color-scheme:light){:root:not([data-theme=dark]){color-scheme:light;--bg:#fafafa;--surface:#fff;--surface-2:#f4f4f5;--border:#e4e4e7;--border-strong:#8b8b94;--ink:#09090b;--ink-muted:#5f5f68;--primary:#09090b;--on-primary:#fafafa;--volt:#f0f0f2;--on-volt:#09090b;--signal:#b7791f;--success-ink:#15803d;--danger-ink:#b91c1c;--focus:#2563eb;--pop:0 12px 32px -8px rgba(9,9,11,.14);--scrim:rgba(9,9,11,.4);--side-bg:var(--bg);--card:var(--surface);--muted:var(--ink-muted);--faint:var(--ink-muted);--line:var(--border);--line-strong:var(--border-strong);--control:var(--border-strong);--chip:var(--surface-2);--hover:var(--surface-2);--accent:var(--primary);--accent-ink:var(--on-primary);--accent-soft:var(--volt);--ok:var(--success-ink);--ok-bg:var(--surface-2);--warn:var(--signal);--warn-bg:var(--surface-2);--err:var(--danger-ink);--err-bg:var(--surface-2)}}
 body{font-family:var(--font-sans);font-size:15px;line-height:1.6;background:var(--bg);color:var(--ink)}
 body :is(code,pre,.v-nav-group,.kpi .l,th){font-family:var(--font-mono)}
 header.shell{background:var(--bg)}
@@ -50,4 +51,16 @@ body main .banner:is(.ok,.warn,.down){background:var(--surface)!important;border
 body main .banner .big{width:10px!important;height:10px!important;font-size:0!important;min-width:10px;background:var(--border-strong)!important}
 body main .banner.ok .big{background:var(--success-ink)!important}body main .banner.warn .big{background:var(--signal)!important}body main .banner.down .big{background:var(--danger-ink)!important}
 
+/* Final polish: page header actions, Surveys status filter, Admin selects and tabs, System banner mark */
+body main .page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+body main .page-head>select{width:auto;max-width:220px;flex:none;margin-top:6px}
+body main #status-tabs{display:flex;flex-wrap:nowrap;gap:2px;overflow-x:auto;scrollbar-width:none}
+body main #status-tabs button{flex:1 1 auto;white-space:nowrap;padding:6px 10px;font-size:13px;line-height:20px}
+body main #status-tabs .n{margin-left:6px;color:var(--ink-muted);font-variant-numeric:tabular-nums}
+body main table tbody td select,body main .people-table td select{field-sizing:content;width:auto;min-width:9em;max-width:none}
+body main .tab-group{display:flex;gap:4px;flex-wrap:wrap}
+body main .tabs .tab-group>:is(a,button,[role=tab]){padding:8px 12px!important;margin:0!important}
+body main .banner{display:flex;align-items:center;gap:14px}
+body main .banner .big{flex:none;align-self:center;border-radius:50%}
+body main .people-table td{padding-right:16px}
 `

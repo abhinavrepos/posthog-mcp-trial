@@ -53,8 +53,6 @@ try {
     const page = await browser.newPage()
     await page.setViewport({ width, height: 900, deviceScaleFactor: 1 })
     await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: theme }])
-    // Both UI generations support media preference. New UI additionally supports data-theme.
-    await page.evaluateOnNewDocument(value => { document.documentElement.dataset.theme = value }, theme)
     await page.setCookie({ name: 'sessionid', value: admin.session, url: origin })
     for (const spec of shots) {
       if (spec.signedOut) await page.deleteCookie({ name: 'sessionid', url: origin })
