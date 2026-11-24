@@ -83,7 +83,7 @@ async function cachedSurvey<T>(key: unknown[], load: () => Promise<T>, stale?: (
 // This avoids multiplying aggregation memory by the number of questions and visitors.
 let surveyQueryTail: Promise<unknown> = Promise.resolve()
 let surveyQueries = 0
-function surveyQuery(query: string, values: Record<string, unknown> = {}) {
+export function surveyQuery(query: string, values: Record<string, unknown> = {}) {
     if(typeof values.days === 'number') {
         const window=requestedToolWindow() || analyticalWindow(`last ${values.days} days`)!
         query=query.replaceAll('timestamp > now() - toIntervalDay({days})','timestamp >= {history_from} AND timestamp < {history_to}')
@@ -554,7 +554,9 @@ async function loadSurveys(): Promise<PostHogSurvey[]> {
     let path = '?limit=100'
     for (let i = 0; i < 20 && path; i++) {
         const page = await surveyApi<{ results: PostHogSurvey[]; next: string | null }>(path)
-        out.push(...(Array.isArray(page.results) ? page.results : []).map(normalSurvey))
+        if (!page || !Array.isArray(page.results))
+            throw new PostHogError('PostHog surveys → 502: unreadable answer (invalid survey list)', 502)
+        out.push(...page.results.map(normalSurvey))
         path = page.next ? `?${new URL(page.next).searchParams.toString()}` : ''
     }
     return out

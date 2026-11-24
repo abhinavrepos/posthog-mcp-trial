@@ -38,3 +38,13 @@ For the owner's IDs (`C1DEV|01|SEM|SEMOPS`), set `CLIENT_FROM_DISTINCT_ID=3`; th
 Run with `node --import tsx src/service/server.ts`. Check with `npx tsc --noEmit` and `npm test -- --test-concurrency=1`. The clip queue defaults to five concurrent renders and two per person. SQLite keeps access, audits, clips, survey metadata, jobs and pinned snapshots. Historical database migrations remain compatible with installed databases; retired history files are not read.
 
 Lab verification helpers are `tools/task-u-server.mts` (port 18371, isolated SQLite) and `tools/task-u-check.mts` (MCP and HTTP checks). Start the server with the lab's bridge preload. A stopped ClickHouse lab produces unavailable errors rather than invented data.
+
+## When PostHog or storage fails
+
+Lens says what is unavailable and never fills in data. A PostHog answer that is not a valid query result or
+survey list is refused as unreadable. A `429` with `Retry-After` is reported with the wait instead of retried
+blindly. A refused survey key or a wrong project id names what to check. When Lens's own SQLite store is busy,
+full, read-only or damaged, pages answer 503 with a plain message and MCP tools return an `unavailable` error;
+other failures still answer 500. `design_survey` and `save_survey` add warnings (never errors) when a step's
+dialog id, button or field, or the client audience, matched nothing in recent events, with close matches, e.g.
+a report's menu id (`LinkListReqv`) instead of its dialog name, or `CLIENT_FROM_DISTINCT_ID=3` for Reval.

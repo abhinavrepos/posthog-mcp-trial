@@ -12,7 +12,21 @@ export class ToolValidationError extends Error {}
 export function toolError(error: unknown, tool: string, id: string = toolCorrelationId(), contract?: {keys:string[];example:unknown}) {
     const raw = error instanceof Error ? error.message : String(error)
     let kind='internal', message='The tool could not complete. Retry later; if it persists, give the correlation id to a Lens administrator.'
-    if(posthogPublicMessage(raw)) {kind=posthogUsageError(raw) ? 'validation' : /memory|timed out|time limit/.test(raw) ? 'capacity' : 'unavailable';message=raw}
+    if (error && typeof error === 'object' && typeof (error as {code?:unknown}).code === 'string'
+        && /^SQLITE_(?:BUSY|LOCKED|FULL|READONLY|CORRUPT|NOTADB|IOERR)(?:_|$)/.test((error as {code:string}).code)) {
+        kind='unavailable';message='Lens storage is unavailable. Retry shortly; if it persists, contact a Lens administrator.'
+    }
+    else if (['design_survey','save_survey','stop_survey','list_surveys','survey_results'].includes(tool)
+        && [401,403].includes((error as {status?:number})?.status ?? 0)) {
+        kind='unavailable';message='PostHog refused the survey request. Ask a Lens administrator to check the survey key and its scope for this project.'
+    }
+    else if (tool === 'list_surveys' && (error as {status?:number})?.status === 404) {
+        kind='unavailable';message='PostHog could not find the survey project. Ask a Lens administrator to check the configured project id.'
+    }
+    else if ((error as {status?:number})?.status === 429 && (error as {retryAfter?:string|null}).retryAfter) {
+        kind='unavailable';message=posthogFailure(raw,429,(error as {retryAfter:string}).retryAfter).message
+    }
+    else if(posthogPublicMessage(raw)) {kind=posthogUsageError(raw) ? 'validation' : /memory|timed out|time limit/.test(raw) ? 'capacity' : 'unavailable';message=raw}
     else if(tool==='posthog_exec' && /memory limit|too much data|code:\s*241|timeout|timed out/i.test(raw)) {kind='capacity';message=posthogFailure(error).message}
     else if(error instanceof RateLimitError) {kind='rate_limit';message=raw}
     else if(error instanceof JobCapError || error instanceof JobQueueError || error instanceof ClipQueueError) {kind='busy';message=error.message}

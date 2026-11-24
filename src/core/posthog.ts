@@ -16,7 +16,8 @@ const MAX_READS = Math.min(16, Math.max(1, Math.floor(Number(process.env.POSTHOG
 export class PostHogError extends Error {
     constructor(
         message: string,
-        readonly status?: number
+        readonly status?: number,
+        readonly retryAfter?: string | null
     ) {
         super(message)
     }
@@ -57,7 +58,7 @@ async function api<T>(path: string, init: RequestInit = {}, timeoutMs = 30_000):
         try {
             detail = JSON.parse(body).detail ?? detail
         } catch {}
-        throw new PostHogError(`PostHog ${init.method || 'GET'} ${path.split('?')[0]} → ${res.status}: ${detail}`, res.status)
+        throw new PostHogError(`PostHog ${init.method || 'GET'} ${path.split('?')[0]} → ${res.status}: ${detail}`, res.status, res.headers.get('retry-after'))
     }
     const text = responseText
     try { return JSON.parse(text) as T }
@@ -160,7 +161,7 @@ export async function cachedPosthogRead<T>(key: string, work: () => Promise<T>, 
 function retryable(error: unknown): boolean {
     if (!error || typeof error !== 'object') return false
     const e = error as { status?: number; name?: string }
-    return e.name === 'TimeoutError' || e.status === 429 || (e.status !== undefined && e.status >= 500 && e.status < 600)
+    return e.name === 'TimeoutError' || (e.status === 429 && !(e as PostHogError).retryAfter) || (e.status !== undefined && e.status >= 500 && e.status < 600)
 }
 let activeReads = 0
 const readers: (() => void)[] = []
@@ -181,6 +182,9 @@ export async function hogql(query: string, values: Record<string, unknown> = {},
                         method: 'POST',
                         body: JSON.stringify({ query: { kind: 'HogQLQuery', query, values }, refresh: 'force_blocking' }),
                     }, options.timeoutMs ?? 30_000)
+                    if (!out || !Array.isArray(out.columns) || !out.columns.every(c => typeof c === 'string')
+                        || !Array.isArray(out.results) || !out.results.every(r => Array.isArray(r)))
+                        throw new PostHogError('PostHog query → 502: unreadable answer (invalid query result)', 502)
                     const rows = out.results.map((r) => Object.fromEntries(out.columns.map((c, i) => [c, r[i]])))
                     const limit = out.limit ?? out.row_limit
                     return markPartial(rows, rows.length >= POSTHOG_ROW_CAP || out.hasMore === true || out.has_more === true || (typeof limit === 'number' && limit > 0 && rows.length >= limit))

@@ -183,7 +183,7 @@ test('Live time endpoint reads fake PostHog directly and returns activity withou
     assert.equal(queries.length,1);assert.match(queries[0],/splitByChar/);assert.ok(!existsSync(join(dir,'tasks.db')))
 })
 test('MCP publishes only retained tools and pin/list/delete and surveys work through the real SDK boundary',async t=>{
-    t.mock.method(globalThis,'fetch',async()=>Response.json({results:[]}))
+    t.mock.method(globalThis,'fetch',async(url:unknown)=>Response.json(String(url).includes('/surveys/')?{results:[],next:null}:{results:[]}))
     const server=new McpServer({name:'test',version:'1'});registerTools(server,undefined,{who:'pm@example.com',email:'pm@example.com',surveyRole:'launch'})
     const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(a);const client=new Client({name:'test',version:'1'});await client.connect(b)
     try {

@@ -22,6 +22,7 @@ import { captionedFile } from '../core/comments.ts'
 import { getClip, handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
 import { retentionJobState, startReplayRetention } from './replayretention.ts'
 import { startSurveySync, surveySyncJobState } from './surveysync.ts'
+import { publicRequestFailure } from './failure.ts'
 
 
 const log = (msg: string, extra: Record<string, unknown> = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), msg, ...extra }))
@@ -189,10 +190,10 @@ const server = createServer((req, res) => {
             send(res, 404, 'not found')
         } catch (e) {
             log('request failed', { path: url?.pathname, error: (e as Error).message })
-            if (!res.headersSent) send(res, 500, { error: 'internal error' })
+            if (!res.headersSent) { const failure = publicRequestFailure(url?.pathname, e); send(res, failure.status, failure.body) }
         }
-    })().catch(() => {
-        if (!res.headersSent) { try { send(res, 500, { error: 'internal error' }) } catch { res.destroy() } }
+    })().catch((error) => {
+        if (!res.headersSent) { try { const failure = publicRequestFailure(req.url?.split('?')[0], error); send(res, failure.status, failure.body) } catch { res.destroy() } }
         else res.destroy()
     })
 })

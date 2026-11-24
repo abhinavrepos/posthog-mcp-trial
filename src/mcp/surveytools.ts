@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { appEvents } from '../core/appevents.ts'
 import { config, surveysActive } from '../core/config.ts'
 import { resolveClient } from '../core/resolve.ts'
+import { surveyEvidence } from '../core/surveychecks.ts'
 import {
     archiveSurvey,
     compileSurvey,
@@ -143,6 +144,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             const { ids, unclear } = await clientIds(spec.clients)
             const c = compileSurvey(spec as SurveySpec, { clientIds: ids })
             const errors = c.problems.filter((p) => p.level === 'error')
+            if (!errors.length) c.problems.push(...await surveyEvidence(c.chain))
             const reach = estimate && !errors.length ? await estimateReach(c.chain,days) : undefined
             const conflicts = conflictsFor(c.chain, {}, await listSurveys())
             const q = queueAlert(c.chain, conflicts)
@@ -178,6 +180,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             if (unclear.length) return json('Which clients? Nothing was saved:', unclear)
             const out = await saveSurvey(spec as SurveySpec, { id: survey_id, clientIds: ids })
             if (!out.survey) return json('Nothing was saved. Fix these first:', out.compiled.problems)
+            out.compiled.problems.push(...await surveyEvidence(out.compiled.chain))
             audit(who, survey_id ? 'survey.changed' : 'survey.created', { survey: out.survey.id, name: out.survey.name })
             const v = viewOf(out.survey)
             const conflicts = conflictsFor(out.compiled.chain, out.survey, await listSurveys())
