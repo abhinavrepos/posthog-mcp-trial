@@ -1,4 +1,5 @@
 import { handlePinned } from './pinned.ts'
+import { VOLT_CSS } from './volt.ts'
 // The replay clip page: paste a PostHog replay link, pick a start and a length, get an MP4.
 //
 // People sign in with their PostHog account (see access.ts). What they may do depends on the role
@@ -804,7 +805,7 @@ body header.shell .acct[open]>summary::after{transform:rotate(225deg)}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}`
 
-export const PAGE_CSS = () => CSS
+export const PAGE_CSS = () => CSS + VOLT_CSS
 
 /** Client-side pagination for any list a page has already loaded. Put ${PAGER_JS} inside a page's
  * <script>, then:
@@ -851,7 +852,7 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
 // On phones the tab bars scroll sideways: keep the current tab in view (on load, and when tabs switch).
 const keep=()=>document.querySelectorAll('main [aria-current=page],main [role=tab][aria-selected=true]').forEach(t=>{for(let a=t.parentElement;a&&a!==m;a=a.parentElement){if(a.scrollWidth>a.clientWidth+1&&/auto|scroll/.test(getComputedStyle(a).overflowX)){const r=t.getBoundingClientRect(),c=a.getBoundingClientRect();a.scrollLeft+=r.left-c.left-(c.width-r.width)/2;break}}});
 const active=document.querySelector('header.shell nav [aria-current=page]');
-if(active){const nav=active.parentElement;const link=active.getBoundingClientRect(),bar=nav.getBoundingClientRect();if(link.right>bar.right)nav.scrollLeft+=link.right-bar.right}
+if(active){const nav=active.closest('nav');const link=active.getBoundingClientRect(),bar=nav.getBoundingClientRect();if(link.right>bar.right)nav.scrollLeft+=link.right-bar.right}
 keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeout(keep));document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('[role=tab]'))setTimeout(keep)})})</script>`
     if (!v) return `${skip}<header class="bare">${brand}</header>${mainId}`
     const tabs = (
@@ -866,28 +867,28 @@ keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeou
         ] as const
     )
         .filter(([, , need]) => need === 'system' ? canSeeSystem(v) : need === 'surveys' ? config.surveys.enabled && canUseSurveys(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need as Role))
-        .map(([name, href]) => `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${icon(name)}<span>${name}</span></a>`)
-        .join('')
+        .map(([name, href]) => ({ group: ['Replay clips', 'Live', 'Pinned'].includes(name) ? 'Monitor' : name === 'Surveys' ? 'Engage' : 'Manage', html: `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${icon(name)}<span>${name}</span></a>` }))
+        .reduce((out, item, i, all) => out + (i === 0 || all[i - 1]!.group !== item.group ? `<div class="v-nav-group"><span>${item.group}</span>` : '') + item.html + (i === all.length - 1 || all[i + 1]!.group !== item.group ? '</div>' : ''), '')
     const initials = (v.name || v.email).split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('')
     return `${skip}${mainId}<header class="shell">${brand}<nav aria-label="Sections">${tabs}</nav><details class="hdr acct"><summary aria-label="Account for ${esc(v.name || v.email.split('@')[0])}"><span class="avatar" aria-hidden="true">${esc(initials)}</span><span class="who-short"><b>${esc(v.name || v.email.split('@')[0])}</b><span>${esc(ROLE_TEXT[v.role].replace(/ \(.*\)$/, ''))}</span></span></summary><div class="acct-menu"><span class="who">${esc(v.email)}</span><span class="muted small">${esc(ROLE_TEXT[v.role])}</span><button class="secondary" id="signout" type="button">Sign out</button></div></details></header>
 <script>document.getElementById('signout').onclick=()=>fetch('/replays/logout',{method:'POST',headers:{'x-clip-page':'1'}}).then(()=>location.href='/');document.addEventListener('click',e=>{const d=document.querySelector('details.acct');if(d&&d.open&&!d.contains(e.target))d.open=false});document.addEventListener('keydown',e=>{const d=document.querySelector('details.acct');if(e.key==='Escape'&&d&&d.open){d.open=false;d.querySelector('summary').focus()}})</script>`
 }
 
 export function loginHtml(section: Section = 'Replay clips'): string {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}</style></head>
 <body>${headerHtml(undefined, section)}<main id="main" tabindex="-1" class="login-page"><div class="card"><h1>Sign in to ${esc(APP_NAME)}</h1>
 <p class="small muted">Use your PostHog account to continue.</p>
 <form id="f"><p><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></p>
 <p><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required></p>
 <p><button id="go" type="submit">Sign in</button></p><p id="signin-status" class="small muted" role="status"></p><p id="msg" class="small err" role="alert"></p></form>
-<details><summary>Other ways to sign in</summary><p class="small muted"><a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on the PostHog website</a>, then <a id="reload-lens" href="">reload this page</a>.</p><p class="small muted">Signing in here also signs you in to PostHog in this browser.</p></details></div></main>
+<details><summary>Other ways to sign in</summary><p class="small muted"><a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on the PostHog website</a>, then <a id="reload-lens" href="">reload this page</a>.</p><p class="small muted">Signing in here also signs you in to PostHog in this browser.</p></details></div><aside class="login-brand" aria-label="About ${esc(APP_NAME)}"><span class="eyebrow">${esc(APP_NAME)}</span><h2>Understand every client moment.</h2><span class="sub">${esc(APP_TAG || 'PostHog insights')}</span></aside></main>
 <script>document.getElementById('reload-lens').href=location.href;document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('go');if(b.disabled)return;b.disabled=true;const msg=document.getElementById('msg'),status=document.getElementById('signin-status');msg.textContent='';status.textContent='Signing in…';
 try{const r=await fetch('/replays/login',{method:'POST',headers:{'content-type':'application/json','x-clip-page':'1'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('pw').value})});
 const d=await r.json().catch(()=>({}));if(!r.ok){msg.textContent=d.error||'Couldn’t reach PostHog. Try again.';return}location.reload()}catch{msg.textContent='Couldn’t reach PostHog. Try again.'}finally{status.textContent='';b.disabled=false}}</script></body></html>`
 }
 
 function noAccessHtml(v: Viewer): string {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No access · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No access · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}</style></head>
 <body>${headerHtml(v, 'Replay clips')}<main id="main" tabindex="-1" style="max-width:560px"><div class="card"><h1 style="font-size:24px;margin-bottom:12px">Request access to replay clips</h1>
 <p class="small muted">Signed in as <b>${esc(v.email)}</b>.</p><p>Ask a PostHog admin for the “Watch clips” role on the admin page.</p>
 <details><summary>Why access is required</summary><p class="small muted">Replays can show client data, so an admin grants access to each person.</p></details></div></main></body></html>`
@@ -896,13 +897,13 @@ function noAccessHtml(v: Viewer): string {
 function pageHtml(v: Viewer): string {
     const bookmarklet = `javascript:(()=>{window.open(${JSON.stringify(config.service.publicUrl + '/replays?url=')}+encodeURIComponent(location.href))})()`
     const boot = JSON.stringify({ lengths: LENGTHS, ttl: config.service.clipLinkTtlHours, retention: RETENTION_DAYS, perHour: PER_HOUR, canDownload: can(v.role, 'download'), shareLinks: can(v.role, 'download') && loadAccess().allow_share_links }).replace(/</g, '\\u003c')
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips · ${esc(APP_NAME)}</title><style>${CSS}
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}
 
 </style></head>
 <body>${headerHtml(v, 'Replay clips')}<main id="main" tabindex="-1" class="clips-page narrow">
 <div class="page-head"><div><h1>Replay clips</h1><p>Choose a replay and make a clip to share.</p></div></div>
 
-<div class="card"><h2>1. Choose a replay</h2><form id="inspect-form">
+<div class="clip-composer"><div class="card"><h2>1. Choose a replay</h2><form id="inspect-form">
 <label for="input">PostHog replay link or session ID</label>
 <div class="row"><div><input id="input" placeholder="Paste a replay link or session ID" autocomplete="off"></div>
 <button id="check" type="submit">Check replay</button></div></form>
@@ -930,7 +931,7 @@ function pageHtml(v: Viewer): string {
 <div class="row" style="align-items:center"><button id="c-add" type="button">Add comment</button><button class="ghost hidden" id="c-cancel" type="button">Cancel</button><span class="small" aria-live="polite" aria-atomic="true" id="c-msg"></span></div>
 <p class="small muted" id="c-plain"></p></div></div></div>
 
-<div class="card"><h2>Your clips</h2><div class="table-wrap" role="region" aria-label="Your clips" tabindex="0"><table><thead><tr><th scope="col">Made</th><th scope="col">Client</th><th scope="col">User</th><th scope="col">Part</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="recent"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table><div id="recent-pager"></div></div>
+</div><div class="card"><h2>Your clips</h2><div class="table-wrap" role="region" aria-label="Your clips" tabindex="0"><table><thead><tr><th scope="col">Made</th><th scope="col">Client</th><th scope="col">User</th><th scope="col">Part</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="recent"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table><div id="recent-pager"></div></div>
 <p id="recent-msg" class="small" role="alert"></p></div>
 <section class="card clips-help"><details><summary>How this works</summary><p class="small muted" id="retention"></p></details>
 

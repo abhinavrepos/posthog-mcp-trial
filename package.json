@@ -16,7 +16,8 @@
     "demo-app": "tsx demo-app/server.ts",
     "mcp": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx src/mcp/stdio.ts",
     "loadtest": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx deploy/posthog/loadtest.ts",
-    "replaytest": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx deploy/posthog/replaytest.ts"
+    "replaytest": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx deploy/posthog/replaytest.ts",
+    "ui-shots": "node tools/ui-shots/run.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.3.0",

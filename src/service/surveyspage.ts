@@ -348,6 +348,19 @@ async function show(id){const period=$('days').value;current=id;$('list').queryS
     +'<details><summary>When it shows &amp; settings</summary>'+chain(s)+'<div class="facts">'+facts.map(([k,x])=>'<div><span>'+esc(k)+'</span>'+esc(x)+'</div>').join('')+'</div>'
     +(s.made_by_lens?'<p style="margin-top:10px"><button type="button" id="a-reach" class="ghost">Estimate reach · last 14 days</button></p><div id="reach" aria-live="polite"></div>':'')+'</details>'
     +'<details open><summary>Preview survey</summary>'+preview(s)+'</details>'
+  // Present the existing result sections as tabs without changing their contents or IDs.
+  const detail=$('detail'), result=[...detail.children].find(e=>e.classList?.contains('card')&&e.querySelector('h2')?.textContent?.startsWith('Results'))
+  if(result){
+    const answers=result.nextElementSibling
+    const sections=[['Results',[result,answers]],['Daily activity',[]],['By client',[]],['Settings',[]],['Preview',[]]]
+    for(const node of [...detail.children])if(node.tagName==='DETAILS'){
+      const label=node.querySelector(':scope > summary')?.textContent?.trim()||''
+      const key=label==='Daily activity'?'Daily activity':label==='By client'?'By client':label.startsWith('When it shows')?'Settings':label==='Preview survey'?'Preview':''
+      if(key){node.open=true;sections.find(x=>x[0]===key)[1].push(node)}
+    }
+    const tabbar=document.createElement('div');tabbar.className='survey-detail-tabs';tabbar.setAttribute('role','tablist');tabbar.setAttribute('aria-label','Survey details');detail.insertBefore(tabbar,result)
+    const panels=sections.map(([label,nodes],i)=>{const button=document.createElement('button');button.type='button';button.textContent=label;button.id='survey-tab-'+i;button.setAttribute('role','tab');button.setAttribute('aria-controls','survey-panel-'+i);button.setAttribute('aria-selected',String(i===0));button.tabIndex=i===0?0:-1;tabbar.appendChild(button);const panel=document.createElement('div');panel.id='survey-panel-'+i;panel.className='survey-tabpanel';panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',button.id);panel.hidden=i!==0;for(const node of nodes)if(node)panel.appendChild(node);detail.appendChild(panel);button.onclick=()=>{for(const [j,p] of panels.entries()){p.hidden=j!==i;const b=tabbar.children[j];b.setAttribute('aria-selected',String(j===i));b.tabIndex=j===i?0:-1}};return panel})
+  }
   if($('conflict-pager'))makePager({mount:$('conflict-pager'),noun:'overlapping surveys',size:25,draw:items=>{$('conflict-rows').innerHTML=items.map(c=>'<li><a href="#'+esc(c.survey_id)+'">'+esc(c.name)+'</a>: '+esc(c.text.replace(/^[^:]*: /,''))+' ('+esc(c.clients==='all'?'every client':c.clients.join(', '))+')</li>').join('')}}).set(r.conflicts)
   r.questions.forEach((q,i)=>{
     if(q.distribution)makePager({mount:$('dist-pager-'+i),noun:'answer choices',label:'Question '+(i+1)+' answer choices',size:25,draw:items=>{$('dist-'+i).innerHTML=bars(Object.fromEntries(items))}}).set(Object.entries(q.distribution))

@@ -1,6 +1,6 @@
 // Lens HTTP and MCP: clips, Live, Surveys, Pinned, Admin and Connect.
 import { jobStates, plainReason } from '../core/jobhealth.ts'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { basename, join } from 'node:path'
 import { brotliCompress, constants, gzip } from 'node:zlib'
@@ -23,6 +23,11 @@ import { getClip, handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
 import { retentionJobState, startReplayRetention } from './replayretention.ts'
 import { startSurveySync, surveySyncJobState } from './surveysync.ts'
 
+
+const FONT_ASSETS: Record<string, Buffer> = {
+    'Geist-Variable.woff2': readFileSync(new URL('../../assets/fonts/Geist-Variable.woff2', import.meta.url)),
+    'GeistMono-Variable.woff2': readFileSync(new URL('../../assets/fonts/GeistMono-Variable.woff2', import.meta.url)),
+}
 
 const log = (msg: string, extra: Record<string, unknown> = {}) => console.log(JSON.stringify({ t: new Date().toISOString(), msg, ...extra }))
 
@@ -159,6 +164,12 @@ const server = createServer((req, res) => {
             compressResponse(req, res)
             try { url = new URL(req.url || '/', 'http://localhost') }
             catch { return send(res, 400, { error: 'invalid request target' }) }
+            if (req.method === 'GET' && (url.pathname === '/replays/assets/fonts/Geist-Variable.woff2' || url.pathname === '/replays/assets/fonts/GeistMono-Variable.woff2')) {
+                const name = url.pathname.slice('/replays/assets/fonts/'.length)
+                const font = FONT_ASSETS[name]!
+                res.writeHead(200, { 'content-type': 'font/woff2', 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff', 'content-length': font.length })
+                return res.end(font)
+            }
             if (url.pathname === '/healthz') return send(res, 200, 'ok')
             // For the status page: up, and which switches are on. No secrets, no data.
             // Jobs: name, level and a plain reason only (core/jobhealth.ts); the status service shows them.
