@@ -114,6 +114,16 @@ details.how summary{cursor:pointer;font-weight:500}details.how li{margin:4px 0}
 .live-settings{align-self:flex-end;min-width:0;padding:0;flex:0 0 auto}.live-settings>summary{display:flex;align-items:center;min-height:36px;padding:7px 12px;border:1px solid var(--control);border-radius:var(--r-sm)}.live-settings[open]{flex-basis:100%}.live-settings>div{max-width:260px;margin-top:12px}.heat-scroll{overflow-x:auto;max-width:100%}.heat{min-width:640px}.tiles{gap:16px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}.tl-facts{gap:6px 20px}
 @media(max-width:600px){.hero{font-size:30px}.now{gap:10px}#now-sub{min-width:0;flex-basis:180px}.live-settings{flex-basis:100%;padding:0}.tl-nav{gap:4px}.tl-nav input[type=date]{max-width:145px}.tl-facts{gap:4px 14px}}
 #chart-title{margin-bottom:4px}#chart-title+p{margin:0 0 16px}.chart-empty{height:120px;display:flex;align-items:center;justify-content:center;color:var(--muted);text-align:center}#list tbody td{vertical-align:middle}#sessions td.small,#sessions td.num{white-space:nowrap}#list tbody td.small,#list tbody td:has(>.seg){white-space:nowrap}#list tbody button.ghost{min-height:28px;padding:0;font-weight:500;text-align:left;white-space:nowrap}#list tbody button.ghost:hover{background:transparent;color:var(--accent);text-decoration:underline}#list thead button.ghost{min-height:24px;padding:0;font-size:12px;line-height:20px;font-weight:600;letter-spacing:.025em;color:var(--muted)}#list-csv{font-size:13px;font-weight:500;min-height:32px;padding:5px 10px}#list-note{margin:12px 0 0}#list-note:empty,#live-status:empty{display:none}
+/* Keep the current roster inside its panel at desktop widths and scroll it on phones. */
+#now-card .table-wrap{width:100%;max-width:100%;overflow-x:auto;overscroll-behavior-inline:contain}
+#now-card table{width:100%;table-layout:fixed;min-width:0}
+#now-card th,#now-card td{padding:8px 6px;font-size:12px;overflow-wrap:normal;word-break:normal;vertical-align:middle}
+#now-card th:nth-child(1){width:19%}#now-card th:nth-child(2){width:17%}#now-card th:nth-child(3){width:14%}#now-card th:nth-child(4){width:14%}#now-card th:nth-child(5){width:13%}#now-card th:nth-child(6){width:12%}#now-card th:nth-child(7){width:11%}
+#now-card .status-label,#list .status-label{display:inline-flex;align-items:center;gap:5px;max-width:100%;vertical-align:middle}
+#now-card .status-label .dot,#list .status-label .dot{display:inline-block;flex:none;margin:0;vertical-align:middle}
+#now-card .status-label button,#list .status-label button{white-space:normal;text-align:left;line-height:1.25;min-width:0;padding:2px 0;overflow-wrap:normal;word-break:normal}
+#now-card td:last-child button{white-space:normal;line-height:1.25}
+@media(max-width:750px){#now-card table{min-width:850px;table-layout:fixed}#now-card .table-wrap{border-radius:12px}}
 </style></head>
 <body>${headerHtml(v, 'Live')}<main id="main" tabindex="-1" class="wide"><div class="page-head"><div><h1>Live activity</h1><p>Current activity and active time across clients.</p></div></div><div class="status-panel" id="live-banner"><p id="live-status" role="status">Loading activity…</p><button class="secondary compact" id="live-retry" type="button" hidden>Try again</button></div>
 
@@ -209,7 +219,7 @@ const updated=iso=>'Last updated at '+new Date(iso).toISOString().slice(11,16)+'
 $('live-retry').onclick=()=>{loadNow();load();if(TL.user)loadTimeline()};
 const nowPager=makePager({mount:$('now-pager'),noun:'people',size:25,draw:people=>{ const tb=$('now-rows');tb.innerHTML='';
  people.forEach(p=>{const tr=el('tr');const choose=()=>{S.client=p.client_id;S.user='';S.range='today';syncControls();load()};
-  const c=el('td');c.appendChild(el('span','dot'));const b=el('button','ghost',p.client_name);b.onclick=choose;c.appendChild(b);tr.appendChild(c);
+  const c=el('td');const status=el('span','status-label');status.appendChild(el('span','dot'));const b=el('button','ghost',p.client_name);b.onclick=choose;status.appendChild(b);c.appendChild(status);tr.appendChild(c);
   tr.appendChild(el('td',null,p.user));tr.appendChild(el('td',null,ago(p.last_seen)));tr.appendChild(el('td',null,timeOf(p.session_start)));
   tr.appendChild(el('td','num',dur(p.today.open_s)));tr.appendChild(el('td','num',dur(p.today.active_s)));tr.appendChild(tlCell(p.user,p.client_id,dayOf(new Date()),p.client_name));tb.appendChild(tr)});}});
 async function loadNow(){const my=++nowBusy;try{const r=await api('/replays/live/api/now?tz='+encodeURIComponent(TZ)+'&gap='+S.gap);if(my!==nowBusy)return;
@@ -310,7 +320,7 @@ function renderList(slice){$('list-csv').disabled=!rows().length;const pick=R.cl
   if(S.client){tr.title='Show '+r.user+"'s sessions";choose=()=>{S.user=S.user===r.user?'':r.user;syncUrl();loadSessions();renderList();for(const b of $('list').querySelectorAll('tbody button'))if(b.getAttribute('aria-label')===r.user+' · filter sessions'){b.focus();break}};if(S.user===r.user)tr.style.background='var(--chip)'}
   else{tr.title='Show the people at '+r.client_name;choose=()=>{S.client=r.client_id;S.user='';sortKey='open_s';sortDir=-1;load();scrollTo({top:0,behavior:'smooth'})}}
   cols().forEach(([k,,num])=>{let td;
-   if(k==='client_name'){td=el('td');if(LIVE.has(r.client_id)){const d=el('span','dot');d.title='In the app now';td.appendChild(d);td.appendChild(el('span','small','Live · '))}const b=el('button','ghost',r.client_name);b.onclick=choose;td.appendChild(b)}
+   if(k==='client_name'){td=el('td');if(LIVE.has(r.client_id)){const status=el('span','status-label');const d=el('span','dot');d.title='In the app now';status.appendChild(d);status.appendChild(el('span','small','Live · '));const b=el('button','ghost',r.client_name);b.onclick=choose;status.appendChild(b);td.appendChild(status)}else{const b=el('button','ghost',r.client_name);b.onclick=choose;td.appendChild(b)}}
    else if(k==='share'){td=el('td');td.appendChild(segBar(r.active_s,r.idle_s));td.appendChild(el('span','small muted',' '+pct(r.active_s,r.open_s)))}
    else if(k==='first'||k==='last')td=el('td','small',whenOf(r[k]));
    else if(k==='user'){td=el('td');const b=el('button','ghost',r.user);b.setAttribute('aria-label',r.user+' · filter sessions');b.setAttribute('aria-pressed',String(S.user===r.user));b.onclick=choose;td.appendChild(b)}
