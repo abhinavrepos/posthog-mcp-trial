@@ -171,9 +171,10 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .tiles{display:grid;margin-bottom:14px;margin:0 0 24px;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
 .tile span{display:block;color:var(--muted);font-size:12px;font-weight:500;min-height:16px;line-height:16px}
 .tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px;line-height:16px}
-.tile.problem{border-color:var(--warn);background:var(--warn-bg)}
-.tile.problem small{color:var(--warn)}
-.tile.failure{border-color:var(--err);background:var(--err-bg)}
+.tile.problem,.tile.failure{border-color:var(--line);background:var(--card)}
+.tile.problem small,.tile.failure small{color:var(--muted)}
+.tile.problem small::before,.tile.failure small::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--warn);margin-right:6px;vertical-align:1px}
+.tile.failure small::before{background:var(--err)}
 .section-details{border-bottom:1px solid var(--line);padding:14px 0}
 .section-details>summary{cursor:pointer;font-size:14px;line-height:20px;font-weight:600}
 .containers-card{margin-top:24px}
@@ -259,14 +260,14 @@ const $=id=>document.getElementById(id)
 // Present the existing sections as tabs; their IDs, refreshes and detail controls stay intact.
 if(document.querySelector && document.createElement){
 const results=$('system-results'),systemGroups=[
-  ['Overview',[...results.children].slice(0,5)],
+  ['Overview',[$('problems'),$('problems-pager'),$('jobs-summary').parentElement,$('tiles'),$('changes-preview').parentElement,$('refresh-note')]],
   ['Containers',[results.querySelector('.containers-card')]],
   ['Trends',[$('trends')]],
   ['Service checks',[...results.children].filter(e=>e.tagName==='DETAILS'&&e.querySelector('#services'))],
   ['Database',[...results.children].filter(e=>e.tagName==='DETAILS'&&e.querySelector('#clickhouse')).concat($('about-section'))],
 ]
 const systemTabs=document.createElement('div');systemTabs.className='system-tabs';systemTabs.setAttribute('role','tablist');systemTabs.setAttribute('aria-label','System sections')
-const systemPanels=systemGroups.map(([name,nodes],i)=>{const b=document.createElement('button');b.type='button';b.id='system-tab-'+i;b.setAttribute('role','tab');b.setAttribute('aria-controls','system-panel-'+i);b.textContent=name;systemTabs.appendChild(b);const panel=document.createElement('div');panel.className='system-tabpanel';panel.id='system-panel-'+i;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',b.id);for(const node of nodes){if(node){if(node.tagName==='DETAILS')node.open=true;panel.appendChild(node)}}results.appendChild(panel);return panel})
+const systemPanels=systemGroups.map(([name,nodes],i)=>{const b=document.createElement('button');b.type='button';b.id='system-tab-'+i;b.setAttribute('role','tab');b.setAttribute('aria-controls','system-panel-'+i);b.textContent=name;systemTabs.appendChild(b);const panel=document.createElement('div');panel.className='system-tabpanel';panel.id='system-panel-'+i;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',b.id);for(const node of nodes){if(node){if(node.tagName==='DETAILS'&&!node.querySelector('#jobs'))node.open=true;panel.appendChild(node)}}results.appendChild(panel);return panel})
 results.prepend(systemTabs);const systemButtons=[...systemTabs.querySelectorAll('button')];const selectSystem=(n,focus=false)=>{systemButtons.forEach((b,i)=>{b.setAttribute('aria-selected',String(i===n));b.tabIndex=i===n?0:-1;systemPanels[i].hidden=i!==n});if(focus)systemButtons[n].focus()};systemButtons.forEach((b,i)=>{b.onclick=()=>selectSystem(i);b.onkeydown=e=>{const d=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0;if(d){e.preventDefault();selectSystem((i+d+systemButtons.length)%systemButtons.length,true)}}});selectSystem(0)
 $('run-checks').onclick=()=>tick()
 }
