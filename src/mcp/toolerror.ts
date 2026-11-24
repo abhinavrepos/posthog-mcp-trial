@@ -20,6 +20,9 @@ export function toolError(error: unknown, tool: string, id: string = toolCorrela
     else if(raw === 'Unknown or expired job id.') {kind='not_found';message=raw}
     else if(raw === 'Privacy or access settings changed. Submit the tool again.') {kind='privacy_changed';message=raw}
     else if(raw.startsWith('Server restarted before this job completed')) {kind='restarted';message='Lens restarted before this job finished, so it has no result. Call the original tool again with the same arguments.'}
+    // Lens's own key or project is wrong: retrying cannot help, so say who has to act. Only Lens's PostHog client
+    // writes "PostHog <METHOD> <path> → <status>"; the status also survives a job's stored message this way.
+    else if(lensPosthogStatus(error,raw)) {kind='unavailable';message=lensPosthogStatus(error,raw)!}
     // A request that got no answer at all: PostHog may be overloaded, so narrowing the window is not the only fix.
     else if((error as {name?:string})?.name === 'TimeoutError' || /operation was aborted due to timeout/i.test(raw)) {kind='capacity';message='PostHog did not answer in time. Retry once; if it times out again, PostHog is overloaded or the question is heavy: use a narrower window, a coarser bucket, or fewer group_by dimensions.'}
     else if(error instanceof z.ZodError) {
@@ -49,6 +52,22 @@ export function toolError(error: unknown, tool: string, id: string = toolCorrela
     else if(/history is still being built/i.test(raw)) {kind='unavailable';message='Task history is still being built. Retry shortly; the Dashboards page shows progress.'}
     errorDiagnostic(error,tool,kind,id)
     return {kind,id,result:{isError:true,content:[{type:'text' as const,text:`${message} Correlation id: ${id}`}]}}
+}
+
+function lensPosthogStatus(error: unknown, raw: string): string | undefined {
+    const m = /^PostHog [A-Z]+ (\S+) → ([1-5]\d\d)\b/.exec(raw)
+    if(!m) return
+    const status = Number((error as {status?:number})?.status) || Number(m[2]), path = m[1]
+    const scope = /missing (?:required )?scope\W{0,3}([a-z_]+:(?:read|write))/i.exec(raw)?.[1]
+    if((status===401 || status===403) && scope) return `PostHog refused Lens's API key: it lacks the ${scope} scope. Retrying will not help; a Lens administrator must add that scope to the key (the System page shows the same).`
+    if(status===401 || status===403) return "PostHog refused Lens's API key. Retrying will not help; a Lens administrator must check POSTHOG_PERSONAL_API_KEY (the System page shows the same)."
+    if(status===404 && /^\/api\/projects\/[^/]*\/query\/$/.test(path)) return 'PostHog has no such project for Lens. Retrying will not help; a Lens administrator must check POSTHOG_PROJECT_ID (the System page shows the same).'
+    // ClickHouse down behind a running PostHog: not a question too large for one call.
+    if(status>=500 && /DB::NetException|\bCode: (?:209|210)\b|NETWORK_ERROR|SOCKET_TIMEOUT/.test(raw)) return "PostHog's event store (ClickHouse) is not answering. Retry in a few minutes; if it persists, a Lens administrator should check the System page."
+    if(status===429) {
+        const seconds = /(?:available in|retry after) (\d{1,5}) seconds?/i.exec(raw)?.[1]
+        return `PostHog is rate-limiting Lens: retry ${seconds ? `in about ${seconds} seconds` : 'in a minute'}.`
+    }
 }
 
 /** Build a value-only example from server-authored JSON Schema, never from rejected user input. */

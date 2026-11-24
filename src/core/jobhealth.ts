@@ -25,12 +25,22 @@ export function registerJob(key: string, label: string, everyMs: number): void {
 export function plainReason(e: unknown): string {
     const raw = e instanceof Error ? `${e.name}: ${e.message}` : String(e)
     const m = raw.toLowerCase()
-    const status = Number((e as { status?: number })?.status) || Number(/\b(?:http|status)[^0-9]{0,3}([1-5]\d\d)\b/i.exec(raw)?.[1]) || 0
+    // The status travels on the error, or only in its text ("PostHog POST /api/projects/1/query/ → 401: …") once
+    // it has been stored (task history keeps the message) or crossed a worker thread.
+    const status = Number((e as { status?: number })?.status) || Number(/\b(?:http|status)[^0-9]{0,3}([1-5]\d\d)\b/i.exec(raw)?.[1])
+        || Number(/^(?:\w*Error: )?PostHog [A-Z]+ \S+ → ([1-5]\d\d)\b/.exec(raw)?.[1]) || 0
     const missing = /PostHog is not configured: set ([A-Z0-9_]+(?:, [A-Z0-9_]+)*)/.exec(raw)?.[1]
     if (missing) return `PostHog settings are missing: ${missing.trim()}`
-    if (/timeout|timed out|aborted/.test(m)) return 'PostHog did not answer in time'
+    // PostHog answered, but its event store did not: ClickHouse is down or restarting ("Code: 210. DB::NetException:
+    // Connection refused (clickhouse:9000)"). Not "PostHog is unreachable", which sends people to the wrong container.
+    if (/clickhouse|db::netexception|\bcode: (?:209|210)\b|network_error|socket_timeout/.test(m) && /refused|network|timeout|unreachable|not available|code: (?:209|210)/.test(m)) return "PostHog's ClickHouse (event store) is not answering"
+    if (/timeout|timed out|aborted|lens paused calls/.test(m)) return 'PostHog did not answer in time'
     if (/econnrefused|enotfound|ehostunreach|econnreset|fetch failed|socket hang up|network/.test(m)) return 'PostHog is unreachable'
-    if (status === 401 || status === 403 || /unauthori[sz]ed|forbidden|invalid api key/.test(m)) return "PostHog refused Lens's API key"
+    const scope = /missing (?:required )?scope\W{0,3}([a-z_]+:(?:read|write))/i.exec(raw)?.[1]
+    if (scope) return `PostHog refused Lens's API key: it lacks the ${scope} scope`
+    if (status === 401 || status === 403 || /unauthori[sz]ed|forbidden|invalid (?:personal )?api key/.test(m)) return "PostHog refused Lens's API key"
+    if (status === 404 && /\/api\/projects\/[^/\s]*\/query\//.test(raw)) return 'PostHog has no such project for Lens: check POSTHOG_PROJECT_ID'
+    if (/unreadable answer|unexpected answer/.test(m)) return 'PostHog sent an answer Lens could not read'
     if (status === 429 || /rate limit|too many requests/.test(m)) return 'PostHog is rate-limiting Lens'
     if (status >= 500) return `PostHog returned an error (HTTP ${status})`
     if (/heap out of memory|err_worker_out_of_memory|out of memory|allocation failed|resourcelimits/.test(m)) return 'ran out of memory'

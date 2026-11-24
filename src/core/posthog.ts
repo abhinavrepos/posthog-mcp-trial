@@ -167,6 +167,10 @@ export async function hogql(query: string, values: Record<string, unknown> = {},
                         method: 'POST',
                         body: JSON.stringify({ query: { kind: 'HogQLQuery', query, values }, refresh: 'force_blocking' }),
                     }, options.timeoutMs ?? 30_000)
+                    // A proxy page or a half-started PostHog can answer 200 with JSON that is not a query result
+                    // ({}, null, {"error": …}): name it as PostHog's answer instead of failing on a missing field.
+                    if (!out || !Array.isArray(out.columns) || !Array.isArray(out.results) || !out.results.every(Array.isArray))
+                        throw new PostHogError('PostHog POST /query/ → 200: unexpected answer (not a query result)', 502)
                     return out.results.map((r) => Object.fromEntries(out.columns.map((c, i) => [c, r[i]])))
                 })
             } catch (error) {
