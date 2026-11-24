@@ -224,7 +224,7 @@ th,td{padding:7px 4px}
 }
 </style></head>
 <body>${headerHtml(v, 'System')}<main id="main" tabindex="-1" class="wide">
-<div class="page-head"><div><h1>System</h1><p>Service health, ingestion and server activity.</p></div></div>
+<div class="page-head"><div><h1>System</h1><p>Service health, ingestion and server activity.</p></div><button type="button" id="run-checks">Run checks</button></div>
 <div class="banner" id="banner"><span class="big" id="b-icon" aria-hidden="true">…</span><div><h2 id="b-head" role="status" aria-live="polite">Checking…</h2><p id="b-sub"></p><details id="status-details" hidden><summary>Technical details</summary><p id="status-error"></p></details></div></div>
 <div id="system-results" hidden><div id="problems"></div><div id="problems-pager"></div>
 <details class="section-details"><summary id="jobs-summary">Lens jobs</summary><div id="jobs"></div></details>
@@ -256,6 +256,20 @@ ${CLIENT}</script></body></html>`
 const CLIENT = String.raw`
 const containerSummary = ${containerSummary.toString()}
 const $=id=>document.getElementById(id)
+// Present the existing sections as tabs; their IDs, refreshes and detail controls stay intact.
+if(document.querySelector && document.createElement){
+const results=$('system-results'),systemGroups=[
+  ['Overview',[...results.children].slice(0,5)],
+  ['Containers',[results.querySelector('.containers-card')]],
+  ['Trends',[$('trends')]],
+  ['Service checks',[...results.children].filter(e=>e.tagName==='DETAILS'&&e.querySelector('#services'))],
+  ['Database',[...results.children].filter(e=>e.tagName==='DETAILS'&&e.querySelector('#clickhouse')).concat($('about-section'))],
+]
+const systemTabs=document.createElement('div');systemTabs.className='system-tabs';systemTabs.setAttribute('role','tablist');systemTabs.setAttribute('aria-label','System sections')
+const systemPanels=systemGroups.map(([name,nodes],i)=>{const b=document.createElement('button');b.type='button';b.id='system-tab-'+i;b.setAttribute('role','tab');b.setAttribute('aria-controls','system-panel-'+i);b.textContent=name;systemTabs.appendChild(b);const panel=document.createElement('div');panel.className='system-tabpanel';panel.id='system-panel-'+i;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',b.id);for(const node of nodes){if(node){if(node.tagName==='DETAILS')node.open=true;panel.appendChild(node)}}results.appendChild(panel);return panel})
+results.prepend(systemTabs);const systemButtons=[...systemTabs.querySelectorAll('button')];const selectSystem=(n,focus=false)=>{systemButtons.forEach((b,i)=>{b.setAttribute('aria-selected',String(i===n));b.tabIndex=i===n?0:-1;systemPanels[i].hidden=i!==n});if(focus)systemButtons[n].focus()};systemButtons.forEach((b,i)=>{b.onclick=()=>selectSystem(i);b.onkeydown=e=>{const d=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0;if(d){e.preventDefault();selectSystem((i+d+systemButtons.length)%systemButtons.length,true)}}});selectSystem(0)
+$('run-checks').onclick=()=>tick()
+}
 const plural=(n,w)=>n+' '+w+(n===1?'':'s')
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
 const num=n=>esc(n==null?'–':Number(n).toLocaleString('en-US'))

@@ -249,8 +249,8 @@ th,td{padding:8px 3px;font-size:12px}
 }
 </style></head>
 <body>${headerHtml(v, 'Surveys')}<main id="main" tabindex="-1" class="wide">
-<div class="toolbar page-head"><div><h1>Surveys</h1><p>Survey activity, results and launch options.</p></div><select id="days" aria-label="Survey counts period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></div>
-<div class="status-panel" id="list-state"><p id="page-msg" class="small" role="status">Loading surveys…</p><button class="secondary compact" id="list-retry" type="button" hidden>Try again</button></div><div class="layout" id="survey-layout" hidden><section><div class="status-tabs" id="status-tabs" role="group" aria-label="Show surveys by status"></div><div class="list" id="list"></div><div id="list-pager"></div>
+<div class="page-head"><div><h1>Surveys</h1><p>Survey activity, results and launch options.</p></div><a class="btn" href="/replays/connect">New survey</a></div>
+<div class="status-panel" id="list-state"><p id="page-msg" class="small" role="status">Loading surveys…</p><button class="secondary compact" id="list-retry" type="button" hidden>Try again</button></div><div class="layout" id="survey-layout" hidden><section><div class="survey-list-tools"><select id="days" aria-label="Survey counts period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></div><div class="status-tabs" id="status-tabs" role="group" aria-label="Show surveys by status"></div><div class="list" id="list"></div><div id="list-pager"></div>
 <p class="small"><a href="/replays/connect">Create a survey in chat</a></p><details><summary>How this works</summary><p class="small muted">Your survey role: ${SURVEY_ROLE_TEXT[v.role === 'admin' ? 'launch' : v.surveys || 'none']}.</p><p class="small muted">Make or change surveys in chat. Describe who should see it, when it appears and what to ask. New surveys stay as drafts until launched.</p></details></section>
 <section id="detail"></section>
 </div></main>
@@ -348,6 +348,19 @@ async function show(id){const period=$('days').value;current=id;$('list').queryS
     +'<details><summary>When it shows &amp; settings</summary>'+chain(s)+'<div class="facts">'+facts.map(([k,x])=>'<div><span>'+esc(k)+'</span>'+esc(x)+'</div>').join('')+'</div>'
     +(s.made_by_lens?'<p style="margin-top:10px"><button type="button" id="a-reach" class="ghost">Estimate reach · last 14 days</button></p><div id="reach" aria-live="polite"></div>':'')+'</details>'
     +'<details open><summary>Preview survey</summary>'+preview(s)+'</details>'
+  // Keep every original detail section and hook, but present the sections as Volt tabs.
+  const detail=$('detail'),parts=[...detail.children],sections=[
+    ['Results',parts.filter((_,i)=>i>0&&i<parts.length-4)],
+    ['Daily activity',[parts[parts.length-4]]],
+    ['By client',[parts[parts.length-3]]],
+    ['Settings',[parts[parts.length-2]]],
+    ['Preview',[parts[parts.length-1]]],
+  ]
+  const tabs=document.createElement('div');tabs.className='survey-detail-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Survey details')
+  const panels=sections.map(([label,nodes],i)=>{const tab=document.createElement('button');tab.type='button';tab.setAttribute('role','tab');tab.id='survey-tab-'+i;tab.setAttribute('aria-controls','survey-panel-'+i);tab.textContent=label;tabs.appendChild(tab);const panel=document.createElement('div');panel.className='survey-tabpanel';panel.id='survey-panel-'+i;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',tab.id);for(const node of nodes){if(node){if(node.tagName==='DETAILS')node.open=true;panel.appendChild(node)}}detail.appendChild(panel);return panel})
+  detail.insertBefore(tabs,panels[0]);const tabButtons=[...tabs.querySelectorAll('button')]
+  const selectTab=(index,focus=false)=>{tabButtons.forEach((tab,i)=>{tab.setAttribute('aria-selected',String(i===index));tab.tabIndex=i===index?0:-1;panels[i].hidden=i!==index});if(focus)tabButtons[index].focus()}
+  tabButtons.forEach((tab,i)=>{tab.onclick=()=>selectTab(i);tab.onkeydown=e=>{const d=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0;if(d){e.preventDefault();selectTab((i+d+tabButtons.length)%tabButtons.length,true)}}});selectTab(0)
   if($('conflict-pager'))makePager({mount:$('conflict-pager'),noun:'overlapping surveys',size:25,draw:items=>{$('conflict-rows').innerHTML=items.map(c=>'<li><a href="#'+esc(c.survey_id)+'">'+esc(c.name)+'</a>: '+esc(c.text.replace(/^[^:]*: /,''))+' ('+esc(c.clients==='all'?'every client':c.clients.join(', '))+')</li>').join('')}}).set(r.conflicts)
   r.questions.forEach((q,i)=>{
     if(q.distribution)makePager({mount:$('dist-pager-'+i),noun:'answer choices',label:'Question '+(i+1)+' answer choices',size:25,draw:items=>{$('dist-'+i).innerHTML=bars(Object.fromEntries(items))}}).set(Object.entries(q.distribution))

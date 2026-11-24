@@ -6,7 +6,7 @@
 // recording is one file however many people ask for it, a clip nobody saved is deleted
 // CLIP_RETENTION_DAYS (14) after it was last asked for, and a saved one stays until it is unsaved.
 import { randomUUID } from 'node:crypto'
-import { createReadStream, existsSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 
@@ -29,11 +29,16 @@ import { handleSurveys } from './surveyspage.ts'
 import { canConnect, handleConnect } from './connect.ts'
 import { handleDashboards } from './dashboards.ts'
 import { appEvents } from '../core/appevents.ts'
+import { VOLT_CSS } from './volt.ts'
 
 const RETENTION_DAYS = Number(process.env.CLIP_RETENTION_DAYS || 14)
 const AUDIT_RETENTION_DAYS = Number(process.env.AUDIT_RETENTION_DAYS || 365)
 const PER_HOUR = Number(process.env.CLIPS_PER_HOUR || 20)
 const LENGTHS = [10, 20, 30, 45, 60, 90, 120]
+const FONT_ASSETS: Record<string, Buffer> = {
+    '/replays/assets/fonts/Geist-Variable.woff2': readFileSync(new URL('../../assets/fonts/Geist-Variable.woff2', import.meta.url)),
+    '/replays/assets/fonts/GeistMono-Variable.woff2': readFileSync(new URL('../../assets/fonts/GeistMono-Variable.woff2', import.meta.url)),
+}
 
 // ------------------------------------------------------------------ clips in the database
 export interface ClipRecord {
@@ -337,6 +342,14 @@ const SAFE_NAME = /^[A-Za-z0-9-]+_\d+-\d+\.mp4$/
 export async function handleReplays(req: IncomingMessage, res: ServerResponse, url: URL): Promise<boolean> {
     const p = url.pathname
     if (!p.startsWith('/replays')) return false
+
+    // Public, immutable local font assets. The literal map is the entire path whitelist.
+    const font = FONT_ASSETS[p]
+    if (font && (req.method === 'GET' || req.method === 'HEAD')) {
+        res.writeHead(200, { 'content-type': 'font/woff2', 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff', 'content-length': font.length })
+        res.end(req.method === 'HEAD' ? undefined : font)
+        return true
+    }
 
     // Cross-site forms cannot set custom headers, so this blocks CSRF on every POST.
     if ((req.method === 'POST' || req.method === 'DELETE') && req.headers['x-clip-page'] !== '1') {
@@ -651,28 +664,9 @@ export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', 
 
 // The Lens shell and page templates share the same theme and component tokens.
 const CSS = `:root{
-  color-scheme:light;
-  --bg:#f8f9fb;--side-bg:#f2f4f8;--card:#fff;--ink:#202736;--muted:#505c6e;--faint:#586477;
-  --line:#dde2ea;--line-strong:#cbd3df;--control:#7b8799;--chip:#e9edf4;--hover:#eef1f6;
-  --accent:#2858af;--accent-ink:#fff;--accent-soft:#e7efff;
-  --ok:#25634e;--ok-bg:#e7f3ed;--warn:#7d4c14;--warn-bg:#fff3de;--err:#a32f43;--err-bg:#fcecef;
   --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:24px;--space-6:32px;
-  --r-sm:6px;--r:12px;--r-pill:999px;
-  --text-small:12px;--text-body:14px;--text-section:18px;--text-title:30px;--text-metric:28px;
-  --title-leading:36px;--section-leading:24px;
-  --disabled-ink:#586477;--disabled-bg:#edf0f4;--disabled-border:#d4dce7;
-  --shadow:0 1px 2px rgb(30 43 68 / .06);--pop:0 12px 32px rgb(30 43 68 / .18);
-  --scrim:rgb(10 17 29 / .55);--page:1440px;--hh:56px;--side:216px;
+  --r-pill:999px;--page:1440px;--hh:56px;
 }
-@media(prefers-color-scheme:dark){:root{
-  color-scheme:dark;
-  --bg:#15181e;--side-bg:#191d25;--card:#20252e;--ink:#eef1f7;--muted:#b2bdcd;--faint:#a9b4c6;
-  --line:#343d4b;--line-strong:#4b5668;--control:#748297;--chip:#2a313d;--hover:#292f3a;
-  --accent:#9dbbff;--accent-ink:#14223f;--accent-soft:#283855;
-  --ok:#9dd7bf;--ok-bg:#233931;--warn:#edbe7d;--warn-bg:#382d20;--err:#ffa0ad;--err-bg:#402630;
-  --disabled-ink:#a9b4c6;--disabled-bg:#262c35;--disabled-border:#465163;
-  --shadow:0 1px 2px rgb(0 0 0 / .2);--pop:0 12px 32px rgb(0 0 0 / .45);
-}}
 *{box-sizing:border-box}html{-webkit-text-size-adjust:100%}body{margin:0;background:var(--bg);color:var(--ink);font:var(--text-body)/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;-webkit-font-smoothing:antialiased;font-feature-settings:'tnum' 1;font-variant-numeric:tabular-nums}
 header{display:flex;align-items:center;gap:16px;background:var(--card);border-bottom:1px solid var(--line);padding:0 24px;height:var(--hh)}
 .brand{display:inline-flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;white-space:nowrap;flex:none;line-height:1}
@@ -707,7 +701,7 @@ body main input:is([type=checkbox],[type=radio]){width:14px;height:14px;vertical
 button.secondary,.btn.secondary{background:var(--card);color:var(--ink);border-color:var(--control)}button.ghost,.btn.ghost{background:transparent;color:var(--ink);border-color:transparent}
 button.ghost:hover,.btn.ghost:hover,button.secondary:hover,.btn.secondary:hover{background:var(--chip)}button.danger{background:var(--card);color:var(--err);border-color:var(--err)}
 button.ghost.danger{background:transparent;border-color:transparent;color:var(--err)}button.ghost.danger:hover:not(:disabled){background:var(--err-bg)}
-button:hover:not(:disabled),.btn:hover{background-image:linear-gradient(rgb(0 0 0 / .04),rgb(0 0 0 / .04))}
+button:hover:not(:disabled),.btn:hover{opacity:.88}
 .facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:6px 0 12px}.facts div{padding:8px 0;min-width:0}
 .facts b{overflow-wrap:anywhere}.facts span{display:block;font-size:12px;color:var(--muted)}.chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{text-align:left;border:1px solid var(--line);background:var(--chip);color:var(--ink);font-weight:500;padding:3px 9px;border-radius:var(--r-pill);font-size:12.5px;min-height:0}
@@ -796,8 +790,6 @@ body main .card>.row>button.ghost:disabled{border-color:var(--disabled-border);b
 :is(#live-banner,#list-state)>p{font-size:13px;line-height:20px}
 
 /* Enterprise polish: quieter chrome, one title rhythm, numbers aligned only where they are compared. */
-:root{--side-bg:#f1f3f6;--chip:#e9edf2;--accent-soft:#e6eefb}
-@media(prefers-color-scheme:dark){:root{--side-bg:#191c22;--chip:#292f38;--accent-soft:#26354d}}
 body{font-feature-settings:normal;font-variant-numeric:normal}
 body :is(table,.kpi .v,.tile b,.num,td.num,th.num,.chip .t,.cm .at,time){font-variant-numeric:tabular-nums}
 body main .page-head h1{font-size:28px;line-height:34px;font-weight:600;letter-spacing:-.02em}
@@ -814,7 +806,7 @@ body header.shell .acct[open]>summary::after{transform:rotate(225deg)}
 }
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}`
 
-export const PAGE_CSS = () => CSS
+export const PAGE_CSS = () => CSS + VOLT_CSS
 
 /** Client-side pagination for any list a page has already loaded. Put ${PAGER_JS} inside a page's
  * <script>, then:
@@ -862,7 +854,7 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
 // On phones the tab bars scroll sideways: keep the current tab in view (on load, and when tabs switch).
 const keep=()=>document.querySelectorAll('main [aria-current=page],main [role=tab][aria-selected=true]').forEach(t=>{for(let a=t.parentElement;a&&a!==m;a=a.parentElement){if(a.scrollWidth>a.clientWidth+1&&/auto|scroll/.test(getComputedStyle(a).overflowX)){const r=t.getBoundingClientRect(),c=a.getBoundingClientRect();a.scrollLeft+=r.left-c.left-(c.width-r.width)/2;break}}});
 const active=document.querySelector('header.shell nav [aria-current=page]');
-if(active){const nav=active.parentElement;const link=active.getBoundingClientRect(),bar=nav.getBoundingClientRect();if(link.right>bar.right)nav.scrollLeft+=link.right-bar.right}
+if(active){const nav=active.closest('nav');const link=active.getBoundingClientRect(),bar=nav.getBoundingClientRect();if(link.right>bar.right)nav.scrollLeft+=link.right-bar.right}
 keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeout(keep));document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('[role=tab]'))setTimeout(keep)})})</script>`
     if (!v) return `${skip}<header class="bare">${brand}</header>${mainId}`
     const tabs = (
@@ -878,21 +870,24 @@ keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeou
         ] as const
     )
         .filter(([, , need]) => (need === 'watchlist' ? can(v.role, 'watch') && canSeeReplayInsights(v) : need === 'system' ? canSeeSystem(v) : need === 'surveys' ? config.surveys.enabled && canUseSurveys(v) : need === 'dashboards' ? !!appEvents() && canUseDashboards(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need as Role)))
-        .map(([name, href]) => `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${icon(name)}<span>${name}</span></a>`)
-        .join('')
+        .map(([name, href]) => {
+            const group = ['Live', 'Replay clips', 'Watchlist', 'Dashboards'].includes(name) ? 'Monitor' : ['Surveys', 'Chat'].includes(name) ? 'Engage' : 'Manage'
+            return { group, html: `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${icon(name)}<span>${name}</span></a>` }
+        })
+        .reduce((out, item, i, all) => out + (i === 0 || all[i - 1]!.group !== item.group ? `<div class="v-nav-group"><span>${item.group}</span>` : '') + item.html + (i === all.length - 1 || all[i + 1]!.group !== item.group ? '</div>' : ''), '')
     const initials = (v.name || v.email).split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('')
     return `${skip}${mainId}<header class="shell">${brand}<nav aria-label="Sections">${tabs}</nav><details class="hdr acct"><summary aria-label="Account for ${esc(v.name || v.email.split('@')[0])}"><span class="avatar" aria-hidden="true">${esc(initials)}</span><span class="who-short"><b>${esc(v.name || v.email.split('@')[0])}</b><span>${esc(ROLE_TEXT[v.role].replace(/ \(.*\)$/, ''))}</span></span></summary><div class="acct-menu"><span class="who">${esc(v.email)}</span><span class="muted small">${esc(ROLE_TEXT[v.role])}</span><button class="secondary" id="signout" type="button">Sign out</button></div></details></header>
 <script>document.getElementById('signout').onclick=()=>fetch('/replays/logout',{method:'POST',headers:{'x-clip-page':'1'}}).then(()=>location.href='/');document.addEventListener('click',e=>{const d=document.querySelector('details.acct');if(d&&d.open&&!d.contains(e.target))d.open=false});document.addEventListener('keydown',e=>{const d=document.querySelector('details.acct');if(e.key==='Escape'&&d&&d.open){d.open=false;d.querySelector('summary').focus()}})</script>`
 }
 
 export function loginHtml(section: Section = 'Replay clips'): string {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}</style></head>
 <body>${headerHtml(undefined, section)}<main id="main" tabindex="-1" class="login-page"><div class="card"><h1>Sign in to ${esc(APP_NAME)}</h1>
 <p class="small muted">Use your PostHog account to continue.</p>
 <form id="f"><p><label for="email">Email</label><input id="email" type="email" autocomplete="username" required></p>
 <p><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required></p>
 <p><button id="go" type="submit">Sign in</button></p><p id="signin-status" class="small muted" role="status"></p><p id="msg" class="small err" role="alert"></p></form>
-<details><summary>Other ways to sign in</summary><p class="small muted"><a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on the PostHog website</a>, then <a id="reload-lens" href="">reload this page</a>.</p><p class="small muted">Signing in here also signs you in to PostHog in this browser.</p></details></div></main>
+<details><summary>Other ways to sign in</summary><p class="small muted"><a href="${esc(config.posthog.publicHost)}/login" target="_blank" rel="noopener">Sign in on the PostHog website</a>, then <a id="reload-lens" href="">reload this page</a>.</p><p class="small muted">Signing in here also signs you in to PostHog in this browser.</p></details></div><aside class="login-brand" aria-label="About ${esc(APP_NAME)}"><span class="eyebrow">${esc(APP_NAME)}</span><h2>Understand every client moment.</h2><span class="sub">${esc(APP_TAG || 'PostHog insights')}</span></aside></main>
 <script>document.getElementById('reload-lens').href=location.href;document.getElementById('f').onsubmit=async e=>{e.preventDefault();const b=document.getElementById('go');if(b.disabled)return;b.disabled=true;const msg=document.getElementById('msg'),status=document.getElementById('signin-status');msg.textContent='';status.textContent='Signing in…';
 try{const r=await fetch('/replays/login',{method:'POST',headers:{'content-type':'application/json','x-clip-page':'1'},body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('pw').value})});
 const d=await r.json().catch(()=>({}));if(!r.ok){msg.textContent=d.error||'Couldn’t reach PostHog. Try again.';return}location.reload()}catch{msg.textContent='Couldn’t reach PostHog. Try again.'}finally{status.textContent='';b.disabled=false}}</script></body></html>`
@@ -900,13 +895,13 @@ const d=await r.json().catch(()=>({}));if(!r.ok){msg.textContent=d.error||'Could
 
 function noWatchHtml(v: Viewer): string {
     if (!can(v.role, 'watch')) return noAccessHtml(v)
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Watchlist · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Watchlist · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}</style></head>
 <body>${headerHtml(v, 'Watchlist')}<main id="main" tabindex="-1" style="max-width:560px"><div class="card"><h1 style="font-size:24px;margin-bottom:12px">Request access to the Watchlist</h1>
 <p class="small muted">Signed in as <b>${esc(v.email)}</b>.</p><p>The Watchlist shows how people worked, step by step, from replays. Ask a Lens admin for replay insights on the admin page.</p></div></main></body></html>`
 }
 
 function noAccessHtml(v: Viewer): string {
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No access · ${esc(APP_NAME)}</title><style>${CSS}</style></head>
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>No access · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}</style></head>
 <body>${headerHtml(v, 'Replay clips')}<main id="main" tabindex="-1" style="max-width:560px"><div class="card"><h1 style="font-size:24px;margin-bottom:12px">Request access to replay clips</h1>
 <p class="small muted">Signed in as <b>${esc(v.email)}</b>.</p><p>Ask a PostHog admin for the “Watch clips” role on the admin page.</p>
 <details><summary>Why access is required</summary><p class="small muted">Replays can show client data, so an admin grants access to each person.</p></details></div></main></body></html>`
@@ -915,13 +910,13 @@ function noAccessHtml(v: Viewer): string {
 function pageHtml(v: Viewer): string {
     const bookmarklet = `javascript:(()=>{window.open(${JSON.stringify(config.service.publicUrl + '/replays?url=')}+encodeURIComponent(location.href))})()`
     const boot = JSON.stringify({ lengths: LENGTHS, ttl: config.service.clipLinkTtlHours, retention: RETENTION_DAYS, perHour: PER_HOUR, canDownload: can(v.role, 'download'), shareLinks: can(v.role, 'download') && loadAccess().allow_share_links }).replace(/</g, '\\u003c')
-    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips · ${esc(APP_NAME)}</title><style>${CSS}
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}
 
 </style></head>
 <body>${headerHtml(v, 'Replay clips')}<main id="main" tabindex="-1" class="clips-page narrow">
 <div class="page-head"><div><h1>Replay clips</h1><p>Choose a replay and make a clip to share.</p></div></div>
 
-<div class="card"><h2>1. Choose a replay</h2><form id="inspect-form">
+<div class="clip-composer"><div class="card"><h2>1. Choose a replay</h2><form id="inspect-form">
 <label for="input">PostHog replay link or session ID</label>
 <div class="row"><div><input id="input" placeholder="Paste a replay link or session ID" autocomplete="off"></div>
 <button id="check" type="submit">Check replay</button></div></form>
@@ -947,7 +942,7 @@ function pageHtml(v: Viewer): string {
 <div style="flex:0"><button class="ghost" id="c-now" type="button" title="Take the moment the video is at" style="white-space:nowrap">Use video time</button></div></div>
 <p style="margin:8px 0"><label for="c-text">Comment</label><textarea id="c-text" rows="2" placeholder="What should people notice at this moment?"></textarea></p>
 <div class="row" style="align-items:center"><button id="c-add" type="button">Add comment</button><button class="ghost hidden" id="c-cancel" type="button">Cancel</button><span class="small" aria-live="polite" aria-atomic="true" id="c-msg"></span></div>
-<p class="small muted" id="c-plain"></p></div></div></div>
+<p class="small muted" id="c-plain"></p></div></div></div></div>
 
 <div class="card"><h2>Your clips</h2><div class="table-wrap" role="region" aria-label="Your clips" tabindex="0"><table><thead><tr><th scope="col">Made</th><th scope="col">Client</th><th scope="col">User</th><th scope="col">Part</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="recent"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table><div id="recent-pager"></div></div>
 <p id="recent-msg" class="small" role="alert"></p></div>

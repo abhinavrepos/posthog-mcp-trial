@@ -433,7 +433,7 @@ main input,main select{min-width:0}
 @media(max-width:1100px){#outcome-form{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 </style></head>
-<body>${headerHtml(v, 'Admin')}<main id="main" tabindex="-1"><div class="page-head"><div><h1>Admin</h1><p>Who can use Lens, and what it keeps.</p></div></div>
+<body>${headerHtml(v, 'Admin')}<main id="main" tabindex="-1"><div class="page-head"><div><h1>Admin</h1><p>Who can use Lens, and what it keeps.</p></div><button type="button" onclick="document.querySelector('[data-tab=people]').click();document.querySelector('details.add-person').open=true;document.getElementById('new-email').focus()">Add person</button></div>
 ${adminTabs()}
 
 <div class="tabpanel" role="tabpanel" aria-labelledby="t-people" id="tab-people" data-panel="people">

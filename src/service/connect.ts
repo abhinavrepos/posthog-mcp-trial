@@ -109,18 +109,18 @@ ol.steps li{padding-left:2px}
 }
 </style></head>
 <body>${headerHtml(v, 'Chat')}<main id="main" tabindex="-1" class="narrow">
-<div class="page-head"><div><h1>Connect GitHub Copilot</h1><p>Connect your personal Lens key to Copilot.</p></div></div><div class="card">
+<div class="page-head"><div><h1>Connect GitHub Copilot</h1><p>Connect your personal Lens key to Copilot.</p></div><button type="button" id="make">Create personal key</button></div><div class="connect-grid"><div class="card">
 <p class="small">Privacy mode: <b>${privacyMode()}</b></p><div class="policy" role="note" aria-labelledby="policy-title"><p id="policy-title"><b>Approved apps only.</b></p>${policy.apps.length === 1 && policy.apps[0] === DEFAULT_CHAT_APPS[0] ? '<p>Use GitHub Copilot with your ION Microsoft enterprise account. Connect your Lens key only to approved apps.</p>' : `<p>Connect your key only to:</p><ul>${policy.apps.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`}${policy.note !== DEFAULT_CHAT_NOTE ? `<p>${esc(policy.note)}</p>` : ''}</div>${anonymiseOn() ? '<div class="info" role="note"><p><b>Client names are hidden from AI.</b> Copilot sees each client\'s codename, never its name or code. Ask about a client by its codename, and do not type client names into chat. <a href="/replays/codenames">Look up codenames</a>.</p></div>' : ''}
 <p class="small muted">Your key is shown once and inherits your Lens access.${ph ? ' PostHog commands are included in this one Lens server.' : ''}${canSurvey(surveyRole, 'edit') ? ' You can create, edit and stop surveys in Copilot; launch them from Surveys.' : role ? ` Survey access: ${esc(role)}.` : ''}</p>
 <ol class="steps">
-<li><button type="button" id="make">Create personal key</button> <span id="msg" class="small" aria-live="polite"></span></li>
+<li><h2>Create personal key</h2><p class="small muted">Use the button above to create your key.</p><span id="msg" class="small" aria-live="polite"></span></li>
 <li><h2>Add Lens in Copilot</h2><div>MCP Servers → Add Server → + Add Custom server</div><div id="add"><span class="small muted">Create your key above to see the fields to copy.</span></div></li>
 <li>Start a new chat: <span>“Which clients need attention this month?”</span></li>
 </ol>
 </div>
 <div class="card"><h2>Your keys</h2><div class="table-wrap" role="region" aria-label="Your keys" tabindex="0"><table><colgroup><col style="width:24%"><col style="width:29%"><col style="width:29%"><col style="width:18%"></colgroup><thead><tr><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div><div id="keys-pager"></div><p id="keys-msg" class="small" aria-live="polite"></p>
 <details id="revoked-box" hidden><summary class="small muted" id="revoked-sum"></summary><ul id="revoked" class="small muted"></ul></details>
-</div>
+</div></div>
 </main>
 <script>
 ${PAGER_JS}

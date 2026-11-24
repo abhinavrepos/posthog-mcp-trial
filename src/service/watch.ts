@@ -114,7 +114,7 @@ td .st{display:inline-flex;align-items:center;gap:6px}td .st i{width:8px;height:
 .rowacts{display:flex;gap:6px;justify-content:flex-end}.rowacts button{min-height:28px;padding:3px 10px;font-size:12.5px}
 .confirm{display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap;font-size:12.5px}
 .empty-card{text-align:center;padding:40px 24px}.empty-card h2{font-size:var(--text-section);margin:0 0 6px}.empty-card p{margin:0 0 14px;color:var(--muted)}
-.skel{height:132px;border-radius:var(--r);background:linear-gradient(90deg,var(--hover),var(--card),var(--hover));background-size:200% 100%;animation:sh 1.4s infinite}
+.skel{height:132px;border-radius:var(--r);background:var(--surface-2)}
 @keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}@media(prefers-reduced-motion:reduce){.skel{animation:none}}
 </style></head>
 <body>${headerHtml(v, 'Watchlist')}<main class="wide">
@@ -152,7 +152,7 @@ const when=iso=>new Date(iso).toLocaleString([], {weekday:'short',day:'numeric',
 const ago=iso=>{if(!iso)return 'Not yet';const m=Math.round((Date.now()-Date.parse(iso))/60000);return m<1?'Just now':m<60?m+' min ago':m<1440?Math.round(m/60)+' h ago':when(iso)}
 const laneOf=k=>CFG.lanes.find(l=>l.kinds.includes(k))
 const markText=k=>(CFG.marks.find(m=>m.key===k)||{}).text||k
-const chip=k=>{const l=laneOf(k)||CFG.lanes[3];const c=el('li','k');c.style.color=l.fg;c.style.background=l.bg;c.appendChild(el('i'));c.appendChild(document.createTextNode(markText(k)));return c}
+const chip=k=>{const l=laneOf(k)||CFG.lanes[3];const c=el('li','k');const dot=el('i');dot.style.background=l.fg;c.appendChild(dot);c.appendChild(document.createTextNode(markText(k)));return c}
 const SEV={high:['High','err'],medium:['Medium','warn'],low:['Low','']}
 let state={watchlist:[],clients:[]},token=0,open=null,loaded=false
 const q=new URLSearchParams(location.search)
