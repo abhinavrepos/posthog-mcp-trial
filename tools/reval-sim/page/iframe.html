@@ -1,0 +1,11 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Reval embedded screen</title></head>
+<body style="font-family:Arial;margin:0;padding:12px;background:#f6f8fb">
+<!-- An iframe screen: its own document, no PostHog inside, so nothing here is captured. -->
+<h3 id="t">Dashboards</h3>
+<button id="export">Export</button> <button id="refresh">Refresh</button>
+<div id="out" style="margin-top:12px;color:#556"></div>
+<script>
+document.getElementById('t').textContent = new URLSearchParams(location.search).get('screen') || 'Embedded';
+document.getElementById('export').onclick = function () { document.getElementById('out').textContent = 'Exported at ' + new Date().toISOString(); };
+document.getElementById('refresh').onclick = function () { document.getElementById('out').textContent = 'Refreshed'; };
+</script></body></html>
