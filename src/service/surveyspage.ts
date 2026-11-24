@@ -5,6 +5,7 @@ import { ToolInputError } from '../core/toolinputerror.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config, surveysActive } from '../core/config.ts'
+import { surveyEvidence } from '../core/surveychecks.ts'
 import { archiveSurvey, conflictsFor, estimateReach, getSurvey, launchSurvey, listSurveys, queueAlert, stopSurvey, surveyAnswers, surveyOverview, surveyResults, viewOf } from '../core/surveys.ts'
 import { ACKNOWLEDGEMENT, checkTicket, jiraTicketUrl, launchesOf, launchRules, recordLaunch } from '../core/launches.ts'
 import { jiraConfigured } from '../core/config.ts'
@@ -73,12 +74,18 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
                 throw e
             }
         }
-        if (m && m[2] === 'launch-check' && req.method === 'GET') return (json(res, 200, await launchCheck(m[1])), true)
+        // Both also carry warnings for steps or an audience that recent events say can never match (additive fields).
+        if (m && m[2] === 'launch-check' && req.method === 'GET') {
+            const check = await launchCheck(m[1])
+            const chain = (await getSurvey(m[1])).conditions?.lensChain
+            return (json(res, 200, { ...check, warnings: chain?.managedBy === 'lens' ? await surveyEvidence(chain) : [] }), true)
+        }
         if (m && m[2] === 'reach' && req.method === 'GET') {
             const s = await getSurvey(m[1])
             const chain = s.conditions?.lensChain
             if (chain?.managedBy !== 'lens') return (json(res, 400, { error: 'Only surveys made in Lens have steps to count.' }), true)
-            return (json(res, 200, await estimateReach(chain, days(url, 14))), true)
+            const reach = await estimateReach(chain, days(url, 14))
+            return (json(res, 200, { ...reach, problems: await surveyEvidence(chain) }), true)
         }
         if (m && m[2] && ['launch', 'stop', 'archive'].includes(m[2]) && req.method === 'POST') {
             if (!canSurvey(v.role === 'admin' ? 'launch' : v.surveys, 'launch')) return (json(res, 403, { error: 'Launching, stopping and archiving surveys needs the "Also launch and stop surveys" survey role. Ask an admin.' }), true)
@@ -367,7 +374,7 @@ async function show(id){const period=$('days').value;current=id;$('list').queryS
   if($('a-launch'))$('a-launch').onclick=()=>openLaunch(id)
   if($('a-stop'))$('a-stop').onclick=act('stop','Stop showing "'+s.name+'"? Its answers stay.')
   if($('a-archive'))$('a-archive').onclick=act('archive','Archive "'+s.name+'"? It stops and leaves this list. Its answers stay in PostHog.')
-  if($('a-reach'))$('a-reach').onclick=async ev=>{const button=ev.currentTarget;if(button.disabled)return;button.disabled=true;$('reach').innerHTML='<p class="small muted">Counting…</p>';try{const x=await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'/reach');$('reach').innerHTML='<p><b>'+num(x.sessions)+'</b> sessions, '+num(x.users)+' users at '+num(x.clients)+' clients.</p>'+bars(Object.fromEntries(x.by_step.map((b,i)=>['Step '+(i+1)+': '+b.step,b.sessions])))+(x.top_clients.length?'<p class="small muted">Most: '+x.top_clients.map(c=>esc(c.client)+' ('+num(c.sessions)+')').join(', ')+'</p>':'')+'<p class="small muted">'+esc(x.note)+'</p>'}catch(e){$('reach').innerHTML='<p class="err" role="alert">'+esc(e.message)+' Try counting again.</p>'}finally{button.disabled=false}}
+  if($('a-reach'))$('a-reach').onclick=async ev=>{const button=ev.currentTarget;if(button.disabled)return;button.disabled=true;$('reach').innerHTML='<p class="small muted">Counting…</p>';try{const x=await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'/reach');$('reach').innerHTML='<p><b>'+num(x.sessions)+'</b> sessions, '+num(x.users)+' users at '+num(x.clients)+' clients.</p>'+bars(Object.fromEntries(x.by_step.map((b,i)=>['Step '+(i+1)+': '+b.step,b.sessions])))+(x.top_clients.length?'<p class="small muted">Most: '+x.top_clients.map(c=>esc(c.client)+' ('+num(c.sessions)+')').join(', ')+'</p>':'')+'<p class="small muted">'+esc(x.note)+'</p>'+(x.problems||[]).map(p=>'<div class="conf">'+esc(p.text)+'</div>').join('')}catch(e){$('reach').innerHTML='<p class="err" role="alert">'+esc(e.message)+' Try counting again.</p>'}finally{button.disabled=false}}
 }
 // The safeguard: read the rules, give the Jira ticket, acknowledge; the server checks the same.
 let LAUNCH=null,launchRequest=0,launchOpener=null,launching=false
@@ -375,7 +382,7 @@ async function openLaunch(id){const d=$('ldlg');if(d.open||busy)return;const req
   try{const check=await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'/launch-check');if(request!==launchRequest||!d.open)return;LAUNCH={...check,id}
     $('l-title').textContent=(LAUNCH.survey.status==='stopped'?'Start again: ':'Launch: ')+LAUNCH.survey.name;$('l-name').textContent='Reval users will see this survey. Read all four rules.'
     $('l-rules').innerHTML=LAUNCH.rules.map(x=>'<li>'+esc(x)+'</li>').join('')
-    $('l-queue').innerHTML=LAUNCH.queue&&LAUNCH.queue.level!=='clear'?'<div class="warnbox">'+esc(LAUNCH.queue.alert)+'</div>':''
+    $('l-queue').innerHTML=(LAUNCH.queue&&LAUNCH.queue.level!=='clear'?'<div class="warnbox">'+esc(LAUNCH.queue.alert)+'</div>':'')+(LAUNCH.warnings||[]).map(w=>'<div class="warnbox">'+esc(w.text)+'</div>').join('')
     $('l-ack-text').textContent=LAUNCH.acknowledgement;$('l-ack').disabled=false;$('l-ticket').disabled=false;launchReady()}
   catch(e){if(request!==launchRequest||!d.open)return;$('l-rules').innerHTML='';$('l-name').textContent='Launch rules could not load.';$('l-msg').textContent=e.message+' Cancel and try launching again.'}}
 const TICKET=/^[A-Z][A-Z0-9_]{0,19}-[0-9]{1,9}$/

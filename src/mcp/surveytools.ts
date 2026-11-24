@@ -10,6 +10,7 @@ import { z } from 'zod'
 import { appEvents } from '../core/appevents.ts'
 import { config, surveysActive } from '../core/config.ts'
 import { resolveClient } from '../core/resolve.ts'
+import { foundMismatch, surveyEvidence } from '../core/surveychecks.ts'
 import {
     archiveSurvey,
     compileSurvey,
@@ -36,6 +37,7 @@ const TOOLS_FOR: Record<SurveyRole, string[]> = {
 }
 export const surveyToolNames = (role: SurveyRole = 'launch'): string[] => (surveysActive() && appEvents() ? SURVEY_TOOLS.filter((t) => TOOLS_FOR[role].includes(t)) : [])
 
+const EVIDENCE_NOTE = '⚠ Some steps or the audience did not match anything in recent events, so the survey may never show: pass the warnings on to the person, first and in full.'
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] })
 const json = jsonResult
 const pageUrl = (id?: string) => `${config.service.publicUrl}/replays/surveys${id ? `#${id}` : ''}`
@@ -143,15 +145,17 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             const c = compileSurvey(spec as SurveySpec, { clientIds: ids })
             const errors = c.problems.filter((p) => p.level === 'error')
             const reach = estimate && !errors.length ? await estimateReach(c.chain,days) : undefined
+            // Steps and an audience that recent events say can never match: warnings only, nothing is refused.
+            const evidence = estimate && !errors.length ? await surveyEvidence(c.chain) : []
             const conflicts = conflictsFor(c.chain, {}, await listSurveys())
             const q = queueAlert(c.chain, conflicts)
-            return json(`${q.level === 'clear' ? '' : q.alert + '\n\n'}${errors.length || unclear.length ? 'This survey cannot be saved yet:' : 'The survey checks out. Show the person this plan (lead with any ⚠ alert above), then save_survey.'}`, {
+            return json(`${q.level === 'clear' ? '' : q.alert + '\n\n'}${errors.length || unclear.length ? 'This survey cannot be saved yet:' : `The survey checks out. Show the person this plan (lead with any ⚠ alert above), then save_survey.${foundMismatch(evidence) ? ` ${EVIDENCE_NOTE}` : ''}`}`, {
                 steps: c.chain.labels,
                 reset_on: c.chain.resetLabels || [],
                 clients: ids.length ? ids : 'every client',
                 unclear_clients: unclear,
                 shows: `${spec.show === 'every_time' ? 'every time' : 'once per user'}, as soon as the last step happens${spec.wait_for_page === false ? '' : ' and the page has loaded'}`,
-                problems: c.problems,
+                problems: [...c.problems, ...evidence],
                 surveys_per_user: { ...queueAlert(c.chain, conflicts), already_in: conflicts.map((x) => x.text) },
                 reach: {days,result:reach},
             })
@@ -174,9 +178,10 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             audit(who, survey_id ? 'survey.changed' : 'survey.created', { survey: out.survey.id, name: out.survey.name })
             const v = viewOf(out.survey)
             const conflicts = conflictsFor(out.compiled.chain, out.survey, await listSurveys())
+            const evidence = await surveyEvidence(out.compiled.chain)
             return json(
-                `${queueAlert(out.compiled.chain, conflicts).alert}\n\n${survey_id ? 'Changed' : 'Saved as a draft'}: "${v.name}" (${v.status}). ${v.status === 'draft' ? 'Users see nothing yet. Chat cannot launch surveys: someone with the launch role launches it on the Surveys page.' : ''} Page: ${pageUrl(v.id)}`,
-                { survey: v, warnings: out.compiled.problems, queue: queueAlert(out.compiled.chain, conflicts), already_in: conflicts.map((x) => x.text) }
+                `${queueAlert(out.compiled.chain, conflicts).alert}\n\n${survey_id ? 'Changed' : 'Saved as a draft'}: "${v.name}" (${v.status}). ${v.status === 'draft' ? 'Users see nothing yet. Chat cannot launch surveys: someone with the launch role launches it on the Surveys page.' : ''} Page: ${pageUrl(v.id)}${foundMismatch(evidence) ? `\n\n${EVIDENCE_NOTE}` : ''}`,
+                { survey: v, warnings: [...out.compiled.problems, ...evidence], queue: queueAlert(out.compiled.chain, conflicts), already_in: conflicts.map((x) => x.text) }
             )
         }
     )
