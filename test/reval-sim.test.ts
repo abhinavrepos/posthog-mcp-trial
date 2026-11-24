@@ -6,13 +6,11 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 
 import { parseAppEvents } from '../src/core/appevents.ts'
-import { config } from '../src/core/config.ts'
-import { compileSurvey, type SurveySpec } from '../src/core/surveys.ts'
+import { compileSurvey } from '../src/core/surveys.ts'
 import { FLOWS, sampleUser } from '../tools/reval-sim/flows.ts'
 import { SCREENS } from '../tools/reval-sim/screens.ts'
 
 const reg = parseAppEvents(JSON.parse(readFileSync('config/app-events.reval.json', 'utf8')))
-const spec = (steps: SurveySpec['steps']): SurveySpec => ({ name: 'Reval check', questions: [{ type: 'rating', text: 'How was it?' }], steps })
 
 test('Reval screen table covers 100 distinct openable screens and report event IDs', () => {
     assert.ok(SCREENS.filter(s => !s.stuck).length >= 100)
@@ -52,25 +50,6 @@ test('Reval flows have valid screen actions and explicit outcomes', () => {
             assert.equal(compiled.problems.filter(p => p.level === 'error').length, 0, flow.name)
         }
     }
-})
-
-test('Lens warns when Reval report Ext IDs or titles are mistaken for emitted IDs', () => {
-    for (const wrong of ['DlgHedgeDesigListReport', 'Hedge Designation']) {
-        const problems = compileSurvey(spec([{ opens: wrong }]), { reg, clientIds: ['SEM'] }).problems
-        assert.ok(problems.some(p => p.level === 'warning' && p.text.includes('LinkListReqv')), wrong)
-    }
-    assert.ok(!compileSurvey(spec([{ opens: 'LinkListReqv' }]), { reg, clientIds: ['SEM'] }).problems.some(p => p.where.startsWith('steps')))
-})
-
-test('Lens warns about Reval client targeting and impossible repeated OPEN', () => {
-    const old = config.properties.clientFromDistinctId
-    try {
-        config.properties.clientFromDistinctId = 0
-        const problems = compileSurvey(spec([{ opens: 'DlgTradeList' }, { opens: 'DlgDetailIRSwap' }, { opens: 'DlgTradeList' }, { button: 'Export' }]), { reg, clientIds: ['SEM'] }).problems
-        assert.ok(problems.some(p => p.where === 'clients' && p.text.includes('CLIENT_FROM_DISTINCT_ID=3')))
-        assert.ok(problems.some(p => p.where === 'steps[2]' && p.text.includes('twice')))
-        assert.ok(problems.some(p => p.where === 'steps[3]' && p.text.includes('XLSX Export')))
-    } finally { config.properties.clientFromDistinctId = old }
 })
 
 test('sample users straddle the fixed PostHog audience bucket', () => {

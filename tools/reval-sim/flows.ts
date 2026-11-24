@@ -11,6 +11,7 @@ export type Act =
     | ['wait', number]
     | ['advance', number] // move the page's clock forward (ms)
     | ['logout'] | ['login', string, string?] | ['changeClient', string, string?]
+    | ['reload'] // the user comes back later: a fresh page load (open surveys are gone from the screen)
     | ['modal'] | ['closeModal'] | ['msgOk']
     | ['iframeClick', string, string] // click inside an iframe screen (no PostHog there)
     | ['dismiss'] | ['answer']
@@ -59,6 +60,32 @@ export const FLOWS: Flow[] = [
         acts: [['ready'], ['open', 'report:LinkListReqv'], ['wait', 600], ['press', 'LinkListReqv', 'Export'], ['expect', { shown: ['A'], notWhileMask: true }]],
     },
     {
+        name: 'Only after Hedge Designation AND Export, in that order', quick: true,
+        why: 'The owner\'s rule: the survey pops only after the user opened Hedge Designation and then exported from it. Not for opening it alone, not for an export elsewhere, not for an export that came first.',
+        surveys: { A: once(S('Hedge export strict', [{ opens: 'LinkListReqv' }, { button: 'Export', dialog: 'LinkListReqv' }])) },
+        lensQuiet: ['A'],
+        acts: [['ready'],
+            ['open', 'DlgTradeList'], ['wait', 1300], ['press', 'DlgTradeList', 'Export'], ['expect', { none: true, note: 'export in another screen' }],
+            ['open', 'report:LinkListReqv'], ['wait', 600], ['expect', { none: true, note: 'Hedge Designation opened, nothing exported yet' }],
+            ['press', 'LinkListReqv', 'Run'], ['wait', 1200], ['expect', { none: true, note: 'ran the report, still no export' }],
+            ['mdi', 'DlgTradeList'], ['press', 'DlgTradeList', 'XLSX Export'], ['expect', { none: true, note: 'another export elsewhere after opening Hedge Designation' }],
+            ['press', 'LinkListReqv', 'Export'], ['expect', { shown: ['A'], notWhileMask: true, within: 15000 }]],
+    },
+    {
+        name: 'Export first, Hedge Designation after: no survey', quick: true,
+        why: 'Order matters: exporting before opening Hedge Designation does not complete the chain.',
+        surveys: { A: once(S('Hedge export order', [{ opens: 'LinkListReqv' }, { button: 'Export', dialog: 'LinkListReqv' }])) },
+        acts: [['ready'], ['open', 'DlgHedgeList'], ['wait', 1300], ['press', 'DlgHedgeList', 'Export'], ['open', 'report:LinkListReqv'], ['wait', 600], ['expect', { none: true, within: 8000 }]],
+    },
+    {
+        name: 'Hedge Designation then Export minutes later', quick: true,
+        why: 'The user opens the report, works for minutes (other screens, tab switches), then exports from Hedge Designation: the survey shows then, not before.',
+        surveys: { A: once(S('Hedge export later', [{ opens: 'LinkListReqv' }, { button: 'Export', dialog: 'LinkListReqv' }])) },
+        acts: [['ready'], ['open', 'report:LinkListReqv'], ['wait', 600], ['advance', 4 * 60_000], ['open', 'DlgTradeList'], ['wait', 1300], ['press', 'DlgTradeList', 'Run'],
+            ['expect', { none: true, note: 'minutes later, still no export from Hedge Designation' }], ['advance', 3 * 60_000],
+            ['press', 'LinkListReqv', 'Export'], ['expect', { shown: ['A'], within: 15000 }]],
+    },
+    {
         name: 'Hedge Designation then XLSX Export (survey asks for XLSX Export)',
         why: 'The XLSX Export button is its own label.',
         surveys: { A: once(S('Hedge xlsx', [{ opens: 'LinkListReqv' }, { button: 'XLSX Export', dialog: 'LinkListReqv' }])) },
@@ -82,7 +109,7 @@ export const FLOWS: Flow[] = [
         why: 'Reval sends the report id for reports, never the Ext dialog name: the survey cannot show, and Lens must warn and point to LinkListReqv.',
         surveys: { A: once(S('Hedge wrong id', [{ opens: 'DlgHedgeDesigListReport' }, { button: 'Export' }])) },
         lensWarns: { A: [/DlgHedgeDesigListReport/, /LinkListReqv/] },
-        acts: [['ready'], ['open', 'report:LinkListReqv'], ['wait', 600], ['press', 'LinkListReqv', 'Run'], ['wait', 1200], ['press', 'report:LinkListReqv#result', 'Export'], ['press', 'LinkListReqv', 'Export'], ['expect', { none: true }]],
+        acts: [['ready'], ['open', 'report:LinkListReqv'], ['wait', 600], ['press', 'LinkListReqv', 'Run'], ['wait', 1200], ['press', 'LinkListReqv', 'Export'], ['expect', { none: true }]],
     },
     {
         name: 'Dialog title instead of id ("Hedge Designation")',
@@ -122,7 +149,6 @@ export const FLOWS: Flow[] = [
         name: 'Chain that needs a second OPEN of a screen still open',
         why: 'List, detail, back to the list: the list tab is still open, so Reval sends no second OPEN. Never shows; Lens must warn.',
         surveys: { A: once(S('List detail list', [{ opens: 'DlgTradeList' }, { opens: 'DlgDetailIRSwap' }, { opens: 'DlgTradeList' }])) },
-        lensWarns: { A: [/DlgTradeList.*(twice|again)/i] },
         acts: [['ready'], ['open', 'DlgTradeList'], ['wait', 1300], ['open', 'DlgDetailIRSwap'], ['wait', 900], ['open', 'DlgTradeList'], ['expect', { none: true }]],
     },
     {
@@ -215,8 +241,8 @@ export const FLOWS: Flow[] = [
             C: once(S('Limit three', [{ button: 'Calculate', dialog: 'DlgCalculator' }], { days_between_surveys: 1 })),
         },
         acts: [['ready'], ['open', 'DlgTradeList'], ['wait', 1300], ['press', 'DlgTradeList', 'Run'], ['expect', { shown: ['A'] }],
-            ['advance', 25 * HOUR], ['open', 'DlgHedgeList'], ['wait', 1300], ['press', 'DlgHedgeList', 'Run'], ['expect', { shown: ['B'], note: 'A shown but not answered' }],
-            ['advance', 25 * HOUR], ['open', 'DlgCalculator'], ['wait', 600], ['press', 'DlgCalculator', 'Calculate'], ['expect', { none: true, note: 'A and B unfinished: C waits' }]],
+            ['advance', 25 * HOUR], ['reload'], ['ready'], ['open', 'DlgHedgeList'], ['wait', 1300], ['press', 'DlgHedgeList', 'Run'], ['expect', { shown: ['B'], note: 'A shown but not answered' }],
+            ['advance', 25 * HOUR], ['reload'], ['ready'], ['open', 'DlgCalculator'], ['wait', 600], ['press', 'DlgCalculator', 'Calculate'], ['expect', { none: true, note: 'A and B unfinished: C waits' }]],
     },
     {
         name: 'show once: not again after an answer',

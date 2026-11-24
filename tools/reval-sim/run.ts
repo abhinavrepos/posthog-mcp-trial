@@ -29,7 +29,7 @@ export interface FlowResult {
 const describe = (f: Flow) => f.acts.filter((a): a is ['expect', Expect] => a[0] === 'expect')
     .map(([, e]) => (e.shown ? `shows ${e.shown.join('+')}${e.notWhileMask ? ' (after the mask)' : ''}` : 'no survey') + (e.note ? ` (${e.note})` : '')).join('; then ')
 
-interface Prepared { flow: Flow; projectId: string; ids: Record<string, string>; chains: Record<string, string>; lens: Record<string, string[]>; failures: string[]; ph: string }
+interface Prepared { flow: Flow; projectId: string; ids: Record<string, string>; chains: Record<string, string>; lensChains: Record<string, unknown>; lens: Record<string, string[]>; failures: string[]; ph: string }
 
 /** Lens makes each flow's surveys, as a PM would: compile and check, save as a draft, launch. */
 async function prepare(sim: Sim, flows: Flow[], alt: StandInPostHog): Promise<Prepared[]> {
@@ -37,7 +37,7 @@ async function prepare(sim: Sim, flows: Flow[], alt: StandInPostHog): Promise<Pr
     const savedHost = sim.config.posthog.host, savedPart = sim.config.properties.clientFromDistinctId
     for (const [i, flow] of flows.entries()) {
         const projectId = String(100 + FLOWS.indexOf(flow))
-        const p: Prepared = { flow, projectId, ids: {}, chains: {}, lens: {}, failures: [], ph: flow.versioned === 'original' ? alt.url : sim.posthog.url }
+        const p: Prepared = { flow, projectId, ids: {}, chains: {}, lensChains: {}, lens: {}, failures: [], ph: flow.versioned === 'original' ? alt.url : sim.posthog.url }
         sim.config.posthog.projectId = projectId
         sim.config.posthog.host = p.ph
         sim.config.properties.clientFromDistinctId = flow.clientFromDistinctId ?? 3
@@ -47,7 +47,7 @@ async function prepare(sim: Sim, flows: Flow[], alt: StandInPostHog): Promise<Pr
                 const problems = saved.compiled.problems
                 if (!saved.survey) { p.failures.push(`Lens refused survey ${key}: ${problems.map((x) => x.text).join('; ')}`); continue }
                 p.lens[key] = problems.filter((x) => x.level === 'warning' && x.where !== 'clients').map((x) => `${x.where}: ${x.text}`)
-                for (const re of flow.lensWarns?.[key] || []) if (!p.lens[key].some((t) => re.test(t))) p.failures.push(`Lens gave no warning matching ${re} for ${key} (warnings: ${p.lens[key].join(' | ') || 'none'})`)
+                p.lensChains[key] = (saved.survey.conditions as { lensChain: unknown }).lensChain
                 if (flow.lensQuiet?.includes(key)) { const steps = p.lens[key].filter((t) => /^(steps|reset_on)/.test(t)); if (steps.length) p.failures.push(`Lens warned about a correct survey ${key}: ${steps.join(' | ')}`) }
                 p.ids[key] = saved.survey.id
                 p.chains[key] = (saved.survey.conditions as { lensChain: { id: string } }).lensChain.id
@@ -84,6 +84,11 @@ async function act(v: Visit, a: Act, r: FlowResult, ctx: { sim: Sim; alt: StandI
         case 'login': return void (await R('login', a[1], a[2]))
         case 'changeClient': {
             await Promise.all([page.waitForNavigation({ waitUntil: 'load' }), R('changeClient', a[1], a[2])])
+            await page.waitForFunction('!!window.Reval && !!window.__viewportAt', { timeout: 30_000 })
+            return
+        }
+        case 'reload': {
+            await page.reload({ waitUntil: 'load' })
             await page.waitForFunction('!!window.Reval && !!window.__viewportAt', { timeout: 30_000 })
             return
         }
@@ -213,6 +218,22 @@ async function runFlow(sim: Sim, p: Prepared, alt: StandInPostHog, screensDir?: 
         for (const [k, id] of Object.entries(p.ids)) {
             const n = store.events(p.projectId).filter((x) => x.event === 'survey shown' && x.properties.$survey_id === id).length
             if (n !== (shownCount.get(k) || 0)) r.failures.push(`"survey shown" for ${k}: ${n} captured, ${shownCount.get(k) || 0} expected`)
+        }
+        // Lens's check against recent events (src/core/surveychecks.ts), run after the users acted, as a PM
+        // designing or reviewing the survey later would. Queries go to this flow's own stand-in project.
+        if (f.lensWarns) {
+            const { surveyEvidence } = await import('../../src/core/surveychecks.ts')
+            const query = async (q: string, values: Record<string, unknown> = {}) => {
+                const res = await fetch(`${p.ph}/api/projects/${p.projectId}/query/`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer sim' }, body: JSON.stringify({ query: { kind: 'HogQLQuery', query: q, values } }) })
+                const out = await res.json() as { columns: string[]; results: unknown[][] }
+                return out.results.map((row) => Object.fromEntries(out.columns.map((c, i) => [c, row[i]])))
+            }
+            for (const [key, res] of Object.entries(f.lensWarns)) {
+                const chain = p.lensChains[key]
+                const said = chain ? (await surveyEvidence(chain as never, { query: query as never })).map((x) => `${x.where}: ${x.text}`) : []
+                r.lens[key] = [...(r.lens[key] || []), ...said]
+                for (const re of res) if (!r.lens[key].some((t) => re.test(t))) r.failures.push(`Lens gave no warning matching ${re} for ${key} (warnings: ${r.lens[key].join(' | ') || 'none'})`)
+            }
         }
         r.errors = v.errors.filter((x) => !/favicon/.test(x))
         if (r.errors.length) r.failures.push(`${r.errors.length} browser console errors or failed requests`)

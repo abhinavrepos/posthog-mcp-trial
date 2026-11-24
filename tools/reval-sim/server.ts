@@ -222,7 +222,7 @@ export class StandInPostHog {
         if (/AS dialog, topK\(3\)/.test(query)) {
             const seen = new Map<string, string>()
             for (const s of SCREENS) if (!seen.has(s.event)) seen.set(s.event, s.name)
-            if (_values.cursor) return { columns: ['dialog', 'names', 'opens', 'sessions', 'clients'], results: [] }
+            if (values.cursor) return { columns: ['dialog', 'names', 'opens', 'sessions', 'clients'], results: [] }
             return { columns: ['dialog', 'names', 'opens', 'sessions', 'clients'], results: [...seen].sort().map(([d, n]) => [d, [n], 40, 30, 5]) }
         }
         const rows = p.events.filter((e) => {
