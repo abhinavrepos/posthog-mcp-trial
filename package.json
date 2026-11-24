@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx --test test/*.test.ts",
     "service": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx src/service/server.ts",
+    "ui-shots": "node tools/ui-shots/run.mjs",
     "demo-app": "tsx demo-app/server.ts",
     "mcp": "NODE_OPTIONS=--disable-warning=ExperimentalWarning tsx src/mcp/stdio.ts",
     "sessions": "tsx scripts/generate-sessions.ts",
