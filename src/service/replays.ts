@@ -851,6 +851,9 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
     const mainId = `<script>addEventListener('DOMContentLoaded',()=>{const m=document.querySelector('main');if(m){if(!m.id)m.id='main';if(!m.hasAttribute('tabindex'))m.tabIndex=-1}
 // On phones the tab bars scroll sideways: keep the current tab in view (on load, and when tabs switch).
 const keep=()=>document.querySelectorAll('main [aria-current=page],main [role=tab][aria-selected=true]').forEach(t=>{for(let a=t.parentElement;a&&a!==m;a=a.parentElement){if(a.scrollWidth>a.clientWidth+1&&/auto|scroll/.test(getComputedStyle(a).overflowX)){const r=t.getBoundingClientRect(),c=a.getBoundingClientRect();a.scrollLeft+=r.left-c.left-(c.width-r.width)/2;break}}});
+// Tables are filled by several page scripts. Keep column labels on their cells as rows change.
+const labelTables=()=>document.querySelectorAll('main table').forEach(table=>{const heads=[...table.querySelectorAll('thead th')].map(th=>th.textContent.trim());if(!heads.length)return;table.querySelectorAll('tbody tr').forEach(row=>{[...row.children].forEach((cell,i)=>{if(cell.hasAttribute('colspan'))return;const label=heads[i]||'';if(label&&cell.dataset.label!==label)cell.dataset.label=label})})});
+labelTables();new MutationObserver(labelTables).observe(m,{childList:true,subtree:true});
 const active=document.querySelector('header.shell nav [aria-current=page]');
 if(active){const nav=active.closest('nav');const link=active.getBoundingClientRect(),bar=nav.getBoundingClientRect();if(link.right>bar.right)nav.scrollLeft+=link.right-bar.right}
 keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeout(keep));document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('[role=tab]'))setTimeout(keep)})})</script>`
@@ -898,7 +901,7 @@ function pageHtml(v: Viewer): string {
     const bookmarklet = `javascript:(()=>{window.open(${JSON.stringify(config.service.publicUrl + '/replays?url=')}+encodeURIComponent(location.href))})()`
     const boot = JSON.stringify({ lengths: LENGTHS, ttl: config.service.clipLinkTtlHours, retention: RETENTION_DAYS, perHour: PER_HOUR, canDownload: can(v.role, 'download'), shareLinks: can(v.role, 'download') && loadAccess().allow_share_links }).replace(/</g, '\\u003c')
     return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Replay clips · ${esc(APP_NAME)}</title><style>${PAGE_CSS()}
-
+.clips-page #recent td{vertical-align:middle}.clips-page #recent td:last-child button{vertical-align:middle}.clips-page #start,.clips-page #length{font-size:14px;line-height:20px}
 </style></head>
 <body>${headerHtml(v, 'Replay clips')}<main id="main" tabindex="-1" class="clips-page narrow">
 <div class="page-head"><div><h1>Replay clips</h1><p>Choose a replay and make a clip to share.</p></div></div>

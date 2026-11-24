@@ -338,11 +338,11 @@ main .ghost{border-color:transparent;color:var(--ink)}
 main table{table-layout:fixed}
 main td,main th{overflow-wrap:anywhere}
 main td{padding-top:12px;padding-bottom:12px}
-.people-table{table-layout:fixed;width:100%;min-width:0}.people-table :is(th,td):nth-child(4){min-width:160px}.person-save{display:block;margin-top:4px}.person-save:empty{display:none}
+.people-table{table-layout:fixed;width:100%;min-width:0}.people-table td select{width:100%;max-width:none}.people-table td:nth-child(2) select,.people-table td:nth-child(5) select{min-width:185px}.people-table :is(th,td):nth-child(4){min-width:160px}.person-save{display:block;margin-top:4px}.person-save:empty{display:none}
 .person-meta{margin-top:2px}
 .people-table td:nth-child(6){white-space:nowrap;font-size:12px}
 .people-table td select{max-width:100%;font-size:13px;padding:7px 4px}
-.people-table td{font-size:13px}
+.people-table td{font-size:13px}.people-table{min-width:1080px}.people-table td select{padding-left:10px;padding-right:22px}.tabs{gap:20px}
 .people-table td:first-child b{font-weight:600}
 #people-filter{max-width:360px}
 .add-person[open] summary,.settings[open] summary{margin-bottom:16px}
@@ -444,7 +444,7 @@ ${adminTabs()}
 <div class="card"><h2>People</h2><p class="small muted">Changes to access save automatically.</p><div class="people-toolbar"><div><label for="people-filter">Find a person</label><input id="people-filter" type="search" placeholder="Name or email"></div><details class="add-person"><summary>Add a person</summary><div class="toolbar"><div><label for="new-email">PostHog email</label><input id="new-email" type="email" placeholder="name@company.com"></div>
 <div><label for="new-role">Role</label><select id="new-role"></select></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-system"><input id="new-system" type="checkbox"> System page</label></div><div style="flex:0;white-space:nowrap"><label class="check" for="new-insights"><input id="new-insights" type="checkbox"> Replay insights</label></div><div style="flex:0"><label for="new-surveys">Surveys</label><select id="new-surveys"></select></div><div style="flex:0"><label for="new-dashboards">Dashboards</label><select id="new-dashboards"></select></div><div style="flex:0"><button type="button" id="add">Add person</button></div></div></details></div>
 <p id="people-msg" class="small" aria-live="polite"></p>
-<div class="table-wrap" role="region" aria-label="People access table" tabindex="0"><table class="people-table" role="table"><colgroup><col style="width:23%"><col style="width:14%"><col style="width:15%"><col style="width:160px"><col style="width:12%"><col style="width:8%"><col style="width:12%"></colgroup><thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Person</th><th scope="col" role="columnheader">Clip role</th><th scope="col" role="columnheader">Extra access</th><th scope="col" role="columnheader">Surveys</th><th scope="col" role="columnheader">Dashboards</th><th scope="col" role="columnheader">Last seen</th><th scope="col" role="columnheader">Actions</th></tr></thead><tbody id="people" role="rowgroup"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table></div><div id="people-pager"></div></div>
+<div class="table-wrap" role="region" aria-label="People access table" tabindex="0"><table class="people-table" role="table"><colgroup><col style="width:18%"><col style="width:20%"><col style="width:12%"><col style="width:16%"><col style="width:18%"><col style="width:6%"><col style="width:10%"></colgroup><thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Person</th><th scope="col" role="columnheader">Clip role</th><th scope="col" role="columnheader">Extra access</th><th scope="col" role="columnheader">Surveys</th><th scope="col" role="columnheader">Dashboards</th><th scope="col" role="columnheader">Last seen</th><th scope="col" role="columnheader">Actions</th></tr></thead><tbody id="people" role="rowgroup"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table></div><div id="people-pager"></div></div>
 
 <details class="settings"><summary>Access defaults</summary><p class="small muted">Changes save automatically.</p>
 <div class="toolbar"><div><label for="default-role">Role for other PostHog users</label><select id="default-role"></select></div>
