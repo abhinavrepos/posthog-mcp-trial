@@ -21,7 +21,7 @@ Installing and upgrading are covered step by step in [SETUP.md](SETUP.md).
 | Watchlist | For chosen clients, every new replay as steps: hovering, pauses, back-and-forth, failed submits, slow answers, with links to the moment |
 | Live | Who is in Reval now, and each client's active and idle time per day and hour |
 | Dashboards | Monday briefing, Rescue Queue, Client Task Map, Flow time, Scorecard, Client story, pinned charts |
-| Surveys | Short in-app surveys for chosen users, with launch safeguards |
+| Surveys | Short in-app surveys for chosen users, with launch safeguards, and a warning when a step or the client audience never matched recent events |
 | Chat | Personal keys for Copilot |
 | System | Health of PostHog, Lens and the machine |
 | Admin | Who may see what, client outcomes, clips, activity, and client privacy (codenames) |
@@ -54,6 +54,11 @@ delivery, chat pre-warm).
 - **Recent changes** is the timeline: when each check went down, when it recovered, and for how long.
 - `GET /healthz` on the status service answers 503 when anything is down, for uptime monitors;
   `STATUS_ALERT_WEBHOOK` sends Teams or Slack messages when a check stays down and when it recovers.
+- Reasons are specific: PostHog's ClickHouse not answering, a key that lacks a scope, a wrong
+  `POSTHOG_PROJECT_ID`, an answer Lens could not read, a full disk, read-only storage or a damaged database
+  file. A full disk or read-only storage no longer stops the service; jobs say why and recover when it is fixed.
+- A setting with a value that is not a number keeps its default and the log names the setting; an unreadable
+  `APP_EVENTS_FILE` names the file and the setting.
 - The Lens service log (`logs/service.log`, one JSON object per line) records when a job starts failing,
   every tenth failure, and when it recovers, and the reason for a crash before the service restarts.
 
