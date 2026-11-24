@@ -193,7 +193,7 @@ export class StandInPostHog {
             if (!/^Bearer /.test(String(req.headers.authorization || ''))) return json(res, 401, { detail: 'no key' })
             const p = this.project(api[1])
             const data = body.length ? JSON.parse(body.toString('utf8')) : {}
-            if (api[2] === 'query') return json(res, 200, this.hogql(String(data.query?.query || ''), data.query?.values || {}))
+            if (api[2] === 'query') return json(res, 200, this.hogql(String(data.query?.query || ''), data.query?.values || {}, p))
             const id = api[3]
             if (!id && req.method === 'GET') {
                 const q = url.searchParams.get('search')
@@ -216,16 +216,64 @@ export class StandInPostHog {
         json(res, 404, { detail: 'unknown to the stand-in' })
     }
 
-    // Only what Lens asks while checking a survey: the dialogs seen (dialogNames). Anything else: no rows.
-    // Every screen of the simulated Reval has been used lately (with its title as dialog_name).
-    private hogql(query: string, _values: Record<string, unknown>) {
+    // Answer the bounded evidence queries from events the browser actually sent. Keep the older
+    // dialogNames fixture for the catalog, which is independent of this visit's event history.
+    private hogql(query: string, values: Record<string, unknown>, p: Project) {
         if (/AS dialog, topK\(3\)/.test(query)) {
             const seen = new Map<string, string>()
             for (const s of SCREENS) if (!seen.has(s.event)) seen.set(s.event, s.name)
             if (_values.cursor) return { columns: ['dialog', 'names', 'opens', 'sessions', 'clients'], results: [] }
             return { columns: ['dialog', 'names', 'opens', 'sessions', 'clients'], results: [...seen].sort().map(([d, n]) => [d, [n], 40, 30, 5]) }
         }
-        return { columns: [], results: [] }
+        const rows = p.events.filter((e) => {
+            if (typeof values.days === 'number' && e.at < Date.now() - values.days * 86400000) return false
+            if (values.history_from && e.at < Date.parse(String(values.history_from))) return false
+            if (values.history_to && e.at >= Date.parse(String(values.history_to))) return false
+            return true
+        })
+        const events = (values.events as string[] | undefined)
+        const app = rows.filter((e) => events?.includes(e.event))
+        const result = (columns: string[], objects: Record<string, unknown>[]) => ({ columns, results: objects.map((r) => columns.map((c) => r[c] ?? null)) })
+        if (/SELECT count\(\) AS n, .* AS carried, countIf\(/s.test(query)) {
+            const property = /toString\(properties\.([A-Za-z_$][\w$]*)\)/.exec(query)?.[1]
+            const part = /splitByChar\('[^']+', toString\(distinct_id\)\)\[(\d+)\]/.exec(query)?.[1]
+            const separator = /splitByChar\('([^']+)'/.exec(query)?.[1] || '|'
+            const client = (e: Captured) => property ? String(e.properties[property] ?? '') : part ? e.distinct_id.split(separator)[Number(part) - 1] || '' : ''
+            const chosen = (values.clients as string[] || []).map((x) => x.toLowerCase())
+            return result(['n', 'carried', 'chosen'], [{ n: app.length, carried: app.filter((e) => property ? client(e) !== '' : e.distinct_id.split(separator).length >= Number(part)).length,
+                chosen: app.filter((e) => chosen.includes(client(e).toLowerCase())).length }])
+        }
+        if (/SELECT count\(\) AS n FROM events/.test(query)) return result(['n'], [{ n: app.length }])
+        const grouped = (items: Captured[], key: (e: Captured) => string) => {
+            const counts = new Map<string, number>()
+            for (const e of items) counts.set(key(e), (counts.get(key(e)) || 0) + 1)
+            return [...counts].map(([v, n]) => ({ v, n })).sort((a, b) => b.n - a.n)
+        }
+        if (/AS id, .* AS name,/.test(query) && /GROUP BY id, name/.test(query)) {
+            const groups = new Map<string, { id: string; name: string; opens: number; closes: number; n: number }>()
+            for (const e of rows.filter((x) => x.event === values.screen)) {
+                const id = String(e.properties.dialog_id ?? ''), name = String(e.properties.dialog_name ?? ''), key = `${id}\0${name}`
+                const r = groups.get(key) || { id, name, opens: 0, closes: 0, n: 0 }
+                r.n++; if ((values.open as string[] || []).includes(String(e.properties.action))) r.opens++
+                if ((values.close as string[] || []).includes(String(e.properties.action))) r.closes++
+                groups.set(key, r)
+            }
+            return result(['id', 'name', 'opens', 'closes', 'n'], [...groups.values()].sort((a, b) => b.n - a.n).slice(0, 10000))
+        }
+        if (/AS id, count\(\) AS n/.test(query) && /event = \{interaction\}/.test(query))
+            return result(['id', 'n'], grouped(rows.filter((e) => e.event === values.interaction && (values.ids as string[] || []).includes(String(e.properties.dialog_id))), (e) => String(e.properties.dialog_id)).map((r) => ({ id: r.v, n: r.n })))
+        if (/toString\(properties\.[\w$]+\) AS v, count\(\) AS n/.test(query) && /event = \{interaction\}/.test(query)) {
+            const property = /toString\(properties\.([\w$]+)\) AS v/.exec(query)![1]
+            const skip = new Set(values.msg as string[] || [])
+            const filtered = rows.filter((e) => e.event === values.interaction && !skip.has(String(e.properties.dialog_id)))
+            return result(['v', 'n'], grouped(filtered, (e) => String(e.properties[property] ?? '')).slice(0, 5000))
+        }
+        if (/\bAS v, count\(\) AS n/.test(query) && /\{list\}/.test(query)) {
+            const property = /toString\(properties\.([\w$]+)\)/.exec(query)?.[1]
+            const filtered = rows.filter((e) => (!property || e.event === values.interaction) && (values.list as string[] || []).includes(String(property ? e.properties[property] ?? '' : e.event).toLowerCase()))
+            return result(['v', 'n'], grouped(filtered, (e) => String(property ? e.properties[property] ?? '' : e.event)).slice(0, 200))
+        }
+        throw new Error(`Unexpected simulation HogQL: ${query.slice(0, 180)}`)
     }
 }
 
