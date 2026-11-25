@@ -61,6 +61,13 @@ Run with `node --import tsx src/service/server.ts`. Check with `npx tsc --noEmit
   short-lived key (`deploy/posthog/survey-engine/opt-in.sh`, `--check` to only report). `lens.sh doctor` fails when
   surveys are on in Signal but off in the project.
 
+**Link addresses.** MCP answers and pages build links from two settings in `.secrets.env`:
+`SERVICE_PUBLIC_URL` for Signal's own pages (clips, Pinned, surveys), for example `http://10.10.10.5:8080`, and
+`POSTHOG_LINK_URL` for PostHog replay links, for example `http://10.10.10.5:8010` or
+`https://c1.posthog.example.com`. Each is reduced to one `scheme://host[:port]`: a path or a second address is
+dropped, so a link never holds two addresses. After a change, restart Signal and rerun `deploy/posthog-mcp/up.sh`
+(PostHog's MCP uses `POSTHOG_LINK_URL` too).
+
 **Memory (`deploy/posthog/tune.sh`, `--dry-run` to preview, `--undo` to remove).** Without it, ClickHouse may use
 90% of RAM and one heavy query can starve the rest of PostHog. On a machine with 48 GB or more, `tune.sh` caps
 ClickHouse at half the RAM, up to 32 GB. One query may use 60% of that, and big sorts and group-bys spill to disk

@@ -59,8 +59,14 @@ PY
 [ -f "$SECRETS" ] || { echo "$SECRETS is missing: run scripts/setup-posthog.sh first."; exit 1; }
 docker network inspect "$POSTHOG_NETWORK" >/dev/null 2>&1 || { echo "Docker network $POSTHOG_NETWORK not found. Set POSTHOG_NETWORK (docker network ls | grep default)."; exit 1; }
 
-public="$(get POSTHOG_PUBLIC_HOST)"
-[ -n "$public" ] || { echo "POSTHOG_PUBLIC_HOST is not set in $SECRETS."; exit 1; }
+# Links in PostHog MCP answers: POSTHOG_LINK_URL (the same setting as Signal's replay links), else
+# POSTHOG_PUBLIC_HOST. Only the first address, as scheme://host[:port], so links never glue two addresses.
+public="$(get POSTHOG_LINK_URL)"; [ -n "$public" ] || public="$(get POSTHOG_PUBLIC_HOST)"
+[ -n "$public" ] || { echo "POSTHOG_LINK_URL or POSTHOG_PUBLIC_HOST must be set in $SECRETS."; exit 1; }
+public="$(python3 -c 'import sys,re,urllib.parse as u
+a=re.split(r"[,\s]+",sys.argv[1].strip())[0]
+if "://" not in a: a=("http" if re.match(r"^(\d+\.){3}\d+(:\d+)?(/|$)|^localhost",a) else "https")+"://"+a
+p=u.urlsplit(a); print(f"{p.scheme}://{p.netloc}")' "$public")"
 export MCP_POSTHOG_PUBLIC_URL="$public"
 # Internal HTTP avoids load balancer certificates and hairpin routing.
 export MCP_POSTHOG_API_URL="${MCP_POSTHOG_API_URL:-http://web:8000}"

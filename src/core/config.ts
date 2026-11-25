@@ -27,6 +27,15 @@ loadEnvFile(ENV_FILE)
 
 const env = (k: string, d = ''): string => process.env[k] ?? d
 const stripSlash = (s: string) => s.replace(/\/+$/, '')
+/** A link base: one address, as scheme://host[:port]. "10.10.10.5:8010", "http://10.10.10.5/c1.example.com" or
+ * "a, b" become "http://10.10.10.5:8010", "http://10.10.10.5" and the first address, so links are never two
+ * addresses glued together. A bare IP gets http://, a name https://. */
+export function linkBase(raw: string): string {
+    const first = raw.trim().split(/[,\s]+/).find(Boolean) || ''
+    if (!first) return ''
+    const withScheme = first.includes('://') ? first : `${/^(?:\d+\.){3}\d+(?::\d+)?(?:\/|$)|^\[|^localhost(?::|\/|$)/i.test(first) ? 'http' : 'https'}://${first}`
+    try { const u = new URL(withScheme); return `${u.protocol}//${u.host}` } catch { return stripSlash(withScheme) }
+}
 // Property names go into HogQL as identifiers, so only plain names are allowed.
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/
 function propName(key: string, fallback: string, optional = false): string {
@@ -86,8 +95,7 @@ function loadScreens(): Screen[] | undefined {
 // Public replay links must never inherit the container-only API endpoint.
 export function posthogLinkHost(settings: NodeJS.ProcessEnv): string {
     const first = (settings.POSTHOG_ADDRESS || settings.ADDRESSES || '').split(/[,\s]+/).find(Boolean) || ''
-    const address = first && !first.includes('://') ? `${/^(?:\d+\.){3}\d+(?::\d+)?$/.test(first) || first.startsWith('[') ? 'http' : 'https'}://${first}` : first
-    return stripSlash(settings.POSTHOG_LINK_URL || settings.POSTHOG_PUBLIC_HOST || address || 'http://localhost')
+    return linkBase(settings.POSTHOG_LINK_URL || settings.POSTHOG_PUBLIC_HOST || first || '') || 'http://localhost'
 }
 
 export const config = {
@@ -165,7 +173,7 @@ export const config = {
     service: {
         port: Number(env('SERVICE_PORT', '8080')),
         // Base URL people use to open clip links (served by the triage service).
-        publicUrl: stripSlash(env('SERVICE_PUBLIC_URL', 'http://localhost:8080')),
+        publicUrl: linkBase(env('SERVICE_PUBLIC_URL', 'http://localhost:8080')) || 'http://localhost:8080',
         // Bearer token for /mcp and signing key for clip links. Required for anything but localhost.
         mcpToken: env('MCP_TOKEN'),
         clipLinkSecret: env('CLIP_LINK_SECRET'),
