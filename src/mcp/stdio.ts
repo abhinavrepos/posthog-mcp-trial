@@ -21,7 +21,9 @@ const server = new McpServer(lensServerInfo, { instructions: serverInstructions(
 registerTools(server)
 warmClientResolver()
 const transport = new StdioServerTransport()
+const connectStarted=performance.now()
 await server.connect(transport)
+console.error(`[lens warm] MCP connect: ${Math.round(performance.now()-connectStarted)} ms`)
 
 const stop = async () => {
     await shutdownClips().catch(() => {})

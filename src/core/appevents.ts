@@ -92,10 +92,13 @@ let loaded: AppEvents | null | undefined
 /** The vocabulary from APP_EVENTS_FILE, or null when none is set. */
 export function appEvents(): AppEvents | null {
     if (loaded !== undefined) return loaded
+    const started=performance.now()
     const file = config.appEventsFile
-    if (!file) return (loaded = null)
+    if (!file) { console.error(`[lens warm] app events/schema lookup: ${Math.round(performance.now()-started)} ms`); return (loaded = null) }
     const path = isAbsolute(file) ? file : join(ROOT, file)
-    return (loaded = parseAppEvents(JSON.parse(readFileSync(path, 'utf8')), file))
+    loaded = parseAppEvents(JSON.parse(readFileSync(path, 'utf8')), file)
+    console.error(`[lens warm] app events/schema lookup: ${Math.round(performance.now()-started)} ms`)
+    return loaded
 }
 
 
@@ -134,7 +137,7 @@ export async function recordingSpans(ids: string[]): Promise<Map<string, { start
         FROM raw_session_replay_events WHERE session_id IN {ids} GROUP BY session_id LIMIT 100`, {ids})
     return markPartial(new Map(rows.map(r => [String(r.session_id), {start: new Date(String(r.start)).toISOString(), end: new Date(String(r.end)).toISOString()}])), isTruncated(rows))
 }
-export interface SessionQuery { clientId: string; screen?: string; what?: string; user?: string; email?: string; from: Date; to: Date; limit?: number; cursor?: string; recordedOnly?: boolean }
+export interface SessionQuery { clientId: string; screen?: string; what?: string; user?: string; email?: string; from: Date; to: Date; limit?: number; cursor?: string; recordedOnly?: boolean; detail?: boolean }
 export async function findSessions(q: SessionQuery) {
     if (!Number.isFinite(+q.from) || !Number.isFinite(+q.to) || q.to <= q.from || +q.to - +q.from > 366 * 86400000) throw new ToolInputError('Choose a time window of at most one year.')
     const reg = required(), limit = Math.max(1, Math.min(q.limit ?? 10, 20))
@@ -165,11 +168,11 @@ export async function findSessions(q: SessionQuery) {
     // MCP carries both JSON text and structuredContent: budget their combined serialized size.
     const pageSize = (sessions: unknown[]) => {
         const json=JSON.stringify({sessions})
-        return json.length + JSON.stringify(json).length + 100
+        return Buffer.byteLength(json) + Buffer.byteLength(JSON.stringify(json)) + 100
     }
     let truncatedBySize = false
     let partial = !!hits.truncated || !!spans.truncated
-    const sessions = []
+    const sessions: any[] = []
     for (const h of hits) {
         const sid = String(h.sid)
         const dialog=prop(reg,'dialog'), message=prop(reg,'button')
@@ -214,7 +217,7 @@ export async function findSessions(q: SessionQuery) {
             return name && !dialogIds.has(name) && !/^(?:Dlg\w*|toast|messagebox|UNKNOWN)$/i.test(name) ? name : ''
         }
         const screens = [...new Set(ev.filter(e=>!isMessage(e)).map(e=>humanName(e.name) || humanName(e.tab)).filter(Boolean))]
-        const dense = ev.length >= 50
+        const dense = !q.detail && ev.length >= 50
         const session = {session_id:sid, user:String(ev[0]?.user || ''), distinct_id:ev[0]?.distinct_id,
             session_start:ev[0]?.session_start ?? ev[0]?.ts ?? null, session_end:ev[0]?.session_end ?? ev.at(-1)?.ts ?? null,
             recording_start:span?.start ?? null, recording_end:span?.end ?? null,
@@ -241,18 +244,30 @@ export async function findSessions(q: SessionQuery) {
             recording:span ? true : recordingCheckFailed ? 'unknown' : false, offset_s:offset,
             replay_url:replayUrl(sid,offset), clip_url:`${config.service.publicUrl}/replays?url=${encodeURIComponent(replayUrl(sid,offset))}`,
             ...markPartial({}, isTruncated(ev) || ev.length >= 5000)}
-        // A single unusually verbose session must still make progress through the cursor.
-        if(!sessions.length) {
+        const topScreens = screens.slice(0,5).map(s=>s.slice(0,11))
+        if(screens.length>5) topScreens.push(`+${screens.length-5} more`)
+        const firstAction = session.matched_actions[0]
+        const compact = {
+            session_id:sid, user:session.user, session_start:session.session_start,
+            duration_s:Math.max(0,(Date.parse(String(session.session_end))-Date.parse(String(session.session_start)))/1000),
+            events_in_session:session.events_in_session, screens:topScreens,
+            matched_action:firstAction ? [firstAction.action,firstAction.message].filter(Boolean).join(': ').slice(0,48) : null,
+            replay_url:session.replay_url, clip_url:session.clip_url,
+            ...markPartial({}, isTruncated(ev) || ev.length >= 5000),
+        }
+        const entry = q.detail ? session : compact
+        // A single unusually verbose detailed session must still make progress through the cursor.
+        if(q.detail && !sessions.length) {
             while(pageSize([session]) > 18500 && session.matched_actions.length) session.matched_actions.pop()
             while(pageSize([session]) > 18500 && session.screens.length) session.screens.pop()
             session.matched_actions_truncated=session.matched_actions.length < session.matched_actions_total
         }
         // Leave room for the cursor and note. Never consume a session that the page did not return.
-        if(pageSize([...sessions,session]) > 19000) { truncatedBySize=true; break }
-        sessions.push(session)
+        if(pageSize([...sessions,entry]) > 19000) { truncatedBySize=true; break }
+        sessions.push(entry)
     }
     const last = hits[sessions.length-1]
     return {sessions, ...markPartial({}, partial), ...(q.what && !sessions.length ? {hint:`No session in this window matched "${q.what}"${q.screen ? ` with screen "${q.screen}"` : ''}. what is a literal substring: try a shorter word or one distinctive word (for example the first word of the phrase), or drop the screen filter.`} : {}), ...((more || truncatedBySize) && last ? {next_cursor:`${last.last}|${last.sid}`} : {}),
         ...(truncatedBySize ? {truncated_by_size:true} : {}),
-        note:recordingCheckFailed ? 'Recording availability could not be checked.' : sessions.length && !sessions.some(s=>s.recording===true) ? 'Sessions found, but none have a recording.' : 'Newest sessions first. Details are limited to 5000 events per session; matched actions to 10; screens to 15. Follow next_cursor for more sessions.'}
+        note:recordingCheckFailed ? 'Recording availability could not be checked.' : sessions.length && !sessions.some(s=>spans.has(String(s.session_id))) ? 'Sessions found, but none have a recording.' : q.detail ? 'Newest sessions first. Details are limited to 5000 events per session; matched actions to 10; screens to 15. Follow next_cursor for more sessions.' : 'Newest first. Set detail: true for action context; use next_cursor for more.'}
 }

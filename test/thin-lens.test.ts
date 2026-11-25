@@ -93,7 +93,7 @@ test('find_sessions uses names, action text, user and bounded newest paging; ret
         }
         return response(events)
     })
-    const result=await findSessions({clientId:'SEM',screen:'cash positions',what:'failed to save',user:'sem ops',limit:1,...window})
+    const result=await findSessions({detail:true,clientId:'SEM',screen:'cash positions',what:'failed to save',user:'sem ops',limit:1,...window})
     const s=result.sessions[0];assert.equal(s.user,'SEMOPS');assert.equal(s.error_messages_in_session,1);assert.equal(s.recording,true)
     assert.match(s.replay_url,/https:\/\/ph.example\/project\/7\/replay\/session-one\?t=7/)
     assert.match(s.clip_url,/https:\/\/lens.example\/replays\?url=/);assert.match(decodeURIComponent(s.clip_url),/session-one\?t=7/)
@@ -104,10 +104,10 @@ test('find_sessions explicitly reports missing recordings, validates cursors and
         const q=JSON.parse(String(init.body)).query
         return response(q.query.includes('raw_session')?[]:q.query.includes('GROUP BY sid')?[{sid:'session-one',last:events[1].ts}]:events)
     })
-    const result=await findSessions({clientId:'SEM',limit:1,...window});assert.match(result.note,/none have a recording/)
+    const result=await findSessions({detail:true,clientId:'SEM',limit:1,...window});assert.match(result.note,/none have a recording/)
     assert.equal(result.sessions[0].recording,false);assert.ok(result.sessions[0].replay_url && result.sessions[0].clip_url)
-    await assert.rejects(findSessions({clientId:'SEM',cursor:'bad',...window}),/next_cursor/)
-    await assert.rejects(findSessions({clientId:'SEM',from:new Date('2020-01-01'),to:new Date()}),/one year/)
+    await assert.rejects(findSessions({detail:true,clientId:'SEM',cursor:'bad',...window}),/next_cursor/)
+    await assert.rejects(findSessions({detail:true,clientId:'SEM',from:new Date('2020-01-01'),to:new Date()}),/one year/)
 })
 test('pin_graph validates size and lengths, persists immutable snapshots, safely renders, and enforces ownership',()=>{
     const input={title:'<script>bad</script>',note:'Saved <now>',chart:{type:'line' as const,x:['Jan','Feb'],series:[{name:'Events',values:[2,5]}]}}
@@ -288,8 +288,8 @@ test('find_sessions recorded_only keeps only sessions that have a recording, and
         return response([])
     })
     const window={from:new Date('2026-11-12T00:00:00Z'),to:new Date('2026-11-19T00:00:00Z')}
-    await findSessions({clientId:'SEM',limit:1,recordedOnly:true,...window})
-    await findSessions({clientId:'SEM',limit:1,...window})
+    await findSessions({detail:true,clientId:'SEM',limit:1,recordedOnly:true,...window})
+    await findSessions({detail:true,clientId:'SEM',limit:1,...window})
     assert.match(seen[0]!,/IN \(SELECT session_id FROM raw_session_replay_events/)
     assert.doesNotMatch(seen[1]!,/raw_session_replay_events/)
 })
@@ -323,9 +323,9 @@ test('find_sessions retains action screens, orders matches chronologically and a
         if(q.query.includes('raw_session'))return response([{session_id:'one',start:'2026-11-18T08:59:50Z',end:'2026-11-18T09:00:40Z'}])
         return response(q.query.includes('GROUP BY sid')?[{sid:'one',last:timeline.at(-1)!.ts}]:timeline)
     })
-    const {sessions:[s]}=await findSessions({clientId:'SEM',screen:'Chart of Accounts',what:'Save',...window})
+    const {sessions:[s]}=await findSessions({detail:true,clientId:'SEM',screen:'Chart of Accounts',what:'Save',...window})
     assert.equal(s.matches_on_target_screen,1);assert.equal(s.matches_elsewhere,2)
-    assert.deepEqual(s.matched_actions.map(a=>a.at),[timeline[0].ts,timeline[2].ts,timeline[4].ts])
+    assert.deepEqual(s.matched_actions.map((a:{at:string})=>a.at),[timeline[0].ts,timeline[2].ts,timeline[4].ts])
     const target=s.matched_actions[1]
     assert.equal(target.on_target_screen,true)
     assert.deepEqual(target.outcome,{at:timeline[3].ts,text:'Trade Id Updated',is_error:false,screen:'Chart of Accounts',dialog_id:'toast',after_s:1,basis:'same screen, before any other action'})
@@ -347,7 +347,7 @@ test('find_sessions bounds actions, screens and serialized pages without skippin
         if(q.query.includes('GROUP BY sid')){assert.match(q.query,/LIMIT 21/);return response(hits)}
         return response(Array.from({length:30},(_,i)=>({...events[0],name:`Screen ${i}`,tab:`Tab ${i}`,message:'Save '+ 'x'.repeat(400)})))
     })
-    const result=await findSessions({clientId:'SEM',limit:30,...window})
+    const result=await findSessions({detail:true,clientId:'SEM',limit:30,...window})
     assert.equal(result.truncated_by_size,true);assert.ok(result.sessions.length>0 && result.sessions.length<20)
     const {jsonResult}=await import('../src/mcp/result.ts')
     assert.ok(JSON.stringify(jsonResult('Sessions',result)).length<=20000)
@@ -357,7 +357,7 @@ test('find_sessions bounds actions, screens and serialized pages without skippin
     assert.equal(s.recording_start,null);assert.equal(s.recording_end,null);assert.equal(s.recording_duration_s,null)
 })
 
-test('dense sessions retain the requested page limit with compact action and screen summaries',async t=>{
+test('detail:true expands dense actions and screens while preserving the size cursor',async t=>{
     const hits=Array.from({length:11},(_,i)=>({sid:`dense-${10-i}`,last:`2026-11-18T09:00:${String(30-i).padStart(2,'0')}Z`}))
     t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
         const q=JSON.parse(String(init.body)).query
@@ -365,13 +365,36 @@ test('dense sessions retain the requested page limit with compact action and scr
         if(q.query.includes('GROUP BY sid'))return response(hits)
         return response(Array.from({length:137},(_,i)=>({...events[0],ts:new Date(Date.parse(events[0].ts)+i*1000).toISOString(),name:`Screen ${i%20}`,message:'Export'})))
     })
-    const result=await findSessions({clientId:'SEM',limit:10,...window})
-    assert.equal(result.sessions.length,10)
-    assert.equal(result.truncated_by_size,undefined)
-    assert.equal(result.next_cursor,`${hits[9].last}|${hits[9].sid}`)
-    assert.ok(result.sessions.every(s=>s.screens.length<=5 && s.matched_actions.length<=2 && s.matched_actions_truncated))
+    const result=await findSessions({detail:true,clientId:'SEM',limit:10,...window})
+    assert.ok(result.sessions.length>0 && result.sessions.length<10)
+    assert.equal(result.truncated_by_size,true)
+    assert.equal(result.next_cursor,`${hits[result.sessions.length-1].last}|${hits[result.sessions.length-1].sid}`)
+    assert.equal(result.sessions[0].screens.length,15)
+    assert.equal(result.sessions[0].matched_actions.length,10)
     const {jsonResult}=await import('../src/mcp/result.ts')
     assert.ok(JSON.stringify(jsonResult('Sessions',result)).length<=20000)
+})
+test('default page fits 20 sessions with 26 screens and 137 events each',async t=>{
+    const hits=Array.from({length:21},(_,i)=>({sid:`dense-${20-i}`,last:new Date(Date.parse('2026-11-18T09:20:00Z')-i*1000).toISOString()}))
+    const timeline=Array.from({length:137},(_,i)=>({...events[0],ts:new Date(Date.parse('2026-11-18T09:00:00Z')+i*1000).toISOString(),name:`Screen ${i%26} Financial Overview`,message:'Export monthly report'}))
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
+        const q=JSON.parse(String(init.body)).query
+        return response(q.query.includes('raw_session')?[]:q.query.includes('GROUP BY sid')?hits:timeline)
+    })
+    const result=await findSessions({clientId:'SEM',limit:20,...window})
+    assert.equal(result.sessions.length,20)
+    assert.equal(result.truncated_by_size,undefined)
+    assert.equal(result.next_cursor,`${hits[19].last}|${hits[19].sid}`)
+    for(const s of result.sessions){
+        assert.equal(s.events_in_session,137)
+        assert.deepEqual(s.screens,['Screen 0 Fi','Screen 1 Fi','Screen 2 Fi','Screen 3 Fi','Screen 4 Fi','+21 more'])
+        assert.ok(s.matched_action && s.replay_url && s.clip_url)
+        assert.equal('matched_actions' in s,false)
+    }
+    const {jsonResult}=await import('../src/mcp/result.ts')
+    const bytes=Buffer.byteLength(JSON.stringify(jsonResult('Sessions',result)))
+    t.diagnostic(`20 dense sessions MCP result: ${bytes} bytes`)
+    assert.ok(bytes<=19000)
 })
 
 test('data_guide exposes configured version, identity, coverage cache and SQL; resolve_client scopes counts through MCP',async t=>{
@@ -437,7 +460,7 @@ test('find_sessions stops outcomes at other actions and respects configured rule
         const q=JSON.parse(String(init.body)).query
         return response(q.query.includes('raw_session')?[]:q.query.includes('GROUP BY sid')?[{sid:'one',last:timeline.at(-1)!.ts}]:timeline)
     })
-    const {sessions:[s]}=await findSessions({clientId:'SEM',what:'Save',...window})
+    const {sessions:[s]}=await findSessions({detail:true,clientId:'SEM',what:'Save',...window})
     assert.equal(s.matched_actions[0].outcome,null)
     assert.equal(s.matched_actions[1].outcome?.is_error,false)
     assert.equal(s.matched_actions[2].outcome?.is_error,true);assert.equal(s.matched_actions[2].screen,'Fallback tab')
@@ -454,7 +477,7 @@ test('find_sessions keeps full session bounds and counts when the detail timelin
         assert.match(q.query,/countIf\(.*\) OVER \(\) AS error_messages_in_session/)
         return response(events.map(e=>({...e,...summary})))
     })
-    const {sessions:[s]}=await findSessions({clientId:'SEM',...window})
+    const {sessions:[s]}=await findSessions({detail:true,clientId:'SEM',...window})
     assert.equal(s.session_start,summary.session_start);assert.equal(s.session_end,summary.session_end)
     assert.equal(s.events_in_session,6000);assert.equal(s.error_messages_in_session,17)
 })
@@ -474,7 +497,7 @@ test('find_sessions scopes outcomes to screens before navigation and exposes bou
         const q=JSON.parse(String(init.body)).query
         return response(q.query.includes('raw_session')?[]:q.query.includes('GROUP BY sid')?[{sid:'one',last:timeline.at(-1)!.ts}]:timeline)
     })
-    const {sessions:[s]}=await findSessions({clientId:'SEM',...window})
+    const {sessions:[s]}=await findSessions({detail:true,clientId:'SEM',...window})
     assert.equal(s.matched_actions[0].outcome,null)
     assert.deepEqual(s.matched_actions[4].outcome,{at:timeline[5].ts,text:timeline[5].message,is_error:false,screen:'Chart of Accounts',dialog_id:'toast',after_s:1.234,basis:'same screen, before any other action'})
     for(const i of [3,5,6,7,8,9])assert.equal(s.matched_actions[i].outcome,null)
@@ -489,8 +512,8 @@ test('find_sessions scopes outcomes to screens before navigation and exposes bou
     assert.equal(s.matched_actions[9].before.length,2);assert.equal(s.matched_actions[9].after.length,0)
     for(const a of s.matched_actions) {
         assert.ok(!('context' in a));assert.ok(a.before.length<=2 && a.after.length<=3)
-        assert.ok(a.before.every(n=>n.dt_s<0));assert.ok(a.after.every(n=>n.dt_s>0))
-        for(const list of [a.before,a.after])assert.deepEqual(list.map(n=>n.dt_s),list.map(n=>n.dt_s).sort((a,b)=>a-b))
+        assert.ok(a.before.every((n:{dt_s:number})=>n.dt_s<0));assert.ok(a.after.every((n:{dt_s:number})=>n.dt_s>0))
+        for(const list of [a.before,a.after])assert.deepEqual(list.map((n:{dt_s:number})=>n.dt_s),list.map((n:{dt_s:number})=>n.dt_s).sort((a:number,b:number)=>a-b))
     }
 
 })
@@ -502,7 +525,7 @@ test('find_sessions gives a shorter literal search hint when what has no matches
         assert.match(q.query,/positionCaseInsensitive/)
         return response([])
     })
-    const result=await findSessions({clientId:'SEM',what:'market data error',from:new Date('2026-11-18'),to:new Date('2026-11-19')})
+    const result=await findSessions({detail:true,clientId:'SEM',what:'market data error',from:new Date('2026-11-18'),to:new Date('2026-11-19')})
     assert.deepEqual(result.sessions,[])
     assert.match(result.hint ?? "",/No session in this window matched "market data error".*literal substring: try a shorter word/)
 })
@@ -520,7 +543,7 @@ test('find_sessions lists only human screen names with tab fallback and labels m
         const q=JSON.parse(String(init.body)).query.query
         return response(q.includes('raw_session')?[]:q.includes('GROUP BY sid')?[{sid:'one',last:timeline.at(-1)!.ts}]:timeline)
     })
-    const {sessions:[s]}=await findSessions({clientId:'SEM',...window})
+    const {sessions:[s]}=await findSessions({detail:true,clientId:'SEM',...window})
     assert.deepEqual(s.screens,['Trade Entry','Fallback tab','Cash Forecast']);assert.equal(s.screens_total,3)
     assert.equal(s.matched_actions[4].action,'MESSAGE');assert.equal(s.matched_actions[4].is_error,false)
     assert.equal(s.matched_actions[5].action,'MESSAGE');assert.equal(s.matched_actions[5].is_error,true)
@@ -538,10 +561,10 @@ test('find_sessions keeps target-screen matches when over 10 actions match, show
         if(q.query.includes('raw_session'))return response([])
         return response(q.query.includes('GROUP BY sid')?[{sid:'one',last:timeline.at(-1)!.ts}]:timeline)
     })
-    const {sessions:[s]}=await findSessions({clientId:'SEM',screen:'Chart of Accounts',what:'Save',...window})
+    const {sessions:[s]}=await findSessions({detail:true,clientId:'SEM',screen:'Chart of Accounts',what:'Save',...window})
     assert.equal(s.matched_actions.length,10);assert.equal(s.matched_actions_total,13)
     assert.equal(s.matched_actions.at(-1)!.at,timeline.at(-1)!.ts);assert.equal(s.matched_actions.at(-1)!.on_target_screen,true)
-    const at=s.matched_actions.map(a=>String(a.at));assert.deepEqual(at,[...at].sort())
+    const at=s.matched_actions.map((a:{at:string})=>String(a.at));assert.deepEqual(at,[...at].sort())
 })
 
 test('chat cannot change a running survey; nothing is sent to PostHog',async t=>{

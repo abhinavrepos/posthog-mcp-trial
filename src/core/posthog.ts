@@ -174,6 +174,9 @@ async function readSlot<T>(work: () => Promise<T>): Promise<T> {
     finally { const next = readers.shift(); if (next) next(); else activeReads-- }
 }
 export async function hogql(query: string, values: Record<string, unknown> = {}, options: HogqlOptions = {}): Promise<Row[] & Completeness> {
+    const first = !firstHogqlStarted
+    if (first) firstHogqlStarted = true
+    const firstStart = performance.now()
     const read = async () => {
         for (let attempt = 0; ; attempt++) {
             try {
@@ -195,9 +198,14 @@ export async function hogql(query: string, values: Record<string, unknown> = {},
             }
         }
     }
-    if (!options.cache) return read()
-    return (await cachedPosthogRead(readCacheKey('hogql', { query, values, timeoutMs: options.timeoutMs, retries: options.retries }), read, { ttlMs: options.ttlMs })).value
+    try {
+        if (!options.cache) return await read()
+        return (await cachedPosthogRead(readCacheKey('hogql', { query, values, timeoutMs: options.timeoutMs, retries: options.retries }), read, { ttlMs: options.ttlMs })).value
+    } finally {
+        if (first) console.error(`[lens warm] HogQL first query: ${Math.round(performance.now()-firstStart)} ms`)
+    }
 }
+let firstHogqlStarted = false
 
 /** Aggregate query nodes use the same read key, queue, timeout and circuit breaker as HogQL. */
 export async function posthogQuery(query: Record<string, unknown>): Promise<unknown> {

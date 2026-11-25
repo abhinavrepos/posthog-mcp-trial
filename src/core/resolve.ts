@@ -3,6 +3,7 @@ import { hogql, isTruncated, markPartial, type Completeness } from './posthog.ts
 import { P } from './props.ts'
 import { normalise, userExpr } from './identity.ts'
 import { config } from './config.ts'
+import { parseTimeWindow } from './timewindow.ts'
 export interface KnownClient extends Completeness { id:string; name:string; events:number; last_seen:string; users:(string|null)[]; emails?:(string|null)[]; distinct_ids?:(string|null)[]; user_event_counts?:[string|null,string|null,string|null,string|number|null][] }
 export interface ClientMatch extends KnownClient { confidence:number; via:string; matched_user?:string; user_events?:number }
 const stringValue = (value:unknown) => String(value ?? '')
@@ -15,8 +16,14 @@ let names: {at:number; value:Roster} | undefined
 let namesFlight: Promise<void> | undefined
 let namesTimer: ReturnType<typeof setTimeout> | undefined
 let generation = 0
+let defaultsStarted = false
+const timed = async <T>(step:string, work:()=>Promise<T>):Promise<T> => {
+    const start=performance.now()
+    try { return await work() }
+    finally { console.error(`[lens warm] ${step}: ${Math.round(performance.now()-start)} ms`) }
+}
 export function clearClientCache() {
-    cache.clear(); emails = undefined; recentNames = undefined; names = undefined; namesFlight = undefined
+    cache.clear(); emails = undefined; recentNames = undefined; names = undefined; namesFlight = undefined; defaultsStarted = false
     clearTimeout(namesTimer); namesTimer = undefined; generation++
 }
 function namesQuery(days:number, timeoutMs:number): Promise<Roster> {
@@ -27,7 +34,17 @@ function namesQuery(days:number, timeoutMs:number): Promise<Roster> {
 }
 /** Startup warm-up is deliberately detached from callers; keep the last good roster during refresh. */
 export function warmClientNames(): void {
-    if (!config.properties.clientName || !config.posthog.projectId || !config.posthog.personalApiKey || namesFlight) return
+    if (!config.posthog.projectId || !config.posthog.personalApiKey) return
+    if (!defaultsStarted) {
+        defaultsStarted = true
+        // Both MCP defaults share the same date-keyed cache as the first caller.
+        // A concurrent call awaits these in-flight promises instead of submitting duplicate roster reads.
+        for (const days of [30,90]) {
+            const w=parseTimeWindow(`last ${days} days`)
+            void timed(`roster ${days}d`,()=>knownClients(w.from,w.to)).catch(()=>{})
+        }
+    }
+    if (!config.properties.clientName || namesFlight) return
     if (namesTimer) return
     const gen = generation
     namesFlight = namesQuery(400,60000).then(value=>{
@@ -41,16 +58,11 @@ export function warmClientNames(): void {
         namesTimer.unref()
     })
 }
-/** Start the first day's roster and its enrichment reads without delaying MCP connect.
+/** Start the MCP default-window rosters without delaying connect.
  * Each read owns its normal cache and catches outages, so calls can retry later. */
 export function warmClientResolver(): void {
     if (!config.posthog.projectId || !config.posthog.personalApiKey) return
     warmClientNames()
-    void clientEmails().catch(()=>{})
-    void clientNames().catch(()=>{})
-    const today = new Date().toISOString().slice(0,10)
-    const from = new Date(`${today}T00:00:00.000Z`), to = new Date(+from + 86400000)
-    void knownClients(from,to).catch(()=>{})
 }
 const readyNames = () => names && Date.now()-names.at < HOUR ? names.value : undefined
 async function clientNames(): Promise<Roster> {
@@ -76,7 +88,8 @@ export async function knownClients(from?: Date, to?: Date): Promise<KnownClient[
     const key = [from?.toISOString().slice(0,10) || 'last_90_days',to?.toISOString().slice(0,10) || 'now'].join('|')
     from ??= new Date(Date.now()-90*86400000); to ??= new Date()
     let hit = cache.get(key)
-    if (!hit || Date.now()-hit.at >= TEN_MINUTES) {
+    const fresh = !hit || Date.now()-hit.at >= TEN_MINUTES
+    if (fresh) {
         const value = hogql(`SELECT toString(${P.client}) AS id, ${userExpr()} AS user,
             toString(distinct_id) AS did, count() AS n, max(timestamp) AS last_seen
             FROM events WHERE timestamp >= {from} AND timestamp < {to} AND notEmpty(toString(${P.client}))
@@ -101,7 +114,11 @@ export async function knownClients(from?: Date, to?: Date): Promise<KnownClient[
         value.catch(()=>{ if(cache.get(key)?.value===value) cache.delete(key) })
         if(cache.size>20) cache.delete(cache.keys().next().value!)
     }
-    const [clients,emailRoster,nameRoster] = await Promise.all([hit.value,clientEmails(),clientNames()])
+    const [clients,emailRoster,nameRoster] = await Promise.all([
+        fresh ? timed('roster query '+key,()=>hit!.value) : hit!.value,
+        fresh ? timed('person email lookup',()=>clientEmails()) : clientEmails(),
+        fresh ? timed('client name lookup',()=>clientNames()) : clientNames(),
+    ])
     return markPartial(clients.map(c=>{
         const counts=c.user_event_counts!.map(([u,_e,d,n])=>[u,emailRoster.get(d || '') || '',d,n] as NonNullable<KnownClient['user_event_counts']>[number])
         return markPartial({...c,name:nameRoster.get(c.id) || c.id,emails:[...new Set(counts.map(r=>r[1]))],user_event_counts:counts}, !!c.truncated || !!emailRoster.truncated || !!nameRoster.truncated)
