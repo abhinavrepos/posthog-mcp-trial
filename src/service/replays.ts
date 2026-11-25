@@ -844,15 +844,30 @@ const icon = (name: string) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden
 /** The product mark: a lens (two rings) on the accent square, drawn to sit on the text's centre line. */
 export const LOGO = `<svg class="mark" viewBox="0 0 28 28" aria-hidden="true" focusable="false"><rect width="28" height="28" rx="7" fill="var(--accent)"/><circle class="wave" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="1.4"/><circle class="wave w2" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="1.4"/><circle class="ring" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="2.4"/><circle class="arc" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="13 25"/><circle class="dot" cx="14" cy="14" r="1.9" fill="var(--accent-ink)"/></svg>`
 
+/** Placeholder rows keep the table's real columns and cell height. */
+export function skelRows(cols: number, label: string, rows = 5): string {
+    const widths = [72, 55, 64, 42, 78, 50, 68]
+    return Array.from({ length: rows }, (_, row) => `<tr class="skel-row"${row ? ' aria-hidden="true"' : ''}>${Array.from({ length: cols }, (_, col) => `<td>${row === 0 && col === 0 ? `<span class="sr-only" role="status">${esc(label)}</span>` : ''}<span class="skel" aria-hidden="true" style="width:${widths[(col + row * 2) % widths.length]}%"></span></td>`).join('')}</tr>`).join('')
+}
+
+export function skelBlock(kind: 'tiles' | 'chart' | 'list' | 'detail'): string {
+    if (kind === 'tiles') return `<div class="skel-tiles" aria-hidden="true">${Array.from({ length: 4 }, () => '<div class="skel-tile"><span class="skel" style="width:58%"></span><span class="skel skel-value" style="width:42%"></span></div>').join('')}</div>`
+    if (kind === 'chart') return '<div class="card skel-chart-card" aria-hidden="true"><span class="skel" style="width:38%"></span><div class="skel skel-chart"></div></div>'
+    if (kind === 'list') return `<div class="skel-list" aria-hidden="true">${Array.from({ length: 6 }, (_, i) => `<div class="skel-list-item"><span class="skel" style="width:${i % 2 ? 65 : 78}%"></span><span class="skel" style="width:${i % 2 ? 43 : 52}%"></span></div>`).join('')}</div>`
+    return '<div class="skel-detail" aria-hidden="true"><span class="skel skel-heading" style="width:52%"></span><div class="skel-detail-tiles">' + Array.from({ length: 3 }, () => '<div class="skel-tile"><span class="skel" style="width:55%"></span><span class="skel skel-value" style="width:40%"></span></div>').join('') + '</div><div class="skel skel-chart"></div></div>'
+}
+
+
 /** The app shell: a sidebar (brand, sections, account) on wide screens, a top bar on narrow ones. */
 export function headerHtml(v: Viewer | undefined, section: Section): string {
     const brand = `<a class="brand" href="/">${LOGO}<span class="names"><span class="word">${esc(APP_NAME)}</span>${APP_TAG ? `<span class="tag">${esc(APP_TAG)}</span>` : ''}</span></a>`
     const skip = `<a class="skip" href="#main">Skip to content</a>`
-    // While the page or its data loads, the logo's ring spins (class sig-busy on <html>). Shown only after 150 ms and
-    // for at least 400 ms, so quick requests never flicker it.
-    const busy = `<script>(()=>{const h=document.documentElement;let n=0,t=0,on=0,since=0;const set=v=>{clearTimeout(t);if(v){if(!on)t=setTimeout(()=>{on=1;since=Date.now();h.classList.add('sig-busy')},150)}else if(on){t=setTimeout(()=>{on=0;h.classList.remove('sig-busy')},Math.max(0,400-(Date.now()-since)))}};
-const upd=()=>set(n>0||document.readyState!=='complete');upd();addEventListener('load',upd);addEventListener('pageshow',()=>{n=0;upd()});
-const f=window.fetch;if(f)window.fetch=function(...a){n++;upd();return f.apply(this,a).finally(()=>{n--;upd()})};
+    // Only initial requests and requests immediately following a user action turn the logo ring.
+    const busy = `<script>(()=>{const h=document.documentElement;let n=0,t=0,on=0,since=0,initial=true,seen=false,action=0;const set=v=>{clearTimeout(t);if(v){if(!on)t=setTimeout(()=>{on=1;since=Date.now();h.classList.add('sig-busy')},150)}else if(on){t=setTimeout(()=>{on=0;h.classList.remove('sig-busy')},Math.max(0,400-(Date.now()-since)))}};
+const finish=()=>{if(initial&&seen&&n===0&&document.readyState==='complete')initial=false};
+const upd=()=>{finish();set(n>0||document.readyState!=='complete')};upd();addEventListener('load',upd);addEventListener('pageshow',()=>{n=0;upd()});
+for(const event of ['click','input','change','submit','keydown'])addEventListener(event,()=>{action=Date.now()},true);
+const f=window.fetch;if(f)window.fetch=function(...a){const count=initial||Date.now()-action<1000;if(count){seen=true;n++;upd()}return f.apply(this,a).finally(()=>{if(count){n--;upd()}})};
 addEventListener('beforeunload',()=>{clearTimeout(t);on=1;since=Date.now();h.classList.add('sig-busy');setTimeout(()=>set(n>0),8000)})})()</script>`
     const mainId = `<script>addEventListener('DOMContentLoaded',()=>{const m=document.querySelector('main');if(m){if(!m.id)m.id='main';if(!m.hasAttribute('tabindex'))m.tabIndex=-1}
 // On phones the tab bars scroll sideways: keep the current tab in view (on load, and when tabs switch).
@@ -940,7 +955,7 @@ function pageHtml(v: Viewer): string {
 <div class="row" style="align-items:center"><button id="c-add" type="button">Add comment</button><button class="ghost hidden" id="c-cancel" type="button">Cancel</button><span class="small" aria-live="polite" aria-atomic="true" id="c-msg"></span></div>
 <p class="small muted" id="c-plain"></p></div></div></div>
 
-</div><div class="card"><h2>Your clips</h2><div class="table-wrap" role="region" aria-label="Your clips" tabindex="0"><table><thead><tr><th scope="col">Made</th><th scope="col">Client</th><th scope="col">User</th><th scope="col">Part</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="recent"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody></table><div id="recent-pager"></div></div>
+</div><div class="card"><h2>Your clips</h2><div class="table-wrap" role="region" aria-label="Your clips" tabindex="0"><table><thead><tr><th scope="col">Made</th><th scope="col">Client</th><th scope="col">User</th><th scope="col">Part</th><th scope="col">Kept until</th><th scope="col">Actions</th></tr></thead><tbody id="recent">${skelRows(6, 'Loading…')}</tbody></table><div id="recent-pager"></div></div>
 <p id="recent-msg" class="small" role="alert"></p></div>
 <section class="card clips-help"><details><summary>How this works</summary><p class="small muted" id="retention"></p></details>
 

@@ -9,7 +9,7 @@ import { archiveSurvey, conflictsFor, estimateReach, getSurvey, launchSurvey, li
 import { ACKNOWLEDGEMENT, checkTicket, jiraTicketUrl, launchesOf, launchRules, recordLaunch } from '../core/launches.ts'
 import { jiraConfigured } from '../core/config.ts'
 import { audit, canSurvey, canUseSurveys, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
-import { APP_NAME, headerHtml, PAGE_CSS, PAGER_JS } from './replays.ts'
+import { APP_NAME, headerHtml, PAGE_CSS, PAGER_JS, skelBlock } from './replays.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -250,7 +250,7 @@ th,td{padding:8px 3px;font-size:12px}
 </style></head>
 <body>${headerHtml(v, 'Surveys')}<main id="main" tabindex="-1" class="wide">
 <div class="page-head"><div><h1>Surveys</h1><p>Survey activity, results and launch options.</p></div><select id="days" aria-label="Survey counts period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></div>
-<div class="status-panel" id="list-state"><p id="page-msg" class="small" role="status">Loading surveys…</p><button class="secondary compact" id="list-retry" type="button" hidden>Try again</button></div><div class="layout" id="survey-layout" hidden><section><div class="status-tabs" id="status-tabs" role="group" aria-label="Show surveys by status"></div><div class="list" id="list"></div><div id="list-pager"></div>
+<div class="status-panel" id="list-state"><p id="page-msg" class="small" role="status">Loading surveys…</p><button class="secondary compact" id="list-retry" type="button" hidden>Try again</button></div><div class="skel-page layout" aria-hidden="true"><section>${skelBlock('list')}</section><section>${skelBlock('detail')}</section></div><div class="layout" id="survey-layout" hidden><section><div class="status-tabs" id="status-tabs" role="group" aria-label="Show surveys by status"></div><div class="list" id="list"></div><div id="list-pager"></div>
 <p class="small"><a href="/replays/connect">Create a survey in chat</a></p><details><summary>How this works</summary><p class="small muted">Your survey role: ${SURVEY_ROLE_TEXT[v.role === 'admin' ? 'launch' : v.surveys || 'none']}.</p><p class="small muted">Make or change surveys in chat. Describe who should see it, when it appears and what to ask. New surveys stay as drafts until launched.</p></details></section>
 <section id="detail"></section>
 </div></main>
@@ -269,6 +269,7 @@ ${CLIENT.replace('__BRAND__', JSON.stringify(config.surveys.brand)).replace('__C
 
 // Runs in the browser. Survey names, questions and answers come from people: everything goes through esc().
 const CLIENT = String.raw`
+const DETAIL_SKEL=${JSON.stringify(skelBlock('detail'))}
 const BRAND=__BRAND__
 const CAN_LAUNCH=__CAN_LAUNCH__
 const $=id=>document.getElementById(id)
@@ -281,11 +282,11 @@ const STATUS={running:'Running',draft:'Draft',stopped:'Stopped',archived:'Archiv
 let LIST=[],current=null,listRequest=0,busy=false
 const listPager=makePager({mount:$('list-pager'),noun:'surveys',size:25,draw:renderList})
 function listMessage(message,retry=false){$('page-msg').textContent=message;$('list-retry').hidden=!retry;$('list-state').hidden=!message}
-async function loadList(refreshDetail=false){const request=++listRequest;try{const d=await api('/replays/surveys/api/list?days='+$('days').value);if(request!==listRequest)return;LIST=d.surveys;$('survey-layout').hidden=!LIST.length;
+async function loadList(refreshDetail=false){const request=++listRequest;try{const d=await api('/replays/surveys/api/list?days='+$('days').value);if(request!==listRequest)return;LIST=d.surveys;$('survey-layout').hidden=!LIST.length;document.querySelector('.skel-page')?.remove();
   if(!LIST.length){current=null;listMessage('No surveys yet.');const a=document.createElement('a');a.href='/replays/connect';a.textContent='Create a survey in chat';$('page-msg').append(' ',a);return}
   listMessage(LIST.some(s=>s.freshness)?'Showing cached survey counts while they refresh.':'');drawList();
   const want=location.hash.slice(1)||shown()[0]?.id;if(want&&(want!==current||refreshDetail))await show(want)}
-  catch(e){if(request!==listRequest)return;current=null;$('survey-layout').hidden=true;listMessage(e.status===503?'Surveys are unavailable. Contact a Signal administrator to finish setup.':'Couldn’t load surveys',e.status!==503)}}
+  catch(e){if(request!==listRequest)return;document.querySelector('.skel-page')?.remove();current=null;$('survey-layout').hidden=true;listMessage(e.status===503?'Surveys are unavailable. Contact a Signal administrator to finish setup.':'Couldn’t load surveys',e.status!==503)}}
 $('list-retry').onclick=()=>{loadList().then(()=>{if($('list-retry').hidden)$('days').focus()})}
 const TABS=[['all','All'],['running','Running'],['draft','Drafts'],['stopped','Stopped']]
 let FILTER=(()=>{const f=new URLSearchParams(location.search).get('status');return TABS.some(t=>t[0]===f)?f:'all'})()
@@ -325,7 +326,7 @@ function bars(dist){const e=Object.entries(dist||{}),max=Math.max(1,...e.map(x=>
 function perDay(rows){if(!rows.length)return '<p class="small muted">Nothing shown in this period.</p>';const W=600,H=120,max=Math.max(1,...rows.map(r=>r.shown)),bw=Math.min(28,Math.max(2,W/rows.length-2))
   return '<div class="days"><svg viewBox="0 0 '+W+' '+(H+18)+'" width="'+W+'" role="img" aria-label="Shown and answered per day">'+rows.map((r,i)=>{const x=i*(W/rows.length),h=r.shown/max*H,a=r.answered/max*H;return '<rect x="'+x+'" y="'+(H-h)+'" width="'+bw+'" height="'+h+'" fill="var(--grid)"><title>'+esc(r.day)+': '+r.shown+' shown</title></rect><rect x="'+x+'" y="'+(H-a)+'" width="'+bw+'" height="'+a+'" fill="var(--act)"><title>'+esc(r.day)+': '+r.answered+' answered</title></rect>'}).join('')+'<text x="0" y="'+(H+14)+'" font-size="11" fill="var(--muted)">'+esc(rows[0].day)+'</text><text x="'+W+'" y="'+(H+14)+'" font-size="11" text-anchor="end" fill="var(--muted)">'+esc(rows[rows.length-1].day)+'</text></svg><p class="small muted">Light grey: shown. Dark grey: answered.</p></div><details><summary>Daily counts as a table</summary><div class="table-wrap" role="region" aria-label="Daily survey counts" tabindex="0"><table><caption class="sr-only">Daily survey counts</caption><thead><tr><th scope="col">Day</th><th scope="col" class="n">Shown</th><th scope="col" class="n">Answered</th></tr></thead><tbody id="daily-rows"></tbody></table></div><div id="daily-pager"></div></details>'}
 
-async function show(id){const period=$('days').value;current=id;$('list').querySelectorAll('.item').forEach(b=>b.setAttribute('aria-current',String(b.dataset.id===id)));$('detail').setAttribute('aria-busy','true');$('detail').innerHTML='<div class="card"><p class="empty" role="status">Loading survey…</p></div>'
+async function show(id){const period=$('days').value;current=id;$('list').querySelectorAll('.item').forEach(b=>b.setAttribute('aria-current',String(b.dataset.id===id)));$('detail').setAttribute('aria-busy','true');$('detail').innerHTML='<div class="card"><span class="sr-only" role="status">Loading survey…</span>'+DETAIL_SKEL+'</div>'
   let r;try{r=await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'?days='+period)}catch(e){if(current!==id||$('days').value!==period)return;$('detail').removeAttribute('aria-busy');$('detail').innerHTML='<div class="card"><p class="err" role="alert">'+esc(e.message)+' Try loading this survey again.</p><button type="button" class="ghost" id="detail-retry">Try again</button></div>';$('detail-retry').onclick=()=>show(id);return}
   if(current!==id||$('days').value!==period)return
   $('detail').removeAttribute('aria-busy')

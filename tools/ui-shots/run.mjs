@@ -90,6 +90,25 @@ try {
         await capture(page, spec, theme, width, 'empty')
         seedDb(join(temp, 'triage.db'))
       }
+      if (['replays', 'connect', 'admin', 'system', 'live', 'surveys'].includes(spec.name)) {
+        // Loading: data requests are held open, so the page shows its skeleton (and, after 1 s, the centred logo).
+        const hold = request => {
+          const path = new URL(request.url()).pathname
+          if (path.startsWith('/replays/') && /\/api(\/|$)/.test(path) || path.startsWith('/status')) return
+          request.continue()
+        }
+        await page.evaluate(() => { try { localStorage.clear(); sessionStorage.clear() } catch {} })
+        await page.setCacheEnabled(false)
+        await page.setRequestInterception(true)
+        page.on('request', hold)
+        await page.goto(origin + spec.path, { waitUntil: 'domcontentloaded', timeout: 30000 })
+        await sleep(1600)
+        await capture(page, spec, theme, width, 'loading')
+        page.off('request', hold)
+        await page.goto('about:blank')
+        await page.setRequestInterception(false)
+        await page.setCacheEnabled(true)
+      }
       if (['replays', 'connect', 'admin', 'system'].includes(spec.name)) {
         const onRequest = request => {
           const path = new URL(request.url()).pathname

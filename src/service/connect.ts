@@ -5,7 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config, posthogMcpActive } from '../core/config.ts'
 import { can, canSurvey, canDashboard, chatPolicy, DEFAULT_CHAT_APPS, DEFAULT_CHAT_NOTE, chatUrl, createMcpToken, listMcpTokens, revokeMcpToken, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
-import { APP_NAME, headerHtml, PAGER_JS, PAGE_CSS } from './replays.ts'
+import { APP_NAME, headerHtml, PAGER_JS, PAGE_CSS, skelRows } from './replays.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -117,7 +117,7 @@ ol.steps li{padding-left:2px}
 <li>Start a new chat: <span>“Which clients need attention this month?”</span></li>
 </ol>
 </div>
-<div class="card"><h2>Your keys</h2><div class="table-wrap" role="region" aria-label="Your keys" tabindex="0"><table><colgroup><col style="width:22%"><col style="width:27%"><col style="width:27%"><col style="width:24%"></colgroup><thead><tr><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div><div id="keys-pager"></div><p id="keys-msg" class="small" aria-live="polite"></p>
+<div class="card"><h2>Your keys</h2><div class="table-wrap" role="region" aria-label="Your keys" tabindex="0"><table><colgroup><col style="width:22%"><col style="width:27%"><col style="width:27%"><col style="width:24%"></colgroup><thead><tr><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="rows">${skelRows(4, 'Loading…')}</tbody></table></div><div id="keys-pager"></div><p id="keys-msg" class="small" aria-live="polite"></p>
 <details id="revoked-box" hidden><summary class="small muted" id="revoked-sum"></summary><ul id="revoked" class="small muted"></ul></details>
 </div></div>
 </main>

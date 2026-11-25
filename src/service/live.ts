@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { config } from '../core/config.ts'
 import { GAP_CHOICES, includesToday, liveNow, parsePresenceQuery, personDay, presenceReport, presenceSessions, presenceSettings, validTimeZone, type PresenceQuery } from '../core/presence.ts'
 import type { Viewer } from './access.ts'
-import { APP_NAME, headerHtml, PAGE_CSS, PAGER_JS } from './replays.ts'
+import { APP_NAME, headerHtml, PAGE_CSS, PAGER_JS, skelBlock, skelRows } from './replays.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -148,6 +148,7 @@ details.how summary{cursor:pointer;font-weight:500}details.how li{margin:4px 0}
 <details><summary class="small" id="tl-list-sum">Every action</summary><div class="table-wrap" role="region" aria-label="Timeline actions" tabindex="0"><table id="tl-list"></table><div id="tl-list-pager"></div></div><p><button class="ghost hidden" id="tl-more" type="button">Show more</button></p></details></div>
 </div>
 
+<div class="skel-page" aria-hidden="true">${skelBlock('tiles')}${skelBlock('chart')}<div class="card"><h2>Clients</h2><div class="table-wrap"><table><thead><tr><th>Client</th><th>People</th><th>Time in the app</th><th>Active time</th></tr></thead><tbody>${skelRows(4, 'Loading activity…')}</tbody></table></div></div></div>
 <p class="small muted" id="report-updated" hidden></p><p class="empty-state" id="report-empty" hidden>No activity in this period. Try a different period or client.</p><div id="report" hidden>
 <div class="tiles" id="tiles"></div>
 <div class="card"><h2 id="chart-title">Time in the app</h2><p class="small muted">Total time across all people.</p><div class="legend"><span><i aria-hidden="true" style="background:var(--act)"></i>Active</span><span><i aria-hidden="true" style="background:var(--idle)"></i>Idle</span></div>
@@ -238,7 +239,7 @@ async function load(){syncUrl();const my=++busy,key=params(false).toString();$('
  if(S.client)loadSessions();else{++sbusy;sessionsKey='';$('sessions-card').setAttribute('aria-busy','false');$('sessions-card').classList.add('hidden');$('sessions-csv').disabled=true;liveStatus('sessions')}
  try{const r=await api('/replays/live/api/time?'+key);if(my!==busy)return;R=r;reportKey=key;warning=r.warning||'';const empty=!r.totals.sessions;$('report').hidden=empty;$('report-empty').hidden=!empty;fillClients();if(!empty)render();else $('list-csv').disabled=true;$('report-updated').hidden=false;$('report-updated').textContent=updated(r.updated_at);liveStatus('report')}
  catch(e){if(my===busy){$('report-empty').hidden=true;if(!R?.totals.sessions)$('report-updated').hidden=true;liveStatus('report',e)}}
- finally{if(my===busy){$('report').classList.remove('loading');$('report').setAttribute('aria-busy','false')}}}
+ finally{if(my===busy){document.querySelector('.skel-page')?.remove();$('report').classList.remove('loading');$('report').setAttribute('aria-busy','false')}}}
 async function loadSessions(){const my=++sbusy,key=params(true).toString();$('sessions-card').setAttribute('aria-busy','true');
  if(key!==sessionsKey){$('sessions-card').classList.add('hidden');$('sessions-csv').disabled=true}
  try{const r=await api('/replays/live/api/sessions?'+key);if(my!==sbusy||key!==params(true).toString())return;SESS=r.sessions;$('sessions-warning').textContent=r.warning||'';sessionsKey=key;renderSessions();liveStatus('sessions')}

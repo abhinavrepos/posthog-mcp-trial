@@ -6,7 +6,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { config } from '../core/config.ts'
 import { canSeeSystem, readAudit, type Viewer } from './access.ts'
-import { APP_NAME, headerHtml, PAGER_JS, PAGE_CSS, storage } from './replays.ts'
+import { APP_NAME, headerHtml, PAGER_JS, PAGE_CSS, skelBlock, skelRows, storage } from './replays.ts'
 
 function json(res: ServerResponse, status: number, body: unknown) {
     res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -184,6 +184,7 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .container-controls .view-control{flex:none;margin:0}
 .containers-table th:nth-child(5){width:180px}
 .containers-table{min-width:860px}.containers-table td{vertical-align:middle}
+@media(min-width:641px){.containers-table .skel-row td{height:34px}}
 .containers-table .metric-inline{display:inline-grid;grid-template-columns:max-content 64px;white-space:nowrap;align-items:center;gap:12px}
 .containers-table .spark{margin:0;width:64px;height:18px}
 .containers-table td.w>details>summary{color:var(--ink);font-size:13px;line-height:20px;font-weight:500}
@@ -227,6 +228,7 @@ th,td{padding:7px 4px}
 <body>${headerHtml(v, 'System')}<main id="main" tabindex="-1" class="wide">
 <div class="page-head"><div><h1>System</h1><p>Service health, ingestion and server activity.</p></div></div>
 <div class="banner" id="banner"><span class="big" id="b-icon" aria-hidden="true">…</span><div><h2 id="b-head" role="status" aria-live="polite">Checking…</h2><p id="b-sub"></p><details id="status-details" hidden><summary>Technical details</summary><p id="status-error"></p></details></div></div>
+<div class="skel-page" aria-hidden="true">${skelBlock('tiles')}<div class="card"><h2>Containers</h2><div class="table-wrap"><table><thead><tr><th>Status</th><th>Container</th><th>Running</th><th>CPU</th><th>Memory</th><th>Restarts</th></tr></thead><tbody>${skelRows(6, 'Loading containers…')}</tbody></table></div></div></div>
 <div id="system-results" hidden><div id="problems"></div><div id="problems-pager"></div>
 <details class="section-details"><summary id="jobs-summary">Signal jobs</summary><div id="jobs"></div></details>
 <div id="tiles"></div>
@@ -245,7 +247,7 @@ th,td{padding:7px 4px}
 <details class="section-details"><summary>Database and Signal activity</summary><div class="split"><div class="card" id="clickhouse"></div><div class="card" id="lens"></div></div>
 </details>
 <div class="card containers-card"><div class="tools"><h2 id="c-title">Containers</h2><div class="container-controls"><input id="find" type="search" placeholder="Find a container" aria-label="Find a container"><details class="view-control"><summary>View</summary><div class="tools"><select id="view" aria-label="Container view"><option value="all">All containers · problems first</option><option value="mem_bytes">Top 5 by memory</option><option value="cpu_pct">Top 5 by CPU</option></select></div></details></div></div>
-<div class="table-wrap" role="region" aria-label="Containers" tabindex="0"><table class="containers-table"><thead><tr><th scope="col">Status</th><th scope="col">Container</th><th scope="col" class="r">Running</th><th scope="col" class="n">CPU</th><th scope="col" class="n">Memory</th><th scope="col" class="n">Restarts</th></tr></thead><tbody id="rows"><tr><td colspan="6">Loading containers…</td></tr></tbody></table></div><div id="containers-pager"></div></div>
+<div class="table-wrap" role="region" aria-label="Containers" tabindex="0"><table class="containers-table"><thead><tr><th scope="col">Status</th><th scope="col">Container</th><th scope="col" class="r">Running</th><th scope="col" class="n">CPU</th><th scope="col" class="n">Memory</th><th scope="col" class="n">Restarts</th></tr></thead><tbody id="rows">${skelRows(6, 'Loading containers…')}</tbody></table></div><div id="containers-pager"></div></div>
 <details class="section-details" id="about-section"><summary>About this server</summary><div id="about"></div><details class="nums"><summary>How this works</summary><p class="small muted">Only counts and machine figures are read, never event or replay content. CPU and memory history restarts with the status service.</p></details></details>
 <p class="small muted" id="refresh-note">Refreshes every 15 seconds.</p></div>
 </main>
@@ -413,7 +415,7 @@ function draw(s){const rows=s.checks||[],m=s.metrics||{},mc=m.machine||{},byName
   $('c-title').textContent='All containers ('+box.length+')';table()}
 async function tick(){try{const r=await fetch('/replays/system/api',{cache:'no-store'}),d=await r.json().catch(()=>({}));if(r.status===401)return location.reload();if(!r.ok)throw new Error('HTTP '+(d.upstream_status||r.status)+(d.upstream_status?'':d.error?' · '+d.error:''));
   $('system-results').hidden=false;draw(d)}
-  catch(e){connectionError=e.message;freshness()}}
+  catch(e){connectionError=e.message;freshness()}finally{document.querySelector('.skel-page')?.remove()}}
 $('trends').ontoggle=function(){if(this.open&&lastStatus)charts(lastStatus.metrics||{})}
 $('problems').onclick=e=>{if(e.target.closest?.('a[href="#about-section"]'))$('about-section').open=true}
 tick();setInterval(tick,15000);setInterval(freshness,1000)
