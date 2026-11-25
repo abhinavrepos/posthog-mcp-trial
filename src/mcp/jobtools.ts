@@ -9,6 +9,8 @@ import { db } from '../core/db.ts'
 import type { ChatCaller } from '../service/access.ts'
 import type { TimeWindow } from '../core/timewindow.ts'
 
+/** How long a call answers inline before it hands back a job_id: below the ~60 s limit common in MCP clients. */
+export const SYNC_BUDGET_MS = Math.max(1000, Number(process.env.LENS_JOB_SYNC_MS || 45_000) || 45_000)
 export const JOB_TOOLS = new Set(['find_sessions','resolve_client','design_survey'])
 export const FAST_TOOLS = new Set(['get_replay_link','get_job_result'])
 export function jobBacked(name: string, _readOnly: boolean, args: {command?:unknown} = {}) {
@@ -56,7 +58,7 @@ export function createJobDispatch(caller?: Caller, options: JobOptions = {}) {
                 const task=name==='posthog_exec' ? posthogQueryWork(execute) : work(name,args,window,execute)
                 return {...task,metadata:()=>({...task.metadata?.(),clients:[...(state?.clients || [])],window:state?.window || window})}
             }, runner.ttlMs, context, name==='posthog_exec')
-            await waitForJob(job, extra as never, options.budgetMs)
+            await waitForJob(job, extra as never, options.budgetMs ?? SYNC_BUDGET_MS)
             if (revision() !== startedRevision) throw new Error('Access settings changed. Submit the tool again.')
             runner.detach(owner, job.id, startedRevision)
             return read(job.id)
@@ -67,7 +69,7 @@ const json = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSO
 /** Register through wrapTools; no SDK dispatcher interception or native Tasks handlers. */
 export function installJobTools(server: McpServer, dispatch: ReturnType<typeof createJobDispatch>): void {
     server.registerTool('get_job_result', {
-        description: 'Wait up to 15 seconds for your analysis job result or running status. Job handles expire after one hour by default. Call this tool directly.',
-        inputSchema: { job_id: z.string().regex(/^[0-9a-f]{32}$/) }, annotations: { readOnlyHint: true },
+        description: 'Returns the result of a job_id that a Lens tool returned when it took longer than about 45 seconds. Waits up to 15 seconds per call; status "running" means call again after poll_after_seconds. The result carries the original tool\'s context (window, filters). Handles expire after one hour. Example: {"job_id":"95c4987a7d4035cdd7791e99bf8fe0ee"}',
+        inputSchema: { job_id: z.string({ error: 'job_id is the 32-character id a tool returned' }).regex(/^[0-9a-f]{32}$/, { error: 'job_id is the 32-character hex id a tool returned' }) }, annotations: { readOnlyHint: true },
     }, async ({ job_id }) => dispatch.poll(job_id) as never)
 }

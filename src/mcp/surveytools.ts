@@ -6,6 +6,8 @@ import { jsonResult } from './result.ts'
 import { ANALYSIS_OUTPUT } from './structured.ts'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
+import { windowArg } from './timeinput.ts'
+import { ToolInputError } from '../core/toolinputerror.ts'
 
 import { appEvents } from '../core/appevents.ts'
 import { config, surveysActive } from '../core/config.ts'
@@ -39,6 +41,15 @@ const TOOLS_FOR: Record<SurveyRole, string[]> = {
 export const surveyToolNames = (role: SurveyRole = 'launch'): string[] => (surveysActive() && appEvents() ? SURVEY_TOOLS.filter((t) => TOOLS_FOR[role].includes(t)) : [])
 
 const text = (t: string) => ({ content: [{ type: 'text' as const, text: t }] })
+/** Survey counts are over the last N days; window {"last":"Nd"} (or "Nh", rounded up to days) is the same thing. */
+const surveyWindow = windowArg.optional().describe('Same as days, as a rolling window: {"last":"365d"}. Survey counts always end now.')
+function daysOf(window: unknown, days: number): number {
+    if (window === undefined) return days
+    const v = typeof window === 'string' ? window : (window as { last?: string }).last
+    const m = typeof v === 'string' ? /^(\d{1,5})([hd])$/.exec(v) : null
+    if (!m) throw new ToolInputError('Survey counts cover the last N days up to now: use window {"last":"30d"} (or days). Example: {"window":{"last":"365d"}}')
+    return Math.min(1500, Math.max(1, Math.ceil(Number(m[1]) / (m[2] === 'h' ? 24 : 1))))
+}
 const json = jsonResult
 const pageUrl = (id?: string) => `${config.service.publicUrl}/replays/surveys${id ? `#${id}` : ''}`
 
@@ -135,20 +146,21 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         'design_survey',
         {
             title: 'Check a survey before saving it',
-            description: `Validate an in-app ${app} survey and estimate its reach. Show all overlap and fatigue warnings. Saves nothing; use save_survey after review. Use posthog_exec to inspect dialog and button names.`,
-            inputSchema: { ...specShape, days:z.number().int().min(1).max(1500).default(14),estimate: z.boolean().default(true).describe('Count past sessions that went through the steps') },
+            description: `Checks an in-app ${app} survey without saving it. Answers e.g. "will this survey work?", "how many users would see it?". Compiles the steps; errors (block saving) and warnings (do not) are in problems: a step's dialog, button or field, or the client audience, that matched nothing in the last 30 days is warned about with close matches (e.g. LinkListReqv for DlgHedgeDesigListReport). Estimates reach: sessions that went through the steps over days of history (default 14; more than 90 uses the last 90 and says so in reach.note). Steps name what ${app} sends: opens/closes = dialog_id, button = exact action_name (Export, XLS Export, XLSX Export and CSV Export are four buttons), message = text shown. Show all problems and overlap/fatigue warnings, then save_survey. Use posthog_exec recipes to look up dialog and button names. ${'A slow estimate returns a job_id: poll get_job_result.'} Example: {"name":"Hedge export","questions":[{"type":"rating","text":"How easy was the export?"}],"steps":[{"opens":"LinkListReqv"},{"button":"Export","dialog":"LinkListReqv"}],"clients":["C08"]}`,
+            inputSchema: { ...specShape, days:z.number().int().min(1).max(1500).default(14).describe('Days of history for the reach estimate (more than 90 uses 90)'), window: surveyWindow,estimate: z.boolean().default(true).describe('Count past sessions that went through the steps') },
             outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
         async (args) => {
-            const { estimate, days, ...spec } = args
+            const { estimate, days: rawDays, window, ...spec } = args as typeof args & { window?: unknown }
+            const days = daysOf(window, rawDays)
             const { ids, unclear } = await clientIds(spec.clients)
             const c = compileSurvey(spec as SurveySpec, { clientIds: ids })
             const errors = c.problems.filter((p) => p.level === 'error')
-            if (!errors.length) c.problems.push(...await surveyEvidence(c.chain))
             // A year of events makes the reach scan expensive. The estimate describes the
-            // recent audience and explicitly reports the window actually queried.
+            // recent audience and explicitly reports the window actually queried. Checks and estimate run together.
             const reachDays = Math.min(days,90)
-            const reach = estimate && !errors.length ? await estimateReach(c.chain,reachDays) : undefined
+            const [evidence, reach] = await Promise.all([errors.length ? [] : surveyEvidence(c.chain), estimate && !errors.length ? estimateReach(c.chain,reachDays) : undefined])
+            c.problems.push(...evidence)
             const conflicts = conflictsFor(c.chain, {}, await listSurveys())
             const q = queueAlert(c.chain, conflicts)
             return json(`${q.level === 'clear' ? '' : q.alert + '\n\n'}${errors.length || unclear.length ? 'This survey cannot be saved yet:' : 'The survey checks out. Show the person this plan (lead with any ⚠ alert above), then save_survey.'}`, {
@@ -168,7 +180,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         'save_survey',
         {
             title: 'Save a survey as a draft, or change one',
-            description: `Save a ${app} survey draft, or update a Lens survey using survey_id and its complete spec. Only drafts can be changed here; launching and changing running surveys happen only on the Surveys page.`,
+            description: `Saves a ${app} survey as a draft, or changes a draft (survey_id plus its complete spec). Same spec as design_survey; run design_survey first. Users see nothing until someone launches it on the Surveys page: this tool cannot launch, and running or stopped surveys can only be changed on that page. Example: {"name":"Hedge export","questions":[{"type":"rating","text":"How easy was the export?"}],"steps":[{"opens":"LinkListReqv"},{"button":"Export","dialog":"LinkListReqv"}]}`,
             inputSchema: { ...specShape, survey_id: z.string().optional().describe('Change this survey instead of making a new one') },
         },
         async (args) => {
@@ -197,8 +209,8 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         'stop_survey',
         {
             title: 'Stop a survey',
-            description: 'Stops showing a survey. Answers stay. archive: true also hides it from lists.',
-            inputSchema: { survey_id: z.string(), archive: z.boolean().default(false) },
+            description: 'Stops a running survey; answers stay. archive: true also hides it from lists. Get the survey_id from list_surveys. Example: {"survey_id":"01a20f7f-a88f-0000-e846-86bf537bde32"}',
+            inputSchema: { survey_id: z.string({ error: 'survey_id is required (from list_surveys)' }), archive: z.boolean().default(false) },
         },
         async ({ survey_id, archive }) => {
             const s = archive ? await archiveSurvey(survey_id) : await stopSurvey(survey_id)
@@ -211,11 +223,12 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         'list_surveys',
         {
             title: 'Which surveys are there?',
-            description: 'List surveys with status, audience, shown counts and answers.',
-            inputSchema: { days: z.number().int().min(1).max(1500).default(30).describe('Counts over this many days') },
+            description: 'Lists every survey with id, name, status (draft, running, stopped), steps, audience, and how often it was shown, answered and dismissed in the last days (default 30, up to 1500). Answers e.g. "how many surveys are there?", "is survey X running?", "which survey was shown most?" (use days: 1500 or window {"last":"1500d"} for all time). For one survey\'s answers by question use survey_results. Example: {"window":{"last":"365d"}}',
+            inputSchema: { days: z.number().int().min(1).max(1500).default(30).describe('Counts over this many days'), window: surveyWindow },
             outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
-        async ({ days }) => {
+        async ({ days: rawDays, window }) => {
+            const days = daysOf(window, rawDays)
             const list = await surveyOverview(days)
             return json(`${list.length} surveys; counts over the last ${days} days. Page: ${pageUrl()}`, list.map((s) => ({ id: s.id, name: s.name, status: s.status, ...(s.freshness ? { freshness: s.freshness } : {}), made_by_lens: s.made_by_lens, steps: s.steps, clients: s.clients, shown: s.shown, answered: s.answered, dismissed: s.dismissed, questions: s.questions.map((q) => q.text) })))
         }
@@ -225,11 +238,12 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
         'survey_results',
         {
             title: 'What did users answer?',
-            description: 'Read survey results by question, client and day, including recent written answers.',
-            inputSchema: { survey_id: z.string(), days: z.number().int().min(1).max(1500).default(90) },
+            description: 'One survey\'s results over the last days (default 90, up to 1500): times shown, answered and dismissed, answers by question, client and day, and recent written answers. Answers e.g. "how many times was survey X shown?", "what did users answer?". Get the survey_id from list_surveys (names are not ids). Example: {"survey_id":"01a20f7f-a88f-0000-e846-86bf537bde32","window":{"last":"365d"}}',
+            inputSchema: { survey_id: z.string({ error: 'survey_id is required (from list_surveys)' }), days: z.number().int().min(1).max(1500).default(90), window: surveyWindow },
             outputSchema: ANALYSIS_OUTPUT, annotations: { readOnlyHint: true },
         },
-        async ({ survey_id, days }) => {
+        async ({ survey_id, days: rawDays, window }) => {
+            const days = daysOf(window, rawDays)
             const r = await surveyResults(survey_id, days)
             const spec = r.spec
             return json(`Results, last ${days} days. Page: ${pageUrl(survey_id)}${spec ? '. "spec" is the survey as it is now: change fields there and pass them to save_survey with survey_id.' : ''}`, { ...r, ...(spec ? { spec } : {}) })

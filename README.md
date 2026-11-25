@@ -18,7 +18,16 @@ The root redirects to `/replays`. Pinned graphs are at `/replays/pinned`. `/heal
 
 Connect to `/mcp` with a personal token from Connect, or the configured shared token. Local clients may use `node --import tsx src/mcp/stdio.ts`.
 
-- `posthog_exec`: PostHog's own tools. Commands: `tools`, `info <tool>`, `call <tool> <json>`. Long calls return a job handle within about 20 seconds. PostHog's `execute-sql` returns at most 500 rows; a result of exactly 500 rows carries a note saying so (aggregate in SQL instead of listing rows).
+Every time-based tool takes one `window` argument: `{"last":"24h"}` or `{"last":"7d"}` (rolling, ending now: the
+default kind, and what "last 7 days" means), `{"day":"2026-11-24"}` (one UTC day) or `{"from":"2026-11-01","to":"2026-11-24"}`
+(inclusive UTC dates); `"7d"` and `"2026-11-24"` are shorthands. The older `period`, `from`/`to`, `when` and `days` still
+work. Every window ends at the latest at now, so rows stamped later are never counted. Every result starts with a
+`context`: the resolved window (from, to, kind, `clamped_to_now`), the filters, the source and how much is shown
+(`shown`, `truncated`, `more`). A call that takes longer than about 45 seconds (`LENS_JOB_SYNC_MS`) returns a job
+handle. Validation errors carry a corrected example call. Tool descriptions say what each tool answers, with example
+questions, when another tool fits better, limits and defaults, and one correct call.
+
+- `posthog_exec`: Lens recipes and PostHog's own tools. `recipe` lists the recipes and `recipe <name> <json>` runs one: `events_per_client`, `top_screens`, `top_buttons`, `exports_by_label`, `messages`, `error_rate`, `active_users`, each with `window` and an optional `client` (tested against ClickHouse by `tools/mcp-regression/recipe-check.mts`). Other commands: `tools`, `info <tool>`, `call <tool> <json>`. PostHog's `execute-sql` returns at most 500 rows; a result of exactly 500 rows carries a note saying so (aggregate in SQL instead of listing rows).
 - `get_job_result`: poll your job handle.
 - `resolve_client`: resolve a client code/name, user, email or distinct id. Includes the match reason, matched user, last seen, and event count for the requested window. The live roster is cached for at most ten minutes; the MCP server starts reading the 30- and 90-day rosters when it starts.
 - `find_sessions`: client, optional screen/action text/user, a window of up to one year, limit and cursor. Returns both PostHog replay and Lens clip page URLs. It reports missing recordings explicitly. Entries are compact by default (session, user, start, duration, event count, top five screens, matched action, links); `detail: true` adds matched actions with their neighbours, outcomes and context. A page is limited by size (about 19 KB) as well as by `limit`, and `truncated_by_size` with `next_cursor` says there is more. A slow page returns a job handle.
@@ -89,7 +98,7 @@ users do the steps again. `window.__lensSurveyRefreshMs` changes the interval (0
 
 `design_survey` adds warnings, never errors, when a step's screen, button or field, or the client audience,
 matched nothing in the last 30 days of events, with close matches (for example `LinkListReqv` for
-`DlgHedgeDesigListReport`). These checks use their own fixed 30-day window and a 15-second limit and never hold
+`DlgHedgeDesigListReport`). These checks use their own fixed 30-day window and a 40-second limit per query, run next to the reach estimate, and never hold
 up other queries; if PostHog cannot answer them, one warning says the check was skipped.
 
 ## When PostHog or storage fails
@@ -129,6 +138,10 @@ keys, file paths or stack traces.
   (6) pages open and do the steps first, then Lens launches the survey; after the engine's refresh (`REFRESH_MS`,
   20000) the same pages, without a reload, do the steps again and must see it. `CONTROL` (2) pages run with the
   refresh off and must see nothing. Same `REAL_*` settings; results in `run/real-live-launch/`.
+- MCP regression (`docs/mcp-regression.md`): `tools/mcp-regression/run.mts` asks the 100 questions of
+  `questions.json` to Claude (Sonnet) with only the Lens MCP connected, against a real PostHog, and grades the answers
+  on ClickHouse; `nightly.sh` fails below 95%. `test/mcp-regression-gate.test.ts` (in `npm test`) checks the questions
+  and the tool contract against a stand-in PostHog.
 - `tools/real-mcp-check.mts`: Lens MCP tools over 1/7/30/90/365-day windows against a real PostHog, counts
   compared with ClickHouse (`CLICKHOUSE_URL`), with latencies, row caps and errors (`run/real-mcp/`).
 - `npm run ui-shots -- <folder>`: screenshots of every page and tab at 1440 and 375 pixels in dark and light,

@@ -8,6 +8,10 @@ export interface TimeWindow {
     to: Date
     label: string // what was understood, for the report
     precision: 'exact' | 'part-of-day' | 'day' | 'range' | 'none'
+    /** rolling (ending now), day (one UTC day), range (UTC dates) or named (period alias). */
+    kind?: 'rolling' | 'day' | 'range' | 'named'
+    /** The window was cut at now. */
+    clamped?: boolean
 }
 
 const DAY = 86_400_000

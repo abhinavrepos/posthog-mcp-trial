@@ -3,7 +3,9 @@ import type { SurveyRole, DashboardRole } from '../service/access.ts'
 export const INSTRUCTIONS_LIMIT = 2048
 export function serverInstructions(_withPosthog = posthogMcpActive(), _surveyRole: SurveyRole = 'launch', _dashboardRole: DashboardRole = 'share', _insights = true): string {
     return `Lens displays PostHog data and saved graph snapshots.
-Call data_guide first before writing PostHog SQL.
+Time: pass window {"last":"24h"|"7d"} (rolling to now; what "last N days" means), {"day":"YYYY-MM-DD"} or {"from","to"} (inclusive UTC dates). Results start with a context line: the window, filters and source used; quote it.
+Counts: resolve_client gives all events of a client or user; for conditions (dialog, button, export label, message, active users) use posthog_exec recipe <name> <json> (run "recipe" to list) before writing SQL.
+Call data_guide first before writing PostHog SQL; bound SQL with timestamp < now().
 Resolve any person/client phrase (e.g. 'rib risk', 'sem ops') with resolve_client before reinterpreting the question.
 Report only what tools returned; no speculation about variation or significance.
 For "the year", "last year" or "all data", use data_guide coverage continuous_from..continuous_to (not data_starts..data_ends when there are gaps) and state the exact UTC bounds used; for complete weeks use only fully covered weeks.

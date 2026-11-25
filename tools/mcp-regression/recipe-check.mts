@@ -1,0 +1,27 @@
+// Each Lens recipe against ClickHouse ground truth on a real PostHog (fixed past windows, so counts are exact).
+const { runRecipe } = await import('../../src/mcp/recipes.ts')
+const CH = process.env.CLICKHOUSE_URL || 'http://127.0.0.1:8123'
+const ch = async (sql: string) => (await (await fetch(CH, { method: 'POST', body: sql + ' FORMAT TSV' })).text()).trim().split('\n').map((l) => l.split('\t'))
+const cl = (c: string) => `team_id=1 AND splitByChar('|',distinct_id)[3]='${c}'`, P = (k: string) => `JSONExtractString(properties,'${k}')`
+const fx = (a: string, b: string) => `timestamp >= '${a} 00:00:00' AND timestamp < '${b} 00:00:00'`
+const MSG = `JSONExtractString(${P('action_name')},1)`
+const cases: [string, string, (r: any) => string, string][] = [
+    ['events_per_client C08 day', 'recipe events_per_client {"client":"C08","window":{"day":"2026-11-20"}}', (r) => String(r.rows[0]?.events), `SELECT count() FROM posthog.events WHERE ${cl('C08')} AND ${fx('2026-11-20', '2026-11-21')}`],
+    ['top_screens C17', 'recipe top_screens {"client":"C17","window":{"from":"2026-11-01","to":"2026-11-24"},"limit":5}', (r) => r.rows.map((x: any) => `${x.dialog_id}:${x.opens}`).join(','), `SELECT arrayStringConcat(groupArray(concat(d,':',toString(c))),',') FROM (SELECT ${P('dialog_id')} d, count() c FROM posthog.events WHERE ${cl('C17')} AND event='PageView' AND ${P('action')}='OPEN' AND ${fx('2026-11-01', '2026-11-25')} GROUP BY d ORDER BY c DESC, d LIMIT 5)`],
+    ['top_buttons C46', 'recipe top_buttons {"client":"C46","window":{"from":"2026-11-01","to":"2026-11-24"},"limit":5}', (r) => r.rows.map((x: any) => `${x.button}:${x.presses}`).join(','), `SELECT arrayStringConcat(groupArray(concat(b,':',toString(c))),',') FROM (SELECT ${P('action_name')} b, count() c FROM posthog.events WHERE ${cl('C46')} AND event='Event' AND ${P('dialog_id')} NOT IN ('messagebox','toast','menuCmb') AND b!='' AND ${fx('2026-11-01', '2026-11-25')} GROUP BY b ORDER BY c DESC, b LIMIT 5)`],
+    ['exports_by_label C11 XLS', 'recipe exports_by_label {"client":"C11","window":{"from":"2026-11-01","to":"2026-11-24"}}', (r) => String(r.rows.find((x: any) => x.label === 'XLS Export')?.presses), `SELECT count() FROM posthog.events WHERE ${cl('C11')} AND event='Event' AND ${P('action_name')}='XLS Export' AND ${fx('2026-11-01', '2026-11-25')}`],
+    ['exports_by_label C08 in LinkListReqv', 'recipe exports_by_label {"client":"C08","dialog":"LinkListReqv","window":{"from":"2026-11-01","to":"2026-11-24"}}', (r) => String(r.rows.reduce((a: number, x: any) => a + Number(x.presses), 0)), `SELECT count() FROM posthog.events WHERE ${cl('C08')} AND event='Event' AND ${P('dialog_id')}='LinkListReqv' AND ${P('action_name')} IN ('Export','XLS Export','XLSX Export','CSV Export') AND ${fx('2026-11-01', '2026-11-25')}`],
+    ['messages C17 error', 'recipe messages {"client":"C17","text":"Error saving trade","window":{"from":"2026-11-01","to":"2026-11-24"}}', (r) => String(r.rows.reduce((a: number, x: any) => a + Number(x.times), 0)), `SELECT count() FROM posthog.events WHERE ${cl('C17')} AND event='Event' AND ${P('dialog_id')} IN ('messagebox','toast') AND ${MSG}='Error saving trade' AND ${fx('2026-11-01', '2026-11-25')}`],
+    ['messages C46 toast day', 'recipe messages {"client":"C46","kind":"notice","window":{"day":"2026-11-24"}}', (r) => String(r.rows.reduce((a: number, x: any) => a + Number(x.times), 0)), `SELECT count() FROM posthog.events WHERE ${cl('C46')} AND event='Event' AND ${P('dialog_id')}='toast' AND ${fx('2026-11-24', '2026-11-25')}`],
+    ['error_rate C08', 'recipe error_rate {"client":"C08","window":{"from":"2026-11-01","to":"2026-11-24"}}', (r) => `${r.rows[0].error_messages}/${r.rows[0].interaction_events}`, `SELECT concat(toString(countIf(${P('dialog_id')} IN ('messagebox','toast') AND match(${MSG}, '(?i)error|failed|could not'))),'/',toString(countIf(event='Event'))) FROM posthog.events WHERE ${cl('C08')} AND ${fx('2026-11-01', '2026-11-25')}`],
+    ['active_users project week', 'recipe active_users {"window":{"from":"2026-11-16","to":"2026-11-22"}}', (r) => `${r.rows.map((x: any) => x.users).join(',')}|${r.users_in_window}`, `SELECT concat(arrayStringConcat(groupArray(toString(u)),','),'|',(SELECT toString(uniq(distinct_id)) FROM posthog.events WHERE team_id=1 AND ${fx('2026-11-16', '2026-11-23')})) FROM (SELECT toDate(timestamp) d, uniq(distinct_id) u FROM posthog.events WHERE team_id=1 AND ${fx('2026-11-16', '2026-11-23')} GROUP BY d ORDER BY d)`],
+    ['active_users C17 weeks', 'recipe active_users {"client":"C17","bucket":"week","window":{"from":"2026-11-09","to":"2026-11-22"}}', (r) => r.rows.map((x: any) => x.users).join(','), `SELECT arrayStringConcat(groupArray(toString(u)),',') FROM (SELECT toStartOfWeek(timestamp,1) w, uniq(distinct_id) u FROM posthog.events WHERE ${cl('C17')} AND ${fx('2026-11-09', '2026-11-23')} GROUP BY w ORDER BY w)`],
+]
+let ok = 0
+for (const [name, cmd, pick, sql] of cases) {
+    const t = Date.now(); let got: string
+    try { got = pick(await runRecipe(cmd)) } catch (e) { got = 'ERROR ' + (e as Error).message }
+    const want = (await ch(sql))[0][0], pass = got === want; ok += +pass
+    console.log(`${pass ? 'PASS' : 'FAIL'} ${name} (${Date.now() - t} ms): recipe ${got.slice(0, 120)} | ClickHouse ${want.slice(0, 120)}`)
+}
+console.log(`${ok}/${cases.length} recipes equal ClickHouse`); process.exit(ok === cases.length ? 0 : 1)
