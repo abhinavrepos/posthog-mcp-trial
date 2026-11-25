@@ -151,7 +151,7 @@ export const config = {
     screens: loadScreens(),
     app: {
         name: env('APP_NAME', 'Signal'),
-        tag: env('APP_TAG', 'for ION'),
+        tag: env('APP_TAG', ''),
     },
     jira: {
         baseUrl: stripSlash(env('JIRA_BASE_URL')),
