@@ -403,6 +403,24 @@ set_env_value() {
     fi
 }
 
+# The hobby compose file requires these (${OBJECT_STORAGE_ACCESS_KEY_ID:?}...), and SeaweedFS registers the
+# object storage keys from .env at each start. Caddy forwards signed requests from the internet to it, so
+# every install needs keys of its own: never PostHog's shared object_storage_root_user/password. An .env from
+# before a key existed gets one; existing values are never changed. Same list as PostHog's bin/deploy-hobby.
+ensure_dedicated_secrets() {
+    sed -i -E "/^OBJECT_STORAGE_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)=[\"']?object_storage_root_(user|password)[\"']?$/d" .env
+    local key
+    for key in INTERNAL_REQUEST_TOKEN BROWSERLESS_SECRET RECORDING_API_JWT_SECRET \
+        OBJECT_STORAGE_ACCESS_KEY_ID OBJECT_STORAGE_SECRET_ACCESS_KEY; do
+        if ! grep -qE "^$key=.+" .env; then
+            sed -i "/^$key=/d" .env
+            echo "$key=$(openssl rand -hex 32)" >> .env
+            info "Added $key to .env (random)"
+        fi
+    done
+    chmod 600 .env
+}
+
 write_env() {
     cd "$INSTALL_DIR"
     if [ -f .env ]; then
@@ -411,6 +429,7 @@ write_env() {
         set_env_value ADDRESSES "${ADDRESSES}"
         set_env_value HTTP_ONLY "${HTTP_ONLY}"
         set_env_value CADDY_HOST "\"$(caddy_host)\""
+        ensure_dedicated_secrets
         ok "Kept the existing .env (secrets unchanged)"
         return
     fi
@@ -431,6 +450,7 @@ EOF
     [ -n "${ANTHROPIC_API_KEY:-}" ] && echo "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}" >> .env
     [ -n "${OPENAI_API_KEY:-}" ] && echo "OPENAI_API_KEY=${OPENAI_API_KEY}" >> .env
     umask 022
+    ensure_dedicated_secrets
     ok "Generated .env with fresh secrets (back up $INSTALL_DIR/.env)"
 }
 
@@ -449,9 +469,13 @@ write_compose_files() {
 
     mkdir -p compose share
     # The compose directory is mounted at /compose, so call the helper by its absolute path.
+    # premigrate adds columns an early ClickHouse migration needs before the later one that adds them has run
+    # (0378 vs 0391 log_comment): without it an upgraded stack crash-loops in migrate. A no-op otherwise.
+    cp "$_HOBBY_HERE/clickhouse-premigrate.py" compose/premigrate
     cat > compose/start <<'EOF'
 #!/bin/bash
 /compose/wait
+python3 /compose/premigrate || true
 ./bin/migrate
 ./bin/docker-server
 EOF
@@ -480,7 +504,7 @@ for host, port in SERVICES:
                 break
             time.sleep(3)
 EOF
-    chmod 0755 compose compose/start compose/temporal-django-worker compose/wait
+    chmod 0755 compose compose/start compose/temporal-django-worker compose/wait compose/premigrate
     chmod 0755 share
     python3 "$_HOBBY_HERE/../offline/public-mount-permissions.py" "$INSTALL_DIR"
     ok "Compose files written"

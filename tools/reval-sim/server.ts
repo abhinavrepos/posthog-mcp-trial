@@ -90,10 +90,12 @@ export class StandInPostHog {
         const { conditions, ...rest } = s
         return { ...rest, conditions, type: 'popover', internal_targeting_flag_key: `survey-targeting-${s.id.slice(0, 8)}-custom`, targeting_flag_key: null, linked_flag_key: null, current_iteration: null, current_iteration_start_date: null, feature_flag_keys: [] }
     }
+    // Like PostHog's remote config: surveys lists the running surveys, or false when none runs (or surveys are off).
     private remoteConfig(token: string) {
+        const running = (this.byToken(token)?.surveys || []).filter((s) => s.start_date && !s.end_date && !s.archived)
         return { token, supportedCompression: ['gzip', 'gzip-js'], hasFeatureFlags: true, captureDeadClicks: false, capturePerformance: false, autocapture_opt_out: true,
             autocaptureExceptions: false, analytics: { endpoint: '/i/v0/e/' }, elementsChainAsString: true, errorTracking: { autocaptureExceptions: false, suppressionRules: [] },
-            sessionRecording: false, heatmaps: false, surveys: true, defaultIdentifiedOnly: true, siteApps: [] }
+            sessionRecording: false, heatmaps: false, surveys: running.length ? running.map((s) => this.publicSurvey(s)) : false, defaultIdentifiedOnly: true, siteApps: [] }
     }
 
     private record(p: Project, token: string, raw: Record<string, unknown>) {

@@ -16,6 +16,7 @@ export type Act =
     | ['iframeClick', string, string] // click inside an iframe screen (no PostHog there)
     | ['dismiss'] | ['answer']
     | ['ready'] // wait until the survey renderer and the surveys are loaded
+    | ['launch', string] // the PM launches this survey now (saved with launch: false), while the page stays open
     | ['openAll'] // open every screen in a row, measuring each
     | ['expect', Expect]
 
@@ -44,6 +45,7 @@ export interface Flow {
     lensQuiet?: string[] // surveys for which Lens must give no step warnings
     acts: Act[]
     quick?: boolean // part of the fast subset (pnpm test)
+    refreshMs?: number // window.__lensSurveyRefreshMs: how often the survey engine reloads flags and surveys (default 5 min)
 }
 
 const Q = (text: string) => [{ type: 'rating' as const, text, scale: 5 as const, low_label: 'Hard', high_label: 'Easy' }]
@@ -345,6 +347,17 @@ export const FLOWS: Flow[] = [
         why: 'Every screen opened one after another (tabs, windows, reports): no slowdown, no console errors; the survey on the last one shows.',
         surveys: { A: once(S('Last screen', [{ opens: 'ValuationReqv' }, { opens: 'CovenantsReqv' }])) },
         acts: [['ready'], ['openAll'], ['expect', { shown: ['A'], within: 10000 }]],
+    },
+    {
+        name: 'Survey launched while the page is open shows after the refresh interval', quick: true,
+        why: 'posthog-js reads flags once per page load, so a survey launched while Reval is open used to need a reload. The engine reloads flags and surveys every few minutes while visible (here every 3 s): the survey must then show on the next Hedge Designation export, with no reload, and not before it is launched.',
+        surveys: { A: { ...once(S('Hedge export live launch', [{ opens: 'LinkListReqv' }, { button: 'Export', dialog: 'LinkListReqv' }])), launch: false } },
+        refreshMs: 3000,
+        acts: [['ready'], ['open', 'report:LinkListReqv'], ['wait', 600], ['press', 'LinkListReqv', 'Export'],
+            ['expect', { none: true, within: 4000, note: 'not launched yet' }],
+            ['launch', 'A'], ['expect', { none: true, within: 8000, note: 'launched and refreshed: the export before the launch does not count' }],
+            ['close', 'LinkListReqv'], ['open', 'report:LinkListReqv'], ['wait', 600], ['press', 'LinkListReqv', 'Export'],
+            ['expect', { shown: ['A'], notWhileMask: true, within: 10000, note: 'launched after page load, no reload' }]],
     },
     {
         name: 'PostHog serves its own surveys.js at the versioned path',

@@ -18,15 +18,15 @@ The root redirects to `/replays`. Pinned graphs are at `/replays/pinned`. `/heal
 
 Connect to `/mcp` with a personal token from Connect, or the configured shared token. Local clients may use `node --import tsx src/mcp/stdio.ts`.
 
-- `posthog_exec`: PostHog's own tools. Commands: `tools`, `info <tool>`, `call <tool> <json>`. Long calls return a job handle within about 20 seconds.
+- `posthog_exec`: PostHog's own tools. Commands: `tools`, `info <tool>`, `call <tool> <json>`. Long calls return a job handle within about 20 seconds. PostHog's `execute-sql` returns at most 500 rows; a result of exactly 500 rows carries a note saying so (aggregate in SQL instead of listing rows).
 - `get_job_result`: poll your job handle.
 - `resolve_client`: resolve a client code/name, user, email or distinct id. Includes the match reason, matched user, last seen, and event count for the requested window. The live roster is cached for at most ten minutes.
-- `find_sessions`: client, optional screen/action text/user, a window of up to one year, limit and cursor. Returns both PostHog replay and Lens clip page URLs. It reports missing recordings explicitly.
+- `find_sessions`: client, optional screen/action text/user, a window of up to one year, limit and cursor. Returns both PostHog replay and Lens clip page URLs. It reports missing recordings explicitly. A page is limited by size (about 19 KB) as well as by `limit`: busy sessions are summarised more briefly, and `truncated_by_size` with `next_cursor` says there is more.
 - `get_replay_link`: PostHog replay and MP4 clip links; waits up to 25 seconds and finishes pending clips in the background.
 - `pin_graph`: save `{title, chart: {type: 'line'|'bar'|'table', x: [...], series: [{name, values: [...]}]}, note?}`. At most 20 series and 500 points; series lengths must match `x`.
 - `list_pinned`: list saved snapshots.
 - `unpin_graph`: delete your own graph; an admin may delete any graph.
-- `design_survey`, `save_survey`, `stop_survey`, `list_surveys`, `survey_results`: survey tools, according to the caller's survey role. Launching stays on the Surveys page.
+- `design_survey`, `save_survey`, `stop_survey`, `list_surveys`, `survey_results`: survey tools, according to the caller's survey role. Launching stays on the Surveys page. A `design_survey` reach estimate over more than 90 days uses the last 90 days and says so; a slow one returns a job handle.
 
 PostHog tools require its upstream MCP URL/key. Survey tools require its survey key. Replay and person tools from PostHog are allowed. Results are not masked. `src/mcp/output-filter.ts` contains the single pass-through hook at the output boundary.
 
@@ -37,6 +37,20 @@ Use `.env.example` and `config/app-events.reval.json`. Event/property names come
 For the owner's IDs (`C1DEV|01|SEM|SEMOPS`), set `CLIENT_FROM_DISTINCT_ID=3`; the provided map identifies user part 4. `sem ops` resolves to client SEM with matched user SEMOPS, and session finding preserves that user filter. Screen names come from `dialog_name` and `tab_name`, codes from `dialog_id`; actions come from `action` and `action_name`.
 
 Run with `node --import tsx src/service/server.ts`. Check with `npx tsc --noEmit` and `npm test -- --test-concurrency=1`. The clip queue defaults to five concurrent renders and two per person. SQLite keeps access, audits, clips, survey metadata, jobs and pinned snapshots. Historical database migrations remain compatible with installed databases; retired history files are not read.
+
+### PostHog install and upgrade
+
+`deploy/install.sh` (and `deploy/posthog/install-posthog-hobby.sh`, `deploy/migrate/posthog-upgrade.sh`) also:
+
+- give every install its own random object storage keys (`OBJECT_STORAGE_ACCESS_KEY_ID`/`SECRET_ACCESS_KEY` in
+  PostHog's `.env`, never PostHog's shared `object_storage_root_*`), and add any that an older `.env` lacks;
+- run `compose/premigrate` (`deploy/posthog/clickhouse-premigrate.py`) before PostHog's `bin/migrate`: it adds
+  columns that an early PostHog ClickHouse migration needs before the later one that adds them (0378 needs
+  `log_comment`, which 0391 adds), so an upgraded stack does not crash-loop. It does nothing on a new or
+  up-to-date stack;
+- turn surveys on in the Lens project (`surveys_opt_in`, off in a new PostHog project) through PostHog's API with a
+  short-lived key (`deploy/posthog/survey-engine/opt-in.sh`, `--check` to only report). `lens.sh doctor` fails when
+  surveys are on in Lens but off in the project.
 
 Lab verification helpers are `tools/task-u-server.mts` (port 18371, isolated SQLite) and `tools/task-u-check.mts` (MCP and HTTP checks). Start the server with the lab's bridge preload. A stopped ClickHouse lab produces unavailable errors rather than invented data.
 
@@ -65,6 +79,13 @@ Example, "after a user opens Hedge Designation and then exports from it":
 `steps: [{opens: 'LinkListReqv'}, {button: 'Export', dialog: 'LinkListReqv'}]`. It does not show for opening
 the report alone, for an export in another screen, or for an export before the report was opened; it shows
 when the export happens, also minutes later, once Reval's loading mask has gone.
+
+A survey launched while Reval is already open shows without a reload. posthog-js reads its flags (a survey's
+targeting flag is one) once per page load, so the survey engine reloads flags and surveys every 5 minutes while
+the page is visible, and when it comes back into view (at most once a minute). When the page loaded while no
+survey was running, PostHog's script starts with survey display off; the engine turns it on once PostHog's
+remote config lists surveys again, as a reload would. Steps done before the launch do not count: after a launch,
+users do the steps again. `window.__lensSurveyRefreshMs` changes the interval (0 turns it off).
 
 `design_survey` adds warnings, never errors, when a step's screen, button or field, or the client audience,
 matched nothing in the last 30 days of events, with close matches (for example `LinkListReqv` for
@@ -101,5 +122,11 @@ keys, file paths or stack traces.
   survey on screen (min, median, p95, max), and writes `run/real-sessions/results-<stamp>.json`. Set
   `REAL_PH`, `REAL_TOKEN` (project token), `REAL_KEY` (personal key with survey write) and `REAL_PROJECT`.
   The project needs surveys turned on (`surveys_opt_in`), and PostHog must serve the Lens survey engine.
+- `tools/reval-sim/real-live-launch.ts`: a survey launched while Reval is open, against a real PostHog. `PAGES`
+  (6) pages open and do the steps first, then Lens launches the survey; after the engine's refresh (`REFRESH_MS`,
+  20000) the same pages, without a reload, do the steps again and must see it. `CONTROL` (2) pages run with the
+  refresh off and must see nothing. Same `REAL_*` settings; results in `run/real-live-launch/`.
+- `tools/real-mcp-check.mts`: Lens MCP tools over 1/7/30/90/365-day windows against a real PostHog, counts
+  compared with ClickHouse (`CLICKHOUSE_URL`), with latencies, row caps and errors (`run/real-mcp/`).
 - `npm run ui-shots -- <folder>`: screenshots of every page and tab at 1440 and 375 pixels in dark and light,
   plus empty and error states, against a stand-in PostHog with sample data.

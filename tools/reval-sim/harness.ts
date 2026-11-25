@@ -55,7 +55,7 @@ export interface Visit {
     close(): Promise<void>
 }
 
-export async function visit(sim: Sim, projectId: string, who: { client: string; user: string; init?: number; speed?: number; ph?: string }): Promise<Visit> {
+export async function visit(sim: Sim, projectId: string, who: { client: string; user: string; init?: number; speed?: number; ph?: string; refreshMs?: number }): Promise<Visit> {
     const ctx = await sim.browser.createBrowserContext()
     const page = await ctx.newPage()
     await page.setViewport({ width: 1366, height: 820 })
@@ -72,6 +72,7 @@ export async function visit(sim: Sim, projectId: string, who: { client: string; 
     page.on('requestfailed', (r) => { const f = r.failure()?.errorText || ''; if (!/ERR_ABORTED/.test(f)) errors.push(`requestfailed: ${r.url().slice(0, 120)} ${f}`) })
     page.on('response', (r) => { if (r.status() >= 400) errors.push(`http ${r.status()}: ${r.url().slice(0, 120)}`) })
     await page.evaluateOnNewDocument(CLOCK)
+    if (who.refreshMs !== undefined) await page.evaluateOnNewDocument(`window.__lensSurveyRefreshMs = ${Number(who.refreshMs)}`)
     const q = new URLSearchParams({ token: sim.posthog.tokenFor(projectId), ph: who.ph || sim.posthog.url, client: who.client, user: who.user, init: String(who.init ?? 300), speed: String(who.speed ?? 1) })
     await page.goto(`${sim.reval.url}/?${q}`, { waitUntil: 'load' })
     await page.waitForFunction('!!window.Reval && !!window.__viewportAt', { timeout: 30_000 })

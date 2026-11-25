@@ -799,6 +799,9 @@ step_surveys() {
     FEATURE_SURVEYS="$SURVEY_ENGINE"
     if [ "$SURVEY_ENGINE" = on ]; then
         SECRETS="$SECRETS" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/posthog/survey-engine/key.sh" || warn "no survey key: the Surveys page and survey tools stay off until this step runs again"
+        # A new PostHog project has surveys off (surveys_opt_in) and then shows none: turn them on through the API.
+        SECRETS="$SECRETS" POSTHOG_DIR="$POSTHOG_DIR" bash "$HERE/posthog/survey-engine/opt-in.sh" \
+            || warn "could not turn surveys on in the PostHog project: no survey shows until deploy/posthog/survey-engine/opt-in.sh succeeds"
     fi
     POSTHOG_SURVEY_API_KEY="$(read_env_file "$SECRETS" POSTHOG_SURVEY_API_KEY)"
     POSTHOG_SURVEY_GATE="$(read_env_file "$SECRETS" POSTHOG_SURVEY_GATE)"

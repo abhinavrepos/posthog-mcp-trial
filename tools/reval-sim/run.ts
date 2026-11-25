@@ -107,6 +107,14 @@ async function act(v: Visit, a: Act, r: FlowResult, ctx: { sim: Sim; alt: StandI
             await page.waitForFunction(() => !!(window as any).__PosthogExtensions__?.generateSurveys && !!(window as any).posthog?.__loaded, { timeout: 30_000 })
             await sleep(700) // the surveys list request
             return
+        case 'launch': {
+            // What Lens's launch sends (src/core/surveys.ts launchSurvey): start_date on the draft. Sent straight to this
+            // flow's stand-in project, because flows run in parallel and Lens's PostHog settings are global.
+            const id = ctx.p.ids[a[1]]
+            const res = id && await fetch(`${ctx.p.ph}/api/projects/${ctx.p.projectId}/surveys/${id}/`, { method: 'PATCH', headers: { 'content-type': 'application/json', authorization: 'Bearer sim' }, body: JSON.stringify({ start_date: new Date().toISOString() }) })
+            if (!res || !res.ok) r.failures.push(`could not launch ${a[1]}`)
+            return
+        }
         case 'openAll': return openAll(v, r)
         case 'expect': return expect(v, a[1], r, ctx)
     }
@@ -196,7 +204,7 @@ async function runFlow(sim: Sim, p: Prepared, alt: StandInPostHog, screensDir?: 
     let v: Visit | undefined
     const shownCount = new Map<string, number>()
     try {
-        v = await visit(sim, p.projectId, { client: f.client || 'SEM', user, init: f.init, ph })
+        v = await visit(sim, p.projectId, { client: f.client || 'SEM', user, init: f.init, ph, refreshMs: f.refreshMs })
         for (const a of f.acts) {
             await act(v, a, r, { sim, alt, p, t: t0, shownCount, screensDir })
             if (a[0] !== 'expect' && a[0] !== 'wait') await sleep(120)

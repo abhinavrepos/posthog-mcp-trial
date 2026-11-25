@@ -650,12 +650,21 @@ if phase configure; then
     site_lines="$(grep -E '^(SECURE_COOKIES|TRUST_ALL_PROXIES)=' .env.services 2>/dev/null || true)"
     [ -f posthog/.env.services ] && cp posthog/.env.services .env.services
     [ -z "$site_lines" ] || printf '\n# Kept by posthog-upgrade.sh\n%s\n' "$site_lines" >> .env.services
+    # The new compose file requires dedicated object storage keys (and a few other secrets): add any that are
+    # missing, never PostHog's shared object_storage_root_* ones, and never change an existing value.
+    sed -i -E "/^OBJECT_STORAGE_(ACCESS_KEY_ID|SECRET_ACCESS_KEY)=[\"']?object_storage_root_(user|password)[\"']?$/d" .env
+    for key in INTERNAL_REQUEST_TOKEN BROWSERLESS_SECRET RECORDING_API_JWT_SECRET OBJECT_STORAGE_ACCESS_KEY_ID OBJECT_STORAGE_SECRET_ACCESS_KEY; do
+        grep -qE "^$key=.+" .env || { sed -i "/^$key=/d" .env; echo "$key=$(openssl rand -hex 32)" >> .env; say "added $key to .env"; }
+    done
+    chmod 600 .env
     ( set -a; . ./.env; set +a; bash posthog/bin/helpers/render-hobby-compose.sh < posthog/docker-compose.hobby.yml > docker-compose.yml.new )
     mv docker-compose.yml.new docker-compose.yml
     mkdir -p compose
-    printf '#!/bin/bash\n./compose/wait\n./bin/migrate\n./bin/docker-server\n' > compose/start
+    # premigrate: see ../posthog/clickhouse-premigrate.py (columns an early ClickHouse migration needs first).
+    cp "$HERE/../posthog/clickhouse-premigrate.py" compose/premigrate
+    printf '#!/bin/bash\n./compose/wait\npython3 /compose/premigrate || true\n./bin/migrate\n./bin/docker-server\n' > compose/start
     [ -f compose/temporal-django-worker ] || printf '#!/bin/bash\n./bin/temporal-django-worker\n' > compose/temporal-django-worker
-    chmod 0755 compose share compose/start compose/temporal-django-worker
+    chmod 0755 compose share compose/start compose/temporal-django-worker compose/premigrate
     [ ! -f compose/wait ] || chmod 0755 compose/wait
     cp "$HERE/versions/docker-compose.pinned.yml" docker-compose.pinned.yml
     files="docker-compose.yml"; [ -f docker-compose.override.yml ] && files="$files:docker-compose.override.yml"
@@ -800,6 +809,7 @@ if phase clickhouse; then
     require_backup
     dc up -d db redis7 clickhouse kafka zookeeper >/dev/null 2>&1
     for _ in $(seq 1 60); do dc exec -T db pg_isready -U posthog >/dev/null 2>&1 < /dev/null && break; sleep 2; done
+    { target_web python3 /compose/premigrate < /dev/null 2>&1 || true; } | grep '^\[premigrate\]' | sed 's/^/    /' || true
     say "PostHog's database migrations"
     TOTAL=$(pending target_web); TOTAL=${TOTAL:-?}
     say "    $TOTAL migrations to apply"

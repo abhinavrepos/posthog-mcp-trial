@@ -66,7 +66,7 @@ function errorKind(result: Dict, body: Dict): string {
 }
 function countsFor(name: string, body: Dict): Dict {
     if (name === 'resolve_client') return { matches: Array.isArray(body.matches) ? body.matches.length : undefined, client_events: object((body.matches as unknown[] | undefined)?.[0])?.client_events }
-    if (name === 'find_sessions') return { sessions: Array.isArray(body.sessions) ? body.sessions.length : undefined, next_cursor: typeof body.next_cursor === 'string', truncated_by_size: body.truncated_by_size === true }
+    if (name === 'find_sessions' || (name === 'get_job_result' && Array.isArray(body.sessions))) return { sessions: Array.isArray(body.sessions) ? body.sessions.length : undefined, next_cursor: typeof body.next_cursor === 'string', truncated_by_size: body.truncated_by_size === true }
     if (name === 'list_surveys') return { surveys: Array.isArray(body.rows) ? body.rows.length : Array.isArray(body.surveys) ? body.surveys.length : undefined }
     if (name === 'design_survey') return { problems: Array.isArray(body.problems) ? body.problems.length : undefined, reach_sessions: object(body.reach)?.result && object(object(body.reach)?.result)?.sessions }
     if (name === 'posthog_exec' || name === 'get_job_result') {
@@ -85,7 +85,7 @@ async function call(windowDays: number, name: string, args: Dict, page?: number)
         const record: Call = { window_days: windowDays, name, ...(page ? { page } : {}), ms: Math.round(performance.now() - start), ok, counts: countsFor(name, body) }
         // PostHog's execute-sql answers as text: a header line, then one line per row.
         const raw = String((result.content as Array<{text?: string}> | undefined)?.find(x => typeof x.text === 'string')?.text || '')
-        if ((name === 'posthog_exec' || name === 'get_job_result') && ok && record.counts?.events === undefined && !body.job_id && raw) {
+        if ((name === 'posthog_exec' || name === 'get_job_result') && ok && record.counts?.events === undefined && !body.job_id && !Array.isArray(body.sessions) && !Array.isArray(body.matches) && raw) {
             const lines = raw.trim().split('\n')
             const first = Number(lines[1]?.split(/[,\t]/)[0])
             record.counts = { events: lines.length === 2 && Number.isFinite(first) ? first : undefined, rows: Math.max(0, lines.length - 1), bytes: raw.length, truncated_note: /truncat|limit|more rows/i.test(raw.slice(-400)) }
