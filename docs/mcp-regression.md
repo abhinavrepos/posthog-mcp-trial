@@ -1,7 +1,7 @@
-# MCP regression: 100 PM questions answered by Sonnet through the Lens MCP
+# MCP regression: 100 PM questions answered by Sonnet through the Signal MCP
 
 Real PostHog (self-hosted hobby, 400M events over one year, 61 clients), 2026-11-25. Each question runs in its own
-`claude -p --model sonnet` session with only the Lens MCP connected (`--strict-mcp-config`, built-in tools off),
+`claude -p --model sonnet` session with only the Signal MCP connected (`--strict-mcp-config`, built-in tools off),
 6 in parallel, 6 minutes each. Answers end with `ANSWER: <value>` and are graded against ClickHouse
 (`posthog.events`, team 1). Harness: `tools/mcp-regression/` (`make-questions.py` → `questions.json`, `run.mts`,
 `report.mts`, `triage.json`, `recipe-check.mts`, `nightly.sh`). Gate in `npm test`: `test/mcp-regression-gate.test.ts`.
@@ -30,15 +30,15 @@ idle PostHog (6/6).** Target was more than 95%.
 | Raw pass count as run | 83 | 94 |
 | After ground-truth/harness corrections (regraded, same answers) | 87 | 95 |
 | Latency per question, median / p90 | 117 s / 169 s | 79 s / 152 s |
-| Lens tool calls per question (mean) | 4.8 | 2.9 |
+| Signal tool calls per question (mean) | 4.8 | 2.9 |
 | Questions answered with execute-sql / with a recipe | 52 / 0 | 25 / 36 |
 | Questions using `window` / `period` | 0 / 33 | 41 / 0 |
 | Sonnet cost, 100 questions | $4.44 | $3.89 |
 
 "Raw" is the grade at the time of the run. The corrections, listed under *Ground truth and harness corrections*,
-fixed my ground truth or grader, not Lens, and were applied to both runs by re-grading the same answers
+fixed my ground truth or grader, not Signal, and were applied to both runs by re-grading the same answers
 (`REGRADE=<tag>`). The before run's failures also include questions that were wrong on my side; they are listed
-there and not counted against Lens.
+there and not counted against Signal.
 
 The after run shared one 16-core machine with 6 Sonnet sessions, each with its own MCP server, and another
 session's headless Chrome. Load average reached 67, PostHog's health check took 12–20 s, and ClickHouse queries hit
@@ -66,7 +66,7 @@ design_survey bug fixed in ccdad99. The rerun one at a time on an idle PostHog i
 
 | Commit | Change | Questions |
 | --- | --- | --- |
-| d577419 | design_survey's 15 s step checks timed out at 400M events and the client-side timeouts opened Lens's PostHog circuit breaker, which then refused the reach estimate and every call for 30 s. The breaker now counts only normal-deadline timeouts. Checks get 40 s. The fallback warning named a removed tool. | q076–q079 |
+| d577419 | design_survey's 15 s step checks timed out at 400M events and the client-side timeouts opened Signal's PostHog circuit breaker, which then refused the reach estimate and every call for 30 s. The breaker now counts only normal-deadline timeouts. Checks get 40 s. The fallback warning named a removed tool. | q076–q079 |
 | 5b1e9bd | Tool design (tool-design.md): one `window` argument, `{last:"24h"|"Nd"}` rolling by default, `{day}`, `{from,to}`, clamped to now, with old arguments kept as aliases. Every result starts with a context (window, filters, source, shown/truncated). Descriptions rewritten with what each tool answers, example questions, when to use another tool, limits and one correct call. `posthog_exec recipe <name> <json>` (7 recipes, 10/10 equal to ClickHouse). Errors carry a corrected example call. A ZodError inside a job-backed tool no longer surfaces as "internal". 45 s inline before a job handle. Gate test and nightly script. | q011, q015, q016, q020, q021, q040, q048, q052, q100 |
 | ccdad99 | design_survey: each 30-day check is skipped on its own ("Check skipped: …") and the others still report. A reach estimate that fails is a warning, not a failed job. | q076, q077 (after run) |
 
@@ -80,7 +80,7 @@ a stdio server starts still waits for them, about 11 s.
 
 ## Ground truth and harness corrections (applied to both runs)
 
-- **Messages (q044–q053):** my ground truth counted `PageView` rows of the messagebox/toast dialogs. Lens's
+- **Messages (q044–q053):** my ground truth counted `PageView` rows of the messagebox/toast dialogs. Signal's
   `data_guide` defines messages as `Event` rows, and Sonnet followed it. Ground truth now uses `event = 'Event'`.
 - **q071:** the simulated data has no "Trade Date" field (`action` is CHANGE or CLICK). Sonnet's "none found" was
   right; the question is now a behaviour check expecting none.
@@ -157,18 +157,18 @@ Latency per question: median 117 s, p90 170 s, max 318 s. Calendar-window passes
 - Fix: Same as q021; recipe messages.
 
 #### q076 (surveys) — tool bug
-- Question: Design (do not save) a survey shown after a user opens the dialog DlgHedgeDesigListReport and then presses Export there, one rating question. What dialog id does Lens suggest instead? Answer with the id.
+- Question: Design (do not save) a survey shown after a user opens the dialog DlgHedgeDesigListReport and then presses Export there, one rating question. What dialog id does Signal suggest instead? Answer with the id.
 - Expected: `{"tool":"design_survey","answer":"LinkListReqv"}`
 - Got: `unknown` (answer does not match /LinkListReqv/)
 - Tools: ToolSearch, design_survey, get_job_result, get_job_result (error), get_job_result (error), get_job_result (error)
 - Tool errors: `get_job_result: PostHog is unavailable or busy. Retry later. Correlation id: 84691f55-a568-404a-9f53-98b5ea33948e
 
 This tool's input schema was not in your prompt when you called it. The input schema `; `get_job_result: PostHog is unavailable or busy. Retry later. Correlation id: 6f7f0ed4-46e6-41ab-90a0-9aa6521e842b`; `get_job_result: PostHog is unavailable or busy. Retry later. Correlation id: 61a05860-4d29-4c8b-8bc4-e7e3af83e3cc`
-- Root cause: design_survey job failed: its 30-day step checks (15 s budget each, run together) timed out at 400M rows, and those client-side timeouts counted toward Lens's PostHog circuit breaker, which then refused the reach estimate and every call for 30 s ("PostHog is unavailable or busy").
+- Root cause: design_survey job failed: its 30-day step checks (15 s budget each, run together) timed out at 400M rows, and those client-side timeouts counted toward Signal's PostHog circuit breaker, which then refused the reach estimate and every call for 30 s ("PostHog is unavailable or busy").
 - Fix: Breaker counts only normal-deadline timeouts (test added); step checks get 40 s and run in parallel with the reach estimate; the fallback warning names existing tools (it named the removed describe_app_events).
 
 #### q077 (surveys) — tool bug
-- Question: Design (do not save) a survey shown after the user presses the button "Exprot" in LinkListReqv, one thumbs question. Does Lens warn that the button matched nothing? Answer yes or no.
+- Question: Design (do not save) a survey shown after the user presses the button "Exprot" in LinkListReqv, one thumbs question. Does Signal warn that the button matched nothing? Answer yes or no.
 - Expected: `{"tool":"design_survey","answer":"^yes\\b"}`
 - Got: `unknown` (answer does not match /^yes\b/)
 - Tools: ToolSearch, design_survey, get_job_result, get_job_result (error), get_job_result (error), get_job_result (error)
@@ -179,7 +179,7 @@ This tool's input schema was not in your prompt when you called it. The input sc
 - Fix: Same as q076.
 
 #### q078 (surveys) — tool bug
-- Question: Design (do not save) a survey for client "ZZZ9" (no such client) shown after opening LinkListReqv, one yes/no question. Does Lens warn about the audience? Answer yes or no.
+- Question: Design (do not save) a survey for client "ZZZ9" (no such client) shown after opening LinkListReqv, one yes/no question. Does Signal warn about the audience? Answer yes or no.
 - Expected: `{"tool":"design_survey","answer":"^yes\\b"}`
 - Got: `unknown` (answer does not match /^yes\b/)
 - Tools: ToolSearch, design_survey, ToolSearch, get_job_result, get_job_result, get_job_result (error), get_job_result (error)
@@ -221,12 +221,12 @@ q089 34 s, q091 31 s).
 - Got: `` (no session id in the answer)
 - Tools: ToolSearch, find_sessions, ToolSearch, get_job_result, find_sessions, get_job_result, get_job_result, get_job_result, get_job_result, get_job_result, get_job_result, get_job_result, get_job_result, get_job_result, find_sessions, get_job_result, get_job_result, get_job_result, get_job_result
 - Root cause: recorded_only:true found nothing (this project has no recordings); Sonnet then searched 365 days of C46 for the message while PostHog was saturated (load average 60 on 16 cores, ClickHouse queries at their 60 s limit) and hit the 6-minute limit. Passes on an idle PostHog (retry1, 59 s).
-- Fix: None in Lens; the after run had 6 Sonnet sessions plus another session's headless Chrome on one machine.
+- Fix: None in Signal; the after run had 6 Sonnet sessions plus another session's headless Chrome on one machine.
 
 #### q076 (surveys) — tool bug
-- Question: Design (do not save) a survey shown after a user opens the dialog DlgHedgeDesigListReport and then presses Export there, one rating question. What dialog id does Lens suggest instead? Answer with the id.
+- Question: Design (do not save) a survey shown after a user opens the dialog DlgHedgeDesigListReport and then presses Export there, one rating question. What dialog id does Signal suggest instead? Answer with the id.
 - Expected: `{"tool":"design_survey","answer":"LinkListReqv"}`
-- Got: `none (Lens suggested no alternative dialog id)` (answer does not match /LinkListReqv/)
+- Got: `none (Signal suggested no alternative dialog id)` (answer does not match /LinkListReqv/)
 - Tools: design_survey (error), design_survey, get_job_result, posthog_exec (error), posthog_exec (error), posthog_exec, get_job_result, get_job_result, get_job_result, get_job_result, get_job_result (error)
 - Tool errors: `design_survey: MCP error -32602: Input validation error: Invalid arguments for tool design_survey: Invalid input: expected string, received undefined at name
 Invalid input: expected array, received un`; `posthog_exec: posthog_exec: Invalid arguments for recipe top_screens: arguments: Unrecognized key: "contains". Example: recipe top_screens {"client":"C08","window":{"last":"30d"},"limit":5} Call posth`; `posthog_exec: posthog_exec: Invalid arguments for recipe top_screens: limit: Too big: expected number to be <=100. Example: recipe top_screens {"client":"C08","window":{"last":"30d"},"limit":5} Call p`; `get_job_result: PostHog is unavailable or busy. Retry later. Correlation id: 3b7f78b0-6b0c-4715-a16f-c2f02cf45273
@@ -236,7 +236,7 @@ This tool's input schema was not in your prompt when you called it. The input sc
 - Fix: ccdad99: each check is skipped on its own ("Check skipped: …"), the others still report; a failed reach estimate is a warning, not a failed job.
 
 #### q077 (surveys) — tool bug
-- Question: Design (do not save) a survey shown after the user presses the button "Exprot" in LinkListReqv, one thumbs question. Does Lens warn that the button matched nothing? Answer yes or no.
+- Question: Design (do not save) a survey shown after the user presses the button "Exprot" in LinkListReqv, one thumbs question. Does Signal warn that the button matched nothing? Answer yes or no.
 - Expected: `{"tool":"design_survey","answer":"^yes\\b"}`
 - Got: `no` (answer does not match /^yes\b/)
 - Tools: ToolSearch, design_survey, ToolSearch, get_job_result, get_job_result (error), design_survey, get_job_result
@@ -253,7 +253,7 @@ This tool's input schema was not in your prompt when you called it. The input sc
 
 This tool's input schema was not in your prompt when you called it. The input schema `; `get_job_result: PostHog is unavailable or busy. Retry later. Correlation id: fe4de820-1658-431e-9bfb-06273ba51966`; `get_job_result: PostHog is unavailable or busy. Retry later. Correlation id: 64729803-73e0-48a6-8f7b-7f7b01740148`
 - Root cause: PostHog answered with errors for a stretch (its own ClickHouse 60 s limit; health check 12-20 s): every call returned "PostHog is unavailable or busy". Passes on an idle PostHog (retry1).
-- Fix: None in Lens (capacity of the test machine).
+- Fix: None in Signal (capacity of the test machine).
 
 #### q091 (edge_cases) — timeout
 - Question: How many events did client C08 have on 2025-01-01 (UTC)?
@@ -262,7 +262,7 @@ This tool's input schema was not in your prompt when you called it. The input sc
 - Tools: ToolSearch, resolve_client (error), resolve_client (error)
 - Tool errors: `resolve_client: PostHog is unavailable or busy. Retry later. Correlation id: 370d8d88-88f7-4e72-933d-f6c7afc30b08`; `resolve_client: PostHog is unavailable or busy. Retry later. Correlation id: 9659909c-8d58-4bab-bc22-654a34295a3a`
 - Root cause: Same stretch as q089. Passes on an idle PostHog (retry1).
-- Fix: None in Lens.
+- Fix: None in Signal.
 
 
 ## Running it
