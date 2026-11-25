@@ -11,17 +11,17 @@ import { TIME_HELP } from './timeinput.ts'
 export class ToolValidationError extends Error {}
 export function toolError(error: unknown, tool: string, id: string = toolCorrelationId(), contract?: {keys:string[];example:unknown}) {
     const raw = error instanceof Error ? error.message : String(error)
-    let kind='internal', message='The tool could not complete. Retry later; if it persists, give the correlation id to a Lens administrator.'
+    let kind='internal', message='The tool could not complete. Retry later; if it persists, give the correlation id to a Signal administrator.'
     if (error && typeof error === 'object' && typeof (error as {code?:unknown}).code === 'string'
         && /^SQLITE_(?:BUSY|LOCKED|FULL|READONLY|CORRUPT|NOTADB|IOERR)(?:_|$)/.test((error as {code:string}).code)) {
-        kind='unavailable';message='Lens storage is unavailable. Retry shortly; if it persists, contact a Lens administrator.'
+        kind='unavailable';message='Signal storage is unavailable. Retry shortly; if it persists, contact a Signal administrator.'
     }
     else if (['design_survey','save_survey','stop_survey','list_surveys','survey_results'].includes(tool)
         && [401,403].includes((error as {status?:number})?.status ?? 0)) {
-        kind='unavailable';message='PostHog refused the survey request. Ask a Lens administrator to check the survey key and its scope for this project.'
+        kind='unavailable';message='PostHog refused the survey request. Ask a Signal administrator to check the survey key and its scope for this project.'
     }
     else if (tool === 'list_surveys' && (error as {status?:number})?.status === 404) {
-        kind='unavailable';message='PostHog could not find the survey project. Ask a Lens administrator to check the configured project id.'
+        kind='unavailable';message='PostHog could not find the survey project. Ask a Signal administrator to check the configured project id.'
     }
     else if ((error as {status?:number})?.status === 429 && (error as {retryAfter?:string|null}).retryAfter) {
         kind='unavailable';message=posthogFailure(raw,429,(error as {retryAfter:string}).retryAfter).message
@@ -32,7 +32,7 @@ export function toolError(error: unknown, tool: string, id: string = toolCorrela
     else if(error instanceof JobCapError || error instanceof JobQueueError || error instanceof ClipQueueError) {kind='busy';message=error.message}
     else if(raw === 'Unknown or expired job id.') {kind='not_found';message=raw}
     else if(raw === 'Access settings changed. Submit the tool again.') {kind='access_changed';message=raw}
-    else if(raw.startsWith('Server restarted before this job completed')) {kind='restarted';message='Lens restarted before this job finished, so it has no result. Call the original tool again with the same arguments.'}
+    else if(raw.startsWith('Server restarted before this job completed')) {kind='restarted';message='Signal restarted before this job finished, so it has no result. Call the original tool again with the same arguments.'}
     // A request that got no answer at all: PostHog may be overloaded, so narrowing the window is not the only fix.
     else if((error as {name?:string})?.name === 'TimeoutError' || /operation was aborted due to timeout/i.test(raw)) {kind='capacity';message='PostHog did not answer in time. Retry once; if it times out again, PostHog is overloaded or the question is heavy: use a narrower window, a coarser bucket, or fewer group_by dimensions.'}
     else if(error instanceof z.ZodError) {

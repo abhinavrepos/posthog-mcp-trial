@@ -24,8 +24,8 @@ export function plainReason(e: unknown): string {
     if (missing) return `PostHog settings are missing: ${missing.trim()}`
     if (/timeout|timed out|aborted/.test(m)) return 'PostHog did not answer in time'
     if (/econnrefused|enotfound|ehostunreach|econnreset|fetch failed|socket hang up|network/.test(m)) return 'PostHog is unreachable'
-    if (status === 401 || status === 403 || /unauthori[sz]ed|forbidden|invalid api key/.test(m)) return "PostHog refused Lens's API key"
-    if (status === 429 || /rate limit|too many requests/.test(m)) return 'PostHog is rate-limiting Lens'
+    if (status === 401 || status === 403 || /unauthori[sz]ed|forbidden|invalid api key/.test(m)) return "PostHog refused Signal's API key"
+    if (status === 429 || /rate limit|too many requests/.test(m)) return 'PostHog is rate-limiting Signal'
     if (status >= 500) return `PostHog returned an error (HTTP ${status})`
     if (/heap out of memory|err_worker_out_of_memory|out of memory|allocation failed|resourcelimits/.test(m)) return 'ran out of memory'
     if (/enospc|no space left|disk is full|database or disk is full/.test(m)) return 'the disk is full'

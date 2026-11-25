@@ -17,7 +17,7 @@ const cleanMessage = (error: unknown): string => {
 export function errorDiagnostic(error: unknown, tool: string, kind = 'internal', correlation_id: string = randomUUID(), status?: number) {
     // copy an upstream message, SQL, identity, amount, stack or file path onto stdio.
     // Operators still need to know what failed: the error's type and a cleaned message (query text and paths cut,
-    console.error('Lens error', {correlation_id, tool: /^[\w:-]{1,80}$/.test(tool) ? tool : 'unknown', error_kind: kind, http_status: status ?? null,
+    console.error('Signal error', {correlation_id, tool: /^[\w:-]{1,80}$/.test(tool) ? tool : 'unknown', error_kind: kind, http_status: status ?? null,
         error_type: error instanceof Error && /^[A-Za-z]{1,40}$/.test(error.name) ? error.name : typeof error, message: cleanMessage(error)})
     const file = process.env.LENS_DEBUG_ERRORS_FILE
     if (!file) return

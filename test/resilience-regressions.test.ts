@@ -65,7 +65,7 @@ test('SQLite storage failures give a plain storage message, without file paths o
         const error = Object.assign(new Error('database failed at /srv/lens/private.db with secret-token'), { code })
         const result = toolError(error, 'pin_graph')
         assert.equal(result.kind, 'unavailable')
-        assert.match(result.result.content[0].text, /Lens storage is unavailable/)
+        assert.match(result.result.content[0].text, /Signal storage is unavailable/)
         assert.doesNotMatch(result.result.content[0].text, /private\.db|secret-token|SQLITE_/)
     }
 })

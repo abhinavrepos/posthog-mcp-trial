@@ -18,7 +18,7 @@ import { pipeline } from 'node:stream/promises'
 import { StringDecoder } from 'node:string_decoder'
 
 
-/** What the proxy says about Lens: its server name, the tracked app's name and its tool names. */
+/** What the proxy says about Signal: its server name, the tracked app's name and its tool names. */
 export interface LensInfo {
     app: string
     tools: string[]

@@ -1,4 +1,4 @@
-// Lens HTTP and MCP: clips, Live, Surveys, Pinned, Admin and Connect.
+// Signal HTTP and MCP: clips, Live, Surveys, Pinned, Admin and Connect.
 import { jobStates, plainReason } from '../core/jobhealth.ts'
 import { existsSync, readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
@@ -227,7 +227,7 @@ server.keepAliveTimeout = 65_000
 server.headersTimeout = 70_000
 server.requestTimeout = 300_000
 
-server.listen(config.service.port, '0.0.0.0', () => log('Lens listening', { port: config.service.port, features: featureState() }))
+server.listen(config.service.port, '0.0.0.0', () => log('Signal listening', { port: config.service.port, features: featureState() }))
 
 const stopSurveySync = startSurveySync()
 

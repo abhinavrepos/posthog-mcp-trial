@@ -54,7 +54,7 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
         res.end(surveysHtml(v))
         return true
     }
-    if (!surveysActive()) return (json(res, 503, { error: 'Surveys are unavailable. Contact a Lens administrator to finish setup.' }), true)
+    if (!surveysActive()) return (json(res, 503, { error: 'Surveys are unavailable. Contact a Signal administrator to finish setup.' }), true)
     try {
         if (p === '/replays/surveys/api/list' && req.method === 'GET') return (json(res, 200, { surveys: await surveyOverview(days(url, 30)) }), true)
         const m = /^\/replays\/surveys\/api\/survey\/([0-9a-f-]{8,64})(?:\/(launch|stop|archive|reach|launch-check|answers))?$/i.exec(p)
@@ -77,7 +77,7 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
         if (m && m[2] === 'reach' && req.method === 'GET') {
             const s = await getSurvey(m[1])
             const chain = s.conditions?.lensChain
-            if (chain?.managedBy !== 'lens') return (json(res, 400, { error: 'Only surveys made in Lens have steps to count.' }), true)
+            if (chain?.managedBy !== 'lens') return (json(res, 400, { error: 'Only surveys made in Signal have steps to count.' }), true)
             return (json(res, 200, await estimateReach(chain, days(url, 14))), true)
         }
         if (m && m[2] && ['launch', 'stop', 'archive'].includes(m[2]) && req.method === 'POST') {
@@ -285,7 +285,7 @@ async function loadList(refreshDetail=false){const request=++listRequest;try{con
   if(!LIST.length){current=null;listMessage('No surveys yet.');const a=document.createElement('a');a.href='/replays/connect';a.textContent='Create a survey in chat';$('page-msg').append(' ',a);return}
   listMessage(LIST.some(s=>s.freshness)?'Showing cached survey counts while they refresh.':'');drawList();
   const want=location.hash.slice(1)||shown()[0]?.id;if(want&&(want!==current||refreshDetail))await show(want)}
-  catch(e){if(request!==listRequest)return;current=null;$('survey-layout').hidden=true;listMessage(e.status===503?'Surveys are unavailable. Contact a Lens administrator to finish setup.':'Couldn’t load surveys',e.status!==503)}}
+  catch(e){if(request!==listRequest)return;current=null;$('survey-layout').hidden=true;listMessage(e.status===503?'Surveys are unavailable. Contact a Signal administrator to finish setup.':'Couldn’t load surveys',e.status!==503)}}
 $('list-retry').onclick=()=>{loadList().then(()=>{if($('list-retry').hidden)$('days').focus()})}
 const TABS=[['all','All'],['running','Running'],['draft','Drafts'],['stopped','Stopped']]
 let FILTER=(()=>{const f=new URLSearchParams(location.search).get('status');return TABS.some(t=>t[0]===f)?f:'all'})()
@@ -334,7 +334,7 @@ async function show(id){const period=$('days').value;current=id;$('list').queryS
   const launched=(r.launches||[])[0]
   const facts=[['Clients',(s.clients==='all'?'Every client':s.clients.join(', '))+(s.sample_percent<100?' · '+s.sample_percent+'% of their users':'')],['Shows',s.show==='every_time'?'Every time the steps happen':'Once per user'],['Time to complete steps',s.within_minutes?num(s.within_minutes)+' minutes':'No limit (same page)'],
     ['Starts over when',s.reset_on.length?s.reset_on.join('; '):'Never (a page reload starts over)'],['Days between any two surveys',s.days_between_surveys||'None'],['User limits',s.pacing?'At most '+s.pacing.per_user+' running at once · '+s.pacing.gap_hours+' h apart at least · '+s.pacing.quiet_days_after_close+' quiet days after a close':'PostHog rules only'],['Only on pages containing',s.url_contains||'Any page'],['Stops after',s.max_responses?num(s.max_responses)+' answers':'No limit'],
-    ['Made',when(s.created)+(s.created_by?' by '+s.created_by:'')+(s.made_by_lens?' (Lens)':' (in PostHog)')],['Running since',s.started?when(s.started):'Not launched'+(s.stopped?'':'')]].concat(s.stopped?[['Stopped',when(s.stopped)]]:[]).concat(launched?[['Launched under',launched.ticket+(launched.ticket_summary?' · '+launched.ticket_summary:'')+' · by '+launched.launched_by+' ('+launched.via+'), '+when(launched.at)]]:[])
+    ['Made',when(s.created)+(s.created_by?' by '+s.created_by:'')+(s.made_by_lens?' (Signal)':' (in PostHog)')],['Running since',s.started?when(s.started):'Not launched'+(s.stopped?'':'')]].concat(s.stopped?[['Stopped',when(s.stopped)]]:[]).concat(launched?[['Launched under',launched.ticket+(launched.ticket_summary?' · '+launched.ticket_summary:'')+' · by '+launched.launched_by+' ('+launched.via+'), '+when(launched.at)]]:[])
   const qs=r.questions.map((q,i)=>'<div class="q"><h3><span class="muted">'+(i+1)+'. </span>'+esc(q.text.replace(/^Q:\s*/i,''))+'</h3><p class="small muted">'+num(q.answers)+' answers'+(q.recent?' · Newest first':'')+(q.average!=null?' · average '+num(q.average):'')+(q.nps?' · NPS '+num(q.nps.score)+' ('+num(q.nps.promoters)+' promoters, '+num(q.nps.passives)+' passives, '+num(q.nps.detractors)+' detractors)':'')+'</p>'+(q.distribution?'<div id="dist-'+i+'"></div><div id="dist-pager-'+i+'"></div>':'')+(q.recent?'<div id="answers-'+i+'"></div><div id="answers-pager-'+i+'"></div><p class="small muted" id="answers-status-'+i+'" role="status" aria-live="polite"></p><button type="button" class="ghost" id="answers-more-'+i+'" aria-controls="answers-'+i+'">Show more</button>':'')+'</div>').join('')
   $('detail').innerHTML='<div class="card"><span class="chip '+esc(s.status)+'">'+esc(STATUS[s.status])+'</span><div class="head"><h2>'+esc(s.name)+'</h2><div class="acts">'+acts+'</div></div>'+(s.description?'<details><summary>About this survey</summary><p class="muted">'+esc(s.description)+'</p></details>':'')+'<p id="a-msg" class="small" role="status" aria-live="polite"></p>'
     +'</div>'

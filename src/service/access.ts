@@ -109,7 +109,7 @@ export function setInsightAccess(email: string, on: boolean, by: string): void {
 // Survey roles are separate from the clip role. Each includes the ones before it:
 //   none    no Surveys page and no survey tools in chat
 //   view    the Surveys page and results; list_surveys and survey_results in chat
-//   edit    also design and save surveys (drafts, and changes to Lens surveys)
+//   edit    also design and save surveys (drafts, and changes to Signal surveys)
 //   launch  also launch, stop and archive: what reaches Reval users
 // Admins always have launch. People not listed get the default an admin sets (none unless changed).
 export type SurveyRole = 'none' | 'view' | 'edit' | 'launch'
@@ -161,7 +161,7 @@ export function resetSurveyRole(email: string, by: string): void {
         if (before) audit(by, 'access.survey_role_reset', { person: e, before })
     })
 }
-/** The Lens address people put in their chat app (Copilot). Admins set it; default PUBLIC_URL. */
+/** The Signal address people put in their chat app (Copilot). Admins set it; default PUBLIC_URL. */
 export const chatUrl = (): string => getSetting<string>('chat_url', '') || config.service.publicUrl
 export function setChatUrl(value: unknown, by: string): string {
     const raw = String(value ?? '').trim().replace(/\/+$/, '')
@@ -180,7 +180,7 @@ export function setChatUrl(value: unknown, by: string): string {
     })
     return chatUrl()
 }
-/** Which chat apps may be connected with a Lens key. Central admins edit it; the Chat page shows it as a warning. */
+/** Which chat apps may be connected with a Signal key. Central admins edit it; the Chat page shows it as a warning. */
 export const DEFAULT_CHAT_APPS = ['GitHub Copilot with your ION Microsoft enterprise account']
 export const DEFAULT_CHAT_NOTE = 'This is ION enterprise data. Other AI agents and chat apps are not approved: do not connect them with your key.'
 export const chatPolicy = (): { apps: string[]; note: string } => ({
@@ -276,7 +276,7 @@ export const canUseDashboards = (v: Pick<Viewer, 'role' | 'dashboards'>) => can(
 
 // ------------------------------------------------------------------ personal chat tokens
 // A person makes their own token on the Connect page; chat sends it instead of the shared MCP_TOKEN,
-// so Lens knows who asks and applies their survey role. Only a SHA-256 of the token is stored.
+// so Signal knows who asks and applies their survey role. Only a SHA-256 of the token is stored.
 export interface McpToken { id: string; email: string; label: string; posthog_admin: boolean; created_at: string; last_used_at: string | null; revoked_at: string | null; revoked_by: string | null }
 const tokenHash = (t: string) => createHash('sha256').update(t).digest('hex')
 const tokenRow = (r: Record<string, unknown>): McpToken => ({ id: String(r.id), email: String(r.email), label: String(r.label), posthog_admin: !!r.posthog_admin, created_at: String(r.created_at), last_used_at: (r.last_used_at as string) ?? null, revoked_at: (r.revoked_at as string) ?? null, revoked_by: (r.revoked_by as string) ?? null })
@@ -320,7 +320,7 @@ export function chatCaller(bearer: string | undefined, sharedToken: string): Cha
     if (!row) return undefined
     const t = tokenRow(row)
     // Personal keys require the same current access as the Connect page. PostHog-admin authority comes
-    // from the owner's last sign-in to Lens (a key cannot ask PostHog), so it counts only while that is
+    // from the owner's last sign-in to Signal (a key cannot ask PostHog), so it counts only while that is
     // recent: a demoted or departed PostHog admin keeps it at most ADMIN_FLAG_DAYS.
     const seen = Date.parse(String(row.posthog_admin_seen_at || row.created_at))
     const adminFresh = t.posthog_admin && Date.now() - seen < ADMIN_FLAG_DAYS * 86_400_000

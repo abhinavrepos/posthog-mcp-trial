@@ -271,7 +271,7 @@ const MIGRATIONS: string[] = [
         updated_by TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );`,
-    // When a personal token's PostHog-admin flag was last confirmed by its owner signing in to Lens.
+    // When a personal token's PostHog-admin flag was last confirmed by its owner signing in to Signal.
     // A key cannot ask PostHog itself, so an unconfirmed flag stops counting after a while (access.ts).
     `ALTER TABLE mcp_tokens ADD COLUMN posthog_admin_seen_at TEXT;`,
     `SELECT 1;`,

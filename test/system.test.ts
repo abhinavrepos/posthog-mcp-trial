@@ -57,7 +57,7 @@ test('container totals call out unhealthy, restarting and stopped processes, exc
     assert.deepEqual(containerSummary(rows), { expected: 4, running: 2, unhealthy: 1, restarting: 1, stopped: 1, problems: 3 })
 })
 
-test('Lens activity counts audit actions and returns only aggregate storage', () => {
+test('Signal activity counts audit actions and returns only aggregate storage', () => {
     const actions = ['signin', 'signin', 'signin.failed', 'clip.created', 'clip.viewed', 'clip.viewed', 'clip.downloaded', 'clip.link_shared', 'clip.requested']
     const now = Date.parse('2026-11-10T12:00:00Z')
     const result = lensActivity(q => {
@@ -114,7 +114,7 @@ test('stale status warns even when the last check was healthy', () => {
 test('ClickHouse groups only blocked counts, keeping raw totals and observed times', () => {
     const b = browser(), now = Date.now()
     b.draw({ level: 'down', checked_at: new Date(now).toISOString(), checks: [
-        { group: 'Lens', name: 'Triage service', level: 'warn', since: now - 60 * 60_000 },
+        { group: 'Signal', name: 'Triage service', level: 'warn', since: now - 60 * 60_000 },
         { group: 'PostHog', name: 'Event capture', level: 'down', since: now - 19 * 60_000, detail: 'Health endpoint refused the connection' },
         { group: 'PostHog', name: 'ClickHouse', level: 'down', since: now - 18 * 60_000 },
         { group: 'Data arriving', name: 'Events', level: 'down', since: now - 20 * 60_000, detail: 'cannot count: ClickHouse is not answering' },
@@ -128,30 +128,30 @@ test('ClickHouse groups only blocked counts, keeping raw totals and observed tim
     assert.match(problems, /too slow to answer<\/div><\/div><\/div><\/div><\/div><\/div><div class="svc">.*No new events for 30 minutes.*Triage service/)
 })
 
-test('the Lens jobs disclosure separates reasons, last success, and missing status', () => {
-    const b = browser(), triage = { group: 'Lens', name: 'Triage service', level: 'down' }
+test('the Signal jobs disclosure separates reasons, last success, and missing status', () => {
+    const b = browser(), triage = { group: 'Signal', name: 'Triage service', level: 'down' }
     b.draw({ checks: [triage] })
     assert.match(b.get('jobs').innerHTML, /Job status unavailable · triage health check failed/)
     b.draw({ checks: [{ ...triage, level: 'ok' }] })
     assert.match(b.get('jobs').innerHTML, /No job status reported/)
     b.draw({ checks: [
-        { group: 'Lens jobs', name: '<Watchlist>', level: 'warn', detail: 'PostHog settings are missing: <key> · last success 18 min ago' },
-        { group: 'Lens jobs', name: 'Task history', level: 'info', detail: 'first round not finished yet · no success yet' },
+        { group: 'Signal jobs', name: '<Watchlist>', level: 'warn', detail: 'PostHog settings are missing: <key> · last success 18 min ago' },
+        { group: 'Signal jobs', name: 'Task history', level: 'info', detail: 'first round not finished yet · no success yet' },
     ] })
-    assert.equal(b.get('jobs-summary').textContent, 'Lens jobs · 1 warning')
+    assert.equal(b.get('jobs-summary').textContent, 'Signal jobs · 1 warning')
     assert.match(b.get('jobs').innerHTML, /PostHog settings are missing: &lt;key&gt;<\/div><div class="d">Last successful run · 18 min ago/)
     assert.match(b.get('jobs').innerHTML, /Waiting for first run.*No successful run yet/)
-    assert.match(b.get('problems').innerHTML, /&lt;Watchlist&gt;.*Ask the Lens administrator to verify the PostHog project ID and API key/)
+    assert.match(b.get('problems').innerHTML, /&lt;Watchlist&gt;.*Ask the Signal administrator to verify the PostHog project ID and API key/)
 })
 
 test('recent changes pair Down intervals beyond the preview and end them at Warning', () => {
     const b = browser(), at = Date.UTC(2026, 10, 19, 14, 32)
     const change = (group: string, minutes: number, from: string, level: string) => ({ group, name: 'Worker', at: at + minutes * 60_000, from, level })
-    b.draw({ changes: [change('PostHog', 0, 'ok', 'down'), change('Lens', 25, 'down', 'ok'),
+    b.draw({ changes: [change('PostHog', 0, 'ok', 'down'), change('Signal', 25, 'down', 'ok'),
         change('PostHog', 23, 'warn', 'ok'), change('PostHog', 18, 'down', 'warn')] })
     const preview = b.get('changes-preview').innerHTML
     assert.equal((preview.match(/<li>/g) || []).length, 3)
-    assert.match(preview, /Lens · Worker.*Recovered at.*Down start unavailable.*PostHog · Worker.*Recovered at.*Improved to warning at.*14:50 UTC.*went down at.*14:32 UTC.*down for 18 min/)
+    assert.match(preview, /Signal · Worker.*Recovered at.*Down start unavailable.*PostHog · Worker.*Recovered at.*Improved to warning at.*14:50 UTC.*went down at.*14:32 UTC.*down for 18 min/)
     assert.equal((preview.match(/down for/g) || []).length, 1)
     assert.match(b.get('changes').innerHTML, /Went down at/)
 })

@@ -5,7 +5,7 @@ import type { Socket } from 'node:net'
 
 // Each entry is "host" (ports 80 and 443 only) or "host:port" (that port only). Without the port limit an
 // allowed name such as localhost would open every service on this machine (the container uses host
-// networking): databases, PostHog's internals, Lens itself.
+// networking): databases, PostHog's internals, Signal itself.
 export async function startEgress(hosts: string[]) {
     const hostname = (host: string) => host.trim().replace(/^\[|\]$/g, '').toLowerCase()
     const allowed = new Set<string>()

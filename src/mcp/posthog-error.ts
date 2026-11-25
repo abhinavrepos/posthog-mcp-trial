@@ -22,7 +22,7 @@ export function posthogFailure(detail: unknown, status?: number, retryAfter?: st
         message = `PostHog is busy: ${Number.isFinite(seconds) ? `retry after ${seconds} seconds` : 'retry later'}.`
     }
     else if (/memory limit|out of memory|too much data|code:\s*241/i.test(raw)) message = `PostHog ran out of memory for this query: ${advice}.`
-    // PostHog's own server-side limit: calling again repeats it, so steer to a smaller query or Lens's rollups.
+    // PostHog's own server-side limit: calling again repeats it, so steer to a smaller query or Signal's rollups.
     else if (/max execution time|max_execution_time|TIMEOUT_EXCEEDED|code:\s*159|\b504\b|gateway time-?out/i.test(raw)) message = POSTHOG_LIMIT
     else if (/timeout|timed out|TimeoutError/i.test(raw)) message = `PostHog query timed out: ${advice}; it continues as a job if you call it again.`
     errorDiagnostic(detail,'posthog_exec','upstream',correlationId,status)

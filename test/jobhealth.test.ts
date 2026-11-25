@@ -1,4 +1,4 @@
-// Lens's background jobs on the System page: plain reasons, a log line when a job starts failing or
+// Signal's background jobs on the System page: plain reasons, a log line when a job starts failing or
 // recovers (not one per round), levels that escalate, and the status service turning them into checks.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -8,7 +8,7 @@ import { jobFailed, jobOk, jobStates, plainReason, registerJob, resetJobs } from
 test('reasons are plain words, never query text, URLs or addresses', () => {
     assert.equal(plainReason(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' })), 'PostHog did not answer in time')
     assert.equal(plainReason(new Error('fetch failed: connect ECONNREFUSED 10.0.0.5:8000')), 'PostHog is unreachable')
-    assert.equal(plainReason(Object.assign(new Error('Request failed'), { status: 401 })), "PostHog refused Lens's API key")
+    assert.equal(plainReason(Object.assign(new Error('Request failed'), { status: 401 })), "PostHog refused Signal's API key")
     assert.equal(plainReason(new Error('PostHog HTTP 502 for query')), 'PostHog returned an error (HTTP 502)')
     assert.equal(plainReason(new Error('Worker terminated due to reaching memory limit: JS heap out of memory')), 'ran out of memory')
     assert.equal(plainReason(new Error('SQLITE_FULL: database or disk is full')), 'the disk is full')
@@ -44,7 +44,7 @@ test('levels escalate with failures, recover cleanly, and log only on change', (
     } finally { console.log = orig; resetJobs() }
 })
 
-test('the status service shows each Lens job as its own check, worst first', async (t) => {
+test('the status service shows each Signal job as its own check, worst first', async (t) => {
     const health = 'http://lens.test/health', previous = process.env.STATUS_HTTP
     const fetch = t.mock.method(globalThis, 'fetch', async (url: string) => {
         if (url.endsWith('/refused')) throw new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } })
@@ -56,14 +56,14 @@ test('the status service shows each Lens job as its own check, worst first', asy
             { key: 'task_history', label: 'Task history', level: 'ok', reason: null, detail: '412 days processed', last_ok_at: new Date().toISOString() },
         ] })
     })
-    process.env.STATUS_HTTP = ['Lens|Triage service|'+health, 'PostHog|Refused|http://lens.test/refused',
+    process.env.STATUS_HTTP = ['Signal|Triage service|'+health, 'PostHog|Refused|http://lens.test/refused',
         'PostHog|Timeout|http://lens.test/timeout', 'PostHog|Unavailable|http://lens.test/unavailable'].join(',')
     try {
         // Load these settings even when another test already imported the collector.
         const { checkHttp } = await import(new URL('../deploy/status/server.mjs?jobhealth-test', import.meta.url).href)
         const rows = await checkHttp() as { group: string; name: string; level: string; detail: string }[]
         assert.equal(fetch.mock.callCount(), 4)
-        assert.deepEqual(rows.slice(0, 3).map((r) => [r.group, r.name, r.level]), [['Lens', 'Triage service', 'ok'], ['Lens jobs', 'Watchlist reader', 'down'], ['Lens jobs', 'Task history', 'ok']])
+        assert.deepEqual(rows.slice(0, 3).map((r) => [r.group, r.name, r.level]), [['Signal', 'Triage service', 'ok'], ['Signal jobs', 'Watchlist reader', 'down'], ['Signal jobs', 'Task history', 'ok']])
         assert.match(rows[0].detail, /^Health endpoint returned HTTP 200 in \d+ ms$/)
         assert.match(rows[1].detail, /^PostHog is unreachable \(failing for 40 min, 4 rounds\) · last success 50 min ago$/)
         assert.match(rows[2].detail, /^412 days processed · last success \d+ s ago$/)

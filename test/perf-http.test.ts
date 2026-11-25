@@ -39,7 +39,7 @@ class ResponseCapture {
     }
     get body() { return Buffer.concat(this.chunks) }
 }
-const html = '<html>' + 'Lens page content '.repeat(1000) + '</html>'
+const html = '<html>' + 'Signal page content '.repeat(1000) + '</html>'
 async function response(options: { accept?: string; type?: string; text?: string; headers?: Record<string, string | undefined>; method?: string; range?: string; status?: number; stream?: boolean } = {}) {
     const capture = new ResponseCapture()
     const req = { method: options.method || 'GET', headers: { 'accept-encoding': options.accept, range: options.range } } as IncomingMessage

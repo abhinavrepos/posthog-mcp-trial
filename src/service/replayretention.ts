@@ -4,7 +4,7 @@ import { deleteReplayCache } from '../core/clip.ts'
 // An admin sets replay_retention_days on the admin page (off by default: nothing is ever deleted). Once a
 // day the job deletes the PostHog recordings that started before the cutoff (UTC midnight today minus N
 // days) through PostHog's own API (DELETE /api/projects/:id/session_recordings/:id/), in small batches and
-// at most LENS_REPLAY_RETENTION_MAX_PER_RUN a run. Lens's clip cache follows the same cutoff: clips of those
+// at most LENS_REPLAY_RETENTION_MAX_PER_RUN a run. Signal's clip cache follows the same cutoff: clips of those
 // recordings are deleted unless someone saved them (saved clips stay until unsaved, as everywhere else).
 //
 // Safety: nothing is deleted while the setting is off, without LENS_REPLAY_RETENTION_API_KEY, or when that
@@ -203,7 +203,7 @@ async function readPosthogRetention(d: Deps, days: number) {
     const currentDays = POSTHOG_PERIODS[period]
     if (currentDays >= days) return { period }
     const offer = key ? periods.find((p) => POSTHOG_PERIODS[p] >= days) : undefined
-    const warning = `PostHog keeps new recordings for ${currentDays} days. They can expire before the ${days} days set in Lens.`
+    const warning = `PostHog keeps new recordings for ${currentDays} days. They can expire before the ${days} days set in Signal.`
     return { period, offer, warning: days > POSTHOG_PERIODS['5y'] ? warning + ' PostHog supports at most 1,825 days.' : warning }
 }
 
@@ -224,7 +224,7 @@ export async function raisePosthogRetention(days: number, requested: unknown, de
         if (current.error) return current.error
         if (!current.period) return 'PostHog did not report a recognized replay retention period.'
         if (POSTHOG_PERIODS[current.period] >= days) return undefined
-        if (retentionDays() !== days) return 'Lens retention changed. Reload and try again.'
+        if (retentionDays() !== days) return 'Signal retention changed. Reload and try again.'
         const updated = await posthogProject(d, key, expected)
         return updated.error ?? (updated.period === expected ? undefined : 'PostHog did not confirm the new retention period.')
     } finally { updatingPosthog = false }

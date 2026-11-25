@@ -1,6 +1,6 @@
-# PostHog Lens
+# Signal
 
-Lens is a thin display layer for Reval product managers. PostHog does the analysis; Lens queries it live and displays the results. Lens does not ingest days, build rollups, or maintain a task history.
+Signal is a thin display layer for Reval product managers. PostHog does the analysis; Signal queries it live and displays the results. Signal does not ingest days, build rollups, or maintain a task history.
 
 | Page | Purpose |
 |---|---|
@@ -10,9 +10,9 @@ Lens is a thin display layer for Reval product managers. PostHog does the analys
 | Pinned | Graph snapshots saved by agents; no automatic refresh |
 | Admin | People, access roles, personal keys and audit |
 | Connect | Create and revoke personal MCP keys |
-| System | Health of PostHog, Lens and the machine (for people with the System page role) |
+| System | Health of PostHog, Signal and the machine (for people with the System page role) |
 
-The root redirects to `/replays`. Pinned graphs are at `/replays/pinned`. `/health` and `/healthz` remain available. Pages use PostHog sign-in and Lens roles.
+The root redirects to `/replays`. Pinned graphs are at `/replays/pinned`. `/health` and `/healthz` remain available. Pages use PostHog sign-in and Signal roles.
 
 ## MCP
 
@@ -27,10 +27,10 @@ work. Every window ends at the latest at now, so rows stamped later are never co
 handle. Validation errors carry a corrected example call. Tool descriptions say what each tool answers, with example
 questions, when another tool fits better, limits and defaults, and one correct call.
 
-- `posthog_exec`: Lens recipes and PostHog's own tools. `recipe` lists the recipes and `recipe <name> <json>` runs one: `events_per_client`, `top_screens`, `top_buttons`, `exports_by_label`, `messages`, `error_rate`, `active_users`, each with `window` and an optional `client` (tested against ClickHouse by `tools/mcp-regression/recipe-check.mts`). Other commands: `tools`, `info <tool>`, `call <tool> <json>`. PostHog's `execute-sql` returns at most 500 rows; a result of exactly 500 rows carries a note saying so (aggregate in SQL instead of listing rows).
+- `posthog_exec`: Signal recipes and PostHog's own tools. `recipe` lists the recipes and `recipe <name> <json>` runs one: `events_per_client`, `top_screens`, `top_buttons`, `exports_by_label`, `messages`, `error_rate`, `active_users`, each with `window` and an optional `client` (tested against ClickHouse by `tools/mcp-regression/recipe-check.mts`). Other commands: `tools`, `info <tool>`, `call <tool> <json>`. PostHog's `execute-sql` returns at most 500 rows; a result of exactly 500 rows carries a note saying so (aggregate in SQL instead of listing rows).
 - `get_job_result`: poll your job handle.
 - `resolve_client`: resolve a client code/name, user, email or distinct id. Includes the match reason, matched user, last seen, and event count for the requested window. The live roster is cached for at most ten minutes; the MCP server starts reading the 30- and 90-day rosters when it starts.
-- `find_sessions`: client, optional screen/action text/user, a window of up to one year, limit and cursor. Returns both PostHog replay and Lens clip page URLs. It reports missing recordings explicitly. Entries are compact by default (session, user, start, duration, event count, top five screens, matched action, links); `detail: true` adds matched actions with their neighbours, outcomes and context. A page is limited by size (about 19 KB) as well as by `limit`, and `truncated_by_size` with `next_cursor` says there is more. A slow page returns a job handle.
+- `find_sessions`: client, optional screen/action text/user, a window of up to one year, limit and cursor. Returns both PostHog replay and Signal clip page URLs. It reports missing recordings explicitly. Entries are compact by default (session, user, start, duration, event count, top five screens, matched action, links); `detail: true` adds matched actions with their neighbours, outcomes and context. A page is limited by size (about 19 KB) as well as by `limit`, and `truncated_by_size` with `next_cursor` says there is more. A slow page returns a job handle.
 - `get_replay_link`: PostHog replay and MP4 clip links; waits up to 25 seconds and finishes pending clips in the background.
 - `pin_graph`: save `{title, chart: {type: 'line'|'bar'|'table', x: [...], series: [{name, values: [...]}]}, note?}`. At most 20 series and 500 points; series lengths must match `x`.
 - `list_pinned`: list saved snapshots.
@@ -57,9 +57,9 @@ Run with `node --import tsx src/service/server.ts`. Check with `npx tsc --noEmit
   columns that an early PostHog ClickHouse migration needs before the later one that adds them (0378 needs
   `log_comment`, which 0391 adds), so an upgraded stack does not crash-loop. It does nothing on a new or
   up-to-date stack;
-- turn surveys on in the Lens project (`surveys_opt_in`, off in a new PostHog project) through PostHog's API with a
+- turn surveys on in the Signal project (`surveys_opt_in`, off in a new PostHog project) through PostHog's API with a
   short-lived key (`deploy/posthog/survey-engine/opt-in.sh`, `--check` to only report). `lens.sh doctor` fails when
-  surveys are on in Lens but off in the project.
+  surveys are on in Signal but off in the project.
 
 Lab verification helpers are `tools/task-u-server.mts` (port 18371, isolated SQLite) and `tools/task-u-check.mts` (MCP and HTTP checks). Start the server with the lab's bridge preload. A stopped ClickHouse lab produces unavailable errors rather than invented data.
 
@@ -69,7 +69,7 @@ Pages use the Volt design: monochrome surfaces, a grouped sidebar (Monitor, Enga
 action per page, neutral tiles with small status dots, and tables that become stacked rows on phones. The
 theme follows the computer's light or dark setting (dark when there is none); `data-theme="light"` or
 `"dark"` on `<html>` overrides it. Geist and Geist Mono (SIL Open Font License, `assets/fonts/`) are served by
-Lens itself, so pages load nothing from outside and work offline. The shared styles are in
+Signal itself, so pages load nothing from outside and work offline. The shared styles are in
 `src/service/volt.ts`; routes, element ids, form names and page scripts are those of the earlier pages.
 
 ## Surveys on Reval
@@ -103,10 +103,10 @@ up other queries; if PostHog cannot answer them, one warning says the check was 
 
 ## When PostHog or storage fails
 
-Lens says what is unavailable and never fills in data. A PostHog answer that is not a valid query result or
+Signal says what is unavailable and never fills in data. A PostHog answer that is not a valid query result or
 survey list is refused as unreadable. Rate-limited, timed-out and 5xx queries are retried as before; when the
 retries run out, a `Retry-After` wait is part of the message. A refused survey key or a wrong project id names
-what to check. When Lens's own SQLite store is busy, full, read-only or damaged, pages answer 503 with a plain
+what to check. When Signal's own SQLite store is busy, full, read-only or damaged, pages answer 503 with a plain
 message and MCP tools return an `unavailable` error; other failures still answer 500. Messages never contain
 keys, file paths or stack traces.
 
@@ -116,7 +116,7 @@ keys, file paths or stack traces.
 - `pnpm reval-sim [name filter]`: a simulated Reval (Ext JS classic, one page whose URL never changes, about
   100 screens as MDI tabs, floating windows, report parameter windows, grids, message boxes, toasts and an
   iframe) with the real posthog-js and the survey engine as `deploy/posthog/survey-engine/build.mjs` builds
-  it, served by a stand-in PostHog. Surveys are made through Lens, and 43 flows in headless Chrome check
+  it, served by a stand-in PostHog. Surveys are made through Signal, and 43 flows in headless Chrome check
   when each survey shows and when it must not: the Hedge Designation then Export order, steps before
   posthog-js has loaded, reopened tabs, tab switches, loading masks and modal windows, client and sample
   audiences, per-user limits and gaps, show once or every time, dismissals, logout and a new user without a
@@ -128,21 +128,21 @@ keys, file paths or stack traces.
   copy's `posthog-js/dist/`, add the hash and run all flows with that `REVAL_VENDOR`.
 - `tools/reval-sim/real-sessions.ts`: the same simulated Reval against a real self-hosted PostHog (its own
   posthog-js, flags service and survey engine). It makes and launches a Hedge Designation then Export survey
-  through Lens, waits until PostHog serves its targeting flag, then runs `SESSIONS` (120) browser sessions,
+  through Signal, waits until PostHog serves its targeting flag, then runs `SESSIONS` (120) browser sessions,
   `PARALLEL` (6) at a time: exports right away or after 3 to 4 minutes, opens without exporting, exports
   elsewhere or first, and another client. It reports sessions as expected and the delay from Export to the
   survey on screen (min, median, p95, max), and writes `run/real-sessions/results-<stamp>.json`. Set
   `REAL_PH`, `REAL_TOKEN` (project token), `REAL_KEY` (personal key with survey write) and `REAL_PROJECT`.
-  The project needs surveys turned on (`surveys_opt_in`), and PostHog must serve the Lens survey engine.
+  The project needs surveys turned on (`surveys_opt_in`), and PostHog must serve the Signal survey engine.
 - `tools/reval-sim/real-live-launch.ts`: a survey launched while Reval is open, against a real PostHog. `PAGES`
-  (6) pages open and do the steps first, then Lens launches the survey; after the engine's refresh (`REFRESH_MS`,
+  (6) pages open and do the steps first, then Signal launches the survey; after the engine's refresh (`REFRESH_MS`,
   20000) the same pages, without a reload, do the steps again and must see it. `CONTROL` (2) pages run with the
   refresh off and must see nothing. Same `REAL_*` settings; results in `run/real-live-launch/`.
 - MCP regression (`docs/mcp-regression.md`): `tools/mcp-regression/run.mts` asks the 100 questions of
-  `questions.json` to Claude (Sonnet) with only the Lens MCP connected, against a real PostHog, and grades the answers
+  `questions.json` to Claude (Sonnet) with only the Signal MCP connected, against a real PostHog, and grades the answers
   on ClickHouse; `nightly.sh` fails below 95%. `test/mcp-regression-gate.test.ts` (in `npm test`) checks the questions
   and the tool contract against a stand-in PostHog.
-- `tools/real-mcp-check.mts`: Lens MCP tools over 1/7/30/90/365-day windows against a real PostHog, counts
+- `tools/real-mcp-check.mts`: Signal MCP tools over 1/7/30/90/365-day windows against a real PostHog, counts
   compared with ClickHouse (`CLICKHOUSE_URL`), with latencies, row caps and errors (`run/real-mcp/`).
 - `npm run ui-shots -- <folder>`: screenshots of every page and tab at 1440 and 375 pixels in dark and light,
   plus empty and error states, against a stand-in PostHog with sample data.

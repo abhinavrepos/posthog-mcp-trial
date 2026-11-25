@@ -108,10 +108,10 @@ export const config = {
         mcpUrl: env('POSTHOG_MCP_URL'),
         mcpViaLens: flag('POSTHOG_MCP_VIA_LENS', true),
         mcpApiKey: env('POSTHOG_MCP_API_KEY'), // a personal key for PostHog MCP
-        // Lens surveys: a key with survey read and write only (deploy/posthog/survey-engine/key.sh).
+        // Signal surveys: a key with survey read and write only (deploy/posthog/survey-engine/key.sh).
         surveyApiKey: env('POSTHOG_SURVEY_API_KEY'),
         // Sent with every survey API call; PostHog's proxy refuses survey calls without it, which closes
-        // PostHog's own survey screens and API to everyone but Lens (deploy/posthog/survey-engine/apply.sh).
+        // PostHog's own survey screens and API to everyone but Signal (deploy/posthog/survey-engine/apply.sh).
         surveyGate: env('POSTHOG_SURVEY_GATE'),
     },
     // Which MCP servers Claude gets. Each can be switched off on its own; both are on by default.
@@ -124,7 +124,7 @@ export const config = {
         // effect only with POSTHOG_MCP_URL and POSTHOG_MCP_API_KEY set.
         posthogMcp: flag('FEATURE_POSTHOG_MCP', true),
     },
-    // Surveys made from Lens (MCP tools and the Surveys page). Takes effect only with POSTHOG_SURVEY_API_KEY.
+    // Surveys made from Signal (MCP tools and the Surveys page). Takes effect only with POSTHOG_SURVEY_API_KEY.
     surveys: {
         enabled: flag('FEATURE_SURVEYS', true),
         brand: env('SURVEY_BRAND', 'Survey by ION'),
@@ -150,7 +150,7 @@ export const config = {
     appEventsFile: env('APP_EVENTS_FILE'),
     screens: loadScreens(),
     app: {
-        name: env('APP_NAME', 'PostHog Lens'),
+        name: env('APP_NAME', 'Signal'),
         tag: env('APP_TAG', 'for ION'),
     },
     jira: {

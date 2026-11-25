@@ -1,6 +1,6 @@
-# Installing and upgrading PostHog Lens
+# Installing and upgrading Signal
 
-For a self-hosted Ubuntu 24.04 machine without internet access. PostHog and PostHog Lens run in Docker;
+For a self-hosted Ubuntu 24.04 machine without internet access. PostHog and Signal run in Docker;
 all images are carried to the machine in one file.
 
 ## Requirements
@@ -9,7 +9,7 @@ all images are carried to the machine in one file.
 |---|---|
 | Build machine | Ubuntu x86_64 with internet, Docker with buildx, git, python3, curl, about 30 GB free |
 | Target machine | Ubuntu 24.04 x86_64, 4 CPUs, 16 GB memory (8 GB works), about 120 GB free disk, Docker (`apt install docker.io`), root access, ports 80, 443 and 8080 free |
-| Network | users and Reval reach the target on 80 (PostHog) and 8080 (PostHog Lens) |
+| Network | users and Reval reach the target on 80 (PostHog) and 8080 (Signal) |
 | Details to hand | the email for the first PostHog login, and the address(es) people will use (IP or `http://name`) |
 
 Without internet there is no HTTPS certificate; use the IP address or `http://<name>`.
@@ -49,7 +49,7 @@ To set more options up front, fill in a copy of `deploy/install.env.example` and
 ## 3. Check
 
 ```bash
-sudo posthog-lens status      # PostHog and PostHog Lens answer
+sudo posthog-lens status      # PostHog and Signal answer
 sudo posthog-lens doctor      # no errors (warnings are fine)
 sudo posthog-lens check       # READY
 ```

@@ -835,7 +835,7 @@
     "unshare"
    ],
    "action": "SCMP_ACT_ALLOW",
-   "comment": "PostHog Lens: Chrome's sandbox puts each renderer in its own user, PID and network namespace."
+   "comment": "Signal: Chrome's sandbox puts each renderer in its own user, PID and network namespace."
   }
  ]
 }

@@ -68,7 +68,7 @@ export async function handleLive(req: IncomingMessage, res: ServerResponse, url:
     } catch (e) {
         const unconfigured = !config.posthog.projectId || !config.posthog.personalApiKey
         if (!unconfigured) console.error('live:', p, e)
-        json(res, unconfigured ? 503 : 502, { error: unconfigured ? 'Live activity is unavailable. PostHog isn’t configured. Contact a Lens administrator.' : 'Couldn’t refresh live activity.' })
+        json(res, unconfigured ? 503 : 502, { error: unconfigured ? 'Live activity is unavailable. PostHog isn’t configured. Contact a Signal administrator.' : 'Couldn’t refresh live activity.' })
         return true
     }
     json(res, 404, { error: 'Not found.' })
@@ -213,7 +213,7 @@ function hover(node,title,rows){const open=()=>{tipDismissed=false;showTip(node,
 let LIVE=new Set(),nowBusy=0;
 const failures={};let warning='';
 function liveStatus(section,error){if(error)failures[section]=error;else delete failures[section];const list=Object.values(failures),setup=list.some(e=>e.status===503);
- const message=setup?'Live activity is unavailable. PostHog isn’t configured. Contact a Lens administrator.':list.find(e=>e.status===400)?.message||(list.length?'Couldn’t refresh live activity.':warning);
+ const message=setup?'Live activity is unavailable. PostHog isn’t configured. Contact a Signal administrator.':list.find(e=>e.status===400)?.message||(list.length?'Couldn’t refresh live activity.':warning);
  if(!message&&document.activeElement===$('live-retry'))$('range').focus();$('live-banner').hidden=!message;if($('live-status').textContent!==message)$('live-status').textContent=message;$('live-retry').hidden=setup||!list.length}
 const updated=iso=>'Last updated at '+new Date(iso).toISOString().slice(11,16)+' UTC';
 $('live-retry').onclick=()=>{loadNow();load();if(TL.user)loadTimeline()};

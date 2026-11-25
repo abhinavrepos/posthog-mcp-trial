@@ -235,7 +235,7 @@ test('never deletes when the project cannot be confirmed or the delete key is mi
     assert.equal(runs().length, 2, 'both refusals are audited')
 })
 
-test('dry run logs what would be deleted and deletes nothing, in PostHog or Lens', async () => {
+test('dry run logs what would be deleted and deletes nothing, in PostHog or Signal', async () => {
     setDays(14)
     ph.sessions = sessions(4)
     const clip = storeTestClip('old-dry', '2026-10-01T00:00:00Z')
@@ -368,7 +368,7 @@ test('the admin page shows the retention card, says deletion is permanent, and i
     const { Script } = await import('node:vm')
     const page = await call(admin, 'GET', '/replays/admin')
     assert.equal(page.status, 200)
-    for (const text of ['Session replay retention', 'does not bring deleted recordings back', 'ret-confirm', 'Analytics events outside replay are kept', 'Replay files stay on disk after deletion', 'Cancel decrease', 'Saved Lens clips and pinned graphs are kept']) assert.ok(page.text.includes(text), text)
+    for (const text of ['Session replay retention', 'does not bring deleted recordings back', 'ret-confirm', 'Analytics events outside replay are kept', 'Replay files stay on disk after deletion', 'Cancel decrease', 'Saved Signal clips and pinned graphs are kept']) assert.ok(page.text.includes(text), text)
     for (const s of page.text.matchAll(/<script>([\s\S]*?)<\/script>/g)) assert.doesNotThrow(() => new Script(s[1]!))
 })
 
@@ -498,7 +498,7 @@ test('at the end of the hold, the smaller policy deletes recordings the old poli
     assert.equal((await R.createRetentionScheduler(deps({}, nextDay))())?.deleted, 2)
 })
 
-test('raising Lens retention warns about earlier expiry and offers the smallest PostHog bucket', async () => {
+test('raising Signal retention warns about earlier expiry and offers the smallest PostHog bucket', async () => {
     setDays(30)
     ph.sessions = sessions(1)
     await R.runReplayRetention(deps())
@@ -508,7 +508,7 @@ test('raising Lens retention warns about earlier expiry and offers the smallest 
     assert.equal(preview.posthog.offer, '1y')
     assert.equal((await call(admin, 'POST', path, { days: 365 })).status, 200)
     assert.equal(ph.sessions[0]?.deleted, true)
-    assert.deepEqual(ph.patches, [], 'Lens changes do not patch PostHog')
+    assert.deepEqual(ph.patches, [], 'Signal changes do not patch PostHog')
     const read = await call(admin, 'GET', path)
     assert.equal(read.body.posthog.offer, '1y')
     assert.equal((await call(admin, 'POST', path + '/posthog', { days: 365, period: '90d' })).status, 422)

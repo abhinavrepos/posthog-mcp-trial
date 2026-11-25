@@ -1,5 +1,5 @@
 import { auditClient } from '../core/toolcontext.ts'
-// MCP tools for in-app surveys: a PM describes a survey in chat, Lens checks it, estimates how many
+// MCP tools for in-app surveys: a PM describes a survey in chat, Signal checks it, estimates how many
 // would see it and saves it as a draft. Launching is never possible from chat: only on the Surveys page. Every survey and
 // its answers are also on the Surveys page (/replays/surveys).
 import { jsonResult } from './result.ts'

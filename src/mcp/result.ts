@@ -8,7 +8,7 @@ const WINDOW_KEYS = new Set(['window','period','from','to','when','compare','com
 const BULKY = new Set(['questions','steps','reset_on','look','chart','note','description'])
 const SOURCES: Record<string,string> = {
     resolve_client: 'PostHog events (HogQL, live)', find_sessions: 'PostHog events and recordings (HogQL, live)', posthog_exec: 'PostHog MCP tools',
-    data_guide: 'Lens app event map and PostHog coverage', get_replay_link: 'PostHog recordings and Lens clips', pin_graph: 'Lens snapshots', list_pinned: 'Lens snapshots', unpin_graph: 'Lens snapshots',
+    data_guide: 'Signal app event map and PostHog coverage', get_replay_link: 'PostHog recordings and Signal clips', pin_graph: 'Signal snapshots', list_pinned: 'Signal snapshots', unpin_graph: 'Signal snapshots',
     design_survey: 'PostHog surveys and events', save_survey: 'PostHog surveys', stop_survey: 'PostHog surveys', list_surveys: 'PostHog surveys and survey events', survey_results: 'PostHog survey events',
 }
 /** Every successful result starts with what it covers: the resolved window, the filters, the source and how much is shown. */
@@ -24,7 +24,7 @@ export function withContext(result: any, tool: string, args: Record<string, unkn
     const context: Record<string, unknown> = {
         tool, ...(recipe ? { recipe } : {}), ...(upstream ? { posthog_tool: upstream } : {}),
         ...(window ? { window } : {}), ...(Object.keys(filters).length ? { filters } : {}),
-        source: recipe ? 'Lens recipe over PostHog events (HogQL, live)' : SOURCES[tool] || 'Lens',
+        source: recipe ? 'Signal recipe over PostHog events (HogQL, live)' : SOURCES[tool] || 'Signal',
         ...(list ? { shown: list.length } : {}), ...(typeof sc?.total === 'number' ? { total: sc.total } : {}),
         ...(sc?.truncated_by_size || sc?.truncated || sc?.partial || capped ? { truncated: true } : {}), ...(sc?.next_cursor ? { more: 'pass next_cursor as cursor for the next page' } : {}),
         ...(capped ? { row_cap: 500 } : {}),

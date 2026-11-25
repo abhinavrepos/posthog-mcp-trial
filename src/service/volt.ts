@@ -1,4 +1,4 @@
-/** Offline Volt presentation shared by every server-rendered Lens page. */
+/** Offline Volt presentation shared by every server-rendered Signal page. */
 export const VOLT_CSS = String.raw`
 @font-face{font-family:Geist;src:url('/replays/assets/fonts/Geist-Variable.woff2') format('woff2');font-style:normal;font-weight:100 900;font-display:swap}
 @font-face{font-family:'Geist Mono';src:url('/replays/assets/fonts/GeistMono-Variable.woff2') format('woff2');font-style:normal;font-weight:100 900;font-display:swap}

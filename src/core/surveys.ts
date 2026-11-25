@@ -2,12 +2,12 @@ import { ToolInputError } from './toolinputerror.ts'
 import { requestedToolWindow } from './toolcontext.ts'
 import { analyticalWindow } from './timewindow.ts'
 import { rememberClientSurvey } from './surveylocal.ts'
-// Surveys made from Lens: a PM describes one in the app's own words (which dialog, which button, which
-// message, which clients, which colours) and Lens turns it into a PostHog survey that PostHog's own
+// Surveys made from Signal: a PM describes one in the app's own words (which dialog, which button, which
+// message, which clients, which colours) and Signal turns it into a PostHog survey that PostHog's own
 // survey script shows. Nothing new is added to the tracked app.
 //
 // How a survey reaches a user:
-//   1. Lens saves a PostHog survey whose conditions carry a "Lens chain" (conditions.lensChain): the
+//   1. Signal saves a PostHog survey whose conditions carry a "Signal chain" (conditions.lensChain): the
 //      ordered steps, the clients, and "wait until the page has loaded".
 //   2. The survey renderer PostHog serves (deploy/posthog/survey-engine) follows the chain in the
 //      browser. When the last step happens and the page is ready, it sends lens_chain:<id>.
@@ -222,7 +222,7 @@ export interface LensChain {
     audience?: Audience
     maxPerUser: number // a user is in at most this many running surveys at once; later ones wait until they finish one
     gapHours: number // never two surveys within this many hours for a user (24 at least)
-    quietDaysAfterClose: number // after the user closes a Lens survey with the cross: none for this many days
+    quietDaysAfterClose: number // after the user closes a Signal survey with the cross: none for this many days
     ready: { documentComplete: boolean; noVisibleMask: boolean; maxWaitMs: number }
 }
 
@@ -295,7 +295,7 @@ export function compileStep(s: StepSpec, reg: AppEvents, where: string, problems
         }
         // event
         const name = str(s.event, 'event')
-        if (name.startsWith('$') || name.startsWith('lens_chain:') || name.startsWith('survey ')) return err(`"${name}" is PostHog's or Lens's own event; chains follow the app's events`)
+        if (name.startsWith('$') || name.startsWith('lens_chain:') || name.startsWith('survey ')) return err(`"${name}" is PostHog's or Signal's own event; chains follow the app's events`)
         const props: Record<string, ChainFilter> = {}
         for (const [k, raw] of Object.entries(s.properties || {})) {
             if (!/^[A-Za-z_][\w$]{0,99}$/.test(k)) return err(`property name "${k}" must be a plain name`)
@@ -562,9 +562,9 @@ async function loadSurveys(): Promise<PostHogSurvey[]> {
     return out
 }
 
-// PostHog's answer as Lens reads it: lists are lists, so a survey changed by hand or by an older Lens never breaks a page.
+// PostHog's answer as Signal reads it: lists are lists, so a survey changed by hand or by an older Signal never breaks a page.
 function normalSurvey(s: PostHogSurvey): PostHogSurvey {
-    if (!s || typeof s !== 'object' || typeof s.id !== 'string') throw new PostHogError('PostHog returned a survey Lens cannot read', 502)
+    if (!s || typeof s !== 'object' || typeof s.id !== 'string') throw new PostHogError('PostHog returned a survey Signal cannot read', 502)
     return { ...s, name: String(s.name ?? ''), questions: Array.isArray(s.questions) ? s.questions : [], created_at: String(s.created_at ?? '') }
 }
 
@@ -580,7 +580,7 @@ function checkId(id: string): string {
 
 /** Saves a new draft, or changes an existing survey (its chain keeps its id, so a running one keeps working). */
 // A create that timed out may still have been saved by PostHog: the retry then hit "There is already a survey with
-// this name", reported as "PostHog is unavailable" forever (survey check on a real PostHog, 2026-11-18). A Lens
+// this name", reported as "PostHog is unavailable" forever (survey check on a real PostHog, 2026-11-18). A Signal
 // draft of the same name made in the last 15 minutes is that earlier attempt: update it. Any other same-named
 // survey is a plain naming conflict the person can fix.
 const RECENT_CREATE_MS = 15 * 60_000
@@ -624,7 +624,7 @@ export async function saveSurvey(spec: SurveySpec, opts: { id?: string; clientId
     if (opts.id) {
         old = await surveyApi<PostHogSurvey>(`${checkId(opts.id)}/`)
         chainId = old.conditions?.lensChain?.managedBy === 'lens' ? old.conditions.lensChain.id : undefined
-        if (!chainId) throw new ToolInputError(`Survey ${opts.id} was not made by Lens; change it in PostHog, or make a new one here.`)
+        if (!chainId) throw new ToolInputError(`Survey ${opts.id} was not made by Signal; change it in PostHog, or make a new one here.`)
         if (old.archived) throw new ToolInputError(`"${old.name}" is archived. Make a new survey instead (you can start from this one's spec with a new name).`)
     }
     const compiled = compileSurvey(spec, { chainId, clientIds: opts.clientIds, reg: opts.reg })
@@ -711,7 +711,7 @@ export interface SurveyView {
     created_by?: string
 }
 
-/** A PostHog question as the Lens type: nps, thumbs and yes_no are ratings and choices underneath. */
+/** A PostHog question as the Signal type: nps, thumbs and yes_no are ratings and choices underneath. */
 export function kindOf(q: PostHogSurvey['questions'][number]): string {
     if (q.type === 'rating' && q.scale === 10 && q.lowerBoundLabel === 'Not likely') return 'nps'
     if (q.type === 'rating' && q.scale === 2 && q.display === 'emoji') return 'thumbs'
@@ -720,7 +720,7 @@ export function kindOf(q: PostHogSurvey['questions'][number]): string {
     return { single_choice: 'single', multiple_choice: 'multiple' }[q.type] || q.type
 }
 
-/** A PostHog question back as the Lens question that makes it, so changing a survey keeps labels, emoji,
+/** A PostHog question back as the Signal question that makes it, so changing a survey keeps labels, emoji,
  * "optional", "Other" and descriptions (the spec used to have no questions at all). The inverse of compileSurvey. */
 export function questionSpecOf(raw: PostHogSurvey['questions'][number]): QuestionSpec {
     const q = raw
@@ -741,7 +741,7 @@ export function questionSpecOf(raw: PostHogSurvey['questions'][number]): Questio
     return { type: 'open', ...base }
 }
 
-/** PostHog's appearance back as Lens look fields (only those set). */
+/** PostHog's appearance back as Signal look fields (only those set). */
 export function lookOf(a: Record<string, unknown>): LookSpec {
     const key = <T extends string>(m: Record<T, string>, v: unknown) => (Object.entries(m) as [T, string][]).find(([, x]) => x === v)?.[0]
     const px = (v: unknown) => (typeof v === 'string' && /^\d+px$/.test(v) ? parseInt(v) : undefined)
@@ -768,7 +768,7 @@ export function viewOf(s: PostHogSurvey): SurveyView {
         status: statusOf(s),
         made_by_lens: lens,
         ...(lens ? { chain_id: c!.id } : {}),
-        // A survey saved by an older Lens, or changed by hand, may miss parts of its chain: never let one survey break the list.
+        // A survey saved by an older Signal, or changed by hand, may miss parts of its chain: never let one survey break the list.
         steps: lens ? (Array.isArray(c!.labels) ? c!.labels : []) : (Array.isArray(s.conditions?.events?.values) ? s.conditions!.events!.values! : []).map((v) => `Event ${v?.name}`),
         reset_on: lens && Array.isArray(c!.resetLabels) ? c!.resetLabels : [],
         ...(lens && c!.withinSeconds ? { within_minutes: Math.round(c!.withinSeconds / 6) / 10 } : {}),
@@ -820,7 +820,7 @@ export function stepSpecOf(st: ChainStep, reg: AppEvents | null = appEvents()): 
     return raw
 }
 
-/** A spec back from a Lens survey, so a change can start from what is there. */
+/** A spec back from a Signal survey, so a change can start from what is there. */
 export function specOf(s: PostHogSurvey): Partial<SurveySpec> {
     const v = viewOf(s)
     const c = s.conditions?.lensChain
@@ -856,7 +856,7 @@ export interface Conflict {
 }
 
 /**
- * Running Lens surveys launched before this one that want some of the same users. Users already in as
+ * Running Signal surveys launched before this one that want some of the same users. Users already in as
  * many unfinished surveys as the limit allows wait for this one (the browser engine enforces it) and
  * get it later, after they answer or dismiss one of those. For a draft, every running survey counts,
  * since it would launch after them.
@@ -916,7 +916,7 @@ export function queueAlert(chain: LensChain, conflicts: Conflict[]): QueueAlert 
     }
     const label = (k: string) => (k === '*' ? 'every other client' : k.toUpperCase())
     const listOf = (ks: string[]) => [...new Set(ks.flatMap((k) => names.get(k)!))].join(', ')
-    const pacing = `Lens keeps at least ${gap} hours between any two surveys for a user, never shows more than ${limit} at a time, after a user closes a survey with the cross it leaves them alone for ${quiet} days, and a survey they ignore twice stops coming back.`
+    const pacing = `Signal keeps at least ${gap} hours between any two surveys for a user, never shows more than ${limit} at a time, after a user closes a survey with the cross it leaves them alone for ${quiet} days, and a survey they ignore twice stops coming back.`
     const fatigue = 'Asking the same people for feedback repeatedly can feel intrusive and tends to lower both the response rate and the quality of the answers.'
     const advice = 'Please consider narrowing the clients, using a sample, or launching once the other survey has ended.'
     const all = queued.length === keys.length && keys.length > 0

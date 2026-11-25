@@ -1,4 +1,4 @@
-// Checks a Lens survey against what the app really sent in the last days, so a survey that can never show is
+// Checks a Signal survey against what the app really sent in the last days, so a survey that can never show is
 // visible before launch instead of silently showing to no one (production, 2026-11):
 //
 // - A step names a dialog id, button or field nobody used. Reports open with dialog_id = their menu id
@@ -81,7 +81,7 @@ function wantedOf(chain: LensChain, reg: AppEvents): Wanted[] {
 }
 
 /** At least one warning says a step or the audience would not match (not only that the check was skipped). */
-export const foundMismatch = (problems: Problem[]): boolean => problems.some((p) => !/^Lens could not check|so the steps could not be checked/.test(p.text))
+export const foundMismatch = (problems: Problem[]): boolean => problems.some((p) => !/^Signal could not check|so the steps could not be checked/.test(p.text))
 
 /** Warnings for steps and an audience that recent events say can never match. Never throws: when PostHog cannot
  * answer, one warning says the check was skipped. */
@@ -96,7 +96,7 @@ export async function surveyEvidence(chain: LensChain, opts: { reg?: AppEvents |
             new Promise<never>((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error('timed out'), { name: 'TimeoutError' })), opts.timeoutMs ?? 45_000); timer.unref?.() }),
         ])
     } catch {
-        return [{ level: 'warning', where: 'steps', text: 'Lens could not check the steps and audience against recent events because PostHog did not answer. Check the dialog ids and button labels with posthog_exec recipe top_screens and recipe top_buttons.' }]
+        return [{ level: 'warning', where: 'steps', text: 'Signal could not check the steps and audience against recent events because PostHog did not answer. Check the dialog ids and button labels with posthog_exec recipe top_screens and recipe top_buttons.' }]
     } finally { clearTimeout(timer) }
 }
 
@@ -131,13 +131,13 @@ async function check(chain: LensChain, reg: AppEvents, days: number, query: Evid
             if (total > 0 && audience?.eventProperty && has === 0) {
                 const parts = reg.distinctIdParts || [], at = parts.indexOf('{client}')
                 const fix = at >= 0
-                    ? `${app}'s user ids carry the client as part ${at + 1} (${parts.join(config.properties.distinctIdSeparator)}): a Lens administrator should set CLIENT_FROM_DISTINCT_ID=${at + 1} in Lens's settings, then save this survey again so it reads the client from there.`
-                    : 'A Lens administrator should set PROP_CLIENT_ID to the event property that carries the client, or CLIENT_FROM_DISTINCT_ID to the part of the user id that does, then save this survey again.'
+                    ? `${app}'s user ids carry the client as part ${at + 1} (${parts.join(config.properties.distinctIdSeparator)}): a Signal administrator should set CLIENT_FROM_DISTINCT_ID=${at + 1} in Signal's settings, then save this survey again so it reads the client from there.`
+                    : 'A Signal administrator should set PROP_CLIENT_ID to the event property that carries the client, or CLIENT_FROM_DISTINCT_ID to the part of the user id that does, then save this survey again.'
                 warn('clients', `The audience reads the client from the event property ${quote(audience.eventProperty)}, but none of ${app}'s ${fmt(total)} events in the last ${since} carry it, so this survey would show to no one. ${fix}`)
             } else if (total > 0 && audience?.eventProperty && has / total < 0.05) {
                 warn('clients', `Only ${Math.max(1, Math.round((100 * has) / total))}% of ${app}'s events in the last ${since} carry the client property ${quote(audience.eventProperty)}; users whose events lack it never see this survey.`)
             } else if (total > 0 && !audience?.eventProperty && has === 0) {
-                warn('clients', `None of the user ids in the last ${since} have a part ${part} when split on "${sep}", so this survey would show to no one. A Lens administrator should check CLIENT_FROM_DISTINCT_ID and DISTINCT_ID_SEPARATOR, then save this survey again.`)
+                warn('clients', `None of the user ids in the last ${since} have a part ${part} when split on "${sep}", so this survey would show to no one. A Signal administrator should check CLIENT_FROM_DISTINCT_ID and DISTINCT_ID_SEPARATOR, then save this survey again.`)
             } else if (total > 0 && chosen === 0) {
                 warn('clients', `None of the chosen clients had any ${app} events in the last ${since}, so nobody would see this survey now. Check the client ids with resolve_client.`)
             }

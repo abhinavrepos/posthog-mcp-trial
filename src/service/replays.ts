@@ -640,7 +640,7 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
 // ------------------------------------------------------------------ pages
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 
-// The Lens shell and page templates share the same theme and component tokens.
+// The Signal shell and page templates share the same theme and component tokens.
 const CSS = `:root{
   color-scheme:light;
   --bg:#f8f9fb;--side-bg:#f2f4f8;--card:#fff;--ink:#202736;--muted:#505c6e;--faint:#586477;

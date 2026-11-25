@@ -88,7 +88,7 @@ async function initializeEngine() {
     process.env.PLAYER_HTML_PATH = join(ROOT, 'vendor/player.html')
     process.env.SITE_URL ||= config.posthog.publicHost
     egress ||= await startEgress([...config.clip.allowedHosts.split(','), new URL(process.env.SITE_URL).host])
-    // Node fetch ignores HTTPS_PROXY unless NODE_USE_ENV_PROXY is enabled; Lens keeps its own routing.
+    // Node fetch ignores HTTPS_PROXY unless NODE_USE_ENV_PROXY is enabled; Signal keeps its own routing.
     process.env.HTTPS_PROXY = egress.url
     process.env.RASTERIZER_USE_PROXY = 'true'
     process.env.CHROME_HOST_RESOLVER_RULES = hostResolverRules()

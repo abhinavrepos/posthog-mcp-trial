@@ -1,4 +1,4 @@
-# Thin Lens: work summary (branch `thin-lens-volt`, PR #1)
+# Thin Signal: work summary (branch `thin-lens-volt`, PR #1)
 
 Status as of 2026-11-25. Built on `thin-lens` (the thin display layer over PostHog). `master` and the other
 branches are kept unchanged. The full measured results are in [real-posthog-test.md](real-posthog-test.md).
@@ -18,7 +18,7 @@ first, or exporting from another screen never does.
 
 ## 2. Failure handling (no breaking changes)
 
-- When PostHog or Lens's own storage fails, Lens says what is unavailable and never fills in data.
+- When PostHog or Signal's own storage fails, Signal says what is unavailable and never fills in data.
 - PostHog answers that are not valid results are refused as unreadable. A busy PostHog (429) is retried as
   before. When the retries run out, the message includes the `Retry-After` wait.
 - A busy or damaged SQLite store answers 503 on pages and `unavailable` in MCP tools. Other failures stay 500.
@@ -101,7 +101,7 @@ Copilot also found no rows because the dev server has `C1DEV`, `ASDEV`, `TR01` a
 `ENV` accordingly.
 
 ```
-Analyse client churn risk in Reval with the Lens MCP. Report only numbers from queries you ran; if a query fails, say which and continue.
+Analyse client churn risk in Reval with the Signal MCP. Report only numbers from queries you ran; if a query fails, say which and continue.
 Setup
 - ENV = C1DEV   (use PROD in production)
 - Run HogQL with: posthog_exec `call execute-sql {"query":"SELECT ..."}`
@@ -125,6 +125,6 @@ Output: table client | score | users before→now | exports before→now | frict
 
 1. Pull `thin-lens-volt` (or merge PR #1). This includes the `query-run` fix.
 2. Run `deploy/posthog-mcp/up.sh` to restart PostHog's MCP with a fresh key on current PostHog.
-3. Restart Lens.
+3. Restart Signal.
 4. Run `deploy/posthog/survey-engine/apply.sh` and check that `/static/array.js` contains `__lensSurveyCapture`.
-5. Before the next PostHog upgrade, use Lens's upgrade script, which runs the premigrate step.
+5. Before the next PostHog upgrade, use Signal's upgrade script, which runs the premigrate step.

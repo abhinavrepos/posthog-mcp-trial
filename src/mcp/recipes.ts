@@ -1,5 +1,5 @@
-// Lens recipes: tested HogQL for the questions product managers ask most, run through posthog_exec as
-// `recipe <name> <json>`. Each takes the same window argument as every Lens tool (rolling by default, clamped to
+// Signal recipes: tested HogQL for the questions product managers ask most, run through posthog_exec as
+// `recipe <name> <json>`. Each takes the same window argument as every Signal tool (rolling by default, clamped to
 // now) and an optional client (a code, name, user or email: resolved like resolve_client). Names of events and
 // properties come from APP_EVENTS_FILE, the client from CLIENT_FROM_DISTINCT_ID / PROP_CLIENT_ID.
 import { z } from 'zod'

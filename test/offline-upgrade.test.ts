@@ -6,15 +6,15 @@ import { join, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
 import { test as nodeTest } from 'node:test'
 
-// These check the install scripts, which the PostHog Lens image leaves out (deploy/lens/Dockerfile.dockerignore):
+// These check the install scripts, which the Signal image leaves out (deploy/lens/Dockerfile.dockerignore):
 // the kit build runs the tests inside that image, where they skip.
 const test = (name: string, fn: () => void) => nodeTest(name, { skip: !existsSync('deploy/install.sh') && 'install scripts are not in this image' }, fn)
 
 for (const file of ['deploy/install.sh', 'deploy/offline/no-internet.sh']) {
     test(`${file} quotes systemd paths`, () => {
         const fn = readFileSync(file, 'utf8').match(/systemd_arg\(\) \{[\s\S]*?\n\}/)![0]
-        const result = execFileSync('bash', ['-c', `${fn}\nsystemd_arg "$1"`, '--', '/srv/PostHog Lens/%name/$cash/"quote"/back\\slash'], { encoding: 'utf8' })
-        assert.equal(result, '"/srv/PostHog Lens/%%name/$$cash/\\"quote\\"/back\\\\slash"')
+        const result = execFileSync('bash', ['-c', `${fn}\nsystemd_arg "$1"`, '--', '/srv/Signal/%name/$cash/"quote"/back\\slash'], { encoding: 'utf8' })
+        assert.equal(result, '"/srv/Signal/%%name/$$cash/\\"quote\\"/back\\\\slash"')
     })
 }
 

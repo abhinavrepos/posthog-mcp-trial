@@ -21,7 +21,7 @@ export class ToolLimiter {
         // Say which limit refused the call: an agent told "calls in the last minute" when it actually ran too
         // many calls at once retries the wrong way (and so did the people reading the audit log).
         const busy = buckets.find(b=>b.active>=this.concurrent)
-        if(busy) throw new RateLimitError(`Too many calls at once: ${busy.active} of your Lens calls are still running (limit ${this.concurrent}). Wait for one to finish, then retry; try again in 1 seconds.`,1,'concurrent')
+        if(busy) throw new RateLimitError(`Too many calls at once: ${busy.active} of your Signal calls are still running (limit ${this.concurrent}). Wait for one to finish, then retry; try again in 1 seconds.`,1,'concurrent')
         const budget = (b: Bucket) => Math.max((weight-b.minute)*60000/this.minute,(weight-b.hour)*3600000/this.hour)
         const wait = Math.max(...buckets.map(budget))
         if(wait>0) {

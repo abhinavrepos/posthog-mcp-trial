@@ -1,4 +1,4 @@
-// PostHog Lens status: one page that says whether everything is up.
+// Signal status: one page that says whether everything is up.
 //
 // Every STATUS_INTERVAL_SECONDS (15) it checks, and the page shows the latest result:
 //   - every container of the watched compose projects (STATUS_PROJECTS, default "posthog"): running,
@@ -11,7 +11,7 @@
 //     replay content is ever read.
 //   - the machine: free disk, memory, CPU, load, and the last hour of CPU and memory
 //   - each running container's CPU and memory; hourly event counts, people and recordings in the last
-//     24 hours, ClickHouse's size. Counts again, never content. PostHog Lens's System page shows these.
+//     24 hours, ClickHouse's size. Counts again, never content. Signal's System page shows these.
 //
 //   GET /             the page (refreshes itself)
 //   GET /api/status   the same as JSON
@@ -27,7 +27,7 @@ const env = (k, d = '') => (process.env[k] ?? '').trim() || d
 const PORT = Number(env('STATUS_LISTEN_PORT', '8090'))
 const EVERY = Math.max(5, Number(env('STATUS_INTERVAL_SECONDS', '15'))) * 1000
 const PASSWORD = env('STATUS_PASSWORD')
-const TITLE = env('STATUS_TITLE', 'PostHog Lens status')
+const TITLE = env('STATUS_TITLE', 'Signal status')
 const PROJECTS = env('STATUS_PROJECTS', 'posthog').split(',').map((s) => s.trim()).filter(Boolean)
 const CLICKHOUSE = env('STATUS_CLICKHOUSE_URL', 'http://clickhouse:8123')
 const DOCKER_SOCKET = env('STATUS_DOCKER_SOCKET', '/var/run/docker.sock')
@@ -55,8 +55,8 @@ const DEFAULT_HTTP = [
     `PostHog|Feature flags|http://feature-flags:3001/_readiness`,
     `PostHog|Replay reader|http://recording-api:6738/_health`,
     `PostHog|ClickHouse|${CLICKHOUSE}/ping`,
-    `Lens|Triage service|${HOST}:8080/health`,
-    `Lens|Demo app|${HOST}:3000/healthz|any`,
+    `Signal|Triage service|${HOST}:8080/health`,
+    `Signal|Demo app|${HOST}:3000/healthz|any`,
 ].join(',')
 const HTTP_CHECKS = env('STATUS_HTTP', DEFAULT_HTTP)
     .split(',')
@@ -249,12 +249,12 @@ export async function checkHttp() {
                 if (up && c.url.endsWith('/health')) {
                     try {
                         const h = JSON.parse(body), f = h.features
-                        if (f) row.switches = { 'Lens MCP': f.lens_mcp, 'PostHog MCP': f.posthog_mcp, 'Claude reads tickets': f.ai }
+                        if (f) row.switches = { 'Signal MCP': f.lens_mcp, 'PostHog MCP': f.posthog_mcp, 'Claude reads tickets': f.ai }
                         const LEVEL = { ok: OK, warn: WARN, down: DOWN, waiting: INFO }
                         for (const j of Array.isArray(h.jobs) ? h.jobs.slice(0, 20) : []) {
                             const last = j.last_ok_at ? `last success ${ago(Date.now() - Date.parse(j.last_ok_at))} ago` : 'no success yet'
                             const hasRunDetail = j.key === 'replay_retention' || j.key === 'survey_sync'
-                            jobs.push({ group: 'Lens jobs', ...(hasRunDetail ? { key: j.key } : {}), name: String(j.label || j.key).slice(0, 60), level: LEVEL[j.level] || WARN,
+                            jobs.push({ group: 'Signal jobs', ...(hasRunDetail ? { key: j.key } : {}), name: String(j.label || j.key).slice(0, 60), level: LEVEL[j.level] || WARN,
                                 detail: hasRunDetail ? String(j.detail || last).slice(0, 500) : String(j.reason ? `${j.reason} · ${last}` : j.detail ? `${j.detail} · ${last}` : last).slice(0, 240) })
                         }
                     } catch {}
@@ -554,7 +554,7 @@ function fragment() {
         if (!groups.has(r.group)) groups.set(r.group, [])
         groups.get(r.group).push(r)
     }
-    const order = (g) => (g === 'PostHog' ? 0 : g === 'Lens' ? 1 : g === 'Data arriving' ? 2 : g.startsWith('Containers') ? 3 : 4)
+    const order = (g) => (g === 'PostHog' ? 0 : g === 'Signal' ? 1 : g === 'Data arriving' ? 2 : g.startsWith('Containers') ? 3 : 4)
     const cards = [...groups.entries()]
         .sort((a, b) => order(a[0]) - order(b[0]))
         .map(([g, rows]) => {

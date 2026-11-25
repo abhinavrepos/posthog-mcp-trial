@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { existsSync } from 'node:fs'
 import { test as nodeTest } from 'node:test'
 
-// These check the install scripts, which the PostHog Lens image leaves out (deploy/lens/Dockerfile.dockerignore):
+// These check the install scripts, which the Signal image leaves out (deploy/lens/Dockerfile.dockerignore):
 // the kit build runs the tests inside that image, where they skip.
 const test = (name: string, fn: () => void) => nodeTest(name, { skip: !existsSync('deploy/install.sh') && 'install scripts are not in this image' }, fn)
 

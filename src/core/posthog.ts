@@ -7,7 +7,7 @@ import { setImmediate as yieldTurn } from 'node:timers/promises'
 
 import { config, requirePosthog } from './config.ts'
 
-// How many HogQL queries Lens runs at once (POSTHOG_CONNECTIONS, 1-16, default 4): ClickHouse on a small box
+// How many HogQL queries Signal runs at once (POSTHOG_CONNECTIONS, 1-16, default 4): ClickHouse on a small box
 // cannot run many heavy reads together, but MCP tools and pages share these. Connections
 // are reused by Node's own fetch (keep-alive). Do not pass an Agent from the npm undici package to the
 // built-in fetch: their versions differ and every request then fails ("fetch failed").
@@ -35,7 +35,7 @@ let consecutiveTimeouts = 0, breakerOpenUntil = 0
 export function resetPosthogBreaker(): void { consecutiveTimeouts = 0; breakerOpenUntil = 0 }
 async function api<T>(path: string, init: RequestInit = {}, timeoutMs = 30_000): Promise<T> {
     requirePosthog()
-    if (Date.now() < breakerOpenUntil) throw new PostHogError('PostHog is not answering: Lens paused calls to it for 30 s', 503)
+    if (Date.now() < breakerOpenUntil) throw new PostHogError('PostHog is not answering: Signal paused calls to it for 30 s', 503)
     let res: Response, responseText: string
     const signal = AbortSignal.timeout(timeoutMs)
     try {

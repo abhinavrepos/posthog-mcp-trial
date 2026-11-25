@@ -228,7 +228,7 @@ th,td{padding:7px 4px}
 <div class="page-head"><div><h1>System</h1><p>Service health, ingestion and server activity.</p></div></div>
 <div class="banner" id="banner"><span class="big" id="b-icon" aria-hidden="true">…</span><div><h2 id="b-head" role="status" aria-live="polite">Checking…</h2><p id="b-sub"></p><details id="status-details" hidden><summary>Technical details</summary><p id="status-error"></p></details></div></div>
 <div id="system-results" hidden><div id="problems"></div><div id="problems-pager"></div>
-<details class="section-details"><summary id="jobs-summary">Lens jobs</summary><div id="jobs"></div></details>
+<details class="section-details"><summary id="jobs-summary">Signal jobs</summary><div id="jobs"></div></details>
 <div id="tiles"></div>
 <section class="section-details"><h2>Recent changes</h2><div id="changes-preview">Loading recent changes…</div><details id="all-changes"><summary>Show all changes</summary><div id="changes"></div><div id="changes-pager"></div></details></section>
 <details class="section-details" id="trends"><summary>Trends</summary><div class="charts">
@@ -242,7 +242,7 @@ th,td{padding:7px 4px}
 </details>
 <details class="section-details"><summary>Service checks</summary><div class="split" id="services"></div><div id="services-pager"></div>
 </details>
-<details class="section-details"><summary>Database and Lens activity</summary><div class="split"><div class="card" id="clickhouse"></div><div class="card" id="lens"></div></div>
+<details class="section-details"><summary>Database and Signal activity</summary><div class="split"><div class="card" id="clickhouse"></div><div class="card" id="lens"></div></div>
 </details>
 <div class="card containers-card"><div class="tools"><h2 id="c-title">Containers</h2><div class="container-controls"><input id="find" type="search" placeholder="Find a container" aria-label="Find a container"><details class="view-control"><summary>View</summary><div class="tools"><select id="view" aria-label="Container view"><option value="all">All containers · problems first</option><option value="mem_bytes">Top 5 by memory</option><option value="cpu_pct">Top 5 by CPU</option></select></div></details></div></div>
 <div class="table-wrap" role="region" aria-label="Containers" tabindex="0"><table class="containers-table"><thead><tr><th scope="col">Status</th><th scope="col">Container</th><th scope="col" class="r">Running</th><th scope="col" class="n">CPU</th><th scope="col" class="n">Memory</th><th scope="col" class="n">Restarts</th></tr></thead><tbody id="rows"><tr><td colspan="6">Loading containers…</td></tr></tbody></table></div><div id="containers-pager"></div></div>
@@ -344,7 +344,7 @@ const checkCounts=(down,warn)=>down?plural(down,'check')+' down'+(warn?' · '+pl
 function observed(r,checkedAt){const since=stamp(r.since);return '<span class="observed">'+(!Number.isFinite(since)||since>checkedAt?'Start time unavailable':
   'Observed since '+utcTime(since)+(Number.isFinite(checkedAt)?' · '+esc(duration(checkedAt-since))+' at last check':''))+'</span>'}
 function checkAction(r){
-  if(r.group==='Lens jobs'&&/^PostHog settings are missing:/.test(r.detail))return '<div class="check-action">Ask the Lens administrator to verify the PostHog project ID and API key</div>'
+  if(r.group==='Signal jobs'&&/^PostHog settings are missing:/.test(r.detail))return '<div class="check-action">Ask the Signal administrator to verify the PostHog project ID and API key</div>'
   if(!failing(r))return ''
   if(isClickHouse(r))return '<div class="check-action"><a href="#c-title">Check the ClickHouse container and its last health output</a></div>'
   if(r.group==='Machine'&&r.name==='Disk')return '<div class="check-action"><a href="#about-section">Review disk usage and retention</a></div>'
@@ -357,7 +357,7 @@ function problemRow(r,checkedAt,children=[]){const name=r.group==='Machine'&&r.n
   return checkRow(r,name,'<div class="d">'+esc(r.detail??'')+'</div>',observed(r,checkedAt),blocked)}
 function lensJobs(jobs,triage){const down=jobs.filter(r=>r.level==='down').length,warn=jobs.filter(r=>r.level==='warn').length,waiting=jobs.filter(r=>r.level==='info').length
   const summary=down||warn?down?down+' down'+(warn?' · '+plural(warn,'warning'):''):plural(warn,'warning'):waiting?waiting+' waiting':'All jobs healthy'
-  $('jobs-summary').textContent='Lens jobs'+(jobs.length?' · '+summary:triage&&triage.level!=='ok'?' · Status unavailable':'')
+  $('jobs-summary').textContent='Signal jobs'+(jobs.length?' · '+summary:triage&&triage.level!=='ok'?' · Status unavailable':'')
   $('jobs').innerHTML=jobs.map(r=>{const detail=r.detail||'',last=detail.match(/(?:^| · )(last success .+ ago|no success yet)$/)
     const reason=r.level==='info'&&r.key!=='replay_retention'&&r.key!=='survey_sync'?'Waiting for first run':last?detail.slice(0,last.index):detail
     const success=last?.[1]==='no success yet'?'No successful run yet':last?.[1]?.replace(/^last success /,'Last successful run · ')
@@ -390,7 +390,7 @@ function draw(s){const rows=s.checks||[],m=s.metrics||{},mc=m.machine||{},byName
   lastStatus=s;connectionError=null;freshness()
   const clickHouse=problems.find(r=>isClickHouse(r)&&r.level==='down'),blocked=clickHouse?rows.filter(r=>failing(r)&&blockedByClickHouse(r)):[]
   paged('problems',problems.filter(r=>!blocked.includes(r)),'problems',slice=>{$('problems').innerHTML=slice.length?'<div class="card"><h2>Needs attention</h2>'+slice.map(r=>problemRow(r,checkedAt,r===clickHouse?blocked:[])).join('')+'</div>':''})
-  lensJobs(byName('Lens jobs'),byName('Lens').find(r=>r.name==='Triage service'))
+  lensJobs(byName('Signal jobs'),byName('Signal').find(r=>r.name==='Triage service'))
   recentChanges(s.changes||[])
   const hours=m.events_by_hour,last=hours?hours.filter(h=>h[0]>=Math.floor(Date.now()/3600000)*3600000).reduce((a,h)=>a+h[1],0):null,day=hours?hours.reduce((a,h)=>a+h[1],0):null
   const memUsed=mc.mem_total?mc.mem_total-mc.mem_available:null,disk=mc.disk_total?mc.disk_total-mc.disk_free:null
@@ -404,10 +404,10 @@ function draw(s){const rows=s.checks||[],m=s.metrics||{},mc=m.machine||{},byName
     tile('Disk used',disk==null?'–':pct(disk/mc.disk_total*100),mc.disk_free!=null?gb(mc.disk_free)+' free of '+gb(mc.disk_total):'',machineLevel('Disk'))].join('')+'</div><h2>Activity</h2><div class="tiles">'+[    tile('Events this hour',num(last),'Current hour'),tile('Events, 24 hours',num(day),'all event types'),tile('People, 24 hours',num(m.people_24h),'Unique users'),tile('Recordings, 24 hours',num(m.recordings_24h),'Last 24 hours')].join('')+'</div><p class="small muted">Ingestion warnings, last 24 hours: '+num(m.ingestion_warnings_24h)+'</p><details class="machine-details"><summary>Machine details</summary><p>ClickHouse data: '+gb(m.clickhouse_bytes)+'. Swap used: '+gb(mc.swap_used)+' of '+gb(mc.swap_total)+'. Recording metrics are counted, never opened.</p></details>'
   charts(m)
   const svc=(name,list)=>list.length?'<div class="card"><h2>'+name+'</h2>'+list.map(r=>'<div class="svc"><span>'+esc(r.name)+'</span><span class="d">'+esc(r.detail)+'</span>'+st(r.level)+'</div>').join('')+'</div>':''
-  paged('services',rows.filter(r=>['PostHog','Lens','Lens jobs','Data arriving','Machine'].includes(r.group)),'checks',slice=>{$('services').innerHTML=['PostHog','Lens','Lens jobs','Data arriving','Machine'].map(g=>svc(g,slice.filter(r=>r.group===g))).join('')})
+  paged('services',rows.filter(r=>['PostHog','Signal','Signal jobs','Data arriving','Machine'].includes(r.group)),'checks',slice=>{$('services').innerHTML=['PostHog','Signal','Signal jobs','Data arriving','Machine'].map(g=>svc(g,slice.filter(r=>r.group===g))).join('')})
   const ch=m.clickhouse||{},lens=s.lens||{},activity=lens.activity,clipDisk=lens.storage
   $('clickhouse').innerHTML='<h2>ClickHouse health</h2>'+pairs([['Version',ch.version],['Uptime',ch.uptime_s==null?null:Math.floor(ch.uptime_s/3600)+' hours'],['Running queries',num(ch.running_queries)],['Merges in progress',num(ch.merges)],['Pending mutations',num(ch.pending_mutations)],['Most active parts in one partition',num(ch.max_partition_parts)]])+'<details><summary>8 biggest tables by bytes on disk</summary>'+((ch.tables||[]).map(t=>'<div class="svc"><span>'+esc(t.database)+'.'+esc(t.table)+'</span><span class="d">'+gb(t.bytes)+' · '+num(t.rows)+' rows</span></div>').join('')||'<p class="muted">Unavailable</p>')+'</details>'
-  $('lens').innerHTML='<h2>Lens activity · last 24 hours</h2>'+(activity?pairs([['Sign-ins',num(activity.signins)],['Failed sign-ins',num(activity.failed_signins)],['Clips made',num(activity.clips_made)],['Clips watched',num(activity.clips_watched)],['Clips downloaded',num(activity.clips_downloaded)],['Share links',num(activity.share_links)]])+(activity.truncated?'<p>Audit limit reached; counts are lower bounds.</p>':''):'<p class="muted">Activity unavailable</p>')+'<details><summary>Clip storage</summary>'+(clipDisk?pairs([['Clips',num(clipDisk.clips)],['Storage',gb(clipDisk.bytes)],['Saved clips',num(clipDisk.saved)],['Saved storage',gb(clipDisk.saved_bytes)]]):'<p>Unavailable</p>')+'</details>'
+  $('lens').innerHTML='<h2>Signal activity · last 24 hours</h2>'+(activity?pairs([['Sign-ins',num(activity.signins)],['Failed sign-ins',num(activity.failed_signins)],['Clips made',num(activity.clips_made)],['Clips watched',num(activity.clips_watched)],['Clips downloaded',num(activity.clips_downloaded)],['Share links',num(activity.share_links)]])+(activity.truncated?'<p>Audit limit reached; counts are lower bounds.</p>':''):'<p class="muted">Activity unavailable</p>')+'<details><summary>Clip storage</summary>'+(clipDisk?pairs([['Clips',num(clipDisk.clips)],['Storage',gb(clipDisk.bytes)],['Saved clips',num(clipDisk.saved)],['Saved storage',gb(clipDisk.saved_bytes)]]):'<p>Unavailable</p>')+'</details>'
   const a=s.about||{},dd=m.docker_disk
   $('about').innerHTML=pairs([['PostHog web image',a.posthog_image],['ClickHouse version',a.clickhouse_version],['Docker engine',a.docker_version],['Status service uptime',a.uptime_s==null?null:Math.floor(a.uptime_s/60)+' minutes'],['Check interval',a.interval_s==null?null:a.interval_s+' s'],['Last check duration',a.took_ms==null?null:a.took_ms+' ms'],['Alerts',a.alerts==null?null:a.alerts==='off'?'Off: no webhook in the status page settings':'On ('+a.alerts.format+', after '+a.alerts.after_minutes+' min)'+(a.alerts.last_sent_at?', last sent '+new Date(a.alerts.last_sent_at).toLocaleString():', none sent yet')+(a.alerts.alerting&&a.alerts.alerting.length?', open: '+a.alerts.alerting.join('; '):'')+(a.alerts.last_error?'. Last failure: '+a.alerts.last_error:'')]])+'<details><summary>Docker disk usage · cached 10 minutes</summary>'+(dd?pairs([['Images',gb(dd.images_bytes)],['Containers (writable layers)',gb(dd.containers_bytes)],['Volumes',gb(dd.volumes_bytes)],['Build cache',gb(dd.build_cache_bytes)],['Measured',new Date(dd.at).toLocaleString()]]):'<p>Unavailable</p>')+'</details><p class="small muted">Large counts and table sizes refresh every five minutes. CPU is a share of the whole machine. Histories and recent changes are held in memory.</p>'
   $('c-title').textContent='All containers ('+box.length+')';table()}

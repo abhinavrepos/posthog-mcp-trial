@@ -69,7 +69,7 @@ const json = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSO
 /** Register through wrapTools; no SDK dispatcher interception or native Tasks handlers. */
 export function installJobTools(server: McpServer, dispatch: ReturnType<typeof createJobDispatch>): void {
     server.registerTool('get_job_result', {
-        description: 'Returns the result of a job_id that a Lens tool returned when it took longer than about 45 seconds. Waits up to 15 seconds per call; status "running" means call again after poll_after_seconds. The result carries the original tool\'s context (window, filters). Handles expire after one hour. Example: {"job_id":"95c4987a7d4035cdd7791e99bf8fe0ee"}',
+        description: 'Returns the result of a job_id that a Signal tool returned when it took longer than about 45 seconds. Waits up to 15 seconds per call; status "running" means call again after poll_after_seconds. The result carries the original tool\'s context (window, filters). Handles expire after one hour. Example: {"job_id":"95c4987a7d4035cdd7791e99bf8fe0ee"}',
         inputSchema: { job_id: z.string({ error: 'job_id is the 32-character id a tool returned' }).regex(/^[0-9a-f]{32}$/, { error: 'job_id is the 32-character hex id a tool returned' }) }, annotations: { readOnlyHint: true },
     }, async ({ job_id }) => dispatch.poll(job_id) as never)
 }

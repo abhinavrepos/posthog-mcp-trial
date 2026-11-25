@@ -1,4 +1,4 @@
-# Real PostHog test: 400M events / 1 year, 120 survey sessions, Lens MCP
+# Real PostHog test: 400M events / 1 year, 120 survey sessions, Signal MCP
 
 Date: 2026-11-25. Code: `/root/tl-int`, branch `thin-lens-volt` (PR #1).
 
@@ -7,7 +7,7 @@ Date: 2026-11-25. Code: `/root/tl-int`, branch `thin-lens-volt` (PR #1).
 - Self-hosted PostHog in `/opt/posthog` (hobby compose), `posthog/posthog:latest` (rev 744f8ae), Node services
   `ghcr.io/posthog/posthog-node:latest` (rev b7f2082), ClickHouse 26.9.5. One project (team 1), `surveys_opt_in=true`.
   Host: 16 vCPU, 121 GB RAM, 900 GB disk.
-- Lens survey engine served by PostHog: `/static/surveys.js` contains "Survey by ION" (no reapply needed).
+- Signal survey engine served by PostHog: `/static/surveys.js` contains "Survey by ION" (no reapply needed).
 - PostHog's own MCP server started with `deploy/posthog-mcp/up.sh` (pinned image, port 8787, read-only key
   `posthog-mcp`) so `posthog_exec` exists.
 - Synthetic load: `load-chunk.sql` into `sharded_events`, 1M rows per chunk, `_offset` = row number, so chunk
@@ -33,7 +33,7 @@ and `/_health` returned 502.
 ## Step 2: survey sessions (120 sessions, 6 parallel)
 
 Survey `01a210e2-972b-0000-d447-ecd431f4e366`, "Hedge Designation (LinkListReqv) then Export", client SEM, show
-once, made and launched through Lens. PostHog served its targeting flag 120 ms after launch.
+once, made and launched through Signal. PostHog served its targeting flag 120 ms after launch.
 Run log: `/root/briefs/real-sessions-run2.log`. Results: `run/real-sessions/results-mwvlqpv2.json`.
 
 **120 of 120 sessions as expected. No survey showed before the Export.**
@@ -84,7 +84,7 @@ not affect their timing.
 All 400M events fall inside a 365-day window measured from load time. Measured from now, 21,156 have aged out,
 and that number grows by about 1.1 M a day.
 
-## Step 4: Lens MCP against real PostHog at 400M
+## Step 4: Signal MCP against real PostHog at 400M
 
 `tools/real-mcp-check.mts` starts `src/mcp/stdio.ts` over stdio with the test keys and the Reval settings
 (`APP_EVENTS_FILE=config/app-events.reval.json`, `CLIENT_FROM_DISTINCT_ID=3`). For each window it calls
@@ -122,11 +122,11 @@ because chunks landed between the two queries).
 ## Findings
 
 1. **PostHog web crash loop after upgrade (new, step 1).** Migration 0378 needs a column that 0391 adds, so an
-   upgraded hobby stack never boots. Fixed here by hand (see Step 1). Lens's installer and upgrade path should
+   upgraded hobby stack never boots. Fixed here by hand (see Step 1). Signal's installer and upgrade path should
    run the 0391 `ADD COLUMN IF NOT EXISTS` statements before `migrate`, or pin a PostHog version where 0378 and 0391
    ship in the right order. Worth reporting upstream.
 2. **`surveys_opt_in` is off by default.** A new PostHog project has surveys turned off, and posthog-js then never
-   loads surveys. It is on here (set earlier). Lens's survey sync (`LENS_SURVEY_SYNC`, settings key) has to turn it on,
+   loads surveys. It is on here (set earlier). Signal's survey sync (`LENS_SURVEY_SYNC`, settings key) has to turn it on,
    and the installer should check it.
 3. **The PostHog installer leaves out object storage keys.** The first `docker compose` run failed:
    `required variable OBJECT_STORAGE_ACCESS_KEY_ID is missing a value` (and `…SECRET_ACCESS_KEY`) for
@@ -134,7 +134,7 @@ because chunks landed between the two queries).
    keys had to be added to `/opt/posthog/.env` by hand.
 4. **posthog-node version drift.** The hobby compose uses floating tags: `web` runs `posthog/posthog:latest`
    rev 744f8ae, while the Node services (plugins, ingestion-*) run `posthog-node:latest` rev b7f2082, built from a
-   different commit. Lens pins `NODE_BASE_IMAGE` by digest in `deploy/migrate/versions/versions.env`, but a plain
+   different commit. Signal pins `NODE_BASE_IMAGE` by digest in `deploy/migrate/versions/versions.env`, but a plain
    PostHog hobby install does not, so web and Node can disagree after any re-pull.
 5. **`deploy/posthog-mcp/up.sh` broke on current PostHog (new).** PostHog moved `GRANTABLE_API_SCOPE_OBJECTS` to
    `posthog.scopes.exposure`. The key-making step failed silently (`2>/dev/null`) and the script exited with no
@@ -154,7 +154,7 @@ because chunks landed between the two queries).
 
 9. **`execute-sql` through `posthog_exec` returns at most 500 rows**, with no truncation marker in the text (asked for
    200,000, got 500 in every window, ~22 KB). Counts and aggregates are exact. Row listings are silently capped at
-   500. Agents should aggregate in SQL. A "rows capped at 500" note in Lens's output filter would help.
+   500. Agents should aggregate in SQL. A "rows capped at 500" note in Signal's output filter would help.
 10. **find_sessions pages are capped at 19 KB, not 20 sessions.** With dense sessions (~137 events each in this data) a
     page held 4–5 sessions with a screen filter and **1 session** without. `truncated_by_size: true` and `next_cursor`
     were always present, and paging worked. Listing 50 sessions over a year therefore takes 10–50 calls at 1–14 s each.
@@ -185,9 +185,9 @@ changes in `src/`, `test/`, committed separately), a0190e1 (deploy, survey engin
 | # | Finding | Fix | Verified |
 | --- | --- | --- | --- |
 | 1 | Upgrade crash-loop (0378 needs `log_comment`, 0391 adds it) | `deploy/posthog/clickhouse-premigrate.py`, installed as `compose/premigrate` and run by `compose/start` before `./bin/migrate` (hobby installer and `posthog-upgrade.sh`, which also runs it before its migrate phase). It runs 0391's `ADD COLUMN IF NOT EXISTS` statements only when the table exists, lacks the column and has the column it comes after. It never blocks migrate | In the real web container: live stack → "nothing to add"; a scratch database with the old table layout → both columns added, second run "nothing to add"; empty database → "nothing to add". Also installed in `/opt/posthog/compose/` (takes effect on the next web start) |
-| 2 | `surveys_opt_in` off by default | `deploy/posthog/survey-engine/opt-in.sh`: a temporary personal key (project read/write, Lens project only), one `PATCH /api/projects/:id/`, a check, then the key is deleted (also on failure). Called by `install.sh` step `surveys`. `scripts/doctor.ts` fails when Lens surveys are on but `surveys_opt_in` is not true | On real PostHog: turned off by hand → `--check` exit 1 → script turned it on → second run "already on" → 0 temporary keys left. Doctor shows `ok Surveys on in the PostHog project — surveys_opt_in=true` |
+| 2 | `surveys_opt_in` off by default | `deploy/posthog/survey-engine/opt-in.sh`: a temporary personal key (project read/write, Signal project only), one `PATCH /api/projects/:id/`, a check, then the key is deleted (also on failure). Called by `install.sh` step `surveys`. `scripts/doctor.ts` fails when Signal surveys are on but `surveys_opt_in` is not true | On real PostHog: turned off by hand → `--check` exit 1 → script turned it on → second run "already on" → 0 temporary keys left. Doctor shows `ok Surveys on in the PostHog project — surveys_opt_in=true` |
 | 3 | Installer missing object storage keys | `ensure_dedicated_secrets` in the hobby installer (new and existing `.env`) and the same block in `posthog-upgrade.sh`: drops PostHog's shared `object_storage_root_*`, adds random 64-hex keys (plus `INTERNAL_REQUEST_TOKEN`, `BROWSERLESS_SECRET`, `RECORDING_API_JWT_SECRET`) when missing or empty, never changes a value, `chmod 600`. Matches PostHog's own `bin/deploy-hobby` | On a sample `.env`: shared keys replaced, empty value filled, existing kept, idempotent, mode 600. SeaweedFS registers whatever keys `.env` holds at each start |
-| 4 | posthog-node / web version drift | Not changed (Lens pins `NODE_BASE_IMAGE` by digest only through `scale.sh`). New effect found: re-applying the survey engine on the upgraded image refused the early-capture hook, because the image ships **posthog-js 1.450.0**, whose `array.js` hash (dbf476b0…) is not on the verified list (1.443.0, 1.454.2). The engine falls back to PostHog's original `array.js`, by design. Surveys work (sessions below); only the startup event history before surveys load is off. Verify 1.450.0 and add its hash, or pin PostHog | — |
+| 4 | posthog-node / web version drift | Not changed (Signal pins `NODE_BASE_IMAGE` by digest only through `scale.sh`). New effect found: re-applying the survey engine on the upgraded image refused the early-capture hook, because the image ships **posthog-js 1.450.0**, whose `array.js` hash (dbf476b0…) is not on the verified list (1.443.0, 1.454.2). The engine falls back to PostHog's original `array.js`, by design. Surveys work (sessions below); only the startup event history before surveys load is off. Verify 1.450.0 and add its hash, or pin PostHog | — |
 | 5 | `up.sh` broken on current PostHog | Import fallback to `posthog.scopes.exposure` | PostHog MCP started on :8787 and used for every MCP run |
 | 6 | Survey launched while the page is open needed a reload | Survey engine (`engine.js`): every 5 min while visible, and on focus or visibility change (at most once a minute), it calls `posthog.reloadFeatureFlags()` and `getSurveys(…, true)`. Two more causes found on real PostHog: **(a)** when the page loads while no survey runs, remote config says `surveys: false` and posthog-js builds the renderer with display off for the whole page. The engine now re-reads `/array/<token>/config` on refresh and calls `startAutomaticDisplay()` once it lists surveys (remote config lists surveys only with `surveys_opt_in` on, as on a reload). **(b)** With display off nothing read the survey list, so the engine buffered startup events and replayed them at the first refresh, and the survey showed for steps done *before* the launch. The engine now reads the list at startup. `window.__lensSurveyRefreshMs` sets the interval (0 = off) | See below |
 | 7 | Loader future timestamps | `/root/briefs/load-chunk.sql` (original kept as `load-chunk.sql.orig`): today's working hours later than now go to yesterday, the oldest day's early hours go to the next day, and the weekend shift never leaves the window. Data not reloaded | SELECT of 2M generated rows (no insert): 0 future, 0 older than 365 days, 100% between 06:00 and 18:00, 5.7% weekend (unchanged) |

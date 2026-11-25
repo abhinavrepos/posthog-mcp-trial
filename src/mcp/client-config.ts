@@ -1,9 +1,9 @@
 // The MCP servers Claude Code gets from .mcp.json, following the two switches:
 //   FEATURE_LENS_MCP     this service's tools, on by default: stdio (node on this machine), or, where
-//                        Lens runs as a container (LENS_CONTAINER=1, deploy/lens), its /mcp address over
+//                        Signal runs as a container (LENS_CONTAINER=1, deploy/lens), its /mcp address over
 //                        HTTP with MCP_TOKEN, since there is no node outside the container
 //   FEATURE_POSTHOG_MCP  PostHog's own MCP server (HTTP), on by default, used only when POSTHOG_MCP_URL
-//                        and POSTHOG_MCP_API_KEY are set; included in Lens when POSTHOG_MCP_VIA_LENS is on
+//                        and POSTHOG_MCP_API_KEY are set; included in Signal when POSTHOG_MCP_VIA_LENS is on
 // scripts/mcp-config.ts writes the result; scripts/doctor.ts compares it with .mcp.json.
 import { config } from '../core/config.ts'
 
@@ -41,7 +41,7 @@ export function mcpClientConfig(
         else {
             const url = viaLens ? `http://127.0.0.1:${lens.port}/posthog-mcp` : ph.mcpUrl
             servers[POSTHOG_SERVER] = { type: 'http', url, headers: { Authorization: `Bearer ${viaLens ? lens.token : ph.mcpApiKey}` } }
-            notes.push(`${POSTHOG_SERVER}: on (${url}${viaLens ? ', via Lens' : ''})`)
+            notes.push(`${POSTHOG_SERVER}: on (${url}${viaLens ? ', via Signal' : ''})`)
         }
     }
     return { file: { mcpServers: servers }, notes }

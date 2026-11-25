@@ -8,7 +8,7 @@ import { config } from '../core/config.ts'
 import { all } from '../core/db.ts'
 import { asViewer, audit, can, lastSeen, loadAccess, readAudit, removePerson, ROLE_TEXT, ROLES, roleOf, setAccessSettings, setPerson, setSurveyRole, resetSurveyRole, setSurveySettings, chatPolicy, setChatPolicy, SURVEY_ROLES, SURVEY_ROLE_TEXT, defaultSurveyRole, sharedTokenSurveyRole, surveyRoleOf, listMcpTokens, revokeMcpToken, chatUrl, setChatUrl, type SurveyRole, setSystemAccess, setInsightAccess, insightPeople, surveyPeople, systemViewers, type Role, type Viewer } from './access.ts'
 import { dashboardPeople, dashboardRoleOf, setDashboardRole, resetDashboardRole, setDashboardSettings, defaultDashboardRole, sharedTokenDashboardRole, DASHBOARD_ROLES, DASHBOARD_ROLE_TEXT, type DashboardRole } from './access.ts'
-/** Admin sections (people, chat keys, clips, activity). The privacy page and client outcomes were removed with the thin Lens. */
+/** Admin sections (people, chat keys, clips, activity). The privacy page and client outcomes were removed with the thin Signal. */
 function adminTabs(): string {
     const sections = [['people', 'People'], ['chat', 'Chat keys'], ['clips', 'Clips'], ['activity', 'Activity']]
     const tabs = sections.map(([id, label], i) => `<button class="tab-link" type="button" role="tab" id="t-${id}" data-tab="${id}" aria-controls="tab-${id}" aria-selected="${i === 0}" tabindex="${i === 0 ? 0 : -1}">${label}</button>`).join('')
@@ -296,7 +296,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         const body = await readJson(req)
         const current = retentionDays()
         if (p.endsWith('/posthog')) {
-            if (current === null || body.days !== current) return (json(res, 409, { error: 'Lens retention changed. Reload and try again.' }), true)
+            if (current === null || body.days !== current) return (json(res, 409, { error: 'Signal retention changed. Reload and try again.' }), true)
             const error = await raisePosthogRetention(current, body.period)
             if (error) return (json(res, 422, { error }), true)
             audit(v.email, 'replay_retention.posthog_checked', { days: current, period: body.period })
@@ -306,7 +306,7 @@ export async function handleAdmin(req: IncomingMessage, res: ServerResponse, url
         try { days = parseRetentionDays(body.days) } catch (e) { return (json(res, 400, { error: (e as Error).message }), true) }
         if (days === current) return (json(res, 200, { ok: true, unchanged: true, ...retentionStatus() }), true)
         const preview = days === null ? undefined : await previewRetention(days, {}, false)
-        if (preview && preview.revision !== retentionRevision()) return (json(res, 409, { error: 'Lens retention changed. Preview again.' }), true)
+        if (preview && preview.revision !== retentionRevision()) return (json(res, 409, { error: 'Signal retention changed. Preview again.' }), true)
         if (preview?.requires_confirm && (preview.count === null || body.confirm !== previewKey(preview))) {
             const error = preview.count === null ? 'Wait until PostHog can count the recordings before saving.' : 'Read the current preview and confirm the deletion.'
             return (json(res, 409, { error, preview: { ...preview, confirmation: previewKey(preview) } }), true)
@@ -437,7 +437,7 @@ main input,main select{min-width:0}
 @media(max-width:1100px){#outcome-form{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 </style></head>
-<body>${headerHtml(v, 'Admin')}<main id="main" tabindex="-1"><div class="page-head"><div><h1>Admin</h1><p>Who can use Lens, and what it keeps.</p></div></div>
+<body>${headerHtml(v, 'Admin')}<main id="main" tabindex="-1"><div class="page-head"><div><h1>Admin</h1><p>Who can use Signal, and what it keeps.</p></div></div>
 ${adminTabs()}
 
 <div class="tabpanel" role="tabpanel" aria-labelledby="t-people" id="tab-people" data-panel="people">
@@ -458,8 +458,8 @@ ${adminTabs()}
 <ul class="tight">
 <li><b>Signing in is PostHog's job.</b> Everyone signs in with their PostHog account. Passwords, two-factor login and removing people all happen in PostHog. Removing someone from PostHog locks them out here within a minute.</li>
 <li><b>What they may do is set here.</b> <i>Watch clips</i> lets a person make and watch clips on this site. <i>Watch, download and share</i> adds MP4 downloads and share links. <i>Admin</i> adds this page.</li>
-<li><b>The System page</b> shows whether the server and every container are up, with machine, ClickHouse and Lens numbers. It never shows replay or event content. Admins always see it. Tick <i>System page</i> to let anyone else see it too, for example whoever looks after the server. It is separate from the role, so someone can see the System page with <i>No access</i> to clips.</li>
-<li><b>Surveys</b> are made, launched and read only in Lens: PostHog's own survey screens and API are closed (they send people here). Each person has a survey role, separate from the clip role: <i>See surveys and results</i>, <i>Also make and change surveys</i>, or <i>Also launch and stop surveys</i> (what reaches Reval users). Admins always have the last. It applies on the Surveys page and in chat, except that launching is only possible on the Surveys page, never from chat.</li>
+<li><b>The System page</b> shows whether the server and every container are up, with machine, ClickHouse and Signal numbers. It never shows replay or event content. Admins always see it. Tick <i>System page</i> to let anyone else see it too, for example whoever looks after the server. It is separate from the role, so someone can see the System page with <i>No access</i> to clips.</li>
+<li><b>Surveys</b> are made, launched and read only in Signal: PostHog's own survey screens and API are closed (they send people here). Each person has a survey role, separate from the clip role: <i>See surveys and results</i>, <i>Also make and change surveys</i>, or <i>Also launch and stop surveys</i> (what reaches Reval users). Admins always have the last. It applies on the Surveys page and in chat, except that launching is only possible on the Surveys page, never from chat.</li>
 <li><b>Dashboards</b> have a separate role on the Dashboards page and in chat: <i>See and pin dashboards</i> or <i>Also share dashboards</i>. Admins always pin and share. The shared team token gets at most viewing access; pinning and sharing need a personal token.</li>
 <li><b>Chat</b> knows who is asking only with a personal token, which each person makes on the <i>Chat</i> page (you can revoke any token below). The shared team token says nothing about who asks, so it gets the survey role you choose in Settings.</li>
 <li><b>PostHog owners and admins</b> of the organization that owns the project are always admins here, so nobody can be locked out.</li>
@@ -471,7 +471,7 @@ ${adminTabs()}
 <div class="tabpanel" role="tabpanel" aria-labelledby="t-chat" hidden id="tab-chat" data-panel="chat">
 <div class="card"><div class="chat-head"><h2>Chat keys</h2><p id="chat-msg" class="small" aria-live="polite"></p>
 <details class="settings"><summary>Copilot settings</summary>
-<div class="toolbar" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label for="chat-url">Lens address for Copilot</label><input id="chat-url" placeholder="https://lens.example.com"></div><div><button type="button" id="chat-url-save">Save address</button></div></div>
+<div class="toolbar" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap"><div style="flex:1;min-width:220px"><label for="chat-url">Signal address for Copilot</label><input id="chat-url" placeholder="https://lens.example.com"></div><div><button type="button" id="chat-url-save">Save address</button></div></div>
 <p class="small muted">The Chat page gives people this address. Leave empty for the default.</p><p id="chat-url-msg" class="small" aria-live="polite"></p>
 <h3 style="font-size:15px;margin:18px 0 6px">Approved chat apps</h3>
 <p class="small muted">The Chat page warns everyone to connect their key only to these apps. One per line.</p>
@@ -484,10 +484,10 @@ ${adminTabs()}
 </div>
 <div class="tabpanel" role="tabpanel" aria-labelledby="t-clips" hidden id="tab-clips" data-panel="clips">
 <div class="card" id="retention-card"><h2>Session replay retention</h2>
-<p class="small muted">Lens deletes PostHog recordings older than this many days, using midnight UTC as the cutoff. Saved Lens clips and pinned graphs are kept. Analytics events outside replay are kept.</p>
-<p class="small"><b>Deleting cannot be undone.</b> A decrease pauses deletion for 24 hours so you can cancel it. Raising the number or turning Lens retention off does not bring deleted recordings back. PostHog still applies its own expiration rules.</p>
+<p class="small muted">Signal deletes PostHog recordings older than this many days, using midnight UTC as the cutoff. Saved Signal clips and pinned graphs are kept. Analytics events outside replay are kept.</p>
+<p class="small"><b>Deleting cannot be undone.</b> A decrease pauses deletion for 24 hours so you can cancel it. Raising the number or turning Signal retention off does not bring deleted recordings back. PostHog still applies its own expiration rules.</p>
 <p class="small muted">Replay files stay on disk after deletion. Ask your storage administrator to check expiration rules for replay storage and ClickHouse.</p>
-<div class="toolbar"><div><label for="ret-mode">Keep session replays</label><select id="ret-mode"><option value="off">Off (stop Lens deletions)</option><option value="days">For a number of days</option></select></div>
+<div class="toolbar"><div><label for="ret-mode">Keep session replays</label><select id="ret-mode"><option value="off">Off (stop Signal deletions)</option><option value="days">For a number of days</option></select></div>
 <div><label for="ret-days">Days (${MIN_DAYS} to ${MAX_DAYS})</label><input id="ret-days" type="number" min="${MIN_DAYS}" max="${MAX_DAYS}" step="1" value="14"></div>
 <div style="flex:0"><button type="button" id="ret-preview-btn" class="ghost">Preview</button></div></div>
 <p id="ret-preview" class="small" aria-live="polite"></p>
@@ -604,7 +604,7 @@ const order=action.startsWith('privacy.')?['on','lens','posthog','triage','codes
 function renderAudit(keep=false){auditPg.set(S.audit,keep);$('audit-more').hidden=S.audit.length%300!==0||!S.audit.length}
 const auditPg=makePager({mount:$('audit-pager'),noun:'activity entries',size:25,draw:slice=>{const tb=$('audit');tb.innerHTML='';
  if(!slice.length)tb.innerHTML='<tr><td colspan="4" class="muted">No activity found. Try another search.</td></tr>';
- slice.forEach(e=>{const tr=document.createElement('tr');const time=document.createElement('time');time.dateTime=e.t;time.title=when(e.t);time.append(new Date(e.t).toLocaleDateString([], {month:'short',day:'numeric'}),' ',document.createElement('br'),new Date(e.t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));cell(tr,time,'small');cell(tr,identity(e.who));cell(tr,ACTIONS[e.action]||'Lens activity');const {t,who,action,...rest}=e;cell(tr,auditDetails(e.action,ACTIONS[e.action]?rest:{...rest,action_id:e.action}),'audit-detail');tb.appendChild(tr)})}});
+ slice.forEach(e=>{const tr=document.createElement('tr');const time=document.createElement('time');time.dateTime=e.t;time.title=when(e.t);time.append(new Date(e.t).toLocaleDateString([], {month:'short',day:'numeric'}),' ',document.createElement('br'),new Date(e.t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}));cell(tr,time,'small');cell(tr,identity(e.who));cell(tr,ACTIONS[e.action]||'Signal activity');const {t,who,action,...rest}=e;cell(tr,auditDetails(e.action,ACTIONS[e.action]?rest:{...rest,action_id:e.action}),'audit-detail');tb.appendChild(tr)})}});
 let searchVersion=0;
 async function searchAudit(more=false){const version=++searchVersion;msg('audit-msg','Loading…',true);try{const q=$('filter').value.trim();const audit=(await api('/replays/admin/api/audit?q='+encodeURIComponent(q)+'&offset='+(more?S.audit.length:0))).audit;if(version!==searchVersion)return;S.audit=more?S.audit.concat(audit):audit;renderAudit(more);msg('audit-msg',audit.length?'Activity loaded.':'No activity found. Try another search.',true)}catch(e){if(version===searchVersion)msg('audit-msg',e.message+' Try the search again.')}}
 $('audit-more').onclick=()=>searchAudit(true);
@@ -632,7 +632,7 @@ $('ret-raise').hidden=!offer
 $('ret-raise').textContent=offer?'Set PostHog retention to '+({'30d':'30 days','90d':'90 days','1y':'1 year','5y':'5 years'}[offer]):''}
 const status=(s,loadForm=true)=>{active=s.days
 if(loadForm){$('ret-mode').value=s.days===null?'off':'days';if(s.days!==null)$('ret-days').value=s.days;$('ret-days').disabled=s.days===null;showPosthog(s.posthog)}
-const parts=[s.days===null?'Lens deletion is off.':'Lens retention is '+s.days+' days.']
+const parts=[s.days===null?'Signal deletion is off.':'Signal retention is '+s.days+' days.']
 if(!s.configured)parts.push('Automatic deletion needs a PostHog key before it can run.')
 if(s.dry_run)parts.push('Dry run is on. The daily job only counts and logs.')
 parts.push('Up to '+Number(s.max_per_run).toLocaleString()+' recordings are processed per run.')
@@ -647,12 +647,12 @@ $('ret-cancel').hidden=!s.hold
 $('ret-status').textContent=parts.join(' ');$('ret-details').hidden=!s.last_error;$('ret-error').textContent=s.last_error?.message||''}
 const showPreview=p=>{shown=p;$('ret-confirm').checked=false
 $('ret-confirm-wrap').hidden=!p?.requires_confirm||p.count===null
-if(!p){$('ret-preview').textContent=chosen()==='off'?'Turning off Lens retention stops future deletions.':'';return}
+if(!p){$('ret-preview').textContent=chosen()==='off'?'Turning off Signal retention stops future deletions.':'';return}
 const recordings=p.count===null?'PostHog could not count the recordings.':n(p.count,'recording')+' currently match the cutoff of '+utcDay(p.cutoff)+' (UTC).'
-const clips=p.clips.delete?' '+n(p.clips.delete,'unsaved Lens clip')+' also match the cutoff.':''
+const clips=p.clips.delete?' '+n(p.clips.delete,'unsaved Signal clip')+' also match the cutoff.':''
 $('ret-preview').textContent=recordings+clips+(p.posthog?.warning?' '+p.posthog.warning:'')
 $('ret-preview').className='small '+(p.requires_confirm?'err':'ok')
-$('ret-confirm-text').textContent='I confirm deletion of '+n(p.count,'recording')+(p.clips.delete?' and '+n(p.clips.delete,'unsaved Lens clip'):'')+' in this preview. Deletion cannot be undone.'}
+$('ret-confirm-text').textContent='I confirm deletion of '+n(p.count,'recording')+(p.clips.delete?' and '+n(p.clips.delete,'unsaved Signal clip'):'')+' in this preview. Deletion cannot be undone.'}
 const preview=async()=>{const id=++request,v=chosen();showPreview(null);if(v==='off')return null
 try{const p=await api(path+'/preview?days='+encodeURIComponent(v));if(id!==request||chosen()!==v)return null;showPreview(p);return p}
 catch(e){if(id===request)msg('ret-msg',e.message);return null}}

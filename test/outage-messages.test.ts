@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 // Outage drill 2026-11-17 against a live lab: what Copilot is told when PostHog hangs, answers garbage,
-// or Lens restarts mid-job. Each used to give advice that sent the PM the wrong way.
+// or Signal restarts mid-job. Each used to give advice that sent the PM the wrong way.
 process.env.TRIAGE_ENV_FILE = '/tmp/lens-outage-messages-absent.env'
 const { config } = await import('../src/core/config.ts')
 const { toolError } = await import('../src/mcp/toolerror.ts')
@@ -12,7 +12,7 @@ const text = (r: ReturnType<typeof toolError>) => r.result.content[0].text
 test('a restart mid-job tells Copilot to call the tool again, not to page an administrator', () => {
     const r = toolError(new Error('Server restarted before this job completed. Submit the tool again.'), 'get_job_result')
     assert.equal(r.kind, 'restarted')
-    assert.match(text(r), /Lens restarted .* Call the original tool again/)
+    assert.match(text(r), /Signal restarted .* Call the original tool again/)
     assert.doesNotMatch(text(r), /administrator/)
 })
 
@@ -37,7 +37,7 @@ test('a non-JSON answer from PostHog is "unavailable", not an internal error', a
     assert.match(text(r), /PostHog is unavailable or busy/)
 })
 
-test('after three timeouts in a row Lens stops waiting on PostHog for 30 s; an answer resets the count', async t => {
+test('after three timeouts in a row Signal stops waiting on PostHog for 30 s; an answer resets the count', async t => {
     const old = { ...config.posthog }
     Object.assign(config.posthog, { host: 'https://posthog.invalid', projectId: 'test', personalApiKey: 'test' })
     t.after(() => { Object.assign(config.posthog, old); resetPosthogBreaker() })

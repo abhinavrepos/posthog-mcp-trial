@@ -36,8 +36,8 @@ test('info rows never alert; a check that disappears counts as fixed; down-only 
 })
 
 test('messages: one per round, readable, in Teams, Slack and plain formats', () => {
-    const m = alertMessage([row('Memory', 'warn', '1.5 GB available of 21.5 GB (7%)')], [row('Disk', 'ok')], 'Lens (vm1)', 'https://status.example')
-    assert.equal(m.head, 'Lens (vm1): 1 problem, 1 fixed')
+    const m = alertMessage([row('Memory', 'warn', '1.5 GB available of 21.5 GB (7%)')], [row('Disk', 'ok')], 'Signal (vm1)', 'https://status.example')
+    assert.equal(m.head, 'Signal (vm1): 1 problem, 1 fixed')
     assert.match(m.text, /🟠 Machine: Memory \(1\.5 GB available/)
     assert.match(m.text, /🟢 Machine: Disk \(back to normal\)/)
     assert.match(m.text, /Status page: https:\/\/status\.example/)

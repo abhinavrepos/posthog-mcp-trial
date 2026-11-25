@@ -85,7 +85,7 @@ test('a PostHog-admin flag on a key counts only while a recent sign-in confirmed
     const old = new Date(Date.now() - (access.ADMIN_FLAG_DAYS + 1) * 86_400_000).toISOString()
     db.prepare('UPDATE mcp_tokens SET created_at = ?, posthog_admin_seen_at = ? WHERE id = ?').run(old, old, id)
     const caller = access.chatCaller(token, '')
-    assert.notEqual(caller?.admin, true, 'an unconfirmed flag no longer makes an admin')  // falls back to their Lens role
+    assert.notEqual(caller?.admin, true, 'an unconfirmed flag no longer makes an admin')  // falls back to their Signal role
 })
 
 test('sign-in attempts are counted when they start, so parallel guesses cannot all get through', async () => {

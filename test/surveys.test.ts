@@ -1,4 +1,4 @@
-// Surveys made from Lens: the spec in the app's words → a PostHog survey whose chain the browser
+// Surveys made from Signal: the spec in the app's words → a PostHog survey whose chain the browser
 // engine (deploy/posthog/survey-engine/engine.js) accepts and follows.
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
@@ -26,7 +26,7 @@ describe('compile', () => {
         const conditions = c.body.conditions as Record<string, any>
         assert.equal(conditions.events.values[0].name, 'lens_chain:hedge-1')
         assert.equal((c.body.appearance as any).surveyPopupDelaySeconds, 0)
-        // The engine accepts what Lens writes, and follows it.
+        // The engine accepts what Signal writes, and follows it.
         const m = engine.createMachine()
         m.setSurveys([{ start_date: 'x', end_date: null, conditions }])
         const who = 'C1|01|ACME|ann'
@@ -634,7 +634,7 @@ describe('saving after a create that timed out', () => {
     }
     const spec = { ...base, name: 'Colour test 01: light theme (default)', look: { theme: 'light' as const } }
     const earlier = () => { const b = compileSurvey(spec, { reg }).body as Record<string, any>; return { questions: b.questions, appearance: b.appearance, conditions: b.conditions } }
-    test('a Lens draft of that name made minutes ago is the earlier attempt: it is updated, not duplicated', async (t) => {
+    test('a Signal draft of that name made minutes ago is the earlier attempt: it is updated, not duplicated', async (t) => {
         const calls = setup(t, { id: 's-1', name: spec.name, start_date: null, created_at: new Date(Date.now() - 60_000).toISOString(), ...earlier() })
         const { saveSurvey } = await import('../src/core/surveys.ts')
         const out = await saveSurvey(spec, { reg })
