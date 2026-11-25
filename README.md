@@ -20,8 +20,8 @@ Connect to `/mcp` with a personal token from Connect, or the configured shared t
 
 - `posthog_exec`: PostHog's own tools. Commands: `tools`, `info <tool>`, `call <tool> <json>`. Long calls return a job handle within about 20 seconds. PostHog's `execute-sql` returns at most 500 rows; a result of exactly 500 rows carries a note saying so (aggregate in SQL instead of listing rows).
 - `get_job_result`: poll your job handle.
-- `resolve_client`: resolve a client code/name, user, email or distinct id. Includes the match reason, matched user, last seen, and event count for the requested window. The live roster is cached for at most ten minutes.
-- `find_sessions`: client, optional screen/action text/user, a window of up to one year, limit and cursor. Returns both PostHog replay and Lens clip page URLs. It reports missing recordings explicitly. A page is limited by size (about 19 KB) as well as by `limit`: busy sessions are summarised more briefly, and `truncated_by_size` with `next_cursor` says there is more.
+- `resolve_client`: resolve a client code/name, user, email or distinct id. Includes the match reason, matched user, last seen, and event count for the requested window. The live roster is cached for at most ten minutes; the MCP server starts reading the 30- and 90-day rosters when it starts.
+- `find_sessions`: client, optional screen/action text/user, a window of up to one year, limit and cursor. Returns both PostHog replay and Lens clip page URLs. It reports missing recordings explicitly. Entries are compact by default (session, user, start, duration, event count, top five screens, matched action, links); `detail: true` adds matched actions with their neighbours, outcomes and context. A page is limited by size (about 19 KB) as well as by `limit`, and `truncated_by_size` with `next_cursor` says there is more. A slow page returns a job handle.
 - `get_replay_link`: PostHog replay and MP4 clip links; waits up to 25 seconds and finishes pending clips in the background.
 - `pin_graph`: save `{title, chart: {type: 'line'|'bar'|'table', x: [...], series: [{name, values: [...]}]}, note?}`. At most 20 series and 500 points; series lengths must match `x`.
 - `list_pinned`: list saved snapshots.
@@ -107,13 +107,16 @@ keys, file paths or stack traces.
 - `pnpm reval-sim [name filter]`: a simulated Reval (Ext JS classic, one page whose URL never changes, about
   100 screens as MDI tabs, floating windows, report parameter windows, grids, message boxes, toasts and an
   iframe) with the real posthog-js and the survey engine as `deploy/posthog/survey-engine/build.mjs` builds
-  it, served by a stand-in PostHog. Surveys are made through Lens, and 42 flows in headless Chrome check
+  it, served by a stand-in PostHog. Surveys are made through Lens, and 43 flows in headless Chrome check
   when each survey shows and when it must not: the Hedge Designation then Export order, steps before
   posthog-js has loaded, reopened tabs, tab switches, loading masks and modal windows, client and sample
   audiences, per-user limits and gaps, show once or every time, dismissals, logout and a new user without a
-  reload, client change, and 100 screens in a row. Ext JS (GPL) is not in this repository: set
+  reload, client change, a survey launched while the page is open, and 100 screens in a row. Ext JS (GPL) is not in this repository: set
   `REVAL_VENDOR` to a folder with `extjs/ext-all.js` and the classic theme, and `posthog-js/` (an npm
-  package copy). Results go to `run/reval-sim/results.json`.
+  package copy). Results go to `run/reval-sim/results.json`. The startup hook in `array.js` is built only for verified
+  posthog-js files (hashes in `build.mjs`: 1.443.0, 1.454.2, and 1.450.0 as PostHog's web image serves it, which is
+  PostHog's own build, not npm's); to verify a new one, put PostHog's served `array.js` and `surveys.js` in a vendor
+  copy's `posthog-js/dist/`, add the hash and run all flows with that `REVAL_VENDOR`.
 - `tools/reval-sim/real-sessions.ts`: the same simulated Reval against a real self-hosted PostHog (its own
   posthog-js, flags service and survey engine). It makes and launches a Hedge Designation then Export survey
   through Lens, waits until PostHog serves its targeting flag, then runs `SESSIONS` (120) browser sessions,
