@@ -86,6 +86,7 @@ body main .people-table td{padding-right:16px}
   body header.shell nav a{justify-content:flex-start}
   body header.shell .acct>summary{display:flex;align-items:center;min-height:42px}
   body details:not(.acct)>summary{min-height:0;padding-top:2px;padding-bottom:2px}
+  @media(min-width:901px){body main table.people-table.people-table{table-layout:fixed;width:100%;min-width:0}body main .card>.table-wrap table.people-table :is(th,td){padding-left:0!important;padding-right:14px!important}body main .card>.table-wrap table.people-table :is(th,td):last-child{padding-right:16px!important;text-align:right}body main .card>.table-wrap table.people-table :is(th,td):first-child{padding-left:16px!important}body main table.people-table td:nth-child(n) select{field-sizing:fixed;width:100%;min-width:0;max-width:100%;text-overflow:ellipsis}}
   body header.shell .acct-menu button{width:100%}
   body main :is(.badge,.chip,.pill,.st){display:inline-flex;align-items:center;vertical-align:middle;line-height:18px}
   body main .chip:is(.running,.stopped,.draft)::before{flex:none;margin-right:6px;vertical-align:middle}
