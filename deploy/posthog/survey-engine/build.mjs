@@ -70,6 +70,7 @@ if (corePath && process.env.SURVEY_EARLY_CAPTURE !== 'off') {
     const expected = new Set([
         'ed7794f94f39bf41227424f0f036d472bdf9d893928dceeb7a88689558109821', // 1.443.0
         '2149ac8783cedfeca0b9d3483bf4433b5a3465829f0930d6100e6ab693299acf', // 1.454.2
+        'dbf476b06c37262b1a77a1bb769059ed052242066c64f1cab3a4e456d9dc39ca', // 1.450.0 as PostHog's web image serves it (its own build, not npm's)
     ])
     const bytes = readFileSync(corePath)
     const actual = sha(bytes)

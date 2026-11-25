@@ -56,12 +56,14 @@ test('sample users straddle the fixed PostHog audience bucket', () => {
     assert.notEqual(sampleUser('sample-chain', true), sampleUser('sample-chain', false))
 })
 
-test('verified 1.454.2 SDK builds with the early capture hook when vendor is present', { skip: !existsSync('/root/briefs/reval-vendor/posthog-js/dist/array.js') || process.env.REVAL_BUILD_TEST !== '1' }, () => {
-    const out = mkdtempSync(join(tmpdir(), 'reval-build-'))
-    try {
-        execFileSync(process.execPath, ['deploy/posthog/survey-engine/build.mjs', '/root/briefs/reval-vendor/posthog-js/dist/surveys.js', out, 'Survey by ION', '/root/briefs/reval-vendor/posthog-js/dist/array.js'])
-        const js = readFileSync(join(out, 'array.js'), 'utf8')
-        assert.match(js, /__lensSurveyCapture/)
-        assert.match(readFileSync(join(out, 'surveys.js'), 'utf8'), /Lens survey chains/)
-    } finally { rmSync(out, { recursive: true, force: true }) }
-})
+for (const [version, vendor] of [['1.454.2', '/root/briefs/reval-vendor'], ['1.450.0', '/root/briefs/reval-vendor-1.450.0']]) {
+    test(`verified ${version} SDK builds with the early capture hook when vendor is present`, { skip: !existsSync(join(vendor, 'posthog-js/dist/array.js')) || process.env.REVAL_BUILD_TEST !== '1' }, () => {
+        const out = mkdtempSync(join(tmpdir(), 'reval-build-'))
+        try {
+            execFileSync(process.execPath, ['deploy/posthog/survey-engine/build.mjs', join(vendor, 'posthog-js/dist/surveys.js'), out, 'Survey by ION', join(vendor, 'posthog-js/dist/array.js')])
+            const js = readFileSync(join(out, 'array.js'), 'utf8')
+            assert.match(js, /__lensSurveyCapture/)
+            assert.match(readFileSync(join(out, 'surveys.js'), 'utf8'), /Lens survey chains/)
+        } finally { rmSync(out, { recursive: true, force: true }) }
+    })
+}
