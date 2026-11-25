@@ -65,7 +65,7 @@ class Tuning(unittest.TestCase):
         server = ET.parse(out/'server.xml')
         total = int(server.findtext('max_server_memory_usage'))
         ram = json.loads((out/'settings.json').read_text())['ram_mb']
-        self.assertEqual(total, min(8192, max(1024, ram // 7)) * 1024 * 1024, 'about a seventh of RAM for ClickHouse')
+        self.assertEqual(total, (min(8192, max(1024, ram // 7)) if ram < 49152 else min(32768, ram // 2)) * 1024 * 1024, 'a seventh of RAM, or half up to 32 GB on 48 GB+')
         self.assertIsNone(server.find('max_server_memory_usage_to_ram_ratio'), 'no ratio unless set')
         per_query = int(users.findtext('profiles/default/max_memory_usage'))
         self.assertTrue(total // 2 < per_query < total, 'one query may use most, not all')
@@ -77,7 +77,7 @@ class Tuning(unittest.TestCase):
         override = json.loads((out/tuning.OVERRIDE).read_text())
         # Worker recycling is off by default (all workers restart at once: minutes of 502s every cycle).
         self.assertNotIn('GRANIAN_WORKERS_LIFETIME', override['services']['web']['environment'])
-        self.assertEqual(override['services']['web']['environment']['GRANIAN_WORKERS'], '2')
+        self.assertEqual(override['services']['web']['environment']['GRANIAN_WORKERS'], '2' if ram < 32768 else '3')
         self.assertNotIn('CADDYFILE', override['services']['proxy'].get('environment', {}))
 
     def test_proxy_preserves_the_effective_survey_lock(self):

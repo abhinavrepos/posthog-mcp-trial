@@ -48,7 +48,9 @@ def generate(out, env_path, config_path=None):
     lifetime = number('LENS_PH_WORKER_LIFETIME', 0, 0)
     if 0 < lifetime < 600: raise ValueError('LENS_PH_WORKER_LIFETIME must be 0 (off) or at least 600 seconds')
     # ClickHouse gets the memory the smaller web worker pool frees (about a seventh of RAM: ~3 GB on 22 GB).
-    server = number('LENS_CH_SERVER_MB', min(8192, max(1024, ram // 7)), 512, ram)
+    # On 48 GB or more (a dedicated analytics server), ClickHouse gets half the RAM up to 32 GB, so one-year
+    # MCP queries over 100M+ events fit (a 365-day query over 400M rows peaked at 21 GB on the test box).
+    server = number('LENS_CH_SERVER_MB', min(8192, max(1024, ram // 7)) if ram < 49152 else min(32768, ram // 2), 512, ram)
     # One query may use most of it; big sorts and group-bys spill to disk at a quarter instead of failing.
     query = number('LENS_CH_QUERY_MB', server * 6 // 10, 16, server)
     spill = number('LENS_CH_SPILL_MB', server // 4, 1, query)

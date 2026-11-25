@@ -61,6 +61,16 @@ Run with `node --import tsx src/service/server.ts`. Check with `npx tsc --noEmit
   short-lived key (`deploy/posthog/survey-engine/opt-in.sh`, `--check` to only report). `lens.sh doctor` fails when
   surveys are on in Signal but off in the project.
 
+**Memory (`deploy/posthog/tune.sh`, `--dry-run` to preview, `--undo` to remove).** Without it, ClickHouse may use
+90% of RAM and one heavy query can starve the rest of PostHog. On a machine with 48 GB or more, `tune.sh` caps
+ClickHouse at half the RAM, up to 32 GB. One query may use 60% of that, and big sorts and group-bys spill to disk
+at 8 GB. On smaller machines the cap is a seventh of RAM, up to 8 GB. Override it with `LENS_CH_SERVER_MB` in
+PostHog's `.env`.
+
+Measured on the test box (400M events over a year): all PostHog containers use about 12 GB when idle, and the
+heaviest one-year query peaked at 21 GB. On a 64 GB server with 300–400k events a day (up to 40k an hour), expect
+12–16 GB in steady use and well under the 32 GB cap at peak. Disk use is about 17 GB per year of events.
+
 Lab verification helpers are `tools/task-u-server.mts` (port 18371, isolated SQLite) and `tools/task-u-check.mts` (MCP and HTTP checks). Start the server with the lab's bridge preload. A stopped ClickHouse lab produces unavailable errors rather than invented data.
 
 ## Interface
