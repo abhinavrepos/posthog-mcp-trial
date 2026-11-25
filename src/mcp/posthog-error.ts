@@ -42,6 +42,9 @@ const TOOL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/
 export function posthogUsageMessage(raw: string): string | undefined {
     const tool = /"([a-z0-9-]+)" is a tool, not a command/i.exec(raw)?.[1]
     if (tool && TOOL_NAME.test(tool)) return `PostHog command format: "${tool}" is a tool. Use: call ${tool} <json_input>. ${USAGE_HELP}`
+    // PostHog retires tools (for example query-run): "Tool \"query-run\" was removed". That is a wrong command, not an outage.
+    const removed = /tool\s*\\?"([a-z0-9-]+)\\?"\s*was removed/i.exec(raw)?.[1]
+    if (removed) return UNKNOWN_COMMAND_MESSAGE + (looksLikeSqlTool(removed.replace(/-run$/, '')) || /sql|hogql/i.test(raw) ? ` Closest tools: execute-sql. ${HOGQL_HINT}` : '')
     if (/unknown (?:command|tool)|is not a (?:known )?(?:command|tool)|no such (?:command|tool)/i.test(raw)) {
         const requested = /(?:unknown (?:command|tool)|is not a (?:known )?(?:command|tool)|no such (?:command|tool))[:\s]*[\\"']*([\w-]+)/i.exec(raw)?.[1] || ''
         return UNKNOWN_COMMAND_MESSAGE + (looksLikeSqlTool(requested) ? ` Closest tools: execute-sql. ${HOGQL_HINT}` : '')
