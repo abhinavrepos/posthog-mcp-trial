@@ -27,7 +27,10 @@ export class PostHogError extends Error {
 // for minutes and stalling every PM (outage drill 2026-11-17: one question took 6 minutes to fail). After
 // three timeouts in a row with no answer in between, fail fast for 30 s, then let calls probe again.
 // Any answer, even an error status, resets the count, so one heavy query timing out does not trip it.
-const BREAKER_TIMEOUTS = 3, BREAKER_OPEN_MS = 30_000
+// Only calls with the normal deadline count: a call that set itself a short budget (design_survey's 15 s step
+// checks run several at once) timing out says the query is heavy, not that PostHog is down. Counting those
+// opened the breaker and failed design_survey's own reach estimate (MCP regression q076, 2026-11-25).
+const BREAKER_TIMEOUTS = 3, BREAKER_OPEN_MS = 30_000, BREAKER_MIN_DEADLINE_MS = 30_000
 let consecutiveTimeouts = 0, breakerOpenUntil = 0
 export function resetPosthogBreaker(): void { consecutiveTimeouts = 0; breakerOpenUntil = 0 }
 async function api<T>(path: string, init: RequestInit = {}, timeoutMs = 30_000): Promise<T> {
@@ -48,7 +51,7 @@ async function api<T>(path: string, init: RequestInit = {}, timeoutMs = 30_000):
         // Consume the body under the same deadline, before counting this as an answer.
         responseText = await res.text()
     } catch (error) {
-        if (((error as { name?: string })?.name === 'TimeoutError' || (signal.aborted && signal.reason?.name === 'TimeoutError')) && ++consecutiveTimeouts >= BREAKER_TIMEOUTS) breakerOpenUntil = Date.now() + BREAKER_OPEN_MS
+        if (((error as { name?: string })?.name === 'TimeoutError' || (signal.aborted && signal.reason?.name === 'TimeoutError')) && timeoutMs >= BREAKER_MIN_DEADLINE_MS && ++consecutiveTimeouts >= BREAKER_TIMEOUTS) breakerOpenUntil = Date.now() + BREAKER_OPEN_MS
         throw error
     }
     resetPosthogBreaker()

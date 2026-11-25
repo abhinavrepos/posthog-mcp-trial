@@ -26,6 +26,28 @@ test('a successful HTTP answer with invalid query shape is unavailable, never em
     }
 })
 
+test('short-budget timeouts (design_survey step checks) never open the PostHog breaker; normal-deadline timeouts still do', async t => {
+    configured(t)
+    let calls = 0
+    t.mock.method(globalThis, 'fetch', async (_u: unknown, init: RequestInit) => {
+        calls++
+        await new Promise((_resolve, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true }))
+    })
+    for (let i = 0; i < 4; i++) await hogql('SELECT 1', {}, { retries: 0, timeoutMs: 20 }).catch(() => {})
+    assert.equal(calls, 4, 'every short-budget call still reached PostHog')
+    t.mock.restoreAll()
+    t.mock.method(globalThis, 'fetch', async () => Response.json({ columns: ['n'], results: [[1]] }))
+    assert.deepEqual(await hogql('SELECT 1', {}, { retries: 0 }), [{ n: 1 }])
+    t.mock.restoreAll()
+    // Normal deadlines: three timeouts in a row open it (fake timers so the test does not wait 90 s).
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+    t.mock.method(AbortSignal, 'timeout', () => { const c = new AbortController(); setTimeout(() => c.abort(Object.assign(new Error('timeout'), { name: 'TimeoutError' })), 30_000); return c.signal })
+    t.mock.method(globalThis, 'fetch', async (_u: unknown, init: RequestInit) => new Promise((_resolve, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason), { once: true })))
+    for (let i = 0; i < 3; i++) { const p = hogql('SELECT 1', {}, { retries: 0 }).catch(e => e); t.mock.timers.tick(30_000); await p }
+    const fast = await hogql('SELECT 1', {}, { retries: 0 }).catch(e => e)
+    assert.match(fast.message, /paused calls/)
+})
+
 test('429 is retried as before; when retries run out, Retry-After is actionable advice', async t => {
     configured(t)
     let calls = 0
