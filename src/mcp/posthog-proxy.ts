@@ -353,12 +353,24 @@ async function posthogExecFrozen(command: string, options: Pick<ProxyOptions, 'u
         if (isPosthogMetadata(command)) return raw
         const warnings = await posthogInputWarnings(command).catch(() => [])
         const annotated = annotatePosthogBuckets(command, warnings.length ? { ...raw, content: [...(raw.content || []), ...warnings.map(text => ({ type: 'text', text }))] } : raw)
-        return annotated
+        return noteSqlRowCap(command, annotated)
     } catch (error) {
         posthogDocsCache.invalidate(server)
         if (error instanceof Error && posthogPublicMessage(error.message)) throw error
         throw posthogFailure(error)
     }
+}
+export const SQL_ROW_CAP_NOTE = 'rows capped at 500 by PostHog; aggregate in SQL or page with LIMIT/OFFSET'
+/** PostHog's execute-sql emits a header followed by up to 500 newline rows. */
+export function noteSqlRowCap(command: string, result: any): any {
+    if (!/^\s*call\s+(?:posthog:)?execute-sql\b/i.test(command) || result?.isError || !Array.isArray(result?.content)) return result
+    const content = result.content.map((part: any) => {
+        if (part?.type !== 'text' || typeof part.text !== 'string' || part.text.includes(SQL_ROW_CAP_NOTE)) return part
+        const lines = part.text.trimEnd().split(/\r?\n/)
+        if (lines.length - 1 !== 500) return part
+        return {...part,text:`${part.text}\n\n${SQL_ROW_CAP_NOTE}`}
+    })
+    return {...result,content}
 }
 async function posthogExecRaw(call: unknown, command: string, options: Pick<ProxyOptions, 'url' | 'apiKey' | 'name' | 'timeoutMs'>): Promise<any> {
     const toolCacheKey = options.url + ':' + createHash('sha256').update(options.apiKey).digest('hex')

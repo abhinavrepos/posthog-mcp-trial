@@ -544,14 +544,72 @@
                 instances.set(instance, guard);
                 return guard;
             }
+            // posthog-js reads feature flags once per page load, and a survey's internal targeting flag is one of
+            // them: a survey launched while Reval is open would not show until a reload. So reload the flags, and
+            // the survey list with them, every few minutes while the page is visible and when it comes back into
+            // view. posthog-js refreshes the list itself after its 5 minute cache; the flags it never refreshes.
+            // window.__lensSurveyRefreshMs overrides the interval (at least 1 s); 0 turns this off.
+            // posthog-js 1.450 builds the renderer with automatic display off when the page's remote config said the
+            // project had no running survey (config.surveys false), and reads that config once per page: the first
+            // survey launched while pages are open would never display. On a refresh, ask PostHog for the remote
+            // config again, as a reload would, and start the display once it lists surveys. Remote config lists
+            // surveys only while the project has surveys turned on (surveys_opt_in), so an opted-out project stays off.
+            var refreshing = new WeakMap(), deferred = new WeakMap();
+            function startDeferred(instance) {
+                var renderer = deferred.get(instance);
+                if (!renderer || typeof root.fetch !== 'function') return;
+                var router = instance.requestRouter, token = instance.config && instance.config.token;
+                if (!token || !router || typeof router.endpointFor !== 'function') return;
+                root.fetch(router.endpointFor('assets', '/array/' + token + '/config'), { credentials: 'omit' })
+                    .then(function (response) { return response.ok ? response.json() : null; })
+                    .then(function (config) {
+                        if (!config || !Array.isArray(config.surveys) || !config.surveys.length || deferred.get(instance) !== renderer) return;
+                        deferred.delete(instance);
+                        renderer.startAutomaticDisplay();
+                    })
+                    .catch(function (error) { debug(instance, error); });
+            }
+            function keepFresh(instance) {
+                try {
+                    if (refreshing.has(instance) || typeof instance.reloadFeatureFlags !== 'function') return;
+                    var setting = root.__lensSurveyRefreshMs;
+                    var every = finite(setting) ? setting : 5 * 60 * 1000;
+                    if (every <= 0) return;
+                    every = Math.max(1000, every);
+                    var gap = Math.min(60 * 1000, every), last = Date.now(), doc = root.document;
+                    function visible() { return !doc || doc.visibilityState !== 'hidden'; }
+                    function refresh() {
+                        try {
+                            var now = Date.now();
+                            if (!visible() || now - last < gap || instance.config && instance.config.disable_surveys) return;
+                            last = now;
+                            instance.reloadFeatureFlags();
+                            if (typeof instance.getSurveys === 'function') instance.getSurveys(function () {}, true);
+                            startDeferred(instance);
+                        } catch (error) { debug(instance, error); }
+                    }
+                    var timer = root.setInterval(refresh, every);
+                    refreshing.set(instance, timer);
+                    if (doc && typeof doc.addEventListener === 'function') doc.addEventListener('visibilitychange', function () { if (visible()) refresh(); });
+                    if (typeof root.addEventListener === 'function') root.addEventListener('focus', refresh);
+                } catch (error) { debug(instance, error); }
+            }
             var wrapped = function (instance, enabled) {
                 var guard;
                 try { guard = attach(instance); } catch (error) { debug(instance, error); }
+                if (guard) keepFresh(instance);
                 if (!guard) return original.apply(this, arguments);
                 // Install the guard before the renderer's first synchronous eligibility check.
                 var renderer = canDeferDisplay ? original.call(this, instance, false) : original.apply(this, arguments);
                 if (renderer && typeof renderer.checkSurveyEligibility === 'function') guard(renderer);
                 if (canDeferDisplay && enabled !== false && renderer && typeof renderer.startAutomaticDisplay === 'function') renderer.startAutomaticDisplay();
+                else if (canDeferDisplay && enabled === false && renderer && typeof renderer.startAutomaticDisplay === 'function') {
+                    deferred.set(instance, renderer);
+                    // With display off nothing reads the surveys, so Lens would keep buffering startup events and replay
+                    // them at the first refresh: a survey launched later would show for steps done before its launch.
+                    // Read the list now so Lens listens live from page load, as it does when display is on.
+                    instance.getSurveys(function () {});
+                }
                 else if (!renderer) instance.getSurveys(function () {});
                 return renderer;
             };

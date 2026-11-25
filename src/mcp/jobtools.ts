@@ -9,7 +9,7 @@ import { db } from '../core/db.ts'
 import type { ChatCaller } from '../service/access.ts'
 import type { TimeWindow } from '../core/timewindow.ts'
 
-export const JOB_TOOLS = new Set(['find_sessions','resolve_client'])
+export const JOB_TOOLS = new Set(['find_sessions','resolve_client','design_survey'])
 export const FAST_TOOLS = new Set(['get_replay_link','get_job_result'])
 export function jobBacked(name: string, _readOnly: boolean, args: {command?:unknown} = {}) {
     return name === 'posthog_exec' ? !/^\s*(tools|info |schema )/.test(String(args.command)) : JOB_TOOLS.has(name)
@@ -63,7 +63,7 @@ export function createJobDispatch(caller?: Caller, options: JobOptions = {}) {
         },
     }
 }
-const json = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }] })
+const json = (value: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(value) }], structuredContent: value as Record<string,unknown> })
 /** Register through wrapTools; no SDK dispatcher interception or native Tasks handlers. */
 export function installJobTools(server: McpServer, dispatch: ReturnType<typeof createJobDispatch>): void {
     server.registerTool('get_job_result', {

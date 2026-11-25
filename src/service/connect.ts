@@ -72,7 +72,7 @@ td,th{overflow-wrap:anywhere}
 .policy ul{margin:4px 0;padding-left:20px}
 .info{border-left:2px solid var(--line-strong);padding:var(--space-2) var(--space-4);margin:0 0 var(--space-4)}
 .info p{margin:0}
-main .card+.card{margin-top:var(--space-4)}
+main .card+.card{margin-top:var(--space-4)}main .connect-grid>.card+.card{margin-top:0}@media(max-width:900px){main .connect-grid>.card+.card{margin-top:16px}}
 main .ghost{border-color:transparent;color:var(--ink)}
 ol.steps{margin:20px 0 0;padding-left:24px}
 ol.steps li{margin:0;padding:0 0 20px 8px;line-height:20px}
@@ -82,7 +82,7 @@ ol.steps li::marker{color:var(--muted);font-weight:600}
 .srv+.srv{border-top:1px solid var(--line)}
 .f{display:grid;align-items:center;padding:4px 0;grid-template-columns:100px minmax(0,1fr) auto;gap:12px}
 .f code{padding:5px 8px;border-radius:6px;overflow-wrap:anywhere;font-size:13px;background:var(--hover)}
-main td{padding-top:12px;padding-bottom:12px;vertical-align:middle}
+main td{padding:12px 8px;vertical-align:middle}#rows td{overflow-wrap:anywhere}#rows td:last-child button{padding:6px 8px}main .connect-grid>.card{align-self:stretch}main .connect-grid>div:last-child{min-width:0}
 main{min-width:0}
 main .page-head{margin-bottom:24px;align-items:center}
 main .page-head p{margin:4px 0 0;font-size:14px;line-height:20px}
@@ -108,7 +108,7 @@ ol.steps li{padding-left:2px}
 }
 </style></head>
 <body>${headerHtml(v, 'Chat')}<main id="main" tabindex="-1" class="narrow">
-<div class="page-head"><div><h1>Connect GitHub Copilot</h1><p>Connect your personal Lens key to Copilot.</p></div></div><div class="card">
+<div class="page-head"><div><h1>Connect GitHub Copilot</h1><p>Connect your personal Lens key to Copilot.</p></div></div><div class="connect-grid"><div class="card">
 <div class="policy" role="note" aria-labelledby="policy-title"><p id="policy-title"><b>Approved apps only.</b></p>${policy.apps.length === 1 && policy.apps[0] === DEFAULT_CHAT_APPS[0] ? '<p>Use GitHub Copilot with your ION Microsoft enterprise account. Connect your Lens key only to approved apps.</p>' : `<p>Connect your key only to:</p><ul>${policy.apps.map(a => `<li>${esc(a)}</li>`).join('')}</ul>`}${policy.note !== DEFAULT_CHAT_NOTE ? `<p>${esc(policy.note)}</p>` : ''}</div>
 <p class="small muted">Your key is shown once and inherits your Lens access.${ph ? ' PostHog commands are included in this one Lens server.' : ''}${canSurvey(surveyRole, 'edit') ? ' You can create, edit and stop surveys in Copilot; launch them from Surveys.' : role ? ` Survey access: ${esc(role)}.` : ''}</p>
 <ol class="steps">
@@ -117,9 +117,9 @@ ol.steps li{padding-left:2px}
 <li>Start a new chat: <span>“Which clients need attention this month?”</span></li>
 </ol>
 </div>
-<div class="card"><h2>Your keys</h2><div class="table-wrap" role="region" aria-label="Your keys" tabindex="0"><table><colgroup><col style="width:24%"><col style="width:29%"><col style="width:29%"><col style="width:18%"></colgroup><thead><tr><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div><div id="keys-pager"></div><p id="keys-msg" class="small" aria-live="polite"></p>
+<div class="card"><h2>Your keys</h2><div class="table-wrap" role="region" aria-label="Your keys" tabindex="0"><table><colgroup><col style="width:22%"><col style="width:27%"><col style="width:27%"><col style="width:24%"></colgroup><thead><tr><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Actions</th></tr></thead><tbody id="rows"><tr><td colspan="4" class="muted">Loading…</td></tr></tbody></table></div><div id="keys-pager"></div><p id="keys-msg" class="small" aria-live="polite"></p>
 <details id="revoked-box" hidden><summary class="small muted" id="revoked-sum"></summary><ul id="revoked" class="small muted"></ul></details>
-</div>
+</div></div>
 </main>
 <script>
 ${PAGER_JS}

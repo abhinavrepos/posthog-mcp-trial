@@ -249,7 +249,7 @@ th,td{padding:8px 3px;font-size:12px}
 }
 </style></head>
 <body>${headerHtml(v, 'Surveys')}<main id="main" tabindex="-1" class="wide">
-<div class="toolbar page-head"><div><h1>Surveys</h1><p>Survey activity, results and launch options.</p></div><select id="days" aria-label="Survey counts period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></div>
+<div class="page-head"><div><h1>Surveys</h1><p>Survey activity, results and launch options.</p></div><select id="days" aria-label="Survey counts period"><option value="7">Last 7 days</option><option value="30" selected>Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option></select></div>
 <div class="status-panel" id="list-state"><p id="page-msg" class="small" role="status">Loading surveys…</p><button class="secondary compact" id="list-retry" type="button" hidden>Try again</button></div><div class="layout" id="survey-layout" hidden><section><div class="status-tabs" id="status-tabs" role="group" aria-label="Show surveys by status"></div><div class="list" id="list"></div><div id="list-pager"></div>
 <p class="small"><a href="/replays/connect">Create a survey in chat</a></p><details><summary>How this works</summary><p class="small muted">Your survey role: ${SURVEY_ROLE_TEXT[v.role === 'admin' ? 'launch' : v.surveys || 'none']}.</p><p class="small muted">Make or change surveys in chat. Describe who should see it, when it appears and what to ask. New surveys stay as drafts until launched.</p></details></section>
 <section id="detail"></section>
@@ -293,8 +293,8 @@ function drawTabs(){$('status-tabs').innerHTML=TABS.map(([k,label])=>{const n=k=
   $('status-tabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{FILTER=b.dataset.status;const q=new URLSearchParams(location.search);if(FILTER==='all')q.delete('status');else q.set('status',FILTER);history.replaceState(null,'',location.pathname+(q.toString()?'?'+q:'')+location.hash);drawList();const first=$('status-tabs').querySelector('[data-status="'+FILTER+'"]');if(first)first.focus()})}
 const shown=()=>FILTER==='all'?LIST:LIST.filter(s=>s.status===FILTER)
 function drawList(){drawTabs();const active=document.activeElement,id=active&&active.dataset.id;const list=shown();listPager.set(list,true);if(!list.length&&LIST.length)$('list').innerHTML='<p class="empty">'+(FILTER==='draft'?'No drafts. New surveys made in chat start here until someone launches them.':'No '+esc(STATUS[FILTER]||FILTER).toLowerCase()+' surveys.')+'</p>';if(id){const b=Array.from($('list').querySelectorAll('.item')).find(b=>b.dataset.id===id);if(b)b.focus()}}
-function renderList(items){$('list').innerHTML=items.map(s=>'<button type="button" class="item" data-id="'+esc(s.id)+'" aria-current="'+(s.id===current)+'" aria-controls="detail"><b>'+esc(s.name)+'</b><span class="chip '+esc(s.status)+'">'+esc(STATUS[s.status]||s.status)+'</span><small>'+(s.freshness?'<span title="Counts are from a few minutes ago and are refreshing">Refreshing</span> · ':'')+num(s.shown)+' shown · '+num(s.answered)+' answered'+(s.clients==='all'?' · every client':' · '+esc(s.clients.slice(0,3).join(', '))+(s.clients.length>3?' +'+(s.clients.length-3):''))+'</small></button>').join('')||'<p class="empty">No surveys yet. Make your first survey in chat.</p>'
-  $('list').querySelectorAll('.item').forEach(b=>b.onclick=()=>{location.hash=b.dataset.id})}
+function renderList(items){$('list').innerHTML=items.map(s=>'<button type="button" class="item" data-id="'+esc(s.id)+'" aria-current="'+(s.id===current)+'" aria-controls="detail"><b>'+esc(s.name)+'</b><span class="chip '+esc(s.status)+'">'+esc(STATUS[s.status]||s.status)+'</span><small>'+(s.freshness?'<span title="Counts are from a few minutes ago and are refreshing">Refreshing</span> · ':'')+num(Math.max(0,s.shown))+' shown · '+num(Math.max(0,s.answered))+' answered'+(s.clients==='all'?' · every client':' · '+esc(s.clients.slice(0,3).join(', '))+(s.clients.length>3?' +'+(s.clients.length-3):''))+'</small></button>').join('')||'<p class="empty">No surveys yet. Make your first survey in chat.</p>'
+  $('list').querySelectorAll('.item').forEach(b=>b.onclick=()=>{if(b.dataset.id===current)show(current);else location.hash=b.dataset.id})}
 window.onhashchange=()=>{const id=location.hash.slice(1);if(!$('survey-layout').hidden&&id&&id!==current)show(id)}
 $('days').onchange=()=>{listMessage('Loading surveys…');loadList(true)}
 
@@ -348,6 +348,19 @@ async function show(id){const period=$('days').value;current=id;$('list').queryS
     +'<details><summary>When it shows &amp; settings</summary>'+chain(s)+'<div class="facts">'+facts.map(([k,x])=>'<div><span>'+esc(k)+'</span>'+esc(x)+'</div>').join('')+'</div>'
     +(s.made_by_lens?'<p style="margin-top:10px"><button type="button" id="a-reach" class="ghost">Estimate reach · last 14 days</button></p><div id="reach" aria-live="polite"></div>':'')+'</details>'
     +'<details open><summary>Preview survey</summary>'+preview(s)+'</details>'
+  // Present the existing result sections as tabs without changing their contents or IDs.
+  const detail=$('detail'), result=[...detail.children].find(e=>e.classList?.contains('card')&&e.querySelector('h2')?.textContent?.startsWith('Results'))
+  if(result){
+    const answers=result.nextElementSibling
+    const sections=[['Results',[result,answers]],['Daily activity',[]],['By client',[]],['Settings',[]],['Preview',[]]]
+    for(const node of [...detail.children])if(node.tagName==='DETAILS'){
+      const label=node.querySelector(':scope > summary')?.textContent?.trim()||''
+      const key=label==='Daily activity'?'Daily activity':label==='By client'?'By client':label.startsWith('When it shows')?'Settings':label==='Preview survey'?'Preview':''
+      if(key){node.open=true;sections.find(x=>x[0]===key)[1].push(node)}
+    }
+    const tabbar=document.createElement('div');tabbar.className='survey-detail-tabs';tabbar.setAttribute('role','tablist');tabbar.setAttribute('aria-label','Survey details');detail.insertBefore(tabbar,result)
+    const panels=sections.map(([label,nodes],i)=>{const button=document.createElement('button');button.type='button';button.textContent=label;button.id='survey-tab-'+i;button.setAttribute('role','tab');button.setAttribute('aria-controls','survey-panel-'+i);button.setAttribute('aria-selected',String(i===0));button.tabIndex=i===0?0:-1;tabbar.appendChild(button);const panel=document.createElement('div');panel.id='survey-panel-'+i;panel.className='survey-tabpanel';panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',button.id);panel.hidden=i!==0;for(const node of nodes)if(node)panel.appendChild(node);detail.appendChild(panel);button.onclick=()=>{for(const [j,p] of panels.entries()){p.hidden=j!==i;const b=tabbar.children[j];b.setAttribute('aria-selected',String(j===i));b.tabIndex=j===i?0:-1}};return panel})
+  }
   if($('conflict-pager'))makePager({mount:$('conflict-pager'),noun:'overlapping surveys',size:25,draw:items=>{$('conflict-rows').innerHTML=items.map(c=>'<li><a href="#'+esc(c.survey_id)+'">'+esc(c.name)+'</a>: '+esc(c.text.replace(/^[^:]*: /,''))+' ('+esc(c.clients==='all'?'every client':c.clients.join(', '))+')</li>').join('')}}).set(r.conflicts)
   r.questions.forEach((q,i)=>{
     if(q.distribution)makePager({mount:$('dist-pager-'+i),noun:'answer choices',label:'Question '+(i+1)+' answer choices',size:25,draw:items=>{$('dist-'+i).innerHTML=bars(Object.fromEntries(items))}}).set(Object.entries(q.distribution))

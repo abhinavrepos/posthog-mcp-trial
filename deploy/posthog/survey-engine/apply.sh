@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Serves the Lens survey renderer from this machine's PostHog: PostHog's own surveys.js with
 # "Survey by ION" instead of the PostHog footer, plus Lens condition chains (build.mjs, engine.js).
-# On PostHog 1.443.0 the hosted /static/array.js also records startup events until surveys load.
+# On a verified posthog-js (1.443.0, 1.450.0 as PostHog serves it, 1.454.2; hashes in build.mjs) the hosted
+# /static/array.js also records startup events until surveys load.
 # Reval keeps its existing SDK and survey script URLs.
 #
 #   sudo deploy/posthog/survey-engine/apply.sh [POSTHOG_DIR]            # build and serve (idempotent)

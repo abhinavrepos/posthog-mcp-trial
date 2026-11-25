@@ -66,19 +66,24 @@ writeBundle('surveys.js', out)
 let coreHash
 if (corePath && process.env.SURVEY_EARLY_CAPTURE !== 'off') {
     // The original /code/staticfiles/array.js shipped with the 1.443.0 survey fixture.
-    const expected = 'ed7794f94f39bf41227424f0f036d472bdf9d893928dceeb7a88689558109821'
+    // Known original hosted SDKs. Each has exactly one loaded callback at the same startup point.
+    const expected = new Set([
+        'ed7794f94f39bf41227424f0f036d472bdf9d893928dceeb7a88689558109821', // 1.443.0
+        '2149ac8783cedfeca0b9d3483bf4433b5a3465829f0930d6100e6ab693299acf', // 1.454.2
+        'dbf476b06c37262b1a77a1bb769059ed052242066c64f1cab3a4e456d9dc39ca', // 1.450.0 as PostHog's web image serves it (its own build, not npm's)
+    ])
     const bytes = readFileSync(corePath)
     const actual = sha(bytes)
     const core = bytes.toString('utf8')
     const loaded = 'this.config.loaded(this)'
-    if (actual === expected && core.split(loaded).length === 2) {
+    if (expected.has(actual) && core.split(loaded).length === 2) {
         // Run before the app's loaded callback, even when Lens throws. Keep the SDK call intact.
         const track = 'function(instance){try{if(!instance.config.disable_surveys)window.__lensSurveyCapture(instance)}catch(_){}}(this)'
         const builtCore = `${bootstrap}\n;\n${core.replace(loaded, `(${track},${loaded})`)}\n`
         writeBundle('array.js', builtCore)
         coreHash = sha(builtCore)
     } else {
-        console.warn(`PostHog startup hook refused array.js (SHA-256 ${actual}, expected ${expected} and one loaded hook). Serving the original.`)
+        console.warn(`PostHog startup hook refused array.js (SHA-256 ${actual}, expected a verified SDK hash and one loaded hook). Serving the original.`)
     }
 }
 writeFileSync(join(outDir, 'manifest.json'), JSON.stringify({ built: new Date().toISOString(), brand, original_sha256: sha(original), output_sha256: sha(out), bytes: out.length, core_output_sha256: coreHash }, null, 2) + '\n')

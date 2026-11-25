@@ -152,8 +152,8 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .banner h2{margin:0;font-size:24px;line-height:32px}
 #banner.down,#banner.warn{background:var(--card);border:1px solid var(--line);border-inline-start:3px solid var(--err);border-radius:var(--r-sm);padding:10px 14px}
 #banner.warn{border-inline-start-color:var(--warn)}
-#banner.down #b-head,#banner.warn #b-head{font-size:18px;line-height:24px}
-.banner .big{font-weight:700;border-radius:50%;display:grid;place-items:center;flex:none;color:var(--card);background:var(--muted);width:28px;height:28px;font-size:16px;margin-top:2px}
+#banner.down #b-head,#banner.warn #b-head{font-size:18px;line-height:24px}#banner .big{background:transparent;color:var(--err);width:20px;height:24px;margin-top:0}#banner.warn .big{color:var(--warn)}#banner.ok .big{color:var(--good)}
+.banner .big{font-weight:700;border-radius:50%;display:grid;place-items:center;flex:none;color:var(--card);background:var(--muted);width:20px;height:20px;font-size:14px;margin-top:2px}
 #problems>.card{padding:0;margin-bottom:16px}
 #problems h2{margin-bottom:8px}
 #problems .svc,#jobs .svc{grid-template-columns:88px minmax(0,1fr);gap:12px;align-items:start;padding:8px 0;border:0}
@@ -171,9 +171,10 @@ main .pager .pg>span{min-height:32px;display:inline-flex;align-items:center}
 .tiles{display:grid;margin-bottom:14px;margin:0 0 24px;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
 .tile span{display:block;color:var(--muted);font-size:12px;font-weight:500;min-height:16px;line-height:16px}
 .tile small{display:block;color:var(--muted);font-size:12px;margin-top:2px;line-height:16px}
-.tile.problem{border-color:var(--warn);background:var(--warn-bg)}
-.tile.problem small{color:var(--warn)}
-.tile.failure{border-color:var(--err);background:var(--err-bg)}
+.tile.problem span::before,.tile.failure span::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--warn);margin-right:6px;vertical-align:middle}.tile.failure span::before{background:var(--err)}
+.tile.problem{border-color:var(--line);background:var(--card)}
+.tile.problem small{color:var(--muted)}
+.tile.failure{border-color:var(--line);background:var(--card)}
 .section-details{border-bottom:1px solid var(--line);padding:14px 0}
 .section-details>summary{cursor:pointer;font-size:14px;line-height:20px;font-weight:600}
 .containers-card{margin-top:24px}
@@ -365,10 +366,10 @@ function lensJobs(jobs,triage){const down=jobs.filter(r=>r.level==='down').lengt
 }
 function recentChanges(changes){const sorted=changes.slice().sort((a,b)=>(stamp(b.at)||0)-(stamp(a.at)||0)),starts=new Map(),entries=[]
   for(const c of sorted.reverse()){const key=JSON.stringify([c.group,c.name]),at=stamp(c.at),start=starts.get(key)
-    const ended=c.from==='down'&&c.level!=='down'
-    if(c.level==='down'&&c.from!=='down')starts.set(key,at)
-    if(c.level!=='down')starts.delete(key)
-    const transition=c.level==='down'?'Went down':c.level==='warn'?c.from==='down'?'Improved to warning':'Entered warning':c.level==='ok'?'Recovered':'Changed to '+(Object.hasOwn(LABEL,c.level)?LABEL[c.level]:c.level)
+    const state=c.level??c.to;const ended=c.from==='down'&&state!=='down'
+    if(state==='down'&&c.from!=='down')starts.set(key,at)
+    if(state!=='down')starts.delete(key)
+    const transition=state==='down'?'Went down':state==='warn'?c.from==='down'?'Improved to warning':'Entered warning':state==='ok'?'Recovered':'Changed to '+(Object.hasOwn(LABEL,state)?LABEL[state]:state||'Unknown')
     const downInterval=ended?(Number.isFinite(start)&&start<=at?' · went down at '+utcTime(start)+' · down for '+esc(duration(at-start)):' · Down start unavailable'):''
     entries.push('<li><span class="check-name">'+esc(c.group)+' · '+esc(c.name)+'</span><div class="d">'+esc(transition)+(Number.isFinite(at)?' at '+utcTime(at):' · Time unavailable')+downInterval+'</div></li>')
   }

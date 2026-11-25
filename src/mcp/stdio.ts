@@ -3,7 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { shutdownClips } from '../core/clip.ts'
-import { warmClientNames } from '../core/resolve.ts'
+import { warmClientResolver } from '../core/resolve.ts'
 import { config } from '../core/config.ts'
 import { lensServerInfo } from './server-info.ts'
 import { registerTools } from './tools.ts'
@@ -19,9 +19,11 @@ if (!config.features.lensMcp) {
 
 const server = new McpServer(lensServerInfo, { instructions: serverInstructions() })
 registerTools(server)
-warmClientNames()
+warmClientResolver()
 const transport = new StdioServerTransport()
+const connectStarted=performance.now()
 await server.connect(transport)
+console.error(`[lens warm] MCP connect: ${Math.round(performance.now()-connectStarted)} ms`)
 
 const stop = async () => {
     await shutdownClips().catch(() => {})

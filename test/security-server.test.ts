@@ -5,17 +5,18 @@ import { connect } from 'node:net'
 import { stripTypeScriptTypes } from 'node:module'
 import { once } from 'node:events'
 import { test } from 'node:test'
+import { publicRequestFailure } from '../src/service/failure.ts'
 
 // Exercise the entry point's real request boundary without starting its background workers.
 const source = readFileSync('src/service/server.ts', 'utf8')
 const boundary = source.slice(source.indexOf('const server = createServer'), source.indexOf('\nif (!jiraConfigured()) log'))
 const webhook = source.slice(source.indexOf('async function handleWebhook'), source.indexOf('async function serveClip'))
 let failLog = false
-const server = new Function('createServer', 'compressResponse', 'send', 'log', 'jiraConfigured', 'readRaw', 'verifyWebhookSignature', 'handleReplays',
+const server = new Function('createServer', 'compressResponse', 'send', 'log', 'jiraConfigured', 'readRaw', 'verifyWebhookSignature', 'handleReplays', 'publicRequestFailure',
     stripTypeScriptTypes(webhook + boundary) + '\nreturn server'
 )(createServer, () => {}, (res: import('node:http').ServerResponse, status: number, body: unknown) => {
     res.writeHead(status); res.end(typeof body === 'string' ? body : JSON.stringify(body))
-}, () => { if (failLog) throw new Error('logging failed') }, () => false, () => { throw new Error('should not read body') }, () => false, () => { throw new Error('handler failed') }) as Server
+}, () => { if (failLog) throw new Error('logging failed') }, () => false, () => { throw new Error('should not read body') }, () => false, () => { throw new Error('handler failed') }, publicRequestFailure) as Server
 
 test('malformed raw request gets 400, health stays live, handler failures get 500', async () => {
     server.listen(0, '127.0.0.1')

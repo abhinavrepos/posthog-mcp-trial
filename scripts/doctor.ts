@@ -73,6 +73,12 @@ else {
         const project = await get(`${ph.host}/api/projects/${ph.projectId}/`, auth)
         say(project.status === 200 ? 'ok' : 'fail', `Project ${ph.projectId}`, project.status === 200 ? `"${project.body.name}"` : `→ ${project.status}`)
         if (project.status === 200 && ph.projectToken && project.body.api_token !== ph.projectToken) say('fail', 'POSTHOG_PROJECT_TOKEN', 'is not this project’s token')
+        // A new PostHog project has surveys off; posthog-js then loads no survey, so none Lens launches would show.
+        if (project.status === 200 && config.surveys.enabled && config.posthog.surveyApiKey) {
+            const optIn = project.body.surveys_opt_in
+            if (optIn === true) say('ok', 'Surveys on in the PostHog project', 'surveys_opt_in=true')
+            else say('fail', 'Surveys off in the PostHog project', `surveys_opt_in=${optIn}: no survey shows. Run sudo deploy/posthog/survey-engine/opt-in.sh (or FEATURE_SURVEYS=off)`)
+        }
 
         // The property names must match what the events carry.
         const p = config.properties

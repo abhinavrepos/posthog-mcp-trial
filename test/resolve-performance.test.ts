@@ -7,7 +7,7 @@ const dir=mkdtempSync(join(tmpdir(),'resolve-performance-'))
 after(()=>rmSync(dir,{recursive:true,force:true}))
 Object.assign(process.env,{TRIAGE_DB:join(dir,'main.db'),POSTHOG_HOST:'http://fake-posthog',POSTHOG_PROJECT_ID:'7',POSTHOG_PERSONAL_API_KEY:'test-key',CLIENT_FROM_DISTINCT_ID:'3',PROP_CLIENT_NAME:'client_name',PROP_PERSON_EMAIL:'contact_email'})
 const {config}=await import('../src/core/config.ts')
-const {knownClients,resolveClient,clearClientCache,warmClientNames}=await import('../src/core/resolve.ts')
+const {knownClients,resolveClient,clearClientCache,warmClientNames,warmClientResolver}=await import('../src/core/resolve.ts')
 const response=(rows:Record<string,unknown>[])=>{
     const columns=Object.keys(rows[0] || {})
     return Response.json({columns,results:rows.map(r=>columns.map(k=>r[k]))})
@@ -70,19 +70,20 @@ test('pending startup roster uses quick names; ready roster enriches cached coun
     await knownClients();assert.equal(wide,1);assert.equal(quick,1)
     release(response([{id:'RIB',name:'Nordlicht Energie'}]));await new Promise(resolve=>setImmediate(resolve))
     assert.equal((await resolveClient({text:'Nordlicht Energie'}))[0].id,'RIB')
-    assert.equal(countCalls,1);assert.equal(quick,1);assert.equal(wide,1)
+    assert.equal(countCalls,3);assert.equal(quick,1);assert.equal(wide,1)
     t.mock.timers.tick(55*60000);await new Promise(resolve=>setImmediate(resolve))
     assert.equal(wide,2);assert.equal((await resolveClient({text:'Refreshed Energie'}))[0].id,'RIB')
 })
-test('startup skips names without a configured clientName or PostHog credentials',async t=>{
+test('startup skips names without a configured clientName and all queries without PostHog credentials',async t=>{
     clearClientCache();t.after(clearClientCache)
     let calls=0
     t.mock.method(globalThis,'fetch',async()=>{calls++;return response([])})
     const oldName=config.properties.clientName,oldKey=config.posthog.personalApiKey
     t.after(()=>{config.properties.clientName=oldName;config.posthog.personalApiKey=oldKey})
     config.properties.clientName='';warmClientNames()
+    await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,3)
     config.properties.clientName=oldName;config.posthog.personalApiKey='';warmClientNames()
-    await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,0)
+    await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,3)
 })
 test('resolve_client is job backed and a slow resolver returns a pollable handle within budget',async()=>{
     const {JOB_TOOLS,FAST_TOOLS,jobBacked,createJobDispatch}=await import('../src/mcp/jobtools.ts')
@@ -98,5 +99,58 @@ test('resolve_client is job backed and a slow resolver returns a pollable handle
         assert.ok(performance.now()-start<500);assert.match(JSON.stringify(job.result),/job_id/)
         finish({matches:[{id:'RIB'}],coverage:{}});await new Promise(resolve=>setImmediate(resolve))
         assert.deepEqual((await dispatch.poll(job.id)).result,{matches:[{id:'RIB'}],coverage:{}})
+    } finally {runner.close();db.close()}
+})
+test('startup resolver warm-up starts roster reads without waiting and tolerates an outage',async t=>{
+    clearClientCache();t.after(clearClientCache)
+    const old=config.properties.clientName;config.properties.clientName='';t.after(()=>{config.properties.clientName=old})
+    let release!:(value:Response)=>void, calls=0
+    const pending=new Promise<Response>(resolve=>{release=resolve})
+    t.mock.method(globalThis,'fetch',async()=>{calls++;return pending})
+    const start=performance.now();warmClientResolver()
+    assert.ok(performance.now()-start<100)
+    await new Promise(resolve=>setImmediate(resolve));assert.ok(calls>=2)
+    release(new Response('unavailable',{status:503}))
+    await new Promise(resolve=>setImmediate(resolve))
+})
+test('concurrent first calls join the startup roster queries for both MCP default windows',async t=>{
+    clearClientCache();t.after(clearClientCache)
+    const old=config.properties.clientName;config.properties.clientName='';t.after(()=>{config.properties.clientName=old})
+    const {parseTimeWindow}=await import('../src/core/timewindow.ts')
+    let release!:(value:Response)=>void
+    const pending=new Promise<Response>(resolve=>{release=resolve})
+    const ranges:string[]=[]
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
+        const q=JSON.parse(String(init.body)).query
+        if(q.query.includes('FROM person_distinct_ids'))return response([])
+        ranges.push(`${q.values.from.slice(0,10)}|${q.values.to.slice(0,10)}`)
+        return pending.then(r=>r.clone())
+    })
+    warmClientResolver()
+    const thirty=parseTimeWindow('last 30 days'), ninety=parseTimeWindow('last 90 days')
+    const calls=Promise.all([resolveClient({text:'RIB',from:ninety.from,to:ninety.to}),resolveClient({text:'RIB',from:ninety.from,to:ninety.to}),knownClients(thirty.from,thirty.to)])
+    await new Promise(resolve=>setImmediate(resolve))
+    assert.equal(ranges.length,2)
+    assert.equal(new Set(ranges).size,2)
+    release(response(counts))
+    const [a,b,c]=await calls
+    assert.equal(a[0].id,'RIB');assert.equal(b[0].id,'RIB');assert.equal(c[0].id,'RIB')
+    assert.equal(ranges.length,2)
+})
+test('design_survey uses the same pollable job budget as long reads',async()=>{
+    const {jobBacked,createJobDispatch}=await import('../src/mcp/jobtools.ts')
+    const {JobRunner}=await import('../src/core/jobs.ts')
+    const {DatabaseSync}=await import('node:sqlite')
+    assert.equal(jobBacked('design_survey',true),true)
+    const db=new DatabaseSync(':memory:'),runner=new JobRunner(db)
+    try {
+        const dispatch=createJobDispatch(undefined,{runner,budgetMs:5})
+        let finish!:(value:unknown)=>void
+        const pending=new Promise(resolve=>{finish=resolve})
+        const job=await dispatch.execute('design_survey',{days:365},undefined,undefined,async()=>pending)
+        assert.match(JSON.stringify(job.result),/job_id/)
+        finish({reach:{days:90,note:'Reach estimate capped at 90 days.'}})
+        await new Promise(resolve=>setImmediate(resolve))
+        assert.equal(((await dispatch.poll(job.id)).result as {reach:{days:number}}).reach.days,90)
     } finally {runner.close();db.close()}
 })
