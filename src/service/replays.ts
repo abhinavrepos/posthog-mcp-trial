@@ -849,6 +849,8 @@ export function headerHtml(v: Viewer | undefined, section: Section): string {
     const brand = `<a class="brand" href="/">${LOGO}<span class="names"><span class="word">${esc(APP_NAME)}</span>${APP_TAG ? `<span class="tag">${esc(APP_TAG)}</span>` : ''}</span></a>`
     const skip = `<a class="skip" href="#main">Skip to content</a>`
     const mainId = `<script>addEventListener('DOMContentLoaded',()=>{const m=document.querySelector('main');if(m){if(!m.id)m.id='main';if(!m.hasAttribute('tabindex'))m.tabIndex=-1}
+// Any element whose own text starts with "Loading" gets the logo loader (CSS only: no nodes added, text unchanged).
+if(m){const mark=()=>m.querySelectorAll('td,p,li,span,div').forEach(e=>{const own=[...e.childNodes].some(n=>n.nodeType===3&&/^\\s*Loading/.test(n.nodeValue));if(own!==e.classList.contains('sig-loading'))e.classList.toggle('sig-loading',own)});mark();let q=0;new MutationObserver(()=>{if(!q){q=1;requestAnimationFrame(()=>{q=0;mark()})}}).observe(m,{subtree:true,childList:true,characterData:true})}
 // On phones the tab bars scroll sideways: keep the current tab in view (on load, and when tabs switch).
 const keep=()=>document.querySelectorAll('main [aria-current=page],main [role=tab][aria-selected=true]').forEach(t=>{for(let a=t.parentElement;a&&a!==m;a=a.parentElement){if(a.scrollWidth>a.clientWidth+1&&/auto|scroll/.test(getComputedStyle(a).overflowX)){const r=t.getBoundingClientRect(),c=a.getBoundingClientRect();a.scrollLeft+=r.left-c.left-(c.width-r.width)/2;break}}});
 // Tables are filled by several page scripts. Keep column labels on their cells as rows change.
