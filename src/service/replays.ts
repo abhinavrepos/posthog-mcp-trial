@@ -842,7 +842,7 @@ const ICON: Record<string, string> = {
 }
 const icon = (name: string) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[name] || ''}</svg>`
 /** The product mark: a lens (two rings) on the accent square, drawn to sit on the text's centre line. */
-export const LOGO = `<svg class="mark" viewBox="0 0 28 28" aria-hidden="true" focusable="false"><rect width="28" height="28" rx="7" fill="var(--accent)"/><circle class="wave" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="1.4"/><circle class="wave w2" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="1.4"/><circle class="ring" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="2.4"/><circle class="arc" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="2.4" stroke-linecap="round" stroke-dasharray="13 25"/><circle class="dot" cx="14" cy="14" r="1.9" fill="var(--accent-ink)"/></svg>`
+export const LOGO = `<svg class="mark" viewBox="0 0 28 28" aria-hidden="true" focusable="false"><rect width="28" height="28" rx="7" fill="var(--accent)"/><circle class="wave" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="1.4"/><circle class="wave w2" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="1.4"/><circle class="ring" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="2.4"/><circle class="dot" cx="14" cy="14" r="1.9" fill="var(--accent-ink)"/></svg>`
 
 /** Placeholder rows keep the table's real columns and cell height. */
 export function skelRows(cols: number, label: string, rows = 5): string {
@@ -862,13 +862,6 @@ export function skelBlock(kind: 'tiles' | 'chart' | 'list' | 'detail'): string {
 export function headerHtml(v: Viewer | undefined, section: Section): string {
     const brand = `<a class="brand" href="/">${LOGO}<span class="names"><span class="word">${esc(APP_NAME)}</span>${APP_TAG ? `<span class="tag">${esc(APP_TAG)}</span>` : ''}</span></a>`
     const skip = `<a class="skip" href="#main">Skip to content</a>`
-    // Only initial requests and requests immediately following a user action turn the logo ring.
-    const busy = `<script>(()=>{const h=document.documentElement;let n=0,t=0,on=0,since=0,initial=true,seen=false,action=0;const set=v=>{clearTimeout(t);if(v){if(!on)t=setTimeout(()=>{on=1;since=Date.now();h.classList.add('sig-busy')},150)}else if(on){t=setTimeout(()=>{on=0;h.classList.remove('sig-busy')},Math.max(0,400-(Date.now()-since)))}};
-const finish=()=>{if(initial&&seen&&n===0&&document.readyState==='complete')initial=false};
-const upd=()=>{finish();set(n>0||document.readyState!=='complete')};upd();addEventListener('load',upd);addEventListener('pageshow',()=>{n=0;upd()});
-for(const event of ['click','input','change','submit','keydown'])addEventListener(event,()=>{action=Date.now()},true);
-const f=window.fetch;if(f)window.fetch=function(...a){const count=initial||Date.now()-action<1000;if(count){seen=true;n++;upd()}return f.apply(this,a).finally(()=>{if(count){n--;upd()}})};
-addEventListener('beforeunload',()=>{clearTimeout(t);on=1;since=Date.now();h.classList.add('sig-busy');setTimeout(()=>set(n>0),8000)})})()</script>`
     const mainId = `<script>addEventListener('DOMContentLoaded',()=>{const m=document.querySelector('main');if(m){if(!m.id)m.id='main';if(!m.hasAttribute('tabindex'))m.tabIndex=-1}
 // On phones the tab bars scroll sideways: keep the current tab in view (on load, and when tabs switch).
 const keep=()=>document.querySelectorAll('main [aria-current=page],main [role=tab][aria-selected=true]').forEach(t=>{for(let a=t.parentElement;a&&a!==m;a=a.parentElement){if(a.scrollWidth>a.clientWidth+1&&/auto|scroll/.test(getComputedStyle(a).overflowX)){const r=t.getBoundingClientRect(),c=a.getBoundingClientRect();a.scrollLeft+=r.left-c.left-(c.width-r.width)/2;break}}});
@@ -878,7 +871,7 @@ labelTables();new MutationObserver(labelTables).observe(m,{childList:true,subtre
 const active=document.querySelector('header.shell nav [aria-current=page]');
 if(active){const nav=active.closest('nav');const link=active.getBoundingClientRect(),bar=nav.getBoundingClientRect();if(link.right>bar.right)nav.scrollLeft+=link.right-bar.right}
 keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeout(keep));document.addEventListener('click',e=>{if(e.target.closest&&e.target.closest('[role=tab]'))setTimeout(keep)})})</script>`
-    if (!v) return `${skip}<header class="bare">${brand}</header>${mainId}${busy}`
+    if (!v) return `${skip}<header class="bare">${brand}</header>${mainId}`
     const tabs = (
         [
             ['Replay clips', '/replays', 'watch'],
@@ -894,7 +887,7 @@ keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeou
         .map(([name, href]) => ({ group: ['Replay clips', 'Live', 'Pinned'].includes(name) ? 'Monitor' : name === 'Surveys' ? 'Engage' : 'Manage', html: `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${icon(name)}<span>${name}</span></a>` }))
         .reduce((out, item, i, all) => out + (i === 0 || all[i - 1]!.group !== item.group ? `<div class="v-nav-group"><span>${item.group}</span>` : '') + item.html + (i === all.length - 1 || all[i + 1]!.group !== item.group ? '</div>' : ''), '')
     const initials = (v.name || v.email).split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('')
-    return `${skip}${mainId}${busy}<header class="shell">${brand}<nav aria-label="Sections">${tabs}</nav><details class="hdr acct"><summary aria-label="Account for ${esc(v.name || v.email.split('@')[0])}"><span class="avatar" aria-hidden="true">${esc(initials)}</span><span class="who-short"><b>${esc(v.name || v.email.split('@')[0])}</b><span>${esc(ROLE_TEXT[v.role].replace(/ \(.*\)$/, ''))}</span></span></summary><div class="acct-menu"><span class="who">${esc(v.email)}</span><span class="muted small">${esc(ROLE_TEXT[v.role])}</span><button class="secondary" id="signout" type="button">Sign out</button></div></details></header>
+    return `${skip}${mainId}<header class="shell">${brand}<nav aria-label="Sections">${tabs}</nav><details class="hdr acct"><summary aria-label="Account for ${esc(v.name || v.email.split('@')[0])}"><span class="avatar" aria-hidden="true">${esc(initials)}</span><span class="who-short"><b>${esc(v.name || v.email.split('@')[0])}</b><span>${esc(ROLE_TEXT[v.role].replace(/ \(.*\)$/, ''))}</span></span></summary><div class="acct-menu"><span class="who">${esc(v.email)}</span><span class="muted small">${esc(ROLE_TEXT[v.role])}</span><button class="secondary" id="signout" type="button">Sign out</button></div></details></header>
 <script>document.getElementById('signout').onclick=()=>fetch('/replays/logout',{method:'POST',headers:{'x-clip-page':'1'}}).then(()=>location.href='/');document.addEventListener('click',e=>{const d=document.querySelector('details.acct');if(d&&d.open&&!d.contains(e.target))d.open=false});document.addEventListener('keydown',e=>{const d=document.querySelector('details.acct');if(e.key==='Escape'&&d&&d.open){d.open=false;d.querySelector('summary').focus()}})</script>`
 }
 
