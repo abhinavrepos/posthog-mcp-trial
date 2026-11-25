@@ -1,0 +1,89 @@
+{
+ "full1": {
+  "q011": {
+   "taxonomy": "misleading description",
+   "cause": "\"Last 1 day\" has no rolling period in the enum (today/yesterday/last_7_days\u2026); Sonnet chose period today (3,472 events since midnight, and the tool's today also ran to the end of the day).",
+   "fix": "window {\"last\":\"24h\"|\"Nd\"} as the one time argument, rolling by default; every window clamped to now."
+  },
+  "q016": {
+   "taxonomy": "misleading description",
+   "cause": "Same as q011 (C02).",
+   "fix": "Same as q011."
+  },
+  "q015": {
+   "taxonomy": "tool bug",
+   "cause": "resolve_client period last_12_months counted 8,373 events stamped after now (the 400M load has rows up to 17:59 today): windows were not clamped to now.",
+   "fix": "Every window ends at the latest at now (clampToNow)."
+  },
+  "q020": {
+   "taxonomy": "tool bug",
+   "cause": "Same as q015 (C11).",
+   "fix": "Same as q015."
+  },
+  "q021": {
+   "taxonomy": "model reasoning",
+   "cause": "Own SQL over 7 calendar days including today (2026-11-19..26), counting rows after now; \"last 7 days\" is rolling.",
+   "fix": "Descriptions and instructions: window {\"last\":\"7d\"} is what \"last 7 days\" means; SQL must bound timestamp < now(); recipes give the count without SQL."
+  },
+  "q040": {
+   "taxonomy": "model reasoning",
+   "cause": "Own SQL: 30 calendar days including today and rows after now.",
+   "fix": "Same as q021; recipe exports_by_label."
+  },
+  "q048": {
+   "taxonomy": "model reasoning",
+   "cause": "Own SQL anchored the 7 days at the latest event (17:59 today, in the future), not at now.",
+   "fix": "Same as q021; recipe messages."
+  },
+  "q052": {
+   "taxonomy": "model reasoning",
+   "cause": "Own SQL: 30 calendar days to tomorrow (2026-10-27..11-26), counting rows after now.",
+   "fix": "Same as q021; recipe messages."
+  },
+  "q100": {
+   "taxonomy": "model reasoning",
+   "cause": "resolve_client gave the right 7-day count (122,481) but Sonnet replaced it with its own calendar-week SQL (114,452) because the result did not say which window it covered.",
+   "fix": "Every result starts with context: the resolved window (from, to, kind)."
+  },
+  "q076": {
+   "taxonomy": "tool bug",
+   "cause": "design_survey job failed: its 30-day step checks (15 s budget each, run together) timed out at 400M rows, and those client-side timeouts counted toward Lens's PostHog circuit breaker, which then refused the reach estimate and every call for 30 s (\"PostHog is unavailable or busy\").",
+   "fix": "Breaker counts only normal-deadline timeouts (test added); step checks get 40 s and run in parallel with the reach estimate; the fallback warning names existing tools (it named the removed describe_app_events)."
+  },
+  "q077": {
+   "taxonomy": "tool bug",
+   "cause": "Same as q076.",
+   "fix": "Same as q076."
+  },
+  "q078": {
+   "taxonomy": "tool bug",
+   "cause": "Same as q076.",
+   "fix": "Same as q076."
+  },
+  "q079": {
+   "taxonomy": "tool bug",
+   "cause": "Same as q076: the job failed before reporting the 90-day reach cap.",
+   "fix": "Same as q076."
+  },
+  "q044": {
+   "taxonomy": "data/ground truth",
+   "cause": "Ground truth counted PageView rows of the messagebox dialog; Lens's data_guide (and Sonnet) define messages as Event rows. Corrected and regraded (passes).",
+   "fix": "Ground truth: event = 'Event' for all message questions."
+  },
+  "q045": {
+   "taxonomy": "data/ground truth",
+   "cause": "Same as q044 (toast).",
+   "fix": "Same as q044."
+  },
+  "q071": {
+   "taxonomy": "data/ground truth",
+   "cause": "The simulated data has no \"Trade Date\" field; Sonnet correctly answered none found. Question changed to a behaviour check and regraded (passes).",
+   "fix": "Question expects none."
+  },
+  "q073": {
+   "taxonomy": "data/ground truth",
+   "cause": "Harness required survey_results, but list_surveys reports shown counts too; the answer (60) was right. Regraded (passes).",
+   "fix": "No tool requirement."
+  }
+ }
+}

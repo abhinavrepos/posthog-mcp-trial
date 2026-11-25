@@ -1,0 +1,831 @@
+[
+ {
+  "id": "q001",
+  "category": "client_lookup",
+  "question": "Which client does the Reval user U1688 belong to? Give the client code.",
+  "kind": "text",
+  "sql": "SELECT any(splitByChar('|',distinct_id)[3]) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[4]='U1688'"
+ },
+ {
+  "id": "q002",
+  "category": "client_lookup",
+  "question": "Which client is user U46 from?",
+  "kind": "text",
+  "sql": "SELECT any(splitByChar('|',distinct_id)[3]) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[4]='U46'"
+ },
+ {
+  "id": "q003",
+  "category": "client_lookup",
+  "question": "Who is the distinct id PROD|01|C46|U1006: which client code?",
+  "kind": "text",
+  "expect_text": "C46"
+ },
+ {
+  "id": "q004",
+  "category": "client_lookup",
+  "question": "Resolve the client \"c08\" and tell me its code exactly as stored.",
+  "kind": "text",
+  "expect_text": "C08"
+ },
+ {
+  "id": "q005",
+  "category": "client_lookup",
+  "question": "Resolve client SEM. How many events did SEM have in the last 30 days? Answer with the number.",
+  "kind": "count",
+  "window_days": 30,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='SEM' AND timestamp >= {from} AND timestamp < {to}",
+  "note": "SEM receives live simulator events during the run; bounds cover them"
+ },
+ {
+  "id": "q006",
+  "category": "client_lookup",
+  "question": "Resolve the user U1757. How many events did that user have in the last 7 days?",
+  "kind": "count",
+  "window_days": 7,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[4]='U1757' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q007",
+  "category": "client_lookup",
+  "question": "When was client C33 last seen (last event before now)? Give the date YYYY-MM-DD.",
+  "kind": "text",
+  "sql": "SELECT toString(toDate(max(timestamp))) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C33' AND timestamp < now()"
+ },
+ {
+  "id": "q008",
+  "category": "client_lookup",
+  "question": "How many distinct users does client C17 have in the last 30 days?",
+  "kind": "count",
+  "window_days": 30,
+  "sql": "SELECT uniq(distinct_id) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C17' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q009",
+  "category": "client_lookup",
+  "question": "How many different clients (client codes) sent events in the last 7 days?",
+  "kind": "count",
+  "window_days": 7,
+  "sql": "SELECT uniq(splitByChar('|',distinct_id)[3]) FROM posthog.events WHERE team_id=1 AND timestamp >= {from} AND timestamp < {to}",
+  "note": "includes simulator clients SEM and ACME"
+ },
+ {
+  "id": "q010",
+  "category": "client_lookup",
+  "question": "Which client has the most events between 2026-11-01 and 2026-11-24 (inclusive, UTC)? Give the code.",
+  "kind": "text",
+  "sql": "SELECT splitByChar('|',distinct_id)[3] c FROM posthog.events WHERE team_id=1 AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00' GROUP BY c ORDER BY count() DESC LIMIT 1"
+ },
+ {
+  "id": "q011",
+  "category": "counts",
+  "question": "How many events did client C08 have in the last 1 day?",
+  "kind": "count",
+  "window_days": 1,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q012",
+  "category": "counts",
+  "question": "How many events did client C08 have in the last 7 days?",
+  "kind": "count",
+  "window_days": 7,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q013",
+  "category": "counts",
+  "question": "How many events did client C08 have in the last 30 days?",
+  "kind": "count",
+  "window_days": 30,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q014",
+  "category": "counts",
+  "question": "How many events did client C08 have in the last 90 days?",
+  "kind": "count",
+  "window_days": 90,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q015",
+  "category": "counts",
+  "question": "How many events did client C08 have in the last 365 days?",
+  "kind": "count",
+  "window_days": 365,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q016",
+  "category": "counts",
+  "question": "How many events did client C02 have in the last 1 day?",
+  "kind": "count",
+  "window_days": 1,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C02' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q017",
+  "category": "counts",
+  "question": "How many events did client C02 have in the last 7 days?",
+  "kind": "count",
+  "window_days": 7,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C02' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q018",
+  "category": "counts",
+  "question": "How many events did client C46 have in the last 30 days?",
+  "kind": "count",
+  "window_days": 30,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C46' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q019",
+  "category": "counts",
+  "question": "How many events did client C54 have in the last 90 days?",
+  "kind": "count",
+  "window_days": 90,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C54' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q020",
+  "category": "counts",
+  "question": "How many events did client C11 have in the last 365 days?",
+  "kind": "count",
+  "window_days": 365,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C11' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q021",
+  "category": "counts",
+  "question": "How many events were recorded in the whole project in the last 7 days?",
+  "kind": "count",
+  "window_days": 7,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q022",
+  "category": "counts",
+  "question": "How many PageView events did client C19 have between 2026-11-16 and 2026-11-22 (inclusive, UTC)?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C19' AND event='PageView' AND timestamp >= '2026-11-16 00:00:00' AND timestamp < '2026-11-23 00:00:00'"
+ },
+ {
+  "id": "q023",
+  "category": "counts",
+  "question": "How many Event (interaction) events did client C27 have on 2026-11-20 (UTC)?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C27' AND event='Event' AND timestamp >= '2026-11-20 00:00:00' AND timestamp < '2026-11-21 00:00:00'"
+ },
+ {
+  "id": "q024",
+  "category": "counts",
+  "question": "How many events did client C05 have in October 2026?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C05' AND timestamp >= '2026-10-01 00:00:00' AND timestamp < '2026-11-01 00:00:00'"
+ },
+ {
+  "id": "q025",
+  "category": "counts",
+  "question": "How many events did the whole project have on Saturday 2026-11-21 (UTC)?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND timestamp >= '2026-11-21 00:00:00' AND timestamp < '2026-11-22 00:00:00'"
+ },
+ {
+  "id": "q026",
+  "category": "top_screens_buttons",
+  "question": "Which 5 dialogs (dialog_id) did client C08 open most often (PageView with action OPEN) between 2026-11-01 and 2026-11-24 inclusive? List the dialog ids, most first.",
+  "kind": "list",
+  "k": 5,
+  "sql": "SELECT JSONExtractString(properties,'dialog_id') d FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND event='PageView' AND JSONExtractString(properties,'action')='OPEN' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00' GROUP BY d ORDER BY count() DESC LIMIT 5"
+ },
+ {
+  "id": "q027",
+  "category": "top_screens_buttons",
+  "question": "Which 5 dialogs (dialog_id) did client C17 open most often (PageView with action OPEN) between 2026-11-01 and 2026-11-24 inclusive? List the dialog ids, most first.",
+  "kind": "list",
+  "k": 5,
+  "sql": "SELECT JSONExtractString(properties,'dialog_id') d FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C17' AND event='PageView' AND JSONExtractString(properties,'action')='OPEN' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00' GROUP BY d ORDER BY count() DESC LIMIT 5"
+ },
+ {
+  "id": "q028",
+  "category": "top_screens_buttons",
+  "question": "Which 5 dialogs (dialog_id) did client C33 open most often (PageView with action OPEN) between 2026-11-01 and 2026-11-24 inclusive? List the dialog ids, most first.",
+  "kind": "list",
+  "k": 5,
+  "sql": "SELECT JSONExtractString(properties,'dialog_id') d FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C33' AND event='PageView' AND JSONExtractString(properties,'action')='OPEN' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00' GROUP BY d ORDER BY count() DESC LIMIT 5"
+ },
+ {
+  "id": "q029",
+  "category": "top_screens_buttons",
+  "question": "What are the top 5 buttons (action_name on Event, excluding messagebox and toast dialogs) pressed by client C08 between 2026-11-01 and 2026-11-24 inclusive? List them, most first.",
+  "kind": "list",
+  "k": 5,
+  "sql": "SELECT JSONExtractString(properties,'action_name') b FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND event='Event' AND JSONExtractString(properties,'dialog_id') NOT IN ('messagebox','toast','menuCmb') AND b!='' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00' GROUP BY b ORDER BY count() DESC LIMIT 5"
+ },
+ {
+  "id": "q030",
+  "category": "top_screens_buttons",
+  "question": "What are the top 5 buttons (action_name on Event, excluding messagebox and toast dialogs) pressed by client C46 between 2026-11-01 and 2026-11-24 inclusive? List them, most first.",
+  "kind": "list",
+  "k": 5,
+  "sql": "SELECT JSONExtractString(properties,'action_name') b FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C46' AND event='Event' AND JSONExtractString(properties,'dialog_id') NOT IN ('messagebox','toast','menuCmb') AND b!='' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00' GROUP BY b ORDER BY count() DESC LIMIT 5"
+ },
+ {
+  "id": "q031",
+  "category": "top_screens_buttons",
+  "question": "What are the top 5 buttons (action_name on Event, excluding messagebox and toast dialogs) pressed by client C02 between 2026-11-01 and 2026-11-24 inclusive? List them, most first.",
+  "kind": "list",
+  "k": 5,
+  "sql": "SELECT JSONExtractString(properties,'action_name') b FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C02' AND event='Event' AND JSONExtractString(properties,'dialog_id') NOT IN ('messagebox','toast','menuCmb') AND b!='' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00' GROUP BY b ORDER BY count() DESC LIMIT 5"
+ },
+ {
+  "id": "q032",
+  "category": "top_screens_buttons",
+  "question": "Which dialog_id had the most PageView events in the whole project on 2026-11-24 (UTC)?",
+  "kind": "text",
+  "sql": "SELECT JSONExtractString(properties,'dialog_id') d FROM posthog.events WHERE team_id=1 AND event='PageView' AND timestamp >= '2026-11-24 00:00:00' AND timestamp < '2026-11-25 00:00:00' GROUP BY d ORDER BY count() DESC LIMIT 1"
+ },
+ {
+  "id": "q033",
+  "category": "top_screens_buttons",
+  "question": "How many times was the dialog LinkListReqv (Hedge Designation report) opened (PageView, action OPEN) by client C11 between 2026-11-01 and 2026-11-24 inclusive?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C11' AND event='PageView' AND JSONExtractString(properties,'action')='OPEN' AND JSONExtractString(properties,'dialog_id')='LinkListReqv' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q034",
+  "category": "top_screens_buttons",
+  "question": "How many distinct dialog_id values did client C54 use between 2026-11-16 and 2026-11-22 inclusive?",
+  "kind": "count",
+  "sql": "SELECT uniq(JSONExtractString(properties,'dialog_id')) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C54' AND timestamp >= '2026-11-16 00:00:00' AND timestamp < '2026-11-23 00:00:00'"
+ },
+ {
+  "id": "q035",
+  "category": "top_screens_buttons",
+  "question": "How many times did client C17 press Save (action_name exactly \"Save\") between 2026-11-01 and 2026-11-24 inclusive?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C17' AND event='Event' AND JSONExtractString(properties,'action_name')='Save' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q036",
+  "category": "exports",
+  "question": "How many times did client C08 press the \"Export\" button (exact label) between 2026-11-01 and 2026-11-24 inclusive?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND event='Event' AND JSONExtractString(properties,'action_name')='Export' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q037",
+  "category": "exports",
+  "question": "How many times did client C11 press the \"XLS Export\" button (exact label) between 2026-11-01 and 2026-11-24 inclusive?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C11' AND event='Event' AND JSONExtractString(properties,'action_name')='XLS Export' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q038",
+  "category": "exports",
+  "question": "How many times did client C17 press the \"XLSX Export\" button (exact label) between 2026-11-01 and 2026-11-24 inclusive?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C17' AND event='Event' AND JSONExtractString(properties,'action_name')='XLSX Export' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q039",
+  "category": "exports",
+  "question": "How many times did client C46 press the \"CSV Export\" button (exact label) between 2026-11-01 and 2026-11-24 inclusive?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C46' AND event='Event' AND JSONExtractString(properties,'action_name')='CSV Export' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q040",
+  "category": "exports",
+  "question": "How many exports of any kind (Export, XLS Export, XLSX Export, CSV Export) did client C02 do in the last 30 days?",
+  "kind": "count",
+  "window_days": 30,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C02' AND event='Event' AND JSONExtractString(properties,'action_name') IN ('Export','XLS Export','XLSX Export','CSV Export') AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q041",
+  "category": "exports",
+  "question": "Which export button label (Export, XLS Export, XLSX Export or CSV Export) was used most across all clients between 2026-11-16 and 2026-11-22 inclusive?",
+  "kind": "text",
+  "sql": "SELECT JSONExtractString(properties,'action_name') b FROM posthog.events WHERE team_id=1 AND event='Event' AND b IN ('Export','XLS Export','XLSX Export','CSV Export') AND timestamp >= '2026-11-16 00:00:00' AND timestamp < '2026-11-23 00:00:00' GROUP BY b ORDER BY count() DESC LIMIT 1"
+ },
+ {
+  "id": "q042",
+  "category": "exports",
+  "question": "How many exports (any of the four export buttons) were done from inside the LinkListReqv dialog by client C08 between 2026-11-01 and 2026-11-24 inclusive?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND event='Event' AND JSONExtractString(properties,'dialog_id')='LinkListReqv' AND JSONExtractString(properties,'action_name') IN ('Export','XLS Export','XLSX Export','CSV Export') AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q043",
+  "category": "exports",
+  "question": "How many distinct users of client C33 used CSV Export between 2026-11-01 and 2026-11-24 inclusive?",
+  "kind": "count",
+  "sql": "SELECT uniq(distinct_id) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C33' AND event='Event' AND JSONExtractString(properties,'action_name')='CSV Export' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q044",
+  "category": "errors_messages",
+  "question": "How many messagebox events did client C08 get between 2026-11-01 and 2026-11-24 inclusive?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND event='Event' AND JSONExtractString(properties,'dialog_id')='messagebox' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q045",
+  "category": "errors_messages",
+  "question": "How many toast notices did client C46 get on 2026-11-24 (UTC)?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C46' AND event='Event' AND JSONExtractString(properties,'dialog_id')='toast' AND timestamp >= '2026-11-24 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q046",
+  "category": "errors_messages",
+  "question": "How many times did users of client C17 see the message \"Error saving trade\" (in a messagebox or a toast) between 2026-11-01 and 2026-11-24 inclusive?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C17' AND event='Event' AND JSONExtractString(properties,'dialog_id') IN ('messagebox','toast') AND JSONExtractString(JSONExtractString(properties,'action_name'),1)='Error saving trade' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q047",
+  "category": "errors_messages",
+  "question": "What was the most frequent messagebox text for client C02 between 2026-11-16 and 2026-11-22 inclusive?",
+  "kind": "text",
+  "sql": "SELECT JSONExtractString(JSONExtractString(properties,'action_name'),1) m FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C02' AND event='Event' AND JSONExtractString(properties,'dialog_id')='messagebox' AND m!='' AND timestamp >= '2026-11-16 00:00:00' AND timestamp < '2026-11-23 00:00:00' GROUP BY m ORDER BY count() DESC LIMIT 1"
+ },
+ {
+  "id": "q048",
+  "category": "errors_messages",
+  "question": "How many \"Error saving trade\" messages (messagebox or toast) were shown across the whole project in the last 7 days?",
+  "kind": "count",
+  "window_days": 7,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND event='Event' AND JSONExtractString(properties,'dialog_id') IN ('messagebox','toast') AND JSONExtractString(JSONExtractString(properties,'action_name'),1)='Error saving trade' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q049",
+  "category": "errors_messages",
+  "question": "Which user of client C33 saw \"Error saving trade\" most often between 2026-11-01 and 2026-11-24 inclusive? Give the user code.",
+  "kind": "text",
+  "sql": "SELECT splitByChar('|',distinct_id)[4] u FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C33' AND event='Event' AND JSONExtractString(properties,'dialog_id') IN ('messagebox','toast') AND JSONExtractString(JSONExtractString(properties,'action_name'),1)='Error saving trade' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00' GROUP BY u ORDER BY count() DESC LIMIT 1"
+ },
+ {
+  "id": "q050",
+  "category": "errors_messages",
+  "question": "How many \"Report has been scheduled\" notices (toast only) did client C54 get between 2026-11-16 and 2026-11-22 inclusive?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C54' AND event='Event' AND JSONExtractString(properties,'dialog_id')='toast' AND JSONExtractString(JSONExtractString(properties,'action_name'),1)='Report has been scheduled' AND timestamp >= '2026-11-16 00:00:00' AND timestamp < '2026-11-23 00:00:00'"
+ },
+ {
+  "id": "q051",
+  "category": "errors_messages",
+  "question": "List the distinct message texts that appeared in messagebox dialogs for client C08 between 2026-11-01 and 2026-11-24 inclusive.",
+  "kind": "list",
+  "k": 4,
+  "sql": "SELECT DISTINCT JSONExtractString(JSONExtractString(properties,'action_name'),1) m FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND event='Event' AND JSONExtractString(properties,'dialog_id')='messagebox' AND m!='' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q052",
+  "category": "errors_messages",
+  "question": "How many messagebox events showed \"No entry selected\" for client C11 in the last 30 days?",
+  "kind": "count",
+  "window_days": 30,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C11' AND event='Event' AND JSONExtractString(properties,'dialog_id')='messagebox' AND JSONExtractString(JSONExtractString(properties,'action_name'),1)='No entry selected' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q053",
+  "category": "errors_messages",
+  "question": "What share (percent, one decimal) of client C08 Event events between 2026-11-01 and 2026-11-24 inclusive were messagebox or toast events?",
+  "kind": "number",
+  "tolerance": 0.051,
+  "sql": "SELECT round(100*countIf(JSONExtractString(properties,'dialog_id') IN ('messagebox','toast'))/count(),1) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND event='Event' AND timestamp >= '2026-11-01 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q054",
+  "category": "active_users",
+  "question": "How many distinct users did client C08 have on 2026-11-24 (UTC)?",
+  "kind": "count",
+  "sql": "SELECT uniq(distinct_id) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND timestamp >= '2026-11-24 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q055",
+  "category": "active_users",
+  "question": "Give the daily active users (distinct users) of the whole project for each day from 2026-11-16 to 2026-11-22 (UTC), as a comma-separated list of 7 numbers in date order.",
+  "kind": "numbers",
+  "sql": "SELECT uniq(distinct_id) FROM posthog.events WHERE team_id=1 AND timestamp >= '2026-11-16 00:00:00' AND timestamp < '2026-11-23 00:00:00' GROUP BY toDate(timestamp) ORDER BY toDate(timestamp)"
+ },
+ {
+  "id": "q056",
+  "category": "active_users",
+  "question": "How many distinct users did the whole project have between 2026-11-16 and 2026-11-22 inclusive (weekly active users)?",
+  "kind": "count",
+  "sql": "SELECT uniq(distinct_id) FROM posthog.events WHERE team_id=1 AND timestamp >= '2026-11-16 00:00:00' AND timestamp < '2026-11-23 00:00:00'"
+ },
+ {
+  "id": "q057",
+  "category": "active_users",
+  "question": "How many distinct users did client C46 have in the last 90 days?",
+  "kind": "count",
+  "window_days": 90,
+  "sql": "SELECT uniq(distinct_id) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C46' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q058",
+  "category": "active_users",
+  "question": "Did the number of distinct active users of client C17 go up, down or stay the same from the week 2026-11-09..2026-11-15 to the week 2026-11-16..2026-11-22? Answer up, down or same.",
+  "kind": "text",
+  "sql": "SELECT multiIf(b>a,'up',b<a,'down','same') FROM (SELECT uniqIf(distinct_id,timestamp >= '2026-11-09 00:00:00' AND timestamp < '2026-11-16 00:00:00') a, uniqIf(distinct_id,timestamp >= '2026-11-16 00:00:00' AND timestamp < '2026-11-23 00:00:00') b FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C17')"
+ },
+ {
+  "id": "q059",
+  "category": "active_users",
+  "question": "How many events per day on average did client C02 have over 2026-11-16..2026-11-22 (7 days)? Round to a whole number.",
+  "kind": "number",
+  "tolerance": 1,
+  "sql": "SELECT round(count()/7) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C02' AND timestamp >= '2026-11-16 00:00:00' AND timestamp < '2026-11-23 00:00:00'"
+ },
+ {
+  "id": "q060",
+  "category": "active_users",
+  "question": "Which weekday (Monday..Sunday) had the most events across the project between 2026-11-02 and 2026-11-22 inclusive?",
+  "kind": "text",
+  "sql": "SELECT dateName('weekday', toDate(timestamp)) w FROM posthog.events WHERE team_id=1 AND timestamp >= '2026-11-02 00:00:00' AND timestamp < '2026-11-23 00:00:00' GROUP BY w ORDER BY count() DESC LIMIT 1"
+ },
+ {
+  "id": "q061",
+  "category": "active_users",
+  "question": "How many distinct users did client C33 have in the last 365 days?",
+  "kind": "count",
+  "window_days": 365,
+  "sql": "SELECT uniq(distinct_id) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C33' AND timestamp >= {from} AND timestamp < {to}"
+ },
+ {
+  "id": "q062",
+  "category": "sessions",
+  "question": "Find a session of client C08 in the last 7 days in which the user opened the Hedge Designation report (dialog LinkListReqv). Give its session id.",
+  "kind": "answer_sql",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND JSONExtractString(properties,'$session_id')={answer} AND JSONExtractString(properties,'dialog_id')='LinkListReqv'",
+  "tool": "find_sessions"
+ },
+ {
+  "id": "q063",
+  "category": "sessions",
+  "question": "Find a session of client C17 in the last 30 days where someone pressed \"CSV Export\". Give the session id.",
+  "kind": "answer_sql",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C17' AND JSONExtractString(properties,'$session_id')={answer} AND JSONExtractString(properties,'action_name')='CSV Export'",
+  "tool": "find_sessions"
+ },
+ {
+  "id": "q064",
+  "category": "sessions",
+  "question": "Find the most recent session of user U1688 and give its session id.",
+  "kind": "answer_sql",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[4]='U1688' AND JSONExtractString(properties,'$session_id')={answer}",
+  "tool": "find_sessions"
+ },
+ {
+  "id": "q065",
+  "category": "sessions",
+  "question": "How many sessions did user U1757 have on 2026-11-24 (UTC)?",
+  "kind": "count",
+  "sql": "SELECT uniq(JSONExtractString(properties,'$session_id')) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[4]='U1757' AND timestamp >= '2026-11-24 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q066",
+  "category": "sessions",
+  "question": "Find a recent session of client C46 where the message \"Error saving trade\" appeared, and give me a replay link for it. Answer with the session id.",
+  "kind": "answer_sql",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C46' AND JSONExtractString(properties,'$session_id')={answer} AND JSONExtractString(JSONExtractString(properties,'action_name'),1)='Error saving trade'",
+  "tool": "find_sessions"
+ },
+ {
+  "id": "q067",
+  "category": "sessions",
+  "question": "Get the replay link for session b0b07a50-a614-43d1-cb4d-d52df885cb71. Is there a recording? Answer yes or no.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "get_replay_link",
+   "answer": "^no\\b",
+   "any_text": "recording|replay"
+  },
+  "note": "simulated data has no recordings"
+ },
+ {
+  "id": "q068",
+  "category": "sessions",
+  "question": "Find sessions of client C08 with screen LinkListReqv in the last 1 day that have a recording I can watch. How many are there?",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "find_sessions",
+   "answer": "^(0|none|no)\\b"
+  },
+  "note": "no recordings in this project"
+ },
+ {
+  "id": "q069",
+  "category": "sessions",
+  "question": "How many distinct sessions did client C02 have on 2026-11-24 (UTC)?",
+  "kind": "count",
+  "sql": "SELECT uniq(JSONExtractString(properties,'$session_id')) FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C02' AND timestamp >= '2026-11-24 00:00:00' AND timestamp < '2026-11-25 00:00:00'"
+ },
+ {
+  "id": "q070",
+  "category": "sessions",
+  "question": "Give me the Lens clip page URL (not the PostHog replay) for the most recent session of user U46.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "find_sessions",
+   "answer": "https?://\\S+"
+  }
+ },
+ {
+  "id": "q071",
+  "category": "sessions",
+  "question": "In the last 7 days, find a session of client C33 where the user typed or touched the field \"Trade Date\". Give the session id, or say none if there is no such session.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "find_sessions",
+   "answer": "^(none|no|n/?a|0)\\b|not found|no session"
+  },
+  "note": "the simulated data has no \"Trade Date\" field (action is CHANGE/CLICK): the right answer is none"
+ },
+ {
+  "id": "q072",
+  "category": "surveys",
+  "question": "How many surveys exist in total (any status) according to list_surveys?",
+  "kind": "count",
+  "expected": 22,
+  "note": "22 surveys at run time; stable unless a new survey is created"
+ },
+ {
+  "id": "q073",
+  "category": "surveys",
+  "question": "How many times was the survey \"Hedge export mwv7w5ry\" shown (all time)?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND event='survey shown' AND JSONExtractString(properties,'$survey_id')='01a20f7f-a88f-0000-e846-86bf537bde32'",
+  "note": "list_surveys or survey_results both report it"
+ },
+ {
+  "id": "q074",
+  "category": "surveys",
+  "question": "How many responses (answers) has the survey \"Hedge export mwvlqpv2\" received?",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND event='survey sent' AND JSONExtractString(properties,'$survey_id')='01a210e2-972b-0000-d447-ecd431f4e366'"
+ },
+ {
+  "id": "q075",
+  "category": "surveys",
+  "question": "Design (do not save) a survey that shows after a user opens LinkListReqv and then presses Export in that dialog, for client C08, with one 1-5 rating question \"How easy was the export?\". Did Lens report any errors (not warnings)? Answer yes or no.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "design_survey",
+   "answer": "^no\\b"
+  }
+ },
+ {
+  "id": "q076",
+  "category": "surveys",
+  "question": "Design (do not save) a survey shown after a user opens the dialog DlgHedgeDesigListReport and then presses Export there, one rating question. What dialog id does Lens suggest instead? Answer with the id.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "design_survey",
+   "answer": "LinkListReqv"
+  }
+ },
+ {
+  "id": "q077",
+  "category": "surveys",
+  "question": "Design (do not save) a survey shown after the user presses the button \"Exprot\" in LinkListReqv, one thumbs question. Does Lens warn that the button matched nothing? Answer yes or no.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "design_survey",
+   "answer": "^yes\\b"
+  }
+ },
+ {
+  "id": "q078",
+  "category": "surveys",
+  "question": "Design (do not save) a survey for client \"ZZZ9\" (no such client) shown after opening LinkListReqv, one yes/no question. Does Lens warn about the audience? Answer yes or no.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "design_survey",
+   "answer": "^yes\\b"
+  }
+ },
+ {
+  "id": "q079",
+  "category": "surveys",
+  "question": "Design (do not save) a survey shown after opening LinkListReqv then pressing Export, for all clients, over the last 365 days of history. What window does the reach estimate use? Answer with the number of days.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "design_survey",
+   "answer": "\\b90\\b"
+  },
+  "note": "design_survey caps reach to 90 days"
+ },
+ {
+  "id": "q080",
+  "category": "surveys",
+  "question": "Which survey has been shown the most times? Give its name.",
+  "kind": "text",
+  "expect_text_any": [
+   "Hedge export mwv7w5ry",
+   "Hedge export mwvlqpv2"
+  ],
+  "note": "tie: both 60"
+ },
+ {
+  "id": "q081",
+  "category": "surveys",
+  "question": "Is the survey \"Hedge export mwv7w5ry\" currently running or stopped? Answer running or stopped.",
+  "kind": "text",
+  "expect_text": "stopped"
+ },
+ {
+  "id": "q082",
+  "category": "pinned",
+  "question": "Pin a bar chart titled \"Regression Q-pin-1\" with x [\"Mon\",\"Tue\",\"Wed\"] and one series \"events\" with values [3,5,8]. Then unpin it again. Did both succeed? Answer yes or no.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "pin_graph",
+   "tool2": "unpin_graph",
+   "answer": "^yes\\b",
+   "no_tool_error": true
+  }
+ },
+ {
+  "id": "q083",
+  "category": "pinned",
+  "question": "Pin a table titled \"Regression Q-pin-2\" with columns client and events and rows [C08, 100] and [C02, 90]. Then list pinned graphs and tell me whether it is in the list (yes or no). Afterwards unpin it.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "pin_graph",
+   "tool2": "list_pinned",
+   "answer": "^yes\\b"
+  }
+ },
+ {
+  "id": "q084",
+  "category": "pinned",
+  "question": "Pin a line chart titled \"Regression Q-pin-3\" with x [\"a\",\"b\",\"c\"] and series \"s\" with values [1,2] (exactly as given, do not fix it). Did Lens accept it? Answer yes or no.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "pin_graph",
+   "answer": "^no\\b",
+   "any_text": "length|match|x"
+  }
+ },
+ {
+  "id": "q085",
+  "category": "pinned",
+  "question": "Unpin the graph with id 6f1e2d3c-4b5a-4c7d-8e9f-0a1b2c3d4e5f. Did it work? Answer yes or no.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "unpin_graph",
+   "answer": "^no\\b"
+  }
+ },
+ {
+  "id": "q086",
+  "category": "pinned",
+  "question": "Make a bar chart of client C08 events per day for 2026-11-16..2026-11-22 (UTC), pin it titled \"Regression Q-pin-5\", then unpin it. Give the value for 2026-11-20.",
+  "kind": "count",
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND timestamp >= '2026-11-20 00:00:00' AND timestamp < '2026-11-21 00:00:00'",
+  "tool": "pin_graph"
+ },
+ {
+  "id": "q087",
+  "category": "pinned",
+  "question": "Pin a line chart titled \"Regression Q-pin-6\" with 21 series (s1..s21), x [\"a\",\"b\"], each series values [1,2]. Did Lens accept it? Answer yes or no.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "pin_graph",
+   "answer": "^no\\b"
+  },
+  "note": "at most 20 series"
+ },
+ {
+  "id": "q088",
+  "category": "edge_cases",
+  "question": "How many events did client ZZZ9 have in the last 30 days?",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "resolve_client",
+   "answer": "^(0|none|n/?a|unknown|no)\\b|not found|no such|does not exist|unknown"
+  }
+ },
+ {
+  "id": "q089",
+  "category": "edge_cases",
+  "question": "How many events did client C08 have in the last 2 years?",
+  "kind": "count",
+  "window_days": 730,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND timestamp >= {from} AND timestamp < {to}",
+  "note": "data starts 2025-11-24: the answer is all data up to now"
+ },
+ {
+  "id": "q090",
+  "category": "edge_cases",
+  "question": "Find sessions of client C08 with screen LinkListReqv between 2024-01-01 and 2026-11-25. How many days of history can find_sessions search at most? Answer with a number.",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "find_sessions",
+   "answer": "\\b(365|366)\\b"
+  }
+ },
+ {
+  "id": "q091",
+  "category": "edge_cases",
+  "question": "How many events did client C08 have on 2025-01-01 (UTC)?",
+  "kind": "count",
+  "expected": 0
+ },
+ {
+  "id": "q092",
+  "category": "edge_cases",
+  "question": "How many events did client C0 have in the last 7 days?",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "resolve_client",
+   "any_text": "C0\\d|ambig|which|several|multiple"
+  },
+  "note": "ambiguous: C00..C09"
+ },
+ {
+  "id": "q093",
+  "category": "edge_cases",
+  "question": "How many events did client \"SME\" have in the last 7 days? (I may have mistyped the client.)",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "resolve_client",
+   "any_text": "SEM"
+  }
+ },
+ {
+  "id": "q094",
+  "category": "edge_cases",
+  "question": "Run this exact HogQL through PostHog and tell me the result: SELECT count( FROM events",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "posthog_exec",
+   "answer": "error|syntax|invalid|fail",
+   "any_text": "error|syntax|invalid"
+  }
+ },
+ {
+  "id": "q095",
+  "category": "edge_cases",
+  "question": "List every distinct_id that had an event in the last 30 days, all of them, with one PostHog SQL query (no aggregation). How many rows did PostHog return?",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "posthog_exec",
+   "answer": "\\b500\\b"
+  },
+  "note": "execute-sql caps at 500 rows; ground truth 2,392 distinct ids"
+ },
+ {
+  "id": "q096",
+  "category": "edge_cases",
+  "question": "Use the PostHog tool \"query-run\" (call it via posthog_exec) to count events in the last day. What happened?",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "posthog_exec",
+   "any_text": "query-run"
+  },
+  "note": "query-run was removed by PostHog: the call must say so, not \"unavailable\""
+ },
+ {
+  "id": "q097",
+  "category": "edge_cases",
+  "question": "How many events did client C08 have between 2026-12-01 and 2026-12-31?",
+  "kind": "behaviour",
+  "expect": {
+   "answer": "^(0|none|no)\\b|future|not yet|no data"
+  }
+ },
+ {
+  "id": "q098",
+  "category": "edge_cases",
+  "question": "How many events did the client \"Brightwater Logistics\" have in the last 90 days?",
+  "kind": "behaviour",
+  "expect": {
+   "tool": "resolve_client",
+   "answer": "^(0|none|n/?a|unknown|no)\\b|not found|no such|does not exist|unknown|no client"
+  }
+ },
+ {
+  "id": "q099",
+  "category": "edge_cases",
+  "question": "How many events did user U999999 have in the last 7 days?",
+  "kind": "behaviour",
+  "expect": {
+   "answer": "^(0|none|n/?a|unknown|no)\\b|not found|no such|does not exist|unknown"
+  }
+ },
+ {
+  "id": "q100",
+  "category": "edge_cases",
+  "question": "Count C08 events in the last 7 days, but use the posthog_exec command \"tools\" first to see which PostHog tools exist. How many events?",
+  "kind": "count",
+  "window_days": 7,
+  "sql": "SELECT count() FROM posthog.events WHERE team_id=1 AND splitByChar('|',distinct_id)[3]='C08' AND timestamp >= {from} AND timestamp < {to}"
+ }
+]
