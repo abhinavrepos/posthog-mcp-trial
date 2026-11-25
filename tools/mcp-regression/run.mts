@@ -111,7 +111,7 @@ async function grade(q: Question, r: Awaited<ReturnType<typeof ask>>, t0: number
         expected = want.length === 1 ? want[0] : want
         pass = want.some((w) => w !== '' && (norm(ans) === norm(w) || new RegExp(`(^|[^a-z0-9])${norm(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^a-z0-9])`).test(norm(ans))))
     } else if (q.kind === 'list') {
-        const want = (await ch(q.sql!)).map((row) => norm(row[0])), got = ans.split(/[,;\n]|\s\|\s/).map((s) => norm(s.replace(/^\s*\d+[.)]\s*/, '').replace(/\s*\(.*\)$/, ''))).filter(Boolean)
+        const want = (await ch(q.sql!)).map((row) => norm(row[0])), got = ans.replace(/\([^)]*\)/g, '').replace(/:\s*[\d,.]+/g, '').split(/[,;\n]|\s\|\s/).map((s) => norm(s.replace(/^\s*\d+[.)]\s*/, '').replace(/\s*\(.*\)$/, ''))).filter(Boolean)
         const k = q.k || want.length, hit = want.filter((w) => got.includes(w)).length
         expected = want; pass = hit / k >= 0.6; detail = `overlap ${hit}/${k}`
     } else if (q.kind === 'answer_sql') {

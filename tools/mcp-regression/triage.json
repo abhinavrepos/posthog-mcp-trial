@@ -85,5 +85,32 @@
    "cause": "Harness required survey_results, but list_surveys reports shown counts too; the answer (60) was right. Regraded (passes).",
    "fix": "No tool requirement."
   }
+ },
+ "after1": {
+  "q066": {
+   "taxonomy": "timeout",
+   "cause": "recorded_only:true found nothing (this project has no recordings); Sonnet then searched 365 days of C46 for the message while PostHog was saturated (load average 60 on 16 cores, ClickHouse queries at their 60 s limit) and hit the 6-minute limit. Passes on an idle PostHog (retry1, 59 s).",
+   "fix": "None in Lens; the after run had 6 Sonnet sessions plus another session's headless Chrome on one machine."
+  },
+  "q076": {
+   "taxonomy": "tool bug",
+   "cause": "Under the same load the 30-day dialog check timed out; the single catch-all warning hid every check, so no LinkListReqv suggestion. Passes on an idle PostHog (retry1).",
+   "fix": "ccdad99: each check is skipped on its own (\"Check skipped: \u2026\"), the others still report; a failed reach estimate is a warning, not a failed job."
+  },
+  "q077": {
+   "taxonomy": "tool bug",
+   "cause": "First attempt: the reach estimate timed out and failed the whole design_survey job; second (estimate: false): the button check was skipped, so Sonnet answered no. Passes on an idle PostHog (retry1).",
+   "fix": "ccdad99 (as q076)."
+  },
+  "q089": {
+   "taxonomy": "timeout",
+   "cause": "PostHog answered with errors for a stretch (its own ClickHouse 60 s limit; health check 12-20 s): every call returned \"PostHog is unavailable or busy\". Passes on an idle PostHog (retry1).",
+   "fix": "None in Lens (capacity of the test machine)."
+  },
+  "q091": {
+   "taxonomy": "timeout",
+   "cause": "Same stretch as q089. Passes on an idle PostHog (retry1).",
+   "fix": "None in Lens."
+  }
  }
 }
