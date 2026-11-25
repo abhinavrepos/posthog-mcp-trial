@@ -214,12 +214,13 @@ export async function findSessions(q: SessionQuery) {
             return name && !dialogIds.has(name) && !/^(?:Dlg\w*|toast|messagebox|UNKNOWN)$/i.test(name) ? name : ''
         }
         const screens = [...new Set(ev.filter(e=>!isMessage(e)).map(e=>humanName(e.name) || humanName(e.tab)).filter(Boolean))]
+        const dense = ev.length >= 50
         const session = {session_id:sid, user:String(ev[0]?.user || ''), distinct_id:ev[0]?.distinct_id,
             session_start:ev[0]?.session_start ?? ev[0]?.ts ?? null, session_end:ev[0]?.session_end ?? ev.at(-1)?.ts ?? null,
             recording_start:span?.start ?? null, recording_end:span?.end ?? null,
             recording_duration_s:span ? (Date.parse(span.end)-Date.parse(span.start))/1000 : null,
-            screens:screens.slice(0,15), screens_total:screens.length,
-            matched_actions:(q.screen && q.what ? [...matches].sort((a,b)=>Number(onScreen(b.e))-Number(onScreen(a.e)) || a.index-b.index).slice(0,10).sort((a,b)=>a.index-b.index) : matches.slice(0,10)).map(({e,index})=>{
+            screens:screens.slice(0,dense ? 3 : 15), screens_total:screens.length,
+            matched_actions:(q.screen && q.what ? [...matches].sort((a,b)=>Number(onScreen(b.e))-Number(onScreen(a.e)) || a.index-b.index).slice(0,dense ? 1 : 10).sort((a,b)=>a.index-b.index) : matches.slice(0,dense ? 1 : 10)).map(({e,index})=>{
                 let next: Record<string, unknown> | undefined
                 if (!isMessage(e)) for (const n of ev.slice(index+1)) {
                     const afterMs = Date.parse(String(n.ts))-Date.parse(String(e.ts))
@@ -231,10 +232,10 @@ export async function findSessions(q: SessionQuery) {
                     ...(q.screen ? {on_target_screen:onScreen(e)} : {}),
                     outcome:next ? {at:next.ts,text:next.message,is_error:isError(next),screen:screenOf(next),dialog_id:next.dialog ?? '',
                         after_s:Number(((Date.parse(String(next.ts))-Date.parse(String(e.ts)))/1000).toFixed(3)),basis:'same screen, before any other action'} : null,
-                    before:ev.slice(Math.max(0,index-2),index).map(neighbour),
-                    after:ev.slice(index+1,index+4).map(neighbour)}
+                    before:dense ? [] : ev.slice(Math.max(0,index-2),index).map(neighbour),
+                    after:dense ? [] : ev.slice(index+1,index+4).map(neighbour)}
             }),
-            matched_actions_total:matches.length, matched_actions_truncated:matches.length>10,
+            matched_actions_total:matches.length, matched_actions_truncated:matches.length>(dense ? 1 : 10),
             ...(q.screen && q.what ? {matches_on_target_screen:matches.filter(({e})=>onScreen(e)).length,matches_elsewhere:matches.filter(({e})=>!onScreen(e)).length} : {}),
             events_in_session:Number(ev[0]?.events_in_session ?? ev.length), error_messages_in_session:Number(ev[0]?.error_messages_in_session ?? ev.filter(e=>isMessage(e) && isError(e)).length),
             recording:span ? true : recordingCheckFailed ? 'unknown' : false, offset_s:offset,

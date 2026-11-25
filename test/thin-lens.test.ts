@@ -357,6 +357,23 @@ test('find_sessions bounds actions, screens and serialized pages without skippin
     assert.equal(s.recording_start,null);assert.equal(s.recording_end,null);assert.equal(s.recording_duration_s,null)
 })
 
+test('dense sessions retain the requested page limit with compact action and screen summaries',async t=>{
+    const hits=Array.from({length:11},(_,i)=>({sid:`dense-${10-i}`,last:`2026-11-18T09:00:${String(30-i).padStart(2,'0')}Z`}))
+    t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{
+        const q=JSON.parse(String(init.body)).query
+        if(q.query.includes('raw_session'))return response([])
+        if(q.query.includes('GROUP BY sid'))return response(hits)
+        return response(Array.from({length:137},(_,i)=>({...events[0],ts:new Date(Date.parse(events[0].ts)+i*1000).toISOString(),name:`Screen ${i%20}`,message:'Export'})))
+    })
+    const result=await findSessions({clientId:'SEM',limit:10,...window})
+    assert.equal(result.sessions.length,10)
+    assert.equal(result.truncated_by_size,undefined)
+    assert.equal(result.next_cursor,`${hits[9].last}|${hits[9].sid}`)
+    assert.ok(result.sessions.every(s=>s.screens.length<=5 && s.matched_actions.length<=2 && s.matched_actions_truncated))
+    const {jsonResult}=await import('../src/mcp/result.ts')
+    assert.ok(JSON.stringify(jsonResult('Sessions',result)).length<=20000)
+})
+
 test('data_guide exposes configured version, identity, coverage cache and SQL; resolve_client scopes counts through MCP',async t=>{
     clearClientCache()
     const {clearPosthogCache}=await import('../src/core/posthog.ts');clearPosthogCache()

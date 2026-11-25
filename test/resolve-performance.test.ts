@@ -7,7 +7,7 @@ const dir=mkdtempSync(join(tmpdir(),'resolve-performance-'))
 after(()=>rmSync(dir,{recursive:true,force:true}))
 Object.assign(process.env,{TRIAGE_DB:join(dir,'main.db'),POSTHOG_HOST:'http://fake-posthog',POSTHOG_PROJECT_ID:'7',POSTHOG_PERSONAL_API_KEY:'test-key',CLIENT_FROM_DISTINCT_ID:'3',PROP_CLIENT_NAME:'client_name',PROP_PERSON_EMAIL:'contact_email'})
 const {config}=await import('../src/core/config.ts')
-const {knownClients,resolveClient,clearClientCache,warmClientNames}=await import('../src/core/resolve.ts')
+const {knownClients,resolveClient,clearClientCache,warmClientNames,warmClientResolver}=await import('../src/core/resolve.ts')
 const response=(rows:Record<string,unknown>[])=>{
     const columns=Object.keys(rows[0] || {})
     return Response.json({columns,results:rows.map(r=>columns.map(k=>r[k]))})
@@ -98,5 +98,34 @@ test('resolve_client is job backed and a slow resolver returns a pollable handle
         assert.ok(performance.now()-start<500);assert.match(JSON.stringify(job.result),/job_id/)
         finish({matches:[{id:'RIB'}],coverage:{}});await new Promise(resolve=>setImmediate(resolve))
         assert.deepEqual((await dispatch.poll(job.id)).result,{matches:[{id:'RIB'}],coverage:{}})
+    } finally {runner.close();db.close()}
+})
+test('startup resolver warm-up starts roster reads without waiting and tolerates an outage',async t=>{
+    clearClientCache();t.after(clearClientCache)
+    const old=config.properties.clientName;config.properties.clientName='';t.after(()=>{config.properties.clientName=old})
+    let release!:(value:Response)=>void, calls=0
+    const pending=new Promise<Response>(resolve=>{release=resolve})
+    t.mock.method(globalThis,'fetch',async()=>{calls++;return pending})
+    const start=performance.now();warmClientResolver()
+    assert.ok(performance.now()-start<100)
+    await new Promise(resolve=>setImmediate(resolve));assert.ok(calls>=2)
+    release(new Response('unavailable',{status:503}))
+    await new Promise(resolve=>setImmediate(resolve))
+})
+test('design_survey uses the same pollable job budget as long reads',async()=>{
+    const {jobBacked,createJobDispatch}=await import('../src/mcp/jobtools.ts')
+    const {JobRunner}=await import('../src/core/jobs.ts')
+    const {DatabaseSync}=await import('node:sqlite')
+    assert.equal(jobBacked('design_survey',true),true)
+    const db=new DatabaseSync(':memory:'),runner=new JobRunner(db)
+    try {
+        const dispatch=createJobDispatch(undefined,{runner,budgetMs:5})
+        let finish!:(value:unknown)=>void
+        const pending=new Promise(resolve=>{finish=resolve})
+        const job=await dispatch.execute('design_survey',{days:365},undefined,undefined,async()=>pending)
+        assert.match(JSON.stringify(job.result),/job_id/)
+        finish({reach:{days:90,note:'Reach estimate capped at 90 days.'}})
+        await new Promise(resolve=>setImmediate(resolve))
+        assert.equal(((await dispatch.poll(job.id)).result as {reach:{days:number}}).reach.days,90)
     } finally {runner.close();db.close()}
 })

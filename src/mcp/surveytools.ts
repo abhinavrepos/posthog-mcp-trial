@@ -145,7 +145,10 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             const c = compileSurvey(spec as SurveySpec, { clientIds: ids })
             const errors = c.problems.filter((p) => p.level === 'error')
             if (!errors.length) c.problems.push(...await surveyEvidence(c.chain))
-            const reach = estimate && !errors.length ? await estimateReach(c.chain,days) : undefined
+            // A year of events makes the reach scan expensive. The estimate describes the
+            // recent audience and explicitly reports the window actually queried.
+            const reachDays = Math.min(days,90)
+            const reach = estimate && !errors.length ? await estimateReach(c.chain,reachDays) : undefined
             const conflicts = conflictsFor(c.chain, {}, await listSurveys())
             const q = queueAlert(c.chain, conflicts)
             return json(`${q.level === 'clear' ? '' : q.alert + '\n\n'}${errors.length || unclear.length ? 'This survey cannot be saved yet:' : 'The survey checks out. Show the person this plan (lead with any ⚠ alert above), then save_survey.'}`, {
@@ -156,7 +159,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
                 shows: `${spec.show === 'every_time' ? 'every time' : 'once per user'}, as soon as the last step happens${spec.wait_for_page === false ? '' : ' and the page has loaded'}`,
                 problems: c.problems,
                 surveys_per_user: { ...queueAlert(c.chain, conflicts), already_in: conflicts.map((x) => x.text) },
-                reach: {days,result:reach},
+                reach: {days,result:reach,...(days>reachDays ? {note:`Reach estimate capped at ${reachDays} days (requested ${days} days).`} : {})},
             })
         }
     )

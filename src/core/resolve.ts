@@ -41,6 +41,17 @@ export function warmClientNames(): void {
         namesTimer.unref()
     })
 }
+/** Start the first day's roster and its enrichment reads without delaying MCP connect.
+ * Each read owns its normal cache and catches outages, so calls can retry later. */
+export function warmClientResolver(): void {
+    if (!config.posthog.projectId || !config.posthog.personalApiKey) return
+    warmClientNames()
+    void clientEmails().catch(()=>{})
+    void clientNames().catch(()=>{})
+    const today = new Date().toISOString().slice(0,10)
+    const from = new Date(`${today}T00:00:00.000Z`), to = new Date(+from + 86400000)
+    void knownClients(from,to).catch(()=>{})
+}
 const readyNames = () => names && Date.now()-names.at < HOUR ? names.value : undefined
 async function clientNames(): Promise<Roster> {
     if (!config.properties.clientName) return new Map()
