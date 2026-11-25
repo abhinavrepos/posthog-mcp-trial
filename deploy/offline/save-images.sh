@@ -64,11 +64,16 @@ ok "${#REFS[@]} images"
 if [ -n "${SINCE:-}" ]; then
     SINCE="${SINCE##*:}"
     [[ "$SINCE" =~ ^[0-9a-f]{12}-[0-9a-f]{8}$ ]] || die "SINCE: \"$SINCE\" is not a kit tag."
-    docker pull -q "$REGISTRY/posthog/kit:$SINCE" >/dev/null || die "Cannot pull the kit $SINCE."
+    # The machine's kit: from the registry, or loaded here from the machine (docker save
+    # lens-offline/posthog/kit:<tag> there, docker load here), which needs no AWS.
+    SINCE_KIT="lens-offline/posthog/kit:$SINCE"
+    docker image inspect "$SINCE_KIT" >/dev/null 2>&1 || { SINCE_KIT="$REGISTRY/posthog/kit:$SINCE"; docker pull -q "$SINCE_KIT" >/dev/null || die "Cannot find the kit $SINCE: load it from the machine (there: sudo docker save lens-offline/posthog/kit:$SINCE -o kit-$SINCE.tar; here: docker load -i kit-$SINCE.tar)."; }
     mkdir "$WORK/since"
-    docker run --rm --entrypoint tar "$REGISTRY/posthog/kit:$SINCE" -C /kit/repo/deploy/offline -cf - ecr.env images.lock | tar -xf - -C "$WORK/since"
-    have="$( { awk '!/^#/ && NF == 2 {print $2}' "$WORK/since/images.lock"; grep -E '^ECR_[A-Z_]+=' "$WORK/since/ecr.env" | cut -d= -f2-; } | sort -u)"
-    mapfile -t REFS < <(printf '%s\n' "${REFS[@]}" | grep -vxF -f <(echo "$have") || true)
+    docker run --rm --entrypoint tar "$SINCE_KIT" -C /kit/repo/deploy/offline -cf - ecr.env images.lock | tar -xf - -C "$WORK/since"
+    # Compared by the name on the machine (lens-offline/...), so a kit built against another registry
+    # (ECR then, a local one now) still matches: tags come from the content.
+    have="$( { awk '!/^#/ && NF == 2 {print $2}' "$WORK/since/images.lock"; grep -E '^ECR_[A-Z_]+=' "$WORK/since/ecr.env" | cut -d= -f2-; } | sort -u | while read -r r; do local_ref "$r"; done)"
+    mapfile -t REFS < <(for r in "${REFS[@]}"; do grep -qxF "$(local_ref "$r")" <<<"$have" || echo "$r"; done)
     ok "${#REFS[@]} of them are new since kit $SINCE (the machine has the others)"
 fi
 
@@ -76,8 +81,8 @@ say "Pulling and naming them for the machine (lens-offline/...)"
 NAMES=("lens-offline/posthog/kit:$TAG")
 same_posthog() {  # the new kit pins the same PostHog (app image, pinned services) as kit $SINCE
     local a b
-    a="$(grep -E '^ECR_(APP|STONE)=' "$WORK/ecr.env"; docker run --rm --entrypoint cat "$KIT" /kit/repo/deploy/migrate/versions/docker-compose.pinned.yml | sha256sum)"
-    b="$(grep -E '^ECR_(APP|STONE)=' "$WORK/since/ecr.env"; docker run --rm --entrypoint cat "$REGISTRY/posthog/kit:$SINCE" /kit/repo/deploy/migrate/versions/docker-compose.pinned.yml | sha256sum)"
+    a="$(grep -E '^ECR_(APP|STONE)=' "$WORK/ecr.env" | while IFS== read -r k v; do echo "$k=$(local_ref "$v")"; done; docker run --rm --entrypoint cat "$KIT" /kit/repo/deploy/migrate/versions/docker-compose.pinned.yml | sha256sum)"
+    b="$(grep -E '^ECR_(APP|STONE)=' "$WORK/since/ecr.env" | while IFS== read -r k v; do echo "$k=$(local_ref "$v")"; done; docker run --rm --entrypoint cat "$SINCE_KIT" /kit/repo/deploy/migrate/versions/docker-compose.pinned.yml | sha256sum)"
     [ "$a" = "$b" ]
 }
 if [ -n "${SINCE:-}" ] && same_posthog; then
