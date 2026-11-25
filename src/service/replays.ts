@@ -842,7 +842,7 @@ const ICON: Record<string, string> = {
 }
 const icon = (name: string) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${ICON[name] || ''}</svg>`
 /** The product mark: a lens (two rings) on the accent square, drawn to sit on the text's centre line. */
-export const LOGO = `<svg class="mark" viewBox="0 0 28 28" aria-hidden="true" focusable="false"><rect width="28" height="28" rx="7" fill="var(--accent)"/><circle cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="2.4"/></svg>`
+export const LOGO = `<svg class="mark" viewBox="0 0 28 28" aria-hidden="true" focusable="false"><rect width="28" height="28" rx="7" fill="var(--accent)"/><circle class="wave" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="1.4"/><circle class="wave w2" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="1.4"/><circle class="ring" cx="14" cy="14" r="6" fill="none" stroke="var(--accent-ink)" stroke-width="2.4"/><circle class="dot" cx="14" cy="14" r="1.9" fill="var(--accent-ink)"/></svg>`
 
 /** The app shell: a sidebar (brand, sections, account) on wide screens, a top bar on narrow ones. */
 export function headerHtml(v: Viewer | undefined, section: Section): string {
