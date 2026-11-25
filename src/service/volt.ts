@@ -20,7 +20,7 @@ body{font-family:var(--font-sans);font-size:15px;line-height:1.6;background:var(
 body :is(code,pre,.v-nav-group,.kpi .l,th){font-family:var(--font-mono)}
 header.shell{background:var(--bg)}
 header.shell .brand{padding-bottom:12px}header.shell .brand .word{font-weight:600;letter-spacing:-.02em}
-header.shell .brand .mark rect{fill:#e5484d;stroke:none}header.shell .brand .mark circle{stroke:#fff}header.shell .brand .mark .dot{fill:#fff;stroke:none}.mark .wave,.mark .dot{transform-box:view-box;transform-origin:14px 14px}.mark .wave{opacity:0;animation:sig-wave 5.6s cubic-bezier(.22,.61,.36,1) infinite}.mark .wave.w2{animation-delay:.45s;stroke-width:1}.mark .dot{animation:sig-dot 5.6s ease-in-out infinite}@keyframes sig-wave{0%{transform:scale(1);opacity:0}4%{opacity:.75}38%,100%{transform:scale(2.05);opacity:0}}@keyframes sig-dot{0%,100%{transform:scale(1);opacity:.85}5%{transform:scale(1.45);opacity:1}22%{transform:scale(1);opacity:.85}}.brand:hover .mark .wave,.brand:focus-visible .mark .wave,.brand:hover .mark .dot,.brand:focus-visible .mark .dot{animation-duration:1.8s}@media (prefers-reduced-motion:reduce){.mark .wave{animation:none;opacity:0}.mark .dot{animation:none}}
+header .brand .mark rect{fill:#e5484d;stroke:none}header .brand .mark circle{stroke:#fff}header .brand .mark .dot{fill:#fff;stroke:none}.mark .wave,.mark .dot{transform-box:view-box;transform-origin:14px 14px}.mark .wave{opacity:0;animation:sig-wave 5.6s cubic-bezier(.22,.61,.36,1) infinite}.mark .wave.w2{animation-delay:.45s;stroke-width:1}.mark .dot{animation:sig-dot 5.6s ease-in-out infinite}@keyframes sig-wave{0%{transform:scale(1);opacity:0}4%{opacity:.75}38%,100%{transform:scale(2.05);opacity:0}}@keyframes sig-dot{0%,100%{transform:scale(1);opacity:.85}5%{transform:scale(1.45);opacity:1}22%{transform:scale(1);opacity:.85}}.brand:hover .mark .wave,.brand:focus-visible .mark .wave,.brand:hover .mark .dot,.brand:focus-visible .mark .dot{animation-duration:1.8s}@media (prefers-reduced-motion:reduce){.mark .wave{animation:none;opacity:0}.mark .dot{animation:none}}
 header.shell nav{gap:0}header.shell .v-nav-group{color:var(--ink-muted);font:500 11px/16px var(--font-mono);text-transform:uppercase;letter-spacing:.06em;padding:20px 10px 6px}header.shell .v-nav-group:first-child{padding-top:8px}
 header.shell nav a{border-radius:8px;color:var(--ink-muted);font-family:var(--font-sans);font-size:14px;font-weight:500;text-transform:none;letter-spacing:normal}header.shell nav a[aria-current=page]{color:var(--ink);background:var(--surface-2);box-shadow:none}header.shell nav a:hover{background:var(--surface-2);color:var(--ink)}header.shell nav a[aria-current=page] .ico{color:var(--ink)}
 header.shell .acct>summary{border-radius:8px}.avatar{background:var(--volt);color:var(--ink);font-weight:600}.acct-menu{background:var(--surface);border-color:var(--border)}
@@ -69,13 +69,35 @@ body main .banner.ok .big{background:var(--success-ink)!important}body main .ban
 /* Final polish: page header actions, Surveys status filter, Admin selects and tabs, System banner mark */
 body main .page-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
 body main .page-head>select{width:auto;max-width:220px;flex:none;margin-top:6px}
-body main #status-tabs{display:flex;flex-wrap:nowrap;gap:2px;overflow-x:auto;scrollbar-width:none}
-body main #status-tabs button{flex:1 1 auto;white-space:nowrap;padding:6px 10px;font-size:13px;line-height:20px}
-body main #status-tabs .n{margin-left:6px;color:var(--ink-muted);font-variant-numeric:tabular-nums}
+body main #status-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px;width:100%;box-sizing:border-box;overflow:hidden}
+body main #status-tabs button{min-width:0;white-space:nowrap;padding:6px 2px;font-size:12.5px;line-height:20px;justify-content:center}
+body main #status-tabs .n{margin-left:4px;color:var(--ink-muted);font-variant-numeric:tabular-nums}
 body main table tbody td select,body main .people-table td select{field-sizing:content;width:auto;min-width:9em;max-width:none}
 body main .tab-group{display:flex;gap:4px;flex-wrap:wrap}
 body main .tabs .tab-group>:is(a,button,[role=tab]){padding:8px 12px!important;margin:0!important}
 body main .banner{display:flex;align-items:center;gap:14px}
 body main .banner .big{flex:none;align-self:center;border-radius:50%}
 body main .people-table td{padding-right:16px}
+/* Keep the content of compact controls on the same centre line at desktop widths. */
+@media(min-width:900px){
+  body :is(button,.btn,[role=tab],.tabs a,summary,header.shell nav a){line-height:20px}
+  body :is(button,.btn,[role=tab],.tabs a){display:inline-flex;align-items:center;justify-content:center;vertical-align:middle}
+  body header.shell nav a{display:flex;align-items:center}
+  body header.shell nav a{justify-content:flex-start}
+  body header.shell .acct>summary{display:flex;align-items:center;min-height:42px}
+  body details:not(.acct)>summary{min-height:0;padding-top:2px;padding-bottom:2px}
+  body header.shell .acct-menu button{width:100%}
+  body main :is(.badge,.chip,.pill,.st){display:inline-flex;align-items:center;vertical-align:middle;line-height:18px}
+  body main .chip:is(.running,.stopped,.draft)::before{flex:none;margin-right:6px;vertical-align:middle}
+  body main :is(.tabs,.survey-detail-tabs,.system-tabs) :is(a,button,[role=tab]){align-self:stretch;display:inline-flex;align-items:center;justify-content:center;line-height:20px}
+  body main :is(input:not([type=checkbox]):not([type=radio]),select){line-height:20px;vertical-align:middle}
+  body main :is(th,td){vertical-align:middle}
+  body main :is(td.num,th.num,td.n,th.n){font-variant-numeric:tabular-nums;text-align:right}
+  body main :is(.alert,.note,.conf,.empty,.empty-state,.rq-empty){line-height:20px}
+  body main .banner{align-items:center}
+  body main .banner .big{margin:0;align-self:center}
+  body main .kpi .l{display:flex;align-items:center;gap:6px}
+  body main .kpi .dot{margin-top:0;flex:none;align-self:center}
+  body main #report>.tiles>.tile,body main .survey-tabpanel .tile{display:flex;flex-direction:column;justify-content:center}
+}
 `
