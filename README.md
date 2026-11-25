@@ -93,5 +93,13 @@ keys, file paths or stack traces.
   reload, client change, and 100 screens in a row. Ext JS (GPL) is not in this repository: set
   `REVAL_VENDOR` to a folder with `extjs/ext-all.js` and the classic theme, and `posthog-js/` (an npm
   package copy). Results go to `run/reval-sim/results.json`.
+- `tools/reval-sim/real-sessions.ts`: the same simulated Reval against a real self-hosted PostHog (its own
+  posthog-js, flags service and survey engine). It makes and launches a Hedge Designation then Export survey
+  through Lens, waits until PostHog serves its targeting flag, then runs `SESSIONS` (120) browser sessions,
+  `PARALLEL` (6) at a time: exports right away or after 3 to 4 minutes, opens without exporting, exports
+  elsewhere or first, and another client. It reports sessions as expected and the delay from Export to the
+  survey on screen (min, median, p95, max), and writes `run/real-sessions/results-<stamp>.json`. Set
+  `REAL_PH`, `REAL_TOKEN` (project token), `REAL_KEY` (personal key with survey write) and `REAL_PROJECT`.
+  The project needs surveys turned on (`surveys_opt_in`), and PostHog must serve the Lens survey engine.
 - `npm run ui-shots -- <folder>`: screenshots of every page and tab at 1440 and 375 pixels in dark and light,
   plus empty and error states, against a stand-in PostHog with sample data.
