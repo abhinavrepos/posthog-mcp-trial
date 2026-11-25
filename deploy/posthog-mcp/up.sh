@@ -101,7 +101,10 @@ import os
 from posthog.models import User
 from posthog.models.personal_api_key import PersonalAPIKey
 from posthog.models.utils import generate_random_token_personal, hash_key_value, mask_key_value
-from posthog.scopes import GRANTABLE_API_SCOPE_OBJECTS
+try:
+    from posthog.scopes import GRANTABLE_API_SCOPE_OBJECTS
+except ImportError:  # PostHog moved it into posthog.scopes.exposure
+    from posthog.scopes.exposure import GRANTABLE_API_SCOPE_OBJECTS
 
 # Lens is a display layer over PostHog: the agent may find and open session replays through PostHog's own
 # tools, so recording scopes are granted (read only). Still never: AI scanners, exports, sharing links, and
