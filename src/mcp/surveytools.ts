@@ -159,8 +159,12 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
             // A year of events makes the reach scan expensive. The estimate describes the
             // recent audience and explicitly reports the window actually queried. Checks and estimate run together.
             const reachDays = Math.min(days,90)
-            const [evidence, reach] = await Promise.all([errors.length ? [] : surveyEvidence(c.chain), estimate && !errors.length ? estimateReach(c.chain,reachDays) : undefined])
+            // A reach estimate that times out is skipped with a warning; it never fails the check of a valid survey.
+            const [evidence, reachOrError] = await Promise.all([errors.length ? [] : surveyEvidence(c.chain), estimate && !errors.length ? estimateReach(c.chain,reachDays).catch((e: unknown) => e instanceof Error ? e : new Error(String(e))) : undefined])
             c.problems.push(...evidence)
+            const reachSkipped = reachOrError instanceof Error
+            if (reachSkipped) c.problems.push({ level: 'warning', where: 'reach', text: `Check skipped: the reach estimate over ${reachDays} days did not finish because PostHog did not answer in time. This is not a problem with the survey; try days: 7, or estimate: false.` })
+            const reach = reachSkipped ? undefined : reachOrError
             const conflicts = conflictsFor(c.chain, {}, await listSurveys())
             const q = queueAlert(c.chain, conflicts)
             return json(`${q.level === 'clear' ? '' : q.alert + '\n\n'}${errors.length || unclear.length ? 'This survey cannot be saved yet:' : 'The survey checks out. Show the person this plan (lead with any ⚠ alert above), then save_survey.'}`, {
@@ -171,7 +175,7 @@ export function registerSurveyTools(server: McpServer, caller: Pick<ChatCaller, 
                 shows: `${spec.show === 'every_time' ? 'every time' : 'once per user'}, as soon as the last step happens${spec.wait_for_page === false ? '' : ' and the page has loaded'}`,
                 problems: c.problems,
                 surveys_per_user: { ...queueAlert(c.chain, conflicts), already_in: conflicts.map((x) => x.text) },
-                reach: {days,result:reach,...(days>reachDays ? {note:`Reach estimate capped at ${reachDays} days (requested ${days} days).`} : {})},
+                reach: {days,result:reach,...(reachSkipped ? {skipped:'PostHog did not answer in time'} : {}),...(days>reachDays ? {note:`Reach estimate capped at ${reachDays} days (requested ${days} days).`} : {})},
             })
         }
     )

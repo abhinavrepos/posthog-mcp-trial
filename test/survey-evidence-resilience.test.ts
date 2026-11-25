@@ -30,3 +30,29 @@ test('survey evidence outage warning hides upstream paths and secrets', async ()
     assert.match(text, /could not check/i)
     assert.doesNotMatch(text, /\/srv\/|secret-token/)
 })
+
+const timeout = () => Promise.reject(Object.assign(new Error('timed out'), { name: 'TimeoutError' }))
+test('a check that times out is skipped on its own with a warning; the others still report and nothing reads as "matched nothing"', async () => {
+    const { foundMismatch } = await import('../src/core/surveychecks.ts')
+    const reg = parseAppEvents(reval)
+    // Hedge Designation then a misspelt Export: the dialog check times out, the button check answers.
+    const chain = { steps: [
+        { event: 'PageView', properties: { dialog_id: { operator: 'exact', values: ['LinkListReqv'] }, action: { operator: 'exact', values: ['OPEN'] } } },
+        { event: 'Event', properties: { action_name: { operator: 'exact', values: ['Exprot'] }, dialog_id: { operator: 'exact', values: ['LinkListReqv'] } } },
+    ] } as never
+    const problems = await surveyEvidence(chain, { reg, query: async (query) => {
+        if (query.includes('AS opens')) return timeout()
+        if (query.includes('count() AS n FROM events WHERE')) return [{ n: 1000 }]
+        if (query.includes('AS v, count() AS n') && !query.includes('lower(')) return [{ v: 'Export', n: 500 }, { v: 'Save', n: 300 }]
+        return []
+    } })
+    const text = problems.map((p) => p.text).join('\n')
+    assert.match(text, /Check skipped: .*the dialog ids/)
+    assert.doesNotMatch(text, /Nobody opened a dialog/, 'a skipped dialog check never claims the dialog is unused')
+    assert.match(text, /button labelled "Exprot".*never match/s, 'the button check still reports')
+    assert.equal(foundMismatch(problems), true)
+    // Every check times out: only skip warnings, never a mismatch.
+    const all = await surveyEvidence(chain, { reg, query: timeout as never })
+    assert.ok(all.length >= 1 && all.every((p) => /Check skipped|could not check/.test(p.text)), JSON.stringify(all))
+    assert.equal(foundMismatch(all), false)
+})
