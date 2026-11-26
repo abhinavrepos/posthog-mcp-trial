@@ -44,6 +44,9 @@ fi
 # Built renderer files and leftovers from the former installer (ours only: fixed names in this folder).
 [ -d lens-survey-engine ] && rm -rf lens-survey-engine
 rm -f .env.lens-survey.bak "$lock.caddy" "$lock.tmp" "$lock.bak" "$renderer.tmp" "$renderer.bak"
+# Other compose files that copied the lock into their CADDYFILE (e.g. docker-compose.site.yml).
+copies="$(grep -l '@lens_surveys' docker-compose*.yml 2>/dev/null || true)"
+if [ -n "$copies" ]; then python3 "$(dirname "$0")/strip-lock.py" $copies && proxy_changed=1; fi
 failed=0
 if [ "$web_changed" = 1 ]; then docker compose up -d --force-recreate --no-deps web >/dev/null || failed=1; fi
 if [ "$proxy_changed" = 1 ]; then docker compose up -d --force-recreate --no-deps proxy >/dev/null || failed=1; fi
