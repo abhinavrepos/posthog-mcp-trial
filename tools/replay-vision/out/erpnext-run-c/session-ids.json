@@ -1,0 +1,1512 @@
+[
+ {
+  "seed": 100000,
+  "phase": "calibration",
+  "persona": "Expert",
+  "user": "rv.cal.0@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21962-16e1-7325-954e-0a32ac2b6ab0"
+ },
+ {
+  "seed": 100001,
+  "phase": "calibration",
+  "persona": "Expert",
+  "user": "rv.cal.0@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21962-6098-73b0-8902-335cd8e06213"
+ },
+ {
+  "seed": 100002,
+  "phase": "calibration",
+  "persona": "Expert",
+  "user": "rv.cal.0@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21962-a81d-70b7-88af-6d33182aaf68"
+ },
+ {
+  "seed": 100010,
+  "phase": "calibration",
+  "persona": "Novice",
+  "user": "rv.cal.1@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21963-8fcc-762a-a577-1daf21245a92"
+ },
+ {
+  "seed": 100011,
+  "phase": "calibration",
+  "persona": "Novice",
+  "user": "rv.cal.1@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21963-fa09-7d64-81d7-cca7af3abefa"
+ },
+ {
+  "seed": 100012,
+  "phase": "calibration",
+  "persona": "Novice",
+  "user": "rv.cal.1@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21964-6031-71e1-8373-c55ff3a6cefe"
+ },
+ {
+  "seed": 100020,
+  "phase": "calibration",
+  "persona": "Hurried",
+  "user": "rv.cal.2@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21964-9934-7d75-852d-838090d6522e"
+ },
+ {
+  "seed": 100021,
+  "phase": "calibration",
+  "persona": "Hurried",
+  "user": "rv.cal.2@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21965-5e2f-71e8-9e12-0decd8cedbb2"
+ },
+ {
+  "seed": 100022,
+  "phase": "calibration",
+  "persona": "Hurried",
+  "user": "rv.cal.2@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21965-a6a5-7c94-bfa8-540536e7bb5f"
+ },
+ {
+  "seed": 100030,
+  "phase": "calibration",
+  "persona": "Careful",
+  "user": "rv.cal.3@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21965-d362-7b0a-8028-6534c0212772"
+ },
+ {
+  "seed": 100031,
+  "phase": "calibration",
+  "persona": "Careful",
+  "user": "rv.cal.3@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21966-37f7-7f29-b3cb-f7339bf0c062"
+ },
+ {
+  "seed": 100032,
+  "phase": "calibration",
+  "persona": "Careful",
+  "user": "rv.cal.3@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21966-a925-70ea-8721-63cb99b826b3"
+ },
+ {
+  "seed": 100040,
+  "phase": "calibration",
+  "persona": "Explorer",
+  "user": "rv.cal.4@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21966-dead-7be4-b564-c55a28440e8a"
+ },
+ {
+  "seed": 100041,
+  "phase": "calibration",
+  "persona": "Explorer",
+  "user": "rv.cal.4@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21967-37c0-7733-95e5-e89f284d1ede"
+ },
+ {
+  "seed": 100042,
+  "phase": "calibration",
+  "persona": "Explorer",
+  "user": "rv.cal.4@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21967-94aa-741f-a93d-ab5be63f4fa0"
+ },
+ {
+  "seed": 100050,
+  "phase": "calibration",
+  "persona": "Returning",
+  "user": "rv.cal.5@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21967-c4d6-7c98-bcd9-921fa0204699"
+ },
+ {
+  "seed": 100051,
+  "phase": "calibration",
+  "persona": "Returning",
+  "user": "rv.cal.5@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21968-1da8-7503-8444-448584d40f28"
+ },
+ {
+  "seed": 100052,
+  "phase": "calibration",
+  "persona": "Returning",
+  "user": "rv.cal.5@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21968-74d6-7959-b1e0-ddf0d9e56220"
+ },
+ {
+  "seed": 100100,
+  "phase": "calibration",
+  "persona": "Expert",
+  "user": "rv.cal.0@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21969-0873-7b0d-8368-59a21300eeb1"
+ },
+ {
+  "seed": 100101,
+  "phase": "calibration",
+  "persona": "Expert",
+  "user": "rv.cal.0@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21969-89fb-780a-ad17-587778f59cad"
+ },
+ {
+  "seed": 100102,
+  "phase": "calibration",
+  "persona": "Expert",
+  "user": "rv.cal.0@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196a-14a4-7756-85d4-30dbd40d0ed1"
+ },
+ {
+  "seed": 100110,
+  "phase": "calibration",
+  "persona": "Novice",
+  "user": "rv.cal.1@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196a-414c-7771-a40b-2cd14808bebc"
+ },
+ {
+  "seed": 100111,
+  "phase": "calibration",
+  "persona": "Novice",
+  "user": "rv.cal.1@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196a-f58d-7887-9824-6220fc0344c4"
+ },
+ {
+  "seed": 100112,
+  "phase": "calibration",
+  "persona": "Novice",
+  "user": "rv.cal.1@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196b-a46f-7335-a2a7-452251ef3a14"
+ },
+ {
+  "seed": 100120,
+  "phase": "calibration",
+  "persona": "Hurried",
+  "user": "rv.cal.2@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196c-1824-7d64-8ed9-e97ee51e0dae"
+ },
+ {
+  "seed": 100121,
+  "phase": "calibration",
+  "persona": "Hurried",
+  "user": "rv.cal.2@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196c-6411-746a-8b94-61961fb4f33b"
+ },
+ {
+  "seed": 100122,
+  "phase": "calibration",
+  "persona": "Hurried",
+  "user": "rv.cal.2@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196c-abd4-7e03-8b69-88f3df08827b"
+ },
+ {
+  "seed": 100130,
+  "phase": "calibration",
+  "persona": "Careful",
+  "user": "rv.cal.3@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196c-d696-714f-b927-f82e1aff84fa"
+ },
+ {
+  "seed": 100131,
+  "phase": "calibration",
+  "persona": "Careful",
+  "user": "rv.cal.3@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196d-37fa-727c-9709-b984cc84ca90"
+ },
+ {
+  "seed": 100132,
+  "phase": "calibration",
+  "persona": "Careful",
+  "user": "rv.cal.3@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196d-9560-7b19-9ff1-770925236d51"
+ },
+ {
+  "seed": 100140,
+  "phase": "calibration",
+  "persona": "Explorer",
+  "user": "rv.cal.4@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196d-c8df-782a-9590-a0ff5c0099d2"
+ },
+ {
+  "seed": 100141,
+  "phase": "calibration",
+  "persona": "Explorer",
+  "user": "rv.cal.4@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196e-2b7f-78e4-ba74-cf4f1a52bdd2"
+ },
+ {
+  "seed": 100142,
+  "phase": "calibration",
+  "persona": "Explorer",
+  "user": "rv.cal.4@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196e-8e69-7c2e-9d89-cb34dd4e9fbc"
+ },
+ {
+  "seed": 100150,
+  "phase": "calibration",
+  "persona": "Returning",
+  "user": "rv.cal.5@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196e-c18e-7da0-9fdf-65e697b9157a"
+ },
+ {
+  "seed": 100151,
+  "phase": "calibration",
+  "persona": "Returning",
+  "user": "rv.cal.5@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a2196f-eb5a-7294-baf3-883fb08b4cce"
+ },
+ {
+  "seed": 100152,
+  "phase": "calibration",
+  "persona": "Returning",
+  "user": "rv.cal.5@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21970-3e6d-7f4a-afdc-4df3dd7b427f"
+ },
+ {
+  "seed": 100200,
+  "phase": "calibration",
+  "persona": "Expert",
+  "user": "rv.cal.0@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219bb-e79e-7916-8a7d-fcd42c9c2b03"
+ },
+ {
+  "seed": 100201,
+  "phase": "calibration",
+  "persona": "Expert",
+  "user": "rv.cal.0@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219bc-3912-7e94-a011-8817d6e87dbc"
+ },
+ {
+  "seed": 100202,
+  "phase": "calibration",
+  "persona": "Expert",
+  "user": "rv.cal.0@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219bc-8681-7643-91fe-f1d48ca70de2"
+ },
+ {
+  "seed": 100210,
+  "phase": "calibration",
+  "persona": "Novice",
+  "user": "rv.cal.1@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219bc-b823-7f65-9442-c5a92100829c"
+ },
+ {
+  "seed": 100211,
+  "phase": "calibration",
+  "persona": "Novice",
+  "user": "rv.cal.1@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219bd-2f6b-7199-bcbf-89ed949e9c34"
+ },
+ {
+  "seed": 100212,
+  "phase": "calibration",
+  "persona": "Novice",
+  "user": "rv.cal.1@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219bd-9d2e-75e9-8f27-27e7c5bbd6a4"
+ },
+ {
+  "seed": 100220,
+  "phase": "calibration",
+  "persona": "Hurried",
+  "user": "rv.cal.2@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219bd-d9d0-7f84-b543-bffde104a6da"
+ },
+ {
+  "seed": 100221,
+  "phase": "calibration",
+  "persona": "Hurried",
+  "user": "rv.cal.2@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219be-27ea-7146-9b6d-1f49728f3969"
+ },
+ {
+  "seed": 100222,
+  "phase": "calibration",
+  "persona": "Hurried",
+  "user": "rv.cal.2@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219be-7218-7d4d-acfa-796df38d1755"
+ },
+ {
+  "seed": 100230,
+  "phase": "calibration",
+  "persona": "Careful",
+  "user": "rv.cal.3@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219be-a113-7827-90a7-e2a9165373a0"
+ },
+ {
+  "seed": 100231,
+  "phase": "calibration",
+  "persona": "Careful",
+  "user": "rv.cal.3@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219bf-0ded-722f-9fae-da42b5b2bee4"
+ },
+ {
+  "seed": 100232,
+  "phase": "calibration",
+  "persona": "Careful",
+  "user": "rv.cal.3@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219bf-74ae-71ba-b080-71d6c77383a7"
+ },
+ {
+  "seed": 100240,
+  "phase": "calibration",
+  "persona": "Explorer",
+  "user": "rv.cal.4@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219bf-b06d-7cdb-a498-604b29794044"
+ },
+ {
+  "seed": 100241,
+  "phase": "calibration",
+  "persona": "Explorer",
+  "user": "rv.cal.4@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c0-1f67-7864-a71a-7b5157f70eb3"
+ },
+ {
+  "seed": 100242,
+  "phase": "calibration",
+  "persona": "Explorer",
+  "user": "rv.cal.4@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c0-87b3-71e7-a6f2-15a22bb3686b"
+ },
+ {
+  "seed": 100250,
+  "phase": "calibration",
+  "persona": "Returning",
+  "user": "rv.cal.5@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c0-c51a-7e90-aed9-77dd17d7e31c"
+ },
+ {
+  "seed": 100251,
+  "phase": "calibration",
+  "persona": "Returning",
+  "user": "rv.cal.5@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c1-1fcd-7852-972d-cd0cf2310902"
+ },
+ {
+  "seed": 100252,
+  "phase": "calibration",
+  "persona": "Returning",
+  "user": "rv.cal.5@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c1-7346-7bcd-bb00-dcff7bebfe1a"
+ },
+ {
+  "seed": 100300,
+  "phase": "calibration",
+  "persona": "Expert",
+  "user": "rv.cal.0@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c1-a3aa-7be9-82d3-f83fb8f34ef4"
+ },
+ {
+  "seed": 100301,
+  "phase": "calibration",
+  "persona": "Expert",
+  "user": "rv.cal.0@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c1-f8de-724b-a1b1-83fedc4e6aea"
+ },
+ {
+  "seed": 100302,
+  "phase": "calibration",
+  "persona": "Expert",
+  "user": "rv.cal.0@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c2-3a42-7b79-ba4c-7a585679abd4"
+ },
+ {
+  "seed": 100310,
+  "phase": "calibration",
+  "persona": "Novice",
+  "user": "rv.cal.1@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c2-678d-781f-870b-316904779e09"
+ },
+ {
+  "seed": 100311,
+  "phase": "calibration",
+  "persona": "Novice",
+  "user": "rv.cal.1@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c2-dc1c-7c04-9286-bd8df8907f17"
+ },
+ {
+  "seed": 100312,
+  "phase": "calibration",
+  "persona": "Novice",
+  "user": "rv.cal.1@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c3-4d17-7851-b660-fc215534139b"
+ },
+ {
+  "seed": 100320,
+  "phase": "calibration",
+  "persona": "Hurried",
+  "user": "rv.cal.2@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c3-8d9b-73e1-b284-4cba3cf6a2bd"
+ },
+ {
+  "seed": 100321,
+  "phase": "calibration",
+  "persona": "Hurried",
+  "user": "rv.cal.2@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c3-dd20-7427-97a3-021afd43d3ce"
+ },
+ {
+  "seed": 100322,
+  "phase": "calibration",
+  "persona": "Hurried",
+  "user": "rv.cal.2@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c4-27e3-72a0-975e-4db1a1407f9f"
+ },
+ {
+  "seed": 100330,
+  "phase": "calibration",
+  "persona": "Careful",
+  "user": "rv.cal.3@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c4-5572-7017-a96c-ca3cd60fd8d0"
+ },
+ {
+  "seed": 100331,
+  "phase": "calibration",
+  "persona": "Careful",
+  "user": "rv.cal.3@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c4-be8c-7c2b-aa34-2950b61a2e8e"
+ },
+ {
+  "seed": 100332,
+  "phase": "calibration",
+  "persona": "Careful",
+  "user": "rv.cal.3@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c5-1cde-7872-b6f9-454b06c97c11"
+ },
+ {
+  "seed": 100340,
+  "phase": "calibration",
+  "persona": "Explorer",
+  "user": "rv.cal.4@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c5-5465-7a37-8043-807c2e317c0e"
+ },
+ {
+  "seed": 100341,
+  "phase": "calibration",
+  "persona": "Explorer",
+  "user": "rv.cal.4@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c5-bf74-74f5-bb46-6c54f828f4fa"
+ },
+ {
+  "seed": 100342,
+  "phase": "calibration",
+  "persona": "Explorer",
+  "user": "rv.cal.4@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c6-234f-7664-ae09-efa9afca0997"
+ },
+ {
+  "seed": 100350,
+  "phase": "calibration",
+  "persona": "Returning",
+  "user": "rv.cal.5@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c6-5d35-70d1-9339-ce2c0919a7c8"
+ },
+ {
+  "seed": 100351,
+  "phase": "calibration",
+  "persona": "Returning",
+  "user": "rv.cal.5@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c6-b68f-7a62-a132-cc8df78402ea"
+ },
+ {
+  "seed": 100352,
+  "phase": "calibration",
+  "persona": "Returning",
+  "user": "rv.cal.5@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a219c7-0764-7bce-a676-76b375a4ac03"
+ },
+ {
+  "seed": 300000,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a09-fb1f-7461-baf7-43e4921867be"
+ },
+ {
+  "seed": 300001,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0a-4e91-7f0c-8548-197836719c74"
+ },
+ {
+  "seed": 300002,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0a-8dbd-723b-ad01-4ca9b3a54e97"
+ },
+ {
+  "seed": 300010,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0a-c34c-740d-bd73-5810e0a9b978"
+ },
+ {
+  "seed": 300011,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0b-3457-712c-bdf6-fff88d7ae8e7"
+ },
+ {
+  "seed": 300012,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0b-a31e-7102-b9cd-647053496c9c"
+ },
+ {
+  "seed": 300020,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0b-e7ef-73e6-afb3-288c00792c16"
+ },
+ {
+  "seed": 300021,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0c-40ff-732a-b4fd-aadb2f7e5380"
+ },
+ {
+  "seed": 300022,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0c-8d37-7c90-8397-012adcbcfad1"
+ },
+ {
+  "seed": 300030,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0c-c868-74c9-bf13-47673afab9ee"
+ },
+ {
+  "seed": 300031,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0d-3200-70ac-8022-fafe647e5096"
+ },
+ {
+  "seed": 300032,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0d-9091-76ff-ac02-7d116dc11060"
+ },
+ {
+  "seed": 300040,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0d-d519-795f-9ded-27ba58c9d762"
+ },
+ {
+  "seed": 300041,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0e-3b72-7195-9190-22b0ba372025"
+ },
+ {
+  "seed": 300042,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0e-9ca7-73a4-a3a2-04e88c986e4e"
+ },
+ {
+  "seed": 300050,
+  "phase": "heldout",
+  "persona": "Returning",
+  "user": "rv.eval.5@example.test",
+  "workflow": "invoice",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0e-dbde-7fc6-8423-8cca855c1435"
+ },
+ {
+  "seed": 300051,
+  "phase": "heldout",
+  "persona": "Returning",
+  "user": "rv.eval.5@example.test",
+  "workflow": "purchase",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0f-316d-7cec-b146-580df87b1963"
+ },
+ {
+  "seed": 300052,
+  "phase": "heldout",
+  "persona": "Returning",
+  "user": "rv.eval.5@example.test",
+  "workflow": "report",
+  "injection": null,
+  "cohort": null,
+  "session_id": "01a21a0f-84eb-7668-9a83-877c79a0f335"
+ },
+ {
+  "seed": 320000,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-u1",
+  "session_id": "01a21a0f-bf95-70ee-aaa5-9c14e0152ad7"
+ },
+ {
+  "seed": 320010,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-u3",
+  "session_id": "01a21a10-37f3-78c0-b4d3-d5ad0f52c14e"
+ },
+ {
+  "seed": 320011,
+  "phase": "heldout",
+  "persona": "Returning",
+  "user": "rv.eval.5@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-u3",
+  "session_id": "01a21a10-b0ac-75af-a80d-3feb9016d72b"
+ },
+ {
+  "seed": 320012,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-u3",
+  "session_id": "01a21a11-108d-77df-8df1-b5b8e3acc83f"
+ },
+ {
+  "seed": 320020,
+  "phase": "heldout",
+  "persona": "Returning",
+  "user": "rv.eval.5@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-u6",
+  "session_id": "01a21a11-70ae-73c4-a160-0ccc040fae72"
+ },
+ {
+  "seed": 320021,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-u6",
+  "session_id": "01a21a11-d343-7512-8e20-6d992d3a9b84"
+ },
+ {
+  "seed": 320022,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-u6",
+  "session_id": "01a21a12-3193-7e48-a070-dfe306d0384d"
+ },
+ {
+  "seed": 320023,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-u6",
+  "session_id": "01a21a12-b305-71f3-8500-93eb93d9d029"
+ },
+ {
+  "seed": 320024,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-u6",
+  "session_id": "01a21a13-0d87-755c-8232-e462a29c791f"
+ },
+ {
+  "seed": 320025,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-u6",
+  "session_id": "01a21a13-8764-7696-b23c-685d153f9816"
+ },
+ {
+  "seed": 320030,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-abandon-u3",
+  "session_id": "01a21a14-00e2-735c-aadc-135ec96ef8fb"
+ },
+ {
+  "seed": 320031,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-abandon-u3",
+  "session_id": "01a21a14-603b-7bb2-82ef-c73e84367bff"
+ },
+ {
+  "seed": 320032,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "invoice",
+  "injection": "validation_loop",
+  "cohort": "I2-validation-abandon-u3",
+  "session_id": "01a21a14-e568-7efd-ab01-ec4093413d3d"
+ },
+ {
+  "seed": 320040,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "invoice",
+  "injection": "dead_button",
+  "cohort": "I5-dead-apply-u1",
+  "session_id": "01a21a15-3f68-7a8b-92e9-9ff97f2a0959"
+ },
+ {
+  "seed": 320050,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "invoice",
+  "injection": "dead_button",
+  "cohort": "I5-dead-apply-u3",
+  "session_id": "01a21a15-d008-7338-aaee-ef39a7d8520f"
+ },
+ {
+  "seed": 320051,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "invoice",
+  "injection": "dead_button",
+  "cohort": "I5-dead-apply-u3",
+  "session_id": "01a21a16-310c-7451-9d3d-50a3ec96282d"
+ },
+ {
+  "seed": 320052,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "invoice",
+  "injection": "dead_button",
+  "cohort": "I5-dead-apply-u3",
+  "session_id": "01a21a16-ac7d-76c4-b7a6-801b2c086afb"
+ },
+ {
+  "seed": 320060,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "invoice",
+  "injection": "dead_button",
+  "cohort": "I5-dead-apply-u6",
+  "session_id": "01a21a17-2b9a-748d-9de0-d7d268c71a1c"
+ },
+ {
+  "seed": 320061,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "invoice",
+  "injection": "dead_button",
+  "cohort": "I5-dead-apply-u6",
+  "session_id": "01a21a17-a9ce-7120-84d7-0f936bf5c11a"
+ },
+ {
+  "seed": 320062,
+  "phase": "heldout",
+  "persona": "Returning",
+  "user": "rv.eval.5@example.test",
+  "workflow": "invoice",
+  "injection": "dead_button",
+  "cohort": "I5-dead-apply-u6",
+  "session_id": "01a21a18-32d2-7ed8-bcd8-e610799f6051"
+ },
+ {
+  "seed": 320063,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "invoice",
+  "injection": "dead_button",
+  "cohort": "I5-dead-apply-u6",
+  "session_id": "01a21a18-9db7-7c81-ad0f-b50ac323cd21"
+ },
+ {
+  "seed": 320064,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "invoice",
+  "injection": "dead_button",
+  "cohort": "I5-dead-apply-u6",
+  "session_id": "01a21a19-0204-784b-ba04-f8cc6e35a447"
+ },
+ {
+  "seed": 320065,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "invoice",
+  "injection": "dead_button",
+  "cohort": "I5-dead-apply-u6",
+  "session_id": "01a21a19-9033-7819-b4be-5e32449da41c"
+ },
+ {
+  "seed": 320070,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "report",
+  "injection": "scroll_hunt",
+  "cohort": "I6-scroll-hunt-u1",
+  "session_id": "01a21a19-f16a-74c1-a8f9-9e1ec9dd1cfd"
+ },
+ {
+  "seed": 320080,
+  "phase": "heldout",
+  "persona": "Returning",
+  "user": "rv.eval.5@example.test",
+  "workflow": "report",
+  "injection": "scroll_hunt",
+  "cohort": "I6-scroll-hunt-u3",
+  "session_id": "01a21a1a-53cf-7e5f-80b4-3ef0f16e1b1f"
+ },
+ {
+  "seed": 320081,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "report",
+  "injection": "scroll_hunt",
+  "cohort": "I6-scroll-hunt-u3",
+  "session_id": "01a21a1a-a796-75e0-927c-53d21556b4ae"
+ },
+ {
+  "seed": 320082,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "report",
+  "injection": "scroll_hunt",
+  "cohort": "I6-scroll-hunt-u3",
+  "session_id": "01a21a1a-fbbc-7562-9602-02aefbab5df5"
+ },
+ {
+  "seed": 320090,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "report",
+  "injection": "scroll_hunt",
+  "cohort": "I6-scroll-hunt-u6",
+  "session_id": "01a21a1b-6097-7147-8a84-74a3aed0fb5b"
+ },
+ {
+  "seed": 320091,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "report",
+  "injection": "scroll_hunt",
+  "cohort": "I6-scroll-hunt-u6",
+  "session_id": "01a21a1b-ad8a-7c8b-b237-4cb0d4455dd5"
+ },
+ {
+  "seed": 320092,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "report",
+  "injection": "scroll_hunt",
+  "cohort": "I6-scroll-hunt-u6",
+  "session_id": "01a21a1c-1550-7554-a603-576dba7a01f2"
+ },
+ {
+  "seed": 320093,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "report",
+  "injection": "scroll_hunt",
+  "cohort": "I6-scroll-hunt-u6",
+  "session_id": "01a21a1c-6249-797c-8a58-8e0153357b1e"
+ },
+ {
+  "seed": 320094,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "report",
+  "injection": "scroll_hunt",
+  "cohort": "I6-scroll-hunt-u6",
+  "session_id": "01a21a1c-bb4e-7d43-a33d-e46cb30a3ffa"
+ },
+ {
+  "seed": 320095,
+  "phase": "heldout",
+  "persona": "Returning",
+  "user": "rv.eval.5@example.test",
+  "workflow": "report",
+  "injection": "scroll_hunt",
+  "cohort": "I6-scroll-hunt-u6",
+  "session_id": "01a21a1d-1882-7664-abe9-ea930acff643"
+ },
+ {
+  "seed": 320100,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "invoice",
+  "injection": "revisit",
+  "cohort": "I7-revisit-u1",
+  "session_id": "01a21a1d-68b1-7d50-bbc0-27908fa08522"
+ },
+ {
+  "seed": 320110,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "invoice",
+  "injection": "revisit",
+  "cohort": "I7-revisit-u3",
+  "session_id": "01a21a1d-faea-7013-adab-732d0b21fdf7"
+ },
+ {
+  "seed": 320111,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "invoice",
+  "injection": "revisit",
+  "cohort": "I7-revisit-u3",
+  "session_id": "01a21a1e-6f1e-74ef-ac71-be0e6a4b7d73"
+ },
+ {
+  "seed": 320112,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "invoice",
+  "injection": "revisit",
+  "cohort": "I7-revisit-u3",
+  "session_id": "01a21a1e-f4ed-7330-909b-fafc824573e8"
+ },
+ {
+  "seed": 320120,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "invoice",
+  "injection": "revisit",
+  "cohort": "I7-revisit-u6",
+  "session_id": "01a21a1f-81f5-7afe-a7d9-4f9d1d44e3a4"
+ },
+ {
+  "seed": 320121,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "invoice",
+  "injection": "revisit",
+  "cohort": "I7-revisit-u6",
+  "session_id": "01a21a20-0eaa-7713-ab41-7b2a46a47290"
+ },
+ {
+  "seed": 320122,
+  "phase": "heldout",
+  "persona": "Returning",
+  "user": "rv.eval.5@example.test",
+  "workflow": "invoice",
+  "injection": "revisit",
+  "cohort": "I7-revisit-u6",
+  "session_id": "01a21a20-9d23-7dcb-8e4a-1ff855a8f53c"
+ },
+ {
+  "seed": 320123,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "invoice",
+  "injection": "revisit",
+  "cohort": "I7-revisit-u6",
+  "session_id": "01a21a21-1bcf-732d-85d3-d41eced10379"
+ },
+ {
+  "seed": 320124,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "invoice",
+  "injection": "revisit",
+  "cohort": "I7-revisit-u6",
+  "session_id": "01a21a21-91fb-7f17-8a2b-7900bde57651"
+ },
+ {
+  "seed": 320125,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "invoice",
+  "injection": "revisit",
+  "cohort": "I7-revisit-u6",
+  "session_id": "01a21a22-2708-7313-b49e-165c69ceab6a"
+ },
+ {
+  "seed": 320130,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "invoice",
+  "injection": "hesitation",
+  "cohort": "I1-hesitation-u3",
+  "session_id": "01a21a22-9dc5-7d66-a6d7-e6414e55c8cc"
+ },
+ {
+  "seed": 320131,
+  "phase": "heldout",
+  "persona": "Returning",
+  "user": "rv.eval.5@example.test",
+  "workflow": "invoice",
+  "injection": "hesitation",
+  "cohort": "I1-hesitation-u3",
+  "session_id": "01a21a23-1f7a-7b05-a1d9-d7c500f27b4f"
+ },
+ {
+  "seed": 320132,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "invoice",
+  "injection": "hesitation",
+  "cohort": "I1-hesitation-u3",
+  "session_id": "01a21a23-8c97-7657-9025-521c2a945b18"
+ },
+ {
+  "seed": 320140,
+  "phase": "heldout",
+  "persona": "Returning",
+  "user": "rv.eval.5@example.test",
+  "workflow": "purchase",
+  "injection": "slow_wait",
+  "cohort": "I3-wait-2s-u3",
+  "session_id": "01a21a23-ff9f-7940-95f0-49d87335ccf9"
+ },
+ {
+  "seed": 320141,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "purchase",
+  "injection": "slow_wait",
+  "cohort": "I3-wait-2s-u3",
+  "session_id": "01a21a24-5d0c-75a0-87d3-261a68a67040"
+ },
+ {
+  "seed": 320142,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "purchase",
+  "injection": "slow_wait",
+  "cohort": "I3-wait-2s-u3",
+  "session_id": "01a21a24-b179-7b94-ac13-1ae6cb4fcb22"
+ },
+ {
+  "seed": 320150,
+  "phase": "heldout",
+  "persona": "Expert",
+  "user": "rv.eval.0@example.test",
+  "workflow": "purchase",
+  "injection": "slow_wait",
+  "cohort": "I3-wait-6s-u3",
+  "session_id": "01a21a25-2064-785d-9bbd-9ff358f39ca6"
+ },
+ {
+  "seed": 320151,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "purchase",
+  "injection": "slow_wait",
+  "cohort": "I3-wait-6s-u3",
+  "session_id": "01a21a25-8689-7493-8ef5-d00f42309512"
+ },
+ {
+  "seed": 320152,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "purchase",
+  "injection": "slow_wait",
+  "cohort": "I3-wait-6s-u3",
+  "session_id": "01a21a26-0685-7ff4-821c-3c296a667996"
+ },
+ {
+  "seed": 320160,
+  "phase": "heldout",
+  "persona": "Novice",
+  "user": "rv.eval.1@example.test",
+  "workflow": "purchase",
+  "injection": "slow_wait",
+  "cohort": "I3-wait-15s-u3",
+  "session_id": "01a21a26-668b-731f-ab13-da70f162cf5a"
+ },
+ {
+  "seed": 320161,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "purchase",
+  "injection": "slow_wait",
+  "cohort": "I3-wait-15s-u3",
+  "session_id": "01a21a27-0b29-73bd-8775-30bce3206fb6"
+ },
+ {
+  "seed": 320162,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "purchase",
+  "injection": "slow_wait",
+  "cohort": "I3-wait-15s-u3",
+  "session_id": "01a21a27-91ad-77b7-b106-9c1a716033c3"
+ },
+ {
+  "seed": 320170,
+  "phase": "heldout",
+  "persona": "Hurried",
+  "user": "rv.eval.2@example.test",
+  "workflow": "invoice",
+  "injection": "reopen",
+  "cohort": "R2-reopen-u3",
+  "session_id": "01a21a28-2e65-71a0-b24f-5391cf5ea28e"
+ },
+ {
+  "seed": 320171,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "invoice",
+  "injection": "reopen",
+  "cohort": "R2-reopen-u3",
+  "session_id": "01a21a28-ae00-796c-9384-de42a0fc089e"
+ },
+ {
+  "seed": 320172,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "invoice",
+  "injection": "reopen",
+  "cohort": "R2-reopen-u3",
+  "session_id": "01a21a29-3c33-7235-a9df-5b46a0cbbffd"
+ },
+ {
+  "seed": 320180,
+  "phase": "heldout",
+  "persona": "Careful",
+  "user": "rv.eval.3@example.test",
+  "workflow": "invoice",
+  "injection": "abandon",
+  "cohort": "D5-abandon-u3",
+  "session_id": "01a21a29-cbab-7d25-8d2f-29b3d982505c"
+ },
+ {
+  "seed": 320181,
+  "phase": "heldout",
+  "persona": "Explorer",
+  "user": "rv.eval.4@example.test",
+  "workflow": "invoice",
+  "injection": "abandon",
+  "cohort": "D5-abandon-u3",
+  "session_id": "01a21a2a-2844-7809-8964-ebbaf64bc778"
+ },
+ {
+  "seed": 320182,
+  "phase": "heldout",
+  "persona": "Returning",
+  "user": "rv.eval.5@example.test",
+  "workflow": "invoice",
+  "injection": "abandon",
+  "cohort": "D5-abandon-u3",
+  "session_id": "01a21a2a-8377-767d-9328-a8b3023a95df"
+ }
+]

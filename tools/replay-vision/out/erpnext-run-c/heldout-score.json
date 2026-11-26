@@ -1,0 +1,1021 @@
+{
+ "n_heldout_sessions": 79,
+ "n_analysed": 79,
+ "coverage": {
+  "complete": 79,
+  "partial": 0
+ },
+ "n_truth": 61,
+ "undelivered": [],
+ "n_hits": 120,
+ "tp": 61,
+ "fp": 59,
+ "fn": 0,
+ "precision": {
+  "n": 61,
+  "d": 120,
+  "value": 0.5083333333333333,
+  "ci95": [
+   0.420023820848017,
+   0.5961258413010508
+  ]
+ },
+ "recall": {
+  "n": 61,
+  "d": 61,
+  "value": 1,
+  "ci95": [
+   0.9407540837980556,
+   1
+  ]
+ },
+ "precision_moment_level": {
+  "n": 101,
+  "d": 120,
+  "value": 0.8416666666666667,
+  "ci95": [
+   0.765905108188538,
+   0.8962310399232436
+  ]
+ },
+ "sm_precision_moment_level": {
+  "n": 91,
+  "d": 110,
+  "value": 0.8272727272727273,
+  "ci95": [
+   0.7459160253006628,
+   0.8865417054409992
+  ]
+ },
+ "sm_precision": {
+  "n": 61,
+  "d": 110,
+  "value": 0.5545454545454546,
+  "ci95": [
+   0.46138519294934005,
+   0.6440244288409369
+  ]
+ },
+ "sm_precision_injected_sessions": {
+  "n": 61,
+  "d": 110,
+  "value": 0.5545454545454546,
+  "ci95": [
+   0.46138519294934005,
+   0.6440244288409369
+  ]
+ },
+ "matched_element_agreement": {
+  "n": 61,
+  "d": 61,
+  "value": 1,
+  "ci95": [
+   0.9407540837980556,
+   1
+  ]
+ },
+ "per_detector": {
+  "D1": {
+   "tp": 10,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   }
+  },
+  "D10": {
+   "tp": 6,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 6,
+    "d": 6,
+    "value": 1,
+    "ci95": [
+     0.6096569663469354,
+     1
+    ]
+   },
+   "recall": {
+    "n": 6,
+    "d": 6,
+    "value": 1,
+    "ci95": [
+     0.6096569663469354,
+     1
+    ]
+   }
+  },
+  "D12": {
+   "tp": 0,
+   "fp": 0,
+   "fn": 3,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 0,
+    "d": 0,
+    "value": null,
+    "ci95": null
+   },
+   "recall": {
+    "n": 0,
+    "d": 3,
+    "value": 0,
+    "ci95": [
+     0,
+     0.5615060804490177
+    ]
+   }
+  },
+  "D14": {
+   "tp": 0,
+   "fp": 6,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 0,
+    "d": 6,
+    "value": 0,
+    "ci95": [
+     0,
+     0.39034303365306455
+    ]
+   },
+   "recall": {
+    "n": 0,
+    "d": 0,
+    "value": null,
+    "ci95": null
+   }
+  },
+  "D2": {
+   "tp": 0,
+   "fp": 0,
+   "fn": 10,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 0,
+    "d": 0,
+    "value": null,
+    "ci95": null
+   },
+   "recall": {
+    "n": 0,
+    "d": 10,
+    "value": 0,
+    "ci95": [
+     0,
+     0.2775401687666166
+    ]
+   }
+  },
+  "D4": {
+   "tp": 13,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 13,
+    "d": 13,
+    "value": 1,
+    "ci95": [
+     0.7718981569447084,
+     1
+    ]
+   },
+   "recall": {
+    "n": 13,
+    "d": 13,
+    "value": 1,
+    "ci95": [
+     0.7718981569447084,
+     1
+    ]
+   }
+  },
+  "D5": {
+   "tp": 6,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 6,
+    "d": 6,
+    "value": 1,
+    "ci95": [
+     0.6096569663469354,
+     1
+    ]
+   },
+   "recall": {
+    "n": 6,
+    "d": 6,
+    "value": 1,
+    "ci95": [
+     0.6096569663469354,
+     1
+    ]
+   }
+  },
+  "D6": {
+   "tp": 3,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 3,
+    "d": 3,
+    "value": 1,
+    "ci95": [
+     0.4384939195509822,
+     1
+    ]
+   },
+   "recall": {
+    "n": 3,
+    "d": 3,
+    "value": 1,
+    "ci95": [
+     0.4384939195509822,
+     1
+    ]
+   }
+  },
+  "D7": {
+   "tp": 10,
+   "fp": 0,
+   "fn": 3,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "recall": {
+    "n": 10,
+    "d": 13,
+    "value": 0.7692307692307693,
+    "ci95": [
+     0.49743126004873084,
+     0.9182062090753429
+    ]
+   }
+  },
+  "D8": {
+   "tp": 0,
+   "fp": 0,
+   "fn": 3,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 0,
+    "d": 0,
+    "value": null,
+    "ci95": null
+   },
+   "recall": {
+    "n": 0,
+    "d": 3,
+    "value": 0,
+    "ci95": [
+     0,
+     0.5615060804490177
+    ]
+   }
+  },
+  "R1": {
+   "tp": 10,
+   "fp": 13,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 10,
+    "d": 23,
+    "value": 0.43478260869565216,
+    "ci95": [
+     0.25634368332198654,
+     0.6318895069498304
+    ]
+   },
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   }
+  },
+  "R2": {
+   "tp": 13,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 13,
+    "d": 13,
+    "value": 1,
+    "ci95": [
+     0.7718981569447084,
+     1
+    ]
+   },
+   "recall": {
+    "n": 13,
+    "d": 13,
+    "value": 1,
+    "ci95": [
+     0.7718981569447084,
+     1
+    ]
+   }
+  },
+  "S1": {
+   "tp": 10,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   }
+  },
+  "S2": {
+   "tp": 10,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   }
+  },
+  "S3": {
+   "tp": 10,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   }
+  }
+ },
+ "per_injection": {
+  "validation_loop": {
+   "tp": 13,
+   "fn": 0,
+   "recall": {
+    "n": 13,
+    "d": 13,
+    "value": 1,
+    "ci95": [
+     0.7718981569447084,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "dead_button": {
+   "tp": 10,
+   "fn": 0,
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "hesitation": {
+   "tp": 3,
+   "fn": 0,
+   "recall": {
+    "n": 3,
+    "d": 3,
+    "value": 1,
+    "ci95": [
+     0.4384939195509822,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "revisit": {
+   "tp": 10,
+   "fn": 0,
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "reopen": {
+   "tp": 3,
+   "fn": 0,
+   "recall": {
+    "n": 3,
+    "d": 3,
+    "value": 1,
+    "ci95": [
+     0.4384939195509822,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "scroll_hunt": {
+   "tp": 10,
+   "fn": 0,
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "slow_wait": {
+   "tp": 6,
+   "fn": 0,
+   "recall": {
+    "n": 6,
+    "d": 6,
+    "value": 1,
+    "ci95": [
+     0.6096569663469354,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "abandon": {
+   "tp": 6,
+   "fn": 0,
+   "recall": {
+    "n": 6,
+    "d": 6,
+    "value": 1,
+    "ci95": [
+     0.6096569663469354,
+     1
+    ]
+   },
+   "missed": []
+  }
+ },
+ "controls": {
+  "sessions": 18,
+  "with_any_finding": {
+   "n": 0,
+   "d": 18,
+   "value": 0,
+   "ci95": [
+    0,
+    0.17588455058237484
+   ]
+  },
+  "with_sm_finding": {
+   "n": 0,
+   "d": 18,
+   "value": 0,
+   "ci95": [
+    0,
+    0.17588455058237484
+   ]
+  },
+  "with_non_d14_sm_finding": {
+   "n": 0,
+   "d": 18,
+   "value": 0,
+   "ci95": [
+    0,
+    0.17588455058237484
+   ]
+  },
+  "finding_kinds": {},
+  "published_insights": []
+ },
+ "severity": {
+  "cohorts": [
+   {
+    "cohort": "I2-validation-u1",
+    "users": 1,
+    "planned": "Low",
+    "predicted": "Low",
+    "reason": "Low: anomalous finding (no High/Medium rule met). U/N 1/6; median lost 3.2 s; A 0; calibrated; signal D4; rate 1/7 vs prior 0%: increase",
+    "insight_users": 1,
+    "calibrated": true,
+    "text": "[Low] Sales Invoice (new) › Save: single session: clicked Save and got a visible validation error 2 times in a row, editing fields between attempts (1 sessions, 3.2 s per loop); No abandonment observed; median 3.2 s lost per affected user. Likely cause: the requirement behind the validation error shown after Save is not visible before clicking, so the edits users make between attempts do not resolve it. Fix: on Sales Invoice (new), validate the fields Save depends on inline as they are filled, and name the failing field next to Save instead of only in the error message. Evidence: http://localhost/project/1/replay/01a21a0f-bf95-70ee-aaa5-9c14e0152ad7?t=16 @0:16. Signals: D4, confidence low."
+   },
+   {
+    "cohort": "I2-validation-u3",
+    "users": 3,
+    "planned": "High",
+    "predicted": "High",
+    "reason": "High: strong D4 (2 cycles) in 3>=3 users. U/N 3/6; median lost 2.5 s; A 0; calibrated; signal D4; rate 3/9 vs prior 0%: increase",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[High] Sales Invoice (new) › Save: 3 of 6 users / 3 sessions: clicked Save and got a visible validation error 2 times in a row, editing fields between attempts (3 sessions, 1.8 s–3.5 s per loop); No abandonment observed; median 2.5 s lost per affected user. Likely cause: the requirement behind the validation error shown after Save is not visible before clicking, so the edits users make between attempts do not resolve it. Fix: on Sales Invoice (new), validate the fields Save depends on inline as they are filled, and name the failing field next to Save instead of only in the error message. Evidence: http://localhost/project/1/replay/01a21a11-108d-77df-8df1-b5b8e3acc83f?t=12 @0:12, http://localhost/project/1/replay/01a21a10-b0ac-75af-a80d-3feb9016d72b?t=12 @0:12, http://localhost/project/1/replay/01a21a10-37f3-78c0-b4d3-d5ad0f52c14e?t=16 @0:16. Signals: D4, confidence high."
+   },
+   {
+    "cohort": "I2-validation-u6",
+    "users": 6,
+    "planned": "High",
+    "predicted": "High",
+    "reason": "High: strong D4 (2 cycles) in 6>=3 users. U/N 6/6; median lost 2.4 s; A 0; calibrated; signal D4; rate 6/12 vs prior 0%: increase",
+    "insight_users": 6,
+    "calibrated": true,
+    "text": "[High] Sales Invoice (new) › Save: 6 of 6 users / 6 sessions: clicked Save and got a visible validation error 2 times in a row, editing fields between attempts (6 sessions, 1.9 s–2.8 s per loop); No abandonment observed; median 2.4 s lost per affected user. Likely cause: the requirement behind the validation error shown after Save is not visible before clicking, so the edits users make between attempts do not resolve it. Fix: on Sales Invoice (new), validate the fields Save depends on inline as they are filled, and name the failing field next to Save instead of only in the error message. Evidence: http://localhost/project/1/replay/01a21a12-b305-71f3-8500-93eb93d9d029?t=11 @0:11, http://localhost/project/1/replay/01a21a11-d343-7512-8e20-6d992d3a9b84?t=12 @0:12, http://localhost/project/1/replay/01a21a11-70ae-73c4-a160-0ccc040fae72?t=12 @0:12, http://localhost/project/1/replay/01a21a13-8764-7696-b23c-685d153f9816?t=17 @0:17, http://localhost/project/1/replay/01a21a13-0d87-755c-8232-e462a29c791f?t=17 @0:17. Signals: D4, confidence high."
+   },
+   {
+    "cohort": "I2-validation-abandon-u3",
+    "users": 3,
+    "planned": "High",
+    "predicted": "High",
+    "reason": "High: 3 users abandoned after friction. U/N 3/6; median lost 2.2 s; A 3; calibrated; signal D4; rate 3/9 vs prior 0%: increase",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[High] Sales Invoice (new) › Save: 3 of 6 users / 3 sessions: clicked Save and got a visible validation error 2 times in a row, editing fields between attempts (3 sessions, 1.4 s–3.2 s per loop); 3 of 3 affected users abandoned the form without saving; median 2.2 s lost per affected user. Likely cause: the requirement behind the validation error shown after Save is not visible before clicking, so the edits users make between attempts do not resolve it. Fix: on Sales Invoice (new), validate the fields Save depends on inline as they are filled, and name the failing field next to Save instead of only in the error message. Evidence: http://localhost/project/1/replay/01a21a14-e568-7efd-ab01-ec4093413d3d?t=10 @0:10, http://localhost/project/1/replay/01a21a14-00e2-735c-aadc-135ec96ef8fb?t=11 @0:11, http://localhost/project/1/replay/01a21a14-603b-7bb2-82ef-c73e84367bff?t=18 @0:18. Signals: D4, confidence high."
+   },
+   {
+    "cohort": "I5-dead-apply-u1",
+    "users": 1,
+    "planned": "Low",
+    "predicted": "Low",
+    "reason": "Low: anomalous finding (no High/Medium rule met). U/N 1/6; median lost 1.3 s; A 0; calibrated; signal D1; rate 1/7 vs prior 0%: increase",
+    "insight_users": 1,
+    "calibrated": true,
+    "text": "[Low] Sales Invoice (new) › Apply: single session: clicked Apply 5 times within 1.3 s at the same spot (1 sessions); No abandonment observed; median 1.3 s lost per affected user. Likely cause: Apply gives no immediate visible feedback, so users click it again (5 clicks, each within 1 s and 30 px of the last). Fix: give Apply on Sales Invoice (new) an immediate pressed/disabled state and a progress indicator while its action runs. Evidence: http://localhost/project/1/replay/01a21a15-3f68-7a8b-92e9-9ff97f2a0959?t=6 @0:06. Signals: D1, confidence low."
+   },
+   {
+    "cohort": "I5-dead-apply-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 3>=2 and p 50.0%>=10%. U/N 3/6; median lost 1.1 s; A 0; calibrated; signal D1; rate 3/9 vs prior 0%: increase",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[Medium] Sales Invoice (new) › Apply: 3 of 6 users / 3 sessions: clicked Apply 5 times within 0.9 s–1.4 s at the same spot (3 sessions); No abandonment observed; median 1.1 s lost per affected user. Likely cause: Apply gives no immediate visible feedback, so users click it again (5 clicks, each within 1 s and 30 px of the last). Fix: give Apply on Sales Invoice (new) an immediate pressed/disabled state and a progress indicator while its action runs. Evidence: http://localhost/project/1/replay/01a21a15-d008-7338-aaee-ef39a7d8520f?t=4 @0:04, http://localhost/project/1/replay/01a21a16-310c-7451-9d3d-50a3ec96282d?t=6 @0:06, http://localhost/project/1/replay/01a21a16-ac7d-76c4-b7a6-801b2c086afb?t=6 @0:06. Signals: D1, confidence high."
+   },
+   {
+    "cohort": "I5-dead-apply-u6",
+    "users": 6,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 6>=2 and p 100.0%>=10%. U/N 6/6; median lost 1.2 s; A 0; calibrated; signal D1; rate 6/12 vs prior 0%: increase",
+    "insight_users": 6,
+    "calibrated": true,
+    "text": "[Medium] Sales Invoice (new) › Apply: 6 of 6 users / 6 sessions: clicked Apply 5 times within 0.9 s–1.4 s at the same spot (6 sessions); No abandonment observed; median 1.2 s lost per affected user. Likely cause: Apply gives no immediate visible feedback, so users click it again (5 clicks, each within 1 s and 30 px of the last). Fix: give Apply on Sales Invoice (new) an immediate pressed/disabled state and a progress indicator while its action runs. Evidence: http://localhost/project/1/replay/01a21a18-9db7-7c81-ad0f-b50ac323cd21?t=4 @0:04, http://localhost/project/1/replay/01a21a19-9033-7819-b4be-5e32449da41c?t=4 @0:04, http://localhost/project/1/replay/01a21a18-32d2-7ed8-bcd8-e610799f6051?t=4 @0:04, http://localhost/project/1/replay/01a21a17-2b9a-748d-9de0-d7d268c71a1c?t=6 @0:06, http://localhost/project/1/replay/01a21a17-a9ce-7120-84d7-0f936bf5c11a?t=6 @0:06. Signals: D1, confidence high."
+   },
+   {
+    "cohort": "I6-scroll-hunt-u1",
+    "users": 1,
+    "planned": "Low",
+    "predicted": "None",
+    "reason": null,
+    "insight_users": null,
+    "calibrated": null,
+    "text": null
+   },
+   {
+    "cohort": "I6-scroll-hunt-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 3>=2 and p 100.0%>=10%. U/N 3/3; median lost 8.3 s; A 0; uncalibrated; signal S3",
+    "insight_users": 3,
+    "calibrated": false,
+    "text": "[Medium] Item (list) › Scroll container: 3 of 3 users / 3 sessions: scrolled 12.0× the visible height in Scroll container with 6 direction reversals, without clicking or typing between reversals (3 sessions; page extent ≥ 8762 px); No abandonment observed; median 8.3 s lost per affected user. Likely cause: the target in Scroll container on Item (list) is hard to find by scrolling (6 up/down reversals of at least a quarter screen each, no search or filter used). Fix: on Item (list), put search/filter above Scroll container, sort the most likely target first, and keep the list short by default. Evidence: http://localhost/project/1/replay/01a21a1a-53cf-7e5f-80b4-3ef0f16e1b1f?t=5 @0:05, http://localhost/project/1/replay/01a21a1a-a796-75e0-927c-53d21556b4ae?t=6 @0:06, http://localhost/project/1/replay/01a21a1a-fbbc-7562-9602-02aefbab5df5?t=8 @0:08. Signals: S1+S2+S3, confidence med."
+   },
+   {
+    "cohort": "I6-scroll-hunt-u6",
+    "users": 6,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 6>=2 and p 100.0%>=10%. U/N 6/6; median lost 8.4 s; A 0; uncalibrated; signal S3",
+    "insight_users": 6,
+    "calibrated": false,
+    "text": "[Medium] Item (list) › Scroll container: 6 of 6 users / 6 sessions: scrolled 12.0× the visible height in Scroll container with 6 direction reversals, without clicking or typing between reversals (6 sessions; page extent ≥ 8762 px); No abandonment observed; median 8.4 s lost per affected user. Likely cause: the target in Scroll container on Item (list) is hard to find by scrolling (6 up/down reversals of at least a quarter screen each, no search or filter used). Fix: on Item (list), put search/filter above Scroll container, sort the most likely target first, and keep the list short by default. Evidence: http://localhost/project/1/replay/01a21a1b-6097-7147-8a84-74a3aed0fb5b?t=2 @0:02, http://localhost/project/1/replay/01a21a1d-1882-7664-abe9-ea930acff643?t=2 @0:02, http://localhost/project/1/replay/01a21a1c-1550-7554-a603-576dba7a01f2?t=5 @0:05, http://localhost/project/1/replay/01a21a1c-6249-797c-8a58-8e0153357b1e?t=6 @0:06, http://localhost/project/1/replay/01a21a1c-bb4e-7d43-a33d-e46cb30a3ffa?t=7 @0:07. Signals: S1+S2+S3, confidence med."
+   },
+   {
+    "cohort": "I7-revisit-u1",
+    "users": 1,
+    "planned": "Low",
+    "predicted": "None",
+    "reason": null,
+    "insight_users": null,
+    "calibrated": null,
+    "text": null
+   },
+   {
+    "cohort": "I7-revisit-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 3>=2 and p 50.0%>=10%. U/N 3/6; median lost 0.0 s; A 0; calibrated; signal R2",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[Medium] Sales Invoice (new) › sales invoice:new: 3 of 6 users / 3 sessions: re-opened Sales Invoice (new) 3 times within one task (3 sessions); No abandonment observed; no measurable time lost. Likely cause: Sales Invoice (new) does not keep what users need in view, so they reopen it 3 times. Fix: keep the state users return for visible on Sales Invoice (new) (pinned filters, recent records) instead of requiring a reopen. Evidence: http://localhost/project/1/replay/01a21a1d-faea-7013-adab-732d0b21fdf7?t=0 @0:00, http://localhost/project/1/replay/01a21a1e-6f1e-74ef-ac71-be0e6a4b7d73?t=0 @0:00, http://localhost/project/1/replay/01a21a1e-f4ed-7330-909b-fafc824573e8?t=0 @0:00. Signals: R2, confidence med."
+   },
+   {
+    "cohort": "I7-revisit-u6",
+    "users": 6,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 6>=2 and p 100.0%>=10%. U/N 6/6; median lost 0.0 s; A 0; calibrated; signal R2",
+    "insight_users": 6,
+    "calibrated": true,
+    "text": "[Medium] Sales Invoice (new) › sales invoice:new: 6 of 6 users / 6 sessions: re-opened Sales Invoice (new) 3 times within one task (6 sessions); No abandonment observed; no measurable time lost. Likely cause: Sales Invoice (new) does not keep what users need in view, so they reopen it 3 times. Fix: keep the state users return for visible on Sales Invoice (new) (pinned filters, recent records) instead of requiring a reopen. Evidence: http://localhost/project/1/replay/01a21a1f-81f5-7afe-a7d9-4f9d1d44e3a4?t=0 @0:00, http://localhost/project/1/replay/01a21a20-0eaa-7713-ab41-7b2a46a47290?t=0 @0:00, http://localhost/project/1/replay/01a21a20-9d23-7dcb-8e4a-1ff855a8f53c?t=0 @0:00, http://localhost/project/1/replay/01a21a21-1bcf-732d-85d3-d41eced10379?t=0 @0:00, http://localhost/project/1/replay/01a21a21-91fb-7f17-8a2b-7900bde57651?t=0 @0:00. Signals: R2, confidence med."
+   },
+   {
+    "cohort": "I1-hesitation-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 3>=2 and p 50.0%>=10%. U/N 3/6; median lost 0.9 s; A 0; calibrated; signal D6",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[Medium] Sales Invoice (new) › Due Date: 3 of 6 users / 3 sessions: paused 3.8 s–7.4 s on Due Date before typing (3 sessions); No abandonment observed; median 0.9 s lost per affected user. Likely cause: the label Due Date does not tell users what to enter; first input came 3.8 s–7.4 s after focus. Fix: rename Due Date on Sales Invoice (new) to the term users expect and add a one-line description with an example under it. Evidence: http://localhost/project/1/replay/01a21a23-8c97-7657-9025-521c2a945b18?t=4 @0:04, http://localhost/project/1/replay/01a21a23-1f7a-7b05-a1d9-d7c500f27b4f?t=4 @0:04, http://localhost/project/1/replay/01a21a22-9dc5-7d66-a6d7-e6414e55c8cc?t=5 @0:05. Signals: D6, confidence med."
+   },
+   {
+    "cohort": "I3-wait-6s-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 3>=2 and p 50.0%>=10%. U/N 3/6; median lost 6.0 s; A 0; calibrated; signal D10",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[Medium] Purchase Order (new) › Save: 3 of 6 users / 3 sessions: waited 6.0 s (median 6.0 s) after Save before the screen responded (3 sessions; 6 clicks/keys during the waits); No abandonment observed; median 6.0 s lost per affected user. Likely cause: the response to Save is slow (loading overlay stayed visible for 6.0 s). Fix: profile the request behind Save on Purchase Order (new), bring it under 3 s, and show progress with an estimated time while it runs. Evidence: http://localhost/project/1/replay/01a21a26-0685-7ff4-821c-3c296a667996?t=9 @0:09, http://localhost/project/1/replay/01a21a25-2064-785d-9bbd-9ff358f39ca6?t=10 @0:10, http://localhost/project/1/replay/01a21a25-8689-7493-8ef5-d00f42309512?t=16 @0:16. Signals: D10, confidence med."
+   },
+   {
+    "cohort": "I3-wait-15s-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 3>=2 and p 50.0%>=10%. U/N 3/6; median lost 15 s; A 0; calibrated; signal D10",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[Medium] Purchase Order (new) › Save: 3 of 6 users / 3 sessions: waited 15 s (median 15 s) after Save before the screen responded (3 sessions; 6 clicks/keys during the waits); No abandonment observed; median 15 s lost per affected user. Likely cause: the response to Save is slow (loading overlay stayed visible for 15 s). Fix: profile the request behind Save on Purchase Order (new), bring it under 3 s, and show progress with an estimated time while it runs. Evidence: http://localhost/project/1/replay/01a21a27-0b29-73bd-8775-30bce3206fb6?t=9 @0:09, http://localhost/project/1/replay/01a21a27-91ad-77b7-b106-9c1a716033c3?t=14 @0:14, http://localhost/project/1/replay/01a21a26-668b-731f-ab13-da70f162cf5a?t=16 @0:16. Signals: D10, confidence med."
+   },
+   {
+    "cohort": "R2-reopen-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 3>=2 and p 50.0%>=10%. U/N 3/6; median lost 0.0 s; A 0; calibrated; signal R2",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[Medium] Sales Invoice (new) › sales invoice:new: 3 of 6 users / 3 sessions: re-opened Sales Invoice (new) 3 times within one task (3 sessions); No abandonment observed; no measurable time lost. Likely cause: Sales Invoice (new) does not keep what users need in view, so they reopen it 3 times. Fix: keep the state users return for visible on Sales Invoice (new) (pinned filters, recent records) instead of requiring a reopen. Evidence: http://localhost/project/1/replay/01a21a28-2e65-71a0-b24f-5391cf5ea28e?t=0 @0:00, http://localhost/project/1/replay/01a21a28-ae00-796c-9384-de42a0fc089e?t=0 @0:00, http://localhost/project/1/replay/01a21a29-3c33-7235-a9df-5b46a0cbbffd?t=0 @0:00. Signals: R2, confidence med."
+   },
+   {
+    "cohort": "D5-abandon-u3",
+    "users": 3,
+    "planned": "High",
+    "predicted": "High",
+    "reason": "High: 3 users abandoned after friction. U/N 3/6; median lost 17 s; A 3; calibrated; signal D5; rate 3/9 vs prior 0%: increase",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[High] Sales Invoice (new) › Rate: 3 of 6 users / 3 sessions: left the form after editing 5 fields without saving; last field edited: Rate (3 sessions); 3 of 3 affected users abandoned the form without saving; median 17 s lost per affected user. Likely cause: no friction signal was recorded before users left; the reason is not observable in the replay. Fix: on Sales Invoice (new), keep a recoverable draft of the form and surface what blocks saving next to Rate. Evidence: http://localhost/project/1/replay/01a21a2a-8377-767d-9328-a8b3023a95df?t=3 @0:03, http://localhost/project/1/replay/01a21a2a-2844-7809-8964-ebbaf64bc778?t=5 @0:05, http://localhost/project/1/replay/01a21a29-cbab-7d25-8d2f-29b3d982505c?t=5 @0:05. Signals: D5, confidence high."
+   }
+  ],
+  "negative_dose_controls": [
+   {
+    "cohort": "I3-wait-2s-u3",
+    "insight": null,
+    "d10_hits": 0
+   }
+  ],
+  "matrix": {
+   "Low": {
+    "None": 2,
+    "Low": 2,
+    "Medium": 0,
+    "High": 0
+   },
+   "Medium": {
+    "None": 0,
+    "Low": 0,
+    "Medium": 10,
+    "High": 0
+   },
+   "High": {
+    "None": 0,
+    "Low": 0,
+    "Medium": 0,
+    "High": 4
+   }
+  },
+  "quadratic_weighted_kappa_4level": 0.9090909090909092,
+  "quadratic_weighted_kappa_detected_only": 1,
+  "dose_spearman": 0.762000762001143,
+  "series": [
+   {
+    "series": "I2-validation",
+    "levels": [
+     "1u:Low",
+     "3u:High",
+     "6u:High"
+    ],
+    "inversions": 0
+   },
+   {
+    "series": "I5-dead-apply",
+    "levels": [
+     "1u:Low",
+     "3u:Medium",
+     "6u:Medium"
+    ],
+    "inversions": 0
+   },
+   {
+    "series": "I6-scroll-hunt",
+    "levels": [
+     "1u:None",
+     "3u:Medium",
+     "6u:Medium"
+    ],
+    "inversions": 0
+   },
+   {
+    "series": "I7-revisit",
+    "levels": [
+     "1u:None",
+     "3u:Medium",
+     "6u:Medium"
+    ],
+    "inversions": 0
+   }
+  ]
+ },
+ "insight": {
+  "published": 26,
+  "hit_at_3": {
+   "n": 16,
+   "d": 18,
+   "value": 0.8888888888888888,
+   "ci95": [
+    0.6719975513339578,
+    0.9689811315464172
+   ]
+  },
+  "hit_at_10": {
+   "n": 16,
+   "d": 18,
+   "value": 0.8888888888888888,
+   "ci95": [
+    0.6719975513339578,
+    0.9689811315464172
+   ]
+  },
+  "per_cohort": [
+   {
+    "cohort": "I2-validation-u1",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I2-validation-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I2-validation-u6",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I2-validation-abandon-u3",
+    "rank": 2,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I5-dead-apply-u1",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I5-dead-apply-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I5-dead-apply-u6",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I6-scroll-hunt-u1",
+    "rank": null,
+    "hit3": false,
+    "hit10": false
+   },
+   {
+    "cohort": "I6-scroll-hunt-u3",
+    "rank": 2,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I6-scroll-hunt-u6",
+    "rank": 2,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I7-revisit-u1",
+    "rank": null,
+    "hit3": false,
+    "hit10": false
+   },
+   {
+    "cohort": "I7-revisit-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I7-revisit-u6",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I1-hesitation-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I3-wait-6s-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "I3-wait-15s-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "R2-reopen-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "D5-abandon-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   }
+  ],
+  "mean_rubric": 17.346153846153847,
+  "generic": 0,
+  "citations": 88,
+  "hallucinated_citations": 0
+ },
+ "unmatched_hits_on_injected": [
+  "D4@sales invoice:new Save 16.9s",
+  "D4@sales invoice:new Save 16.8s",
+  "D4@sales invoice:new Save 12.5s",
+  "D4@sales invoice:new Save 12.3s",
+  "D4@sales invoice:new Save 12.3s",
+  "D4@sales invoice:new Save 12.2s",
+  "D4@sales invoice:new Save 19.5s",
+  "D4@sales invoice:new Save 11.6s",
+  "D4@sales invoice:new Save 17.6s",
+  "D4@sales invoice:new Save 17.6s",
+  "R1@accounts receivable:report item:list 4.9s",
+  "S2@item:list Scroll container 8s",
+  "S3@item:list Scroll container 8s",
+  "R1@accounts receivable:report item:list 3.1s",
+  "S2@item:list Scroll container 5.4s",
+  "S3@item:list Scroll container 5.4s",
+  "R1@accounts receivable:report item:list 4.1s",
+  "S2@item:list Scroll container 6.3s",
+  "S3@item:list Scroll container 6.3s",
+  "R1@accounts receivable:report item:list 4.8s",
+  "S2@item:list Scroll container 8s",
+  "S3@item:list Scroll container 8s",
+  "R1@accounts receivable:report item:list 0s",
+  "S2@item:list Scroll container 2.2s",
+  "S3@item:list Scroll container 2.2s",
+  "R1@accounts receivable:report item:list 5.9s",
+  "S2@item:list Scroll container 9s",
+  "S3@item:list Scroll container 9s",
+  "R1@accounts receivable:report item:list 3.6s",
+  "S2@item:list Scroll container 5.9s",
+  "S3@item:list Scroll container 5.9s",
+  "R1@accounts receivable:report item:list 4.4s",
+  "S2@item:list Scroll container 6.9s",
+  "S3@item:list Scroll container 6.9s",
+  "R1@accounts receivable:report item:list 4.3s",
+  "S2@item:list Scroll container 7.2s",
+  "S3@item:list Scroll container 7.2s",
+  "R1@accounts receivable:report item:list 0s",
+  "S2@item:list Scroll container 2.3s",
+  "S3@item:list Scroll container 2.3s",
+  "R1@sales invoice:new customer:list 5.4s",
+  "R1@sales invoice:new customer:list 4.1s",
+  "R1@sales invoice:new customer:list 4.9s",
+  "R1@sales invoice:new customer:list 4.7s",
+  "R1@sales invoice:new customer:list 4.9s",
+  "R1@sales invoice:new customer:list 4.7s",
+  "R1@sales invoice:new customer:list 3.5s",
+  "R1@sales invoice:new customer:list 3.6s",
+  "R1@sales invoice:new customer:list 5.7s",
+  "R1@sales invoice:new customer:list 4.2s",
+  "D14@purchase order:new Save 12.3s",
+  "D14@purchase order:new Save 10.2s",
+  "D14@purchase order:new Save 16.4s",
+  "D14@purchase order:new Save 10.8s",
+  "D14@purchase order:new Save 16.7s",
+  "D14@purchase order:new Save 9.4s",
+  "R1@sales invoice:new sales invoice:list 4.6s",
+  "R1@sales invoice:new sales invoice:list 5.8s",
+  "R1@sales invoice:new sales invoice:list 4.7s"
+ ]
+}

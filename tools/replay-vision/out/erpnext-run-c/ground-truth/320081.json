@@ -1,0 +1,53 @@
+{
+  "plan": {
+    "seed": 320081,
+    "phase": "heldout",
+    "user": "rv.eval.0@example.test",
+    "persona": "Expert",
+    "workflow": "report",
+    "injection": "scroll_hunt",
+    "dose": 200,
+    "planned_severity": "Medium",
+    "cohort": "I6-scroll-hunt-u3",
+    "cohort_users": 3
+  },
+  "session_id": "01a21a1a-a796-75e0-927c-53d21556b4ae",
+  "truth": [
+    {
+      "id": "320081:0",
+      "session_id": "01a21a1a-a796-75e0-927c-53d21556b4ae",
+      "kind": "scroll_hunt",
+      "screen": "/desk/stock/item",
+      "element": "Item 190",
+      "t_start": 1795734290232,
+      "t_end": 1795734294000,
+      "expected_detectors": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "expected_severity": "Medium",
+      "dose": 200,
+      "seed": 320081,
+      "observed": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "opened_report",
+      "ok": true,
+      "at": 1795734287617
+    },
+    {
+      "name": "report_filters_applied",
+      "ok": true,
+      "at": 1795734300202,
+      "detail": "{\"date\":\"2026-11-01\",\"group\":1}"
+    },
+    {
+      "name": "report_inspected",
+      "ok": true,
+      "at": 1795734301295
+    }
+  ]
+}

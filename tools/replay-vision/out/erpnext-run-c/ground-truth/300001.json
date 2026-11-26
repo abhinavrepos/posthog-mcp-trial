@@ -1,0 +1,35 @@
+{
+  "plan": {
+    "seed": 300001,
+    "phase": "heldout",
+    "user": "rv.eval.0@example.test",
+    "persona": "Expert",
+    "workflow": "purchase"
+  },
+  "session_id": "01a21a0a-4e91-7f0c-8548-197836719c74",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_purchase",
+      "ok": true,
+      "at": 1795733215824
+    },
+    {
+      "name": "party_input_attempted",
+      "ok": true,
+      "at": 1795733218745
+    },
+    {
+      "name": "line_item_entered",
+      "ok": false,
+      "at": 1795733221959,
+      "detail": "item=false,qty=true,rate=true"
+    },
+    {
+      "name": "saved_draft",
+      "ok": false,
+      "at": 1795733224580,
+      "detail": "Please fill the following mandatory fields before saving: In Items, Item Code is required in every row. In Items, Item Name is required in e"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "plan": {
+    "seed": 300052,
+    "phase": "heldout",
+    "user": "rv.eval.5@example.test",
+    "persona": "Returning",
+    "workflow": "report"
+  },
+  "session_id": "01a21a0f-84eb-7668-9a83-877c79a0f335",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_report",
+      "ok": true,
+      "at": 1795733559096
+    },
+    {
+      "name": "report_filters_applied",
+      "ok": true,
+      "at": 1795733563682,
+      "detail": "{\"date\":\"2026-11-01\",\"group\":1}"
+    },
+    {
+      "name": "report_inspected",
+      "ok": true,
+      "at": 1795733564925
+    }
+  ]
+}
