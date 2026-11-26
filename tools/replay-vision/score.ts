@@ -54,8 +54,8 @@ export function spearman(pairs:[number,number][]):number|null{
 export function cohortInsight(insights:PipelineInsight[],injection:string,screen:string,sessions:Set<string>):PipelineInsight|undefined{
  return insights.filter(x=>x.screen===screen&&x.members.some(m=>sessions.has(m.session_id)&&COMPATIBLE[injection].includes(m.kind))).sort((a,b)=>b.users_affected-a.users_affected||LEVELS.indexOf(b.severity as Level)-LEVELS.indexOf(a.severity as Level))[0]
 }
-export function insightMatches(x:PipelineInsight,injection:string,screen:string,users:number){
- const ok=ACCEPTED_ELEMENTS[injection]
+export function insightMatches(x:PipelineInsight,injection:string,screen:string,users:number,accepted:Record<string,string[]>=ACCEPTED_ELEMENTS){
+ const ok=accepted[injection]??['*']
  return x.screen===screen&&(ok.includes('*')||ok.includes(x.element.toLowerCase()))&&x.members.some(m=>COMPATIBLE[injection].includes(m.kind))&&Math.abs(x.users_affected-users)<=1&&x.rubric.score>=14
 }
 /** Screen the injection happens on (the truth label's screen when one was delivered). */
@@ -68,11 +68,12 @@ function injectionScreen(k:Cohort,labels:Label[]):string{
  * screen_start existed (2026-11-26 run) clicked Save on the new form by construction, so doctype:form maps to doctype:new.
  * This correction depends only on the harness, never on a pipeline finding. */
 export function truthScreen(t:{kind:string;screen:string;screen_start?:string}):string{
+ if(!t.screen.startsWith('/'))return t.screen // already a screen key (e.g. Reval app screens)
  if(t.screen_start)return screenKey(t.screen_start)
  const k=screenKey(t.screen)
  return t.kind==='slow_wait'?k.replace(/:form$/,':new'):k
 }
-export function score(captured:Captured[],p:PipelineOutput,cohorts:Cohort[],controlSeeds:number[]){
+export function score(captured:Captured[],p:PipelineOutput,cohorts:Cohort[],controlSeeds:number[],accepted:Record<string,string[]>=ACCEPTED_ELEMENTS){
  const held=captured.filter(c=>c.plan.phase==='heldout'&&c.session_id&&p.sessions[c.session_id])
  const analysed=held.filter(c=>['complete','partial'].includes(p.sessions[c.session_id!].analysis.coverage.state))
  const seedOf=new Map(held.map(c=>[c.session_id!,c.plan.seed]))
@@ -113,7 +114,7 @@ export function score(captured:Captured[],p:PipelineOutput,cohorts:Cohort[],cont
   const sessions=new Set(held.filter(c=>c.plan.cohort===k.id).map(c=>c.session_id!)),screen=injectionScreen(k,labels)
   const x=cohortInsight(scope.insights,k.injection,screen,sessions)
   severity.push({cohort:k.id,users:k.users,planned:k.planned,predicted:(x?.severity as Level)??'None',reason:x?.severity_reason??null,insight_users:x?.users_affected??null,calibrated:x?.calibrated??null,text:x?.text??null})
-  const rank=scope.insights.findIndex(y=>insightMatches(y,k.injection,screen,k.users))
+  const rank=scope.insights.findIndex(y=>insightMatches(y,k.injection,screen,k.users,accepted))
   insight_hits.push({cohort:k.id,rank:rank<0?null:rank+1,hit3:rank>=0&&rank<3,hit10:rank>=0&&rank<10})
  }
  const negative=cohorts.filter(k=>!k.planned).map(k=>{const sessions=new Set(held.filter(c=>c.plan.cohort===k.id).map(c=>c.session_id!));const x=cohortInsight(p.scopes[k.id]?.insights??[],k.injection,injectionScreen(k,labels),sessions);return {cohort:k.id,insight:x?{severity:x.severity,users:x.users_affected}:null,d10_hits:hits.filter(h=>sessions.has(h.session_id)&&h.kind==='D10').length}})
@@ -135,7 +136,7 @@ export function score(captured:Captured[],p:PipelineOutput,cohorts:Cohort[],cont
   precision_moment_level:fraction(hits.filter(compatibleHit).length,hits.length),sm_precision_moment_level:fraction(hits.filter(h=>h.strength!=='weak'&&compatibleHit(h)).length,hits.filter(h=>h.strength!=='weak').length),
   sm_precision:fraction(sm.filter(i=>match.usedHit.has(i)).length,sm.length),
   sm_precision_injected_sessions:(()=>{const idx=sm.filter(i=>injectedSessions.has(hits[i].session_id));return fraction(idx.filter(i=>match.usedHit.has(i)).length,idx.length)})(),
-  matched_element_agreement:fraction(match.matched.filter(m=>ACCEPTED_ELEMENTS[labels[m.truth].kind].some(e=>e==='*'||e===hits[m.hit].element.toLowerCase())).length,tp),
+  matched_element_agreement:fraction(match.matched.filter(m=>(accepted[labels[m.truth].kind]??['*']).some(e=>e==='*'||e===hits[m.hit].element.toLowerCase())).length,tp),
   per_detector,per_injection,
   controls:{sessions:controls.length,with_any_finding:fraction(ctlHits(()=>true),controls.length),with_sm_finding:fraction(ctlHits(h=>h.strength!=='weak'),controls.length),with_non_d14_sm_finding:fraction(ctlHits(h=>h.strength!=='weak'&&h.kind!=='D14'),controls.length),finding_kinds:controlKinds,published_insights:p.scopes.controls?.insights.map(x=>({severity:x.severity,users:x.users_affected,text:x.text}))??[]},
   severity:{cohorts:severity,negative_dose_controls:negative,matrix,quadratic_weighted_kappa_4level:weightedKappa(severity.map(s=>[s.planned,s.predicted])),quadratic_weighted_kappa_detected_only:weightedKappa(severity.filter(s=>s.predicted!=='None').map(s=>[s.planned,s.predicted]),['Low','Medium','High']),dose_spearman:spearman(dosePairs),series},

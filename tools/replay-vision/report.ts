@@ -10,10 +10,12 @@ type F={n:number;d:number;value:number|null;ci95:[number,number]|null}
 const pct=(v:F|undefined)=>!v||v.value===null?`undefined (n=0)`:`${(100*v.value).toFixed(1)}% [${(100*v.ci95![0]).toFixed(1)}, ${(100*v.ci95![1]).toFixed(1)}] (${v.n}/${v.d})`
 const num=(x:number|null|undefined,d=2)=>x===null||x===undefined?'undefined':x.toFixed(d)
 
-export async function writeReport(out:string,captures:Captured[],p:PipelineOutput,h:ReturnType<typeof scoreFn>,cal:ReturnType<typeof calibrationSummary>,run:{evaluate_ms:number;peak_rss_mib:number}){
+export interface ReportApp { title: string; design: string; workflows: string[]; done(c: Captured): boolean; note?: string }
+export async function writeReport(out:string,captures:Captured[],p:PipelineOutput,h:ReturnType<typeof scoreFn>,cal:ReturnType<typeof calibrationSummary>,run:{evaluate_ms:number;peak_rss_mib:number},app?:ReportApp){
  const sessions=Object.values(p.sessions),bytes=sessions.map(s=>s.bytes).sort((a,b)=>a-b)
  const q=(f:number)=>bytes[Math.min(bytes.length-1,Math.max(0,Math.ceil(f*bytes.length)-1))]??0
- const done=(c:Captured)=>c.plan.workflow==='report'?c.steps.some(s=>s.name==='report_filters_applied'&&s.ok):c.plan.injection==='abandon'||c.plan.abandon_after?c.steps.some(s=>s.name==='line_item_entered'&&s.ok):c.steps.some(s=>s.name==='submitted'&&s.ok)
+ const erpDone=(c:Captured)=>c.plan.workflow==='report'?c.steps.some(s=>s.name==='report_filters_applied'&&s.ok):c.plan.injection==='abandon'||c.plan.abandon_after?c.steps.some(s=>s.name==='line_item_entered'&&s.ok):c.steps.some(s=>s.name==='submitted'&&s.ok)
+ const done=app?app.done:erpDone
  const wf=(phase:string,w:string,inj:boolean)=>{const xs=captures.filter(c=>c.plan.phase===phase&&c.plan.workflow===w&&!!c.plan.injection===inj);return `${xs.filter(done).length}/${xs.length}`}
  const browserS=Math.round(captures.reduce((s,x)=>s+Math.max(0,Date.parse(x.ended_at)-Date.parse(x.started_at)),0)/1000)
  const det=Object.entries(h.per_detector).filter(([,v])=>v.tp+v.fp+v.fn>0).map(([k,v])=>`| ${k} | ${v.tp} | ${v.fp} | ${v.fp_on_controls} | ${v.fn} | ${pct(v.precision)} | ${pct(v.recall)} |`).join('\n')
@@ -25,18 +27,19 @@ export async function writeReport(out:string,captures:Captured[],p:PipelineOutpu
  const seen=new Set<string>(),picked:typeof examples=[]
  for(const e of examples.sort((a,b)=>['High','Medium','Low'].indexOf(a.x.severity)-['High','Medium','Low'].indexOf(b.x.severity)||b.x.users_affected-a.x.users_affected)){const k=e.x.family+'|'+e.x.screen;if(seen.has(k))continue;seen.add(k);picked.push(e);if(picked.length===10)break}
  const misses=Object.entries(h.per_injection).flatMap(([k,v])=>v.missed.map(x=>`- ${k} ${x.id} (${x.session_id}, window ${x.window_s[0]}–${x.window_s[1]} s): pipeline found ${x.found_on_session.join(', ')||'nothing'}`)).join('\n')
- const text=`# Replay Vision — ERPNext v16 evaluation report
-
-Generated ${new Date().toISOString()} by \`tools/replay-vision/run.ts\`. Frozen config hash (detectors + severity + calibration baselines) \`${p.frozen.hash}\`, baseline hash \`${p.frozen.baseline_hash}\`, detectors \`${p.frozen.detectors_version}\`, severity \`${p.frozen.severity_version}\`. The hash was written to \`frozen-config.json\` after calibration and before any held-out session was analysed. Calibration and held-out sessions have disjoint seeds and session ids. Held-out results are the headline; calibration is reported separately.
-
-## Design
+ const designDefault=`## Design
 
 - Calibration: ${CALIBRATION_REPEATS} clean repeats × 6 personas (Expert, Novice, Hurried, Careful, Explorer, Returning; users rv.cal.0–5) × 3 workflows (Sales Invoice create→Save→Submit, Purchase Order create→Save→Submit, Accounts Receivable report filter + inspect) = ${cal.sessions} sessions. Baselines are recomputed from these alone (product \`recomputeBaselines\`). Calibrated screens (≥20 sessions, ≥5 users): ${cal.calibrated_screens.join(', ')||'none'}.
 - Held-out controls: 6 users (rv.eval.0–5) × 3 workflows, no injection (18 sessions).
 - Held-out injected cohorts: ${COHORTS.length} cohorts, ${COHORTS.reduce((a,k)=>a+k.users,0)} sessions. Dose = distinct affected users (1/3/6) for I2 validation loop, I5 inert Apply, I6 scroll hunt, I7 Customer↔Invoice revisits; I2 with abandonment; I3 save waits of 2/6/15 s; I1 relabelled field with 3–9 s hesitation; R2 re-open; D5 abandonment. Each cohort is scored in its own scope (cohort + the 18 controls), as one client would be in the product.
 - Pipeline: product code only (\`analyzeFile → storeFindings → runMetrics → recomputeBaselines (calibration only) → refreshInsights\`), see \`pipeline.ts\`. No LLM call; provider calls and spend: 0 / $0.
 
-## Coverage and cost
+`
+ const text=`# Replay Vision — ${app?.title??'ERPNext v16'} evaluation report
+
+Generated ${new Date().toISOString()} by \`tools/replay-vision/${app?'run-reval.ts':'run.ts'}\`. Frozen config hash (detectors + severity + calibration baselines) \`${p.frozen.hash}\`, baseline hash \`${p.frozen.baseline_hash}\`, detectors \`${p.frozen.detectors_version}\`, severity \`${p.frozen.severity_version}\`. The hash was written to \`frozen-config.json\` after calibration and before any held-out session was analysed. Calibration and held-out sessions have disjoint seeds and session ids. Held-out results are the headline; calibration is reported separately.
+
+${app?app.design:designDefault}## Coverage and cost
 
 - ${sessions.length} sessions analysed (${h.coverage.complete} held-out complete, ${h.coverage.partial} held-out partial; calibration ${cal.complete}/${cal.sessions} complete). A session without rrweb Meta + FullSnapshot is marked partial/missing_snapshot by the analysis.
 - Snapshot JSONL from PostHog's public API: total ${(bytes.reduce((a,b)=>a+b,0)/1048576).toFixed(1)} MiB, median ${(q(.5)/1024).toFixed(0)} KiB, p95 ${(q(.95)/1024).toFixed(0)} KiB, max ${((bytes.at(-1)??0)/1024).toFixed(0)} KiB.
@@ -44,7 +47,7 @@ Generated ${new Date().toISOString()} by \`tools/replay-vision/run.ts\`. Frozen 
 
 | Workflow | Calibration done | Held-out controls done | Held-out injected done |
 | --- | ---: | ---: | ---: |
-${['invoice','purchase','report'].map(w=>`| ${w} | ${wf('calibration',w,false)} | ${wf('heldout',w,false)} | ${wf('heldout',w,true)} |`).join('\n')}
+${(app?.workflows??['invoice','purchase','report']).map(w=>`| ${w} | ${wf('calibration',w,false)} | ${wf('heldout',w,false)} | ${wf('heldout',w,true)} |`).join('\n')}
 
 (Injected abandonment sessions count as done when the line item was entered; they never save by design.)
 

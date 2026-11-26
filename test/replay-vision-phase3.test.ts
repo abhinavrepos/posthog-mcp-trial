@@ -369,3 +369,10 @@ test('v7: D14 ignores a click without a mousedown on the same element (a script 
     // No mousedowns recorded at all: undetectable, the old behaviour stays.
     assert.ok(detectCandidates(tl([nav(0, 'purchase order:new'), save(1000, 5), save(5000, 5)])).some((c) => c.kind === 'D14'))
 })
+
+test('D6: focus that arrived by Tab while the user clicked elsewhere (Save) before typing is not hesitation', () => {
+    const t = tl([nav(0, 'cap / floor:screen'), { ...focus(1000, 'Notional'), node_id: 52 }, click(1600, 'Save', { node_id: 9 }), { offset_ms: 5800, kind: 'input_activity', label: 'Notional', node_id: 52 }])
+    assert.ok(!kinds(detectCandidates(t)).includes('D6'))
+    const h = tl([nav(0, 'cap / floor:screen'), { ...focus(1000, 'Notional'), node_id: 52 }, { offset_ms: 5800, kind: 'input_activity', label: 'Notional', node_id: 52 }])
+    assert.ok(kinds(detectCandidates(h)).includes('D6'), 'a real pause still counts')
+})

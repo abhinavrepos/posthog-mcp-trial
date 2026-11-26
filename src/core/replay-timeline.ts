@@ -22,17 +22,26 @@ export type TimelineKind = 'pointer'|'click'|'scroll'|'input_activity'|'focus'|'
 export interface TimelineItem { event_id: string; offset_ms: number; raw_offset_ms: number; window_id: string; frame_id?: number; kind: TimelineKind; source: 'rrweb'|'app'; x?: number; y?: number; node_id?: number; tag?: string; role?: string; label?: string; screen?: string; scroll_y?: number; scroll_id?: number; error_text?: string; error_kind?: 'visible'|'console'|'exception'|'network'; interaction?: number }
 export interface Coverage { state: 'complete'|'partial'|'oversize'; lines: number; bad_lines: number; full_snapshot_seen: boolean; meta_seen: boolean; pointer_seen: boolean; click_seen: boolean; dom_seen: boolean; input_masked: boolean; iframe_seen: boolean; iframe_unseen: boolean; canvas_unseen: boolean; clock_anomaly: boolean; truncated: boolean; reasons: string[] }
 export interface Timeline { items: TimelineItem[]; coverage: Coverage; start_time: string; width: number; height: number; screens: string[] }
-interface NodeInfo { parent: number; tag: string; role: string; label: string; label_rank: number; attrs: string; field?: string; frame_x?:number;frame_y?:number }
+interface NodeInfo { parent: number; tag: string; role: string; label: string; label_rank: number; attrs: string; field?: string; dom_id?: string; for_id?: string; frame_x?:number;frame_y?:number }
 /** Precedence of label-bearing attributes; child text ranks 0. Attribute mutations update a label of equal or lower rank. */
 const LABEL_ATTRS: [string, number][] = [['aria-label',3],['data-label',2],['title',1]]
 const rec = (v: unknown): Raw | undefined => v && typeof v === 'object' && !Array.isArray(v) ? v as Raw : undefined
 const finite = (v: unknown): number | undefined => typeof v === 'number' && Number.isFinite(v) ? v : undefined
 const safeId = (v: unknown): number | undefined => { const n=finite(v); return n !== undefined && Number.isSafeInteger(n) ? n : undefined }
+/** Labels the application vocabulary adds for one analysis (APP_EVENTS_FILE: buttons, fields, tabs, screen names). Set per readTimeline call. */
+let APP_LABELS = new Set<string>()
 function safeLabel(v: unknown): string {
     if (typeof v !== 'string' || v.length > 100) return ''
-    const s = v.trim().replace(/\s+/g,' ')
-    return LABELS.has(s) ? s : ''
+    const s = v.trim().replace(/\s+/g,' ').replace(/\s*:$/,'') // Ext field labels end with a ':' separator
+    return LABELS.has(s) || APP_LABELS.has(s) ? s : ''
 }
+/** Screen key for an application screen event (e.g. Reval PageView with dialog_id/dialog_name): "<visible name>:screen". */
+export function appScreenKey(dialog: string, name?: string): string {
+    const n = (name && !/^(unknown|undefined|null)$/i.test(name) ? name : dialog).trim().replace(/\s+/g, ' ').slice(0, 80).toLowerCase()
+    return `${n || 'unknown'}:screen`
+}
+/** One application event as the timeline uses it; screen/nav/error/notice are resolved from APP_EVENTS_FILE by the caller. */
+export interface AppEventInput { timestamp: string; event: string; path?: string; screen?: string; nav?: 'open' | 'close'; error?: boolean; notice?: boolean }
 export function screenKey(route: string, title = ''): string {
     let path = '/'
     try { path = new URL(route, 'http://local.invalid').pathname } catch {}
@@ -73,7 +82,7 @@ function noteVisibleLabel(labelNode:number, text:string, map:Map<number,NodeInfo
     let id=labelNode
     for(let depth=0;depth<6&&id;depth++){const n=map.get(id);if(!n)return;if(n.field){visible.set(id,text);return}id=n.parent}
 }
-function nodeWalk(root: unknown, map: Map<number,NodeInfo>, labels: Map<number,string>, budget:{n:number}, parent=0, visible:Map<number,string>=new Map()): boolean {
+function nodeWalk(root: unknown, map: Map<number,NodeInfo>, labels: Map<number,string>, budget:{n:number}, parent=0, visible:Map<number,string>=new Map(), labelFor:Map<string,string>=new Map()): boolean {
     const stack: [unknown,number][]=[[root,parent]]
     while(stack.length) {
         const [value,p]=stack.pop()!, n=rec(value); if(!n) continue
@@ -88,9 +97,12 @@ function nodeWalk(root: unknown, map: Map<number,NodeInfo>, labels: Map<number,s
             for(let i=0;i<queue.length&&i<30;i++){const child=rec(queue[i]);if(!child)continue;if(typeof child.textContent==='string')raw+=child.textContent.slice(0,100);else if(Array.isArray(child.childNodes))queue.push(...child.childNodes.slice(0,8))}
             label=safeLabel(raw)
         }
-        if(id!==undefined) {if(!map.has(id)){if(budget.n>=MAX_NODES)return false;budget.n++}map.set(id,{parent:p,tag,role:String(a.role||'').slice(0,30),label,label_rank,attrs,field:fieldLabel(a['data-fieldname'])||undefined,frame_x:finite(Number(a.rr_left)),frame_y:finite(Number(a.rr_top))});if(label)labels.set(p,labels.has(p)&&labels.get(p)!==label?'':label)
-            if(label&&tag==='label')noteVisibleLabel(id,label,map,visible)
-            else if(label&&!tag&&map.get(p)?.tag==='label')noteVisibleLabel(p,label,map,visible)}
+        if(id!==undefined) {if(!map.has(id)){if(budget.n>=MAX_NODES)return false;budget.n++}map.set(id,{parent:p,tag,role:String(a.role||'').slice(0,30),label,label_rank,attrs,field:fieldLabel(a['data-fieldname'])||undefined,dom_id:typeof a.id==='string'&&a.id.length<=120?a.id:undefined,for_id:tag==='label'&&typeof a.for==='string'&&a.for.length<=120?a.for:undefined,frame_x:finite(Number(a.rr_left)),frame_y:finite(Number(a.rr_top))});if(label)labels.set(p,labels.has(p)&&labels.get(p)!==label?'':label)
+            if(label&&tag==='label'){noteVisibleLabel(id,label,map,visible);if(typeof a.for==='string'&&a.for.length<=120)labelFor.set(a.for,label)}
+            else if(label&&!tag){
+                // Label text can arrive after its element, nested in spans (Ext builds DOM incrementally): find the <label> ancestor.
+                let q=p;for(let depth=0;depth<4&&q;depth++){const anc=map.get(q);if(!anc)break;if(anc.tag==='label'){noteVisibleLabel(q,label,map,visible);if(anc.for_id)labelFor.set(anc.for_id,label);break}q=anc.parent}
+            }}
         const children=Array.isArray(n.childNodes)?n.childNodes:[]
         if(stack.length+children.length>MAX_NODES)return false
         for(let i=children.length-1;i>=0;i--) stack.push([children[i],id??p])
@@ -102,18 +114,23 @@ function visibleState(root:unknown):{error:boolean;mask:boolean;maskId?:number} 
     for(let i=0;i<queue.length&&i<3000;i++){
         const n=rec(queue[i]);if(!n)continue
         const a=rec(n.attributes)||{}, cls=typeof a.class==='string'?a.class:''
+        // Hidden when added (Ext keeps hidden components such as the message box's progress bar): neither an error nor a wait.
+        if(a['aria-hidden']==='true'||(typeof a.style==='string'&&/display:\s*none/.test(a.style))||/\bx-hidden(-display|-offsets|-clip)?\b/.test(cls))continue
         if(a.role==='alert'||/\b(msgprint|has-error|invalid-feedback)\b/.test(cls)||a['aria-invalid']==='true')return {error:true,mask:false}
-        if(/\b(x-mask|freeze|freeze-message-container|loading-overlay)\b/.test(cls)||a.id==='freeze'||a.role==='progressbar')return {error:false,mask:true,maskId:safeId(n.id)}
+        // Ext: a LoadMask is a component (x-mask + x-component); a modal window's backdrop is a bare x-mask (not a wait).
+        if((/\bx-mask\b/.test(cls)&&/\bx-component\b/.test(cls))||/\b(freeze|freeze-message-container|loading-overlay)\b/.test(cls)||a.id==='freeze'||a.role==='progressbar')return {error:false,mask:true,maskId:safeId(n.id)}
         if(Array.isArray(n.childNodes))for(const child of n.childNodes){if(queue.length>=3000)break;queue.push(child)}
     }
     return {error:false,mask:false}
 }
-export async function readTimeline(file: string, metadata: {start_time:string;app_events?:{timestamp:string;event:string;path?:string}[]}): Promise<Timeline> {
+export async function readTimeline(file: string, metadata: {start_time:string;app_events?:AppEventInput[];labels?:string[]}): Promise<Timeline> {
+    APP_LABELS = new Set((metadata.labels ?? []).filter((x) => typeof x === 'string' && x.length <= 60).slice(0, 2000))
     const coverage:Coverage={state:'complete',lines:0,bad_lines:0,full_snapshot_seen:false,meta_seen:false,pointer_seen:false,click_seen:false,dom_seen:false,input_masked:true,iframe_seen:false,iframe_unseen:false,canvas_unseen:true,clock_anomaly:false,truncated:false,reasons:[]}
-    const items:TimelineItem[]=[], maps=new Map<string,Map<number,NodeInfo>>(), labelMaps=new Map<string,Map<number,string>>(), visibleMaps=new Map<string,Map<number,string>>(), screens=new Set<string>()
+    const items:TimelineItem[]=[], maps=new Map<string,Map<number,NodeInfo>>(), labelMaps=new Map<string,Map<number,string>>(), visibleMaps=new Map<string,Map<number,string>>(), labelForMaps=new Map<string,Map<string,string>>(), screens=new Set<string>()
     const budget={n:0},nodeBudget={n:0}, start=Date.parse(metadata.start_time), validStart=Number.isFinite(start)?start:0
     let width=0,height=0,previous=-Infinity,rawBytes=0,skipNodes=false
-    const masks=new Map<string,Set<number>>()
+    /** Loading overlays per window: node id -> currently shown. Ext hides a form-submit mask (style/aria-hidden) and reuses it. */
+    const masks=new Map<string,Map<number,boolean>>()
     const stream=createReadStream(file,{highWaterMark:64*1024})
     try {
       for await (const line of createInterface({input:stream,crlfDelay:Infinity})) {
@@ -133,29 +150,33 @@ export async function readTimeline(file: string, metadata: {start_time:string;ap
         const map=maps.get(windowId)??new Map<number,NodeInfo>(); maps.set(windowId,map)
         const labels=labelMaps.get(windowId)??new Map<number,string>();labelMaps.set(windowId,labels)
         const visible=visibleMaps.get(windowId)??new Map<number,string>();visibleMaps.set(windowId,visible)
+        const labelFor=labelForMaps.get(windowId)??new Map<string,string>();labelForMaps.set(windowId,labelFor)
         if(maps.size>32){coverage.state='oversize';coverage.truncated=true;coverage.reasons.push('window_cap');break}
         const base={event_id:`${coverage.lines}`,offset_ms:offset,raw_offset_ms:raw,window_id:windowId,source:'rrweb' as const}
         const target=(id:unknown):{node_id?:number;tag?:string;role?:string;label?:string;frame_id?:number;frame_x:number;frame_y:number}=>{const n=map.get(safeId(id)??NaN);if(!n)return {frame_x:0,frame_y:0};
             // Precedence: an explicit aria-label/data-label/title, then the label the user sees on the field's container, then own text, then the schema name.
-            let seen='';for(let q:number|undefined=safeId(id),depth=0;q&&depth<8&&!seen;depth++){seen=visible.get(q)??'';q=map.get(q)?.parent}
-            let label=(n.label_rank>0?n.label:'')||seen||n.label||n.field||'';let parent=n.parent,frameId:number|undefined,frameX=0,frameY=0;for(let depth=0;depth<32&&parent;depth++){const ancestor=map.get(parent);if(!label&&depth<3)label=ancestor?.label||labels.get(parent)||'';if(!label&&depth<6&&ancestor?.field)label=ancestor.field;if(ancestor?.tag==='iframe'){frameId=parent;coverage.iframe_seen=true;if(ancestor.frame_x===undefined||ancestor.frame_y===undefined){if(!coverage.reasons.includes('iframe_offset_unknown'))coverage.reasons.push('iframe_offset_unknown')}else{frameX+=ancestor.frame_x;frameY+=ancestor.frame_y}}parent=ancestor?.parent??0}return {node_id:safeId(id),tag:n.tag,role:n.role,label:label||undefined,frame_id:frameId,frame_x:frameX,frame_y:frameY} }
+            let seen=(n.dom_id&&labelFor.get(n.dom_id))||'';for(let q:number|undefined=safeId(id),depth=0;q&&depth<8&&!seen;depth++){seen=visible.get(q)??'';q=map.get(q)?.parent}
+            // labels.get(self): text children that arrived after the element itself (incremental DOM, e.g. an Ext button's span).
+            let label=(n.label_rank>0?n.label:'')||seen||n.label||labels.get(safeId(id)!)||n.field||'';let parent=n.parent,frameId:number|undefined,frameX=0,frameY=0;for(let depth=0;depth<32&&parent;depth++){const ancestor=map.get(parent);if(!label&&depth<3)label=ancestor?.label||labels.get(parent)||'';if(!label&&depth<6&&ancestor?.field)label=ancestor.field;if(ancestor?.tag==='iframe'){frameId=parent;coverage.iframe_seen=true;if(ancestor.frame_x===undefined||ancestor.frame_y===undefined){if(!coverage.reasons.includes('iframe_offset_unknown'))coverage.reasons.push('iframe_offset_unknown')}else{frameX+=ancestor.frame_x;frameY+=ancestor.frame_y}}parent=ancestor?.parent??0}return {node_id:safeId(id),tag:n.tag,role:n.role,label:label||undefined,frame_id:frameId,frame_x:frameX,frame_y:frameY} }
         try {
           const d=rec(typeof e.data==='string'?await inflate(e.data,budget):e.data)
           if(!d)throw new Error('data_shape')
           if(type===4) {coverage.meta_seen=true;width=finite(d.width)??width;height=finite(d.height)??height;const key=screenKey(String(d.href||'/'));screens.add(key);items.push({...base,kind:'navigation',screen:key})}
           else if(type===2) {
             const node=await inflate(d.node,budget)
-            nodeBudget.n-=map.size;map.clear();labels.clear();visible.clear()
-            if(!nodeWalk(node,map,labels,nodeBudget,0,visible)){coverage.state='oversize';coverage.reasons.push('node_cap');skipNodes=true;nodeBudget.n-=map.size;map.clear();labels.clear();visible.clear()}
+            nodeBudget.n-=map.size;map.clear();labels.clear();visible.clear();labelFor.clear()
+            if(!nodeWalk(node,map,labels,nodeBudget,0,visible,labelFor)){coverage.state='oversize';coverage.reasons.push('node_cap');skipNodes=true;nodeBudget.n-=map.size;map.clear();labels.clear();visible.clear();labelFor.clear()}
             else {coverage.full_snapshot_seen=true;coverage.dom_seen=true}
             items.push({...base,kind:'mutation'})
           } else if(type===3) {
             const source=d.source
             if(source===0) {
                 for(const field of ['adds','removes','texts','attributes']) d[field]=await inflate(d[field],budget)
-                if(!skipNodes && Array.isArray(d.adds)) for(const add of d.adds.slice(0,MAX_NODES)) {const a=rec(add); if(!a?.node)continue; if(!nodeWalk(a.node,map,labels,nodeBudget,safeId(a.parentId)??0,visible)){skipNodes=true;coverage.state='oversize';coverage.reasons.push('node_cap');nodeBudget.n-=map.size;map.clear();labels.clear();visible.clear();break}const state=visibleState(a.node);if(state.error)items.push({...base,event_id:`${coverage.lines}:e${items.length}`,kind:'error',error_kind:'visible',error_text:'visible validation error'});if(state.mask){const id=state.maskId;if(id!==undefined){const set=masks.get(windowId)??new Set<number>();set.add(id);masks.set(windowId,set)}items.push({...base,event_id:`${coverage.lines}:w${items.length}`,kind:'coverage',label:'wait_start'})}}
-                if(Array.isArray(d.removes))for(const removed of d.removes.slice(0,MAX_NODES)){const id=safeId(rec(removed)?.id);if(id!==undefined&&masks.get(windowId)?.delete(id))items.push({...base,event_id:`${coverage.lines}:x${items.length}`,kind:'coverage',label:'wait_end'});if(id!==undefined&&map.delete(id))nodeBudget.n--}
-                if(Array.isArray(d.attributes))for(const change of d.attributes.slice(0,MAX_NODES)){const c=rec(change),attrs=rec(c?.attributes);if(!attrs)continue;const node=map.get(safeId(c?.id)??NaN);if(node){const before=node.label;for(const [k,r] of LABEL_ATTRS){if(!(k in attrs)||r<node.label_rank)continue;const l=safeLabel(attrs[k]);if(l){node.label=l;node.label_rank=r;break}if(attrs[k]===null&&r===node.label_rank){node.label='';node.label_rank=0}}if(before&&node.label!==before&&labels.get(node.parent)===before){if(node.label)labels.set(node.parent,node.label);else labels.delete(node.parent)}}const cls=typeof attrs.class==='string'?attrs.class:'';if(attrs['aria-invalid']==='true'||/\b(has-error|msgprint|invalid-feedback)\b/.test(cls)){items.push({...base,event_id:`${coverage.lines}:a${items.length}`,kind:'error',error_kind:'visible',error_text:'visible validation error'});break}}
+                if(!skipNodes && Array.isArray(d.adds)) for(const add of d.adds.slice(0,MAX_NODES)) {const a=rec(add); if(!a?.node)continue; if(!nodeWalk(a.node,map,labels,nodeBudget,safeId(a.parentId)??0,visible,labelFor)){skipNodes=true;coverage.state='oversize';coverage.reasons.push('node_cap');nodeBudget.n-=map.size;map.clear();labels.clear();visible.clear();labelFor.clear();break}const state=visibleState(a.node);if(state.error)items.push({...base,event_id:`${coverage.lines}:e${items.length}`,kind:'error',error_kind:'visible',error_text:'visible validation error'});if(state.mask){const id=state.maskId;if(id!==undefined){const set=masks.get(windowId)??new Map<number,boolean>();set.set(id,true);masks.set(windowId,set)}items.push({...base,event_id:`${coverage.lines}:w${items.length}`,kind:'coverage',label:'wait_start'})}}
+                // Text changes on existing text nodes (frameworks set button/label text this way): relabel the node and its parent.
+                if(!skipNodes&&Array.isArray(d.texts))for(const change of d.texts.slice(0,MAX_NODES)){const c=rec(change),id=safeId(c?.id),node=id!==undefined?map.get(id):undefined;if(!node)continue;const l=safeLabel(c?.value);node.label=l;if(l){labels.set(node.parent,l);let q=node.parent;for(let depth=0;depth<4&&q;depth++){const anc=map.get(q);if(!anc)break;if(anc.tag==='label'){noteVisibleLabel(q,l,map,visible);if(anc.for_id)labelFor.set(anc.for_id,l);break}q=anc.parent}}else if(labels.has(node.parent))labels.delete(node.parent)}
+                if(Array.isArray(d.removes))for(const removed of d.removes.slice(0,MAX_NODES)){const id=safeId(rec(removed)?.id);const shown=id!==undefined?masks.get(windowId)?.get(id):undefined;if(id!==undefined)masks.get(windowId)?.delete(id);if(shown)items.push({...base,event_id:`${coverage.lines}:x${items.length}`,kind:'coverage',label:'wait_end'});if(id!==undefined&&map.delete(id))nodeBudget.n--}
+                if(Array.isArray(d.attributes))for(const change of d.attributes.slice(0,MAX_NODES)){const c=rec(change),attrs=rec(c?.attributes);if(!attrs)continue;const maskId=safeId(c?.id),maskSet=masks.get(windowId);if(maskId!==undefined&&maskSet?.has(maskId)){const was=maskSet.get(maskId)!,st=attrs.style,ah=attrs['aria-hidden'];const hidden=ah==='true'||(typeof st==='string'&&/display:\s*none/.test(st))||(!!st&&typeof st==='object'&&(st as Raw).display==='none');const shownNow=ah==='false'||(typeof st==='string'&&!/display:\s*none/.test(st)&&ah!=='true')||(!!st&&typeof st==='object'&&(st as Raw).display===false);if(was&&hidden){maskSet.set(maskId,false);items.push({...base,event_id:`${coverage.lines}:x${items.length}`,kind:'coverage',label:'wait_end'})}else if(!was&&shownNow&&!hidden){maskSet.set(maskId,true);items.push({...base,event_id:`${coverage.lines}:w${items.length}`,kind:'coverage',label:'wait_start'})}}const node=map.get(safeId(c?.id)??NaN);if(node){const before=node.label;for(const [k,r] of LABEL_ATTRS){if(!(k in attrs)||r<node.label_rank)continue;const l=safeLabel(attrs[k]);if(l){node.label=l;node.label_rank=r;break}if(attrs[k]===null&&r===node.label_rank){node.label='';node.label_rank=0}}if(before&&node.label!==before&&labels.get(node.parent)===before){if(node.label)labels.set(node.parent,node.label);else labels.delete(node.parent)}}const cls=typeof attrs.class==='string'?attrs.class:'';if(attrs['aria-invalid']==='true'||/\b(has-error|msgprint|invalid-feedback)\b/.test(cls)){items.push({...base,event_id:`${coverage.lines}:a${items.length}`,kind:'error',error_kind:'visible',error_text:'visible validation error'});break}}
                 coverage.dom_seen=true;items.push({...base,kind:'mutation'})
             } else if((source===1||source===6) && Array.isArray(d.positions)) { // 6 = TouchMove, same shape as MouseMove
                 for(const p of d.positions.slice(0,10_000)){const q=rec(p);if(!q)continue;const x=finite(q.x),y=finite(q.y);if(x===undefined||y===undefined)continue;const {frame_x,frame_y,...targetInfo}=target(q.id),pTime=t+(finite(q.timeOffset)??0),pRaw=pTime-validStart;items.push({...base,event_id:`${coverage.lines}:${items.length}`,offset_ms:Math.max(0,pRaw),raw_offset_ms:pRaw,kind:'pointer',x:x+frame_x,y:y+frame_y,...targetInfo});coverage.pointer_seen=true}
@@ -176,13 +197,26 @@ export async function readTimeline(file: string, metadata: {start_time:string;ap
       }
     } catch {coverage.state='partial';coverage.reasons.push('stream_error')}
     finally {stream.destroy()}
+    const openStack:string[]=[]
     for(const [i,app] of (metadata.app_events||[]).slice(0,500).entries()){
         const ms=Date.parse(app.timestamp)-validStart;if(!Number.isFinite(ms))continue
         if(app.event==='$pageview'&&app.path){const key=screenKey(app.path);screens.add(key);items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app',kind:'navigation',source:'app',screen:key})}
         else if(app.event==='$exception')items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app',kind:'error',error_kind:'exception',source:'app',error_text:'exception event'})
+        // Application screen events (APP_EVENTS_FILE): an OPEN navigates to the screen; a CLOSE returns to the most recently
+        // opened screen that is still open (Ext MDI re-activates it without an event). Message boxes are visible errors.
+        else if(app.screen&&app.nav==='open'){openStack.splice(openStack.indexOf(app.screen)>>>0,openStack.includes(app.screen)?1:0);openStack.push(app.screen);screens.add(app.screen);items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app-screen',kind:'navigation',source:'app',screen:app.screen})}
+        else if(app.screen&&app.nav==='close'){const at=openStack.lastIndexOf(app.screen);if(at>=0){const wasActive=at===openStack.length-1;openStack.splice(at,1);const back=openStack.at(-1);if(wasActive&&back)items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app-screen',kind:'navigation',source:'app',screen:back})}}
+        else if(app.error)items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app',kind:'error',error_kind:'visible',source:'app',error_text:'application message'})
     }
     if(!coverage.full_snapshot_seen || !coverage.meta_seen || skipNodes || coverage.bad_lines/Math.max(1,coverage.lines)>.01) {if(coverage.state==='complete')coverage.state='partial';if(!coverage.full_snapshot_seen)coverage.reasons.push('missing_snapshot')}
     if(items.length*160>20*1024*1024){items.length=Math.floor(20*1024*1024/160);coverage.state='oversize';coverage.truncated=true;coverage.reasons.push('timeline_cap')}
+    // An app with its own screen events (APP_EVENTS_FILE, e.g. Reval: one page, the URL never changes) defines screens by
+    // those events; URL-derived navigation (rrweb Meta, $url_changed, $pageview) would only add a meaningless "/" visit.
+    if((metadata.app_events||[]).some((a)=>a.nav==='open')){
+        for(let i=items.length-1;i>=0;i--)if(items[i]!.kind==='navigation'&&items[i]!.window_id!=='app-screen')items.splice(i,1)
+        screens.clear();for(const it of items)if(it.kind==='navigation'&&it.screen)screens.add(it.screen)
+    }
+    items.sort((a,b)=>a.offset_ms-b.offset_ms) // app events are merged in after the rrweb stream; stable sort keeps stream order
     return {items,coverage,start_time:metadata.start_time,width,height,screens:[...screens]}
 }
 
@@ -223,7 +257,7 @@ export function sanitizedWindow(t: Timeline, center: number, before = 20_000, af
     dropped += kept.length - selected.length
     const events: SanitizedEvent[] = selected.map((e) => ({
             id: e.event_id.slice(0, 24), t_ms: Math.round(e.offset_ms), kind: e.kind,
-            ...(e.label && LABELS.has(e.label) || (e.label && /^[A-Z][A-Za-z ]{0,40}$/.test(e.label)) ? { label: e.label } : {}),
+            ...(e.label && (LABELS.has(e.label) || APP_LABELS.has(e.label)) || (e.label && /^[A-Z][A-Za-z ]{0,40}$/.test(e.label)) ? { label: e.label } : {}),
             ...(e.tag && SAFE_TAG.test(e.tag) ? { tag: e.tag } : {}), ...(e.role && SAFE_ROLE.test(e.role) ? { role: e.role } : {}),
             ...(e.x !== undefined ? { x: round(e.x), y: round(e.y) } : {}), ...(e.scroll_y !== undefined ? { scroll_y: round(e.scroll_y) } : {}),
             ...(e.kind === 'error' ? { error: e.error_kind ?? 'unknown' } : {}), ...(e.kind === 'navigation' && e.screen ? { screen: e.screen.slice(0, 80) } : {}),

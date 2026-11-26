@@ -10,7 +10,7 @@
 import type { Timeline, TimelineItem } from './replay-timeline.ts'
 
 export const DETECTOR_CONFIG = Object.freeze({
-    version: 'rv-d1-15-r1-r2-s1-s3-v7',
+    version: 'rv-d1-15-r1-r2-s1-s3-v8',
     rageClicks: 3, rageGapMs: 1000, rageManhattanPx: 30,
     deadResponseMs: 2500, deadScrollMs: 100,
     errorClickMs: 1000,
@@ -287,6 +287,8 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
             for (const f of group) {
                 const firstInput = edits.any(f.offset_ms - 1, v.end, (e) => e.label === label)
                 if (!firstInput || edits.any(f.offset_ms - 1, firstInput.offset_ms - 1, (e) => e.label !== label)) continue
+                // Focus that arrived by Tab traversal while the user did something else (clicked Save, a menu) is not hesitation.
+                if (primary.any(f.offset_ms + 1, firstInput.offset_ms - 1, (e) => e.node_id !== f.node_id)) continue
                 const h = firstInput.offset_ms - f.offset_ms
                 if (h >= cfg.hesitationMs) { add('D6', [f, firstInput], { hesitation_ms: h, lost_ms: h - cfg.hesitationMs }, label, `Fill ${label}`, v.screen); break }
             }

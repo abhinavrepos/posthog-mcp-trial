@@ -20,7 +20,7 @@ import { baselineContext, loadBaselines, recomputeBaselines, runMetrics } from '
 import { addDownloadBytes, admitSession, BUDGET, startupReconcile } from '../core/replay-vision-budget.ts'
 import { deleteSessionData, refreshInsights, screenReach, storeFindings } from '../core/replay-vision-insights.ts'
 import type { DetectorContext } from '../core/replay-vision-detectors.ts'
-import type { SanitizedWindow } from '../core/replay-timeline.ts'
+import type { AppEventInput, SanitizedWindow } from '../core/replay-timeline.ts'
 import { collectExplanations, externalAnalysisAllowed, prepareExplanations, selectProvider } from '../core/replay-vision-llm.ts'
 import { collectWatchFully, prepareWatchFully, watchFullyAvailability, type WatchFrame } from '../core/replay-vision-watch.ts'
 import { WATCH_LIMITS, type WatchPlan } from '../core/replay-vision-watch-plan.ts'
@@ -44,7 +44,7 @@ export interface VisionDeps {
     now(): number
     discover(input: { from: Date; to: Date; cursor?: { end: string; session_id: string }; limit?: number }): Promise<{ rows: Discovered[]; next?: { end: string; session_id: string }; partial: boolean }>
     getRecording(sessionId: string): Promise<{ start_time: string; end_time: string; distinct_id?: string }>
-    appEvents(sessionId: string): Promise<{ timestamp: string; event: string; path?: string }[]>
+    appEvents(sessionId: string): Promise<AppEventInput[]>
     withSnapshots<T>(sessionId: string, use: (file: string) => Promise<T>): Promise<T>
     analyze(file: string, metadata: { start_time: string; app_events?: { timestamp: string; event: string; path?: string }[] }, timeoutMs: number, ctx: DetectorContext): Promise<AnalysisResult>
     fileSize(file: string): Promise<number>
