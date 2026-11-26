@@ -10,7 +10,7 @@
 import type { Timeline, TimelineItem } from './replay-timeline.ts'
 
 export const DETECTOR_CONFIG = Object.freeze({
-    version: 'rv-d1-15-r1-r2-s1-s3-v3',
+    version: 'rv-d1-15-r1-r2-s1-s3-v4',
     rageClicks: 3, rageGapMs: 1000, rageManhattanPx: 30,
     deadResponseMs: 2500, deadScrollMs: 100,
     errorClickMs: 1000,
@@ -145,7 +145,16 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
 
     const primary = new Series(events.filter(isPrimaryClick))
     const inputs = new Series(events.filter(isInput))
-    const edits = new Series(events.filter((e) => e.kind === 'input_activity'))
+    // An edit is an input on a field the user engaged (clicked or focused) earlier in the same screen visit. ERPNext sets
+    // hundreds of field values by script when a form opens (rrweb records them as inputs, without userTriggered), and
+    // dependent fields are filled by script after a user edit; neither is the user editing.
+    const engaged = new Set<string>()
+    const edits = new Series(events.filter((e) => {
+        if (e.kind === 'navigation') { engaged.clear(); return false }
+        const key = `${e.window_id}|${e.node_id}`
+        if ((e.kind === 'click' || e.kind === 'focus') && e.node_id !== undefined) engaged.add(key)
+        return e.kind === 'input_activity' && e.node_id !== undefined && engaged.has(key)
+    }))
     const errors = new Series(events.filter((e) => e.kind === 'error'))
     const visibleErrors = new Series(errors.items.filter((e) => e.error_kind === 'visible'))
     const responses = new Series(events.filter((e) => e.kind === 'mutation' || e.kind === 'navigation'))

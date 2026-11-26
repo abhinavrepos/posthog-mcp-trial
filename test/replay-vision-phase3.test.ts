@@ -26,7 +26,10 @@ type SevIn = import('../src/core/replay-vision-severity.ts').SeverityInput
 type Moment = import('../src/core/replay-vision-aggregate.ts').Moment
 
 function tl(items: Partial<Item>[], cov: Partial<TL['coverage']> = {}, height = 800): TL {
-    const full = items.map((x, i) => ({ event_id: String(i + 1), offset_ms: 0, raw_offset_ms: x.offset_ms ?? 0, window_id: 'main', kind: 'click', source: 'rrweb', ...x }) as Item)
+    // Real rrweb records a Focus interaction on a field before input on it (click or Tab); edits model that, unless
+    // marked scripted (a value set by the page itself, which never counts as a user edit).
+    const expanded = items.flatMap((x) => x.kind === 'input_activity' && x.node_id !== undefined && !(x as { scripted?: boolean }).scripted ? [{ offset_ms: (x.offset_ms ?? 0) - 1, kind: 'focus' as const, node_id: x.node_id, label: x.label }, x] : [x])
+    const full = expanded.map((x, i) => ({ event_id: String(i + 1), offset_ms: 0, raw_offset_ms: x.offset_ms ?? 0, window_id: 'main', kind: 'click', source: 'rrweb', ...x }) as Item)
     return {
         items: full, start_time: '2026-11-26T10:00:00Z', width: 1280, height,
         screens: [...new Set(full.filter((e) => e.kind === 'navigation').map((e) => e.screen!))],
@@ -35,7 +38,8 @@ function tl(items: Partial<Item>[], cov: Partial<TL['coverage']> = {}, height = 
 }
 const nav = (t: number, screen: string): Partial<Item> => ({ offset_ms: t, kind: 'navigation', screen })
 const click = (t: number, label?: string, extra: Partial<Item> = {}): Partial<Item> => ({ offset_ms: t, kind: 'click', interaction: 2, label, tag: 'button', x: 100, y: 100, ...extra })
-const edit = (t: number, label = 'Customer'): Partial<Item> => ({ offset_ms: t, kind: 'input_activity', label })
+const nodeOf = (label: string) => 1000 + [...label].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 100_000, 7)
+const edit = (t: number, label = 'Customer'): Partial<Item> => ({ offset_ms: t, kind: 'input_activity', label, node_id: nodeOf(label) })
 const focus = (t: number, label: string): Partial<Item> => ({ offset_ms: t, kind: 'focus', label })
 const verr = (t: number): Partial<Item> => ({ offset_ms: t, kind: 'error', error_kind: 'visible' })
 const scroll = (t: number, y: number): Partial<Item> => ({ offset_ms: t, kind: 'scroll', scroll_y: y, scroll_id: 1 })
@@ -293,4 +297,17 @@ test('co-starting signals are cited once per moment; equal rounded ranges print 
     assert.deepEqual(a!.draft.citations.map((c) => c.session_id), ['s-a', 's-b'])
     assert.match(a!.draft.behaviour, /scrolled 7\.0× the visible height in Item list with 8 direction reversals/)
     assert.ok(!/(\d[^–]*)–\1/.test(a!.draft.behaviour), 'no "x–x" ranges')
+})
+
+test('inputs the page sets by script (no prior focus on the field) are not user edits: no D5, no "edited 226 fields"', () => {
+    // Shape of ERPNext session 01a219d9-…: ~226 rrweb inputs within 1 s of opening a new form, none preceded by a
+    // click or focus on the field, then the user leaves to Customer (list). Before the fix this was a D5 with 226 edits.
+    const scripted = Array.from({ length: 226 }, (_, i) => ({ offset_ms: 700 + i * 4, kind: 'input_activity' as const, label: i % 2 ? 'Item' : 'Qty', node_id: 5000 + i, scripted: true }))
+    const t = tl([nav(0, 'sales invoice:new'), ...scripted, nav(3200, 'customer:list'), click(4000, 'Customer')])
+    assert.ok(!detectCandidates(t).some((c) => c.kind === 'D5'))
+    // The same exit after one real edit (focus, then input on that field) is an abandonment with exactly one edit.
+    const t2 = tl([nav(0, 'sales invoice:new'), ...scripted, edit(2000, 'Customer'), nav(3200, 'customer:list'), click(4000, 'Customer')])
+    const d5 = detectCandidates(t2).find((c) => c.kind === 'D5')
+    assert.equal(d5?.facts.edits, 1)
+    assert.equal(d5?.element, 'Customer')
 })

@@ -19,7 +19,7 @@ async function withEvents<T>(events:unknown[],f:(file:string)=>Promise<T>):Promi
 test('client-gzipped FullSnapshot, adjacent field label, chained clicks and visible error cite exact offsets',async()=>{
   const rows=[event(0,4,{href:'http://app/desk/sales-invoice/new-1?secret=private',width:1000,height:800}),event(1,2,packed({node:root,initialOffset:{top:0,left:0}})),
     event(100,3,{source:2,type:2,id:2,x:10,y:20}),event(300,3,{source:2,type:2,id:2,x:29,y:20}),event(500,3,{source:2,type:2,id:2,x:48,y:20}),
-    event(700,3,{source:5,id:3,text:'********'}),
+    event(699,3,{source:2,type:5,id:3}),event(700,3,{source:5,id:3,text:'********'}),
     event(1000,3,{source:0,adds:packed([{parentId:1,node:{id:6,type:2,tagName:'div',attributes:{role:'alert'},childNodes:[{id:7,type:3,textContent:'Debit To is required'}]}}]),removes:[],texts:[],attributes:[]}),
     event(2000,3,{source:2,type:2,id:2,x:10,y:20}),event(2050,6,{plugin:'rrweb/console@1',payload:{level:'error',payload:['secret console payload']}}),event(2100,3,{source:0,adds:[],removes:[],texts:[],attributes:[]}),
   ]
@@ -51,7 +51,7 @@ test('two visible validation cycles and an overlay wait produce bounded detector
   const mask={parentId:1,node:{id:40,type:2,tagName:'div',attributes:{class:'freeze'}}}
   const rows=[event(0,4,{href:'http://app/desk/sales-invoice/new',width:1000,height:800}),event(1,2,packed({node:root})),
     event(100,3,{source:2,type:2,id:2,x:10,y:20}),event(200,3,{source:0,adds:packed([alert(20)]),removes:[],texts:[],attributes:[]}),
-    event(300,3,{source:5,id:3,text:'*'}),event(1000,3,{source:2,type:2,id:2,x:10,y:20}),event(1100,3,{source:0,adds:packed([alert(22)]),removes:[],texts:[],attributes:[]}),
+    event(299,3,{source:2,type:5,id:3}),event(300,3,{source:5,id:3,text:'*'}),event(1000,3,{source:2,type:2,id:2,x:10,y:20}),event(1100,3,{source:0,adds:packed([alert(22)]),removes:[],texts:[],attributes:[]}),
     event(2000,3,{source:2,type:2,id:2,x:10,y:20}),event(2100,3,{source:0,adds:packed([mask]),removes:[],texts:[],attributes:[]}),
     event(6100,3,{source:0,adds:[],removes:packed([{id:40,parentId:1}]),texts:[],attributes:[]})]
   await withEvents(rows,async file=>{const t=await readTimeline(file,{start_time:new Date(base).toISOString()});const hits=detectCandidates(t);assert.ok(hits.some(h=>h.kind==='D4'&&Number(h.facts.cycles)>=2));assert.ok(hits.some(h=>h.kind==='D10'&&Number(h.facts.wait_ms)>=3000));assert.ok(hits.every(h=>h.event_ids.every(id=>t.items.some(e=>e.event_id===id))))})
