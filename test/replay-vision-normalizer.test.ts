@@ -56,3 +56,26 @@ test('two visible validation cycles and an overlay wait produce bounded detector
     event(6100,3,{source:0,adds:[],removes:packed([{id:40,parentId:1}]),texts:[],attributes:[]})]
   await withEvents(rows,async file=>{const t=await readTimeline(file,{start_time:new Date(base).toISOString()});const hits=detectCandidates(t);assert.ok(hits.some(h=>h.kind==='D4'&&Number(h.facts.cycles)>=2));assert.ok(hits.some(h=>h.kind==='D10'&&Number(h.facts.wait_ms)>=3000));assert.ok(hits.every(h=>h.event_ids.every(id=>t.items.some(e=>e.event_id===id))))})
 })
+
+test('a data-label attribute mutation relabels the button (Frappe Save -> Submit), so Submit is not a repeated Save',async()=>{
+  // Shape taken from ERPNext session 01a21970-ec54-…: the primary action keeps its node, gets data-label="Submit" by an
+  // attribute mutation, and its inner text is re-rendered as new spans whose text alone is not a vocabulary label.
+  const frappe={id:1,type:2,tagName:'div',childNodes:[{id:20,type:2,tagName:'button',attributes:{class:'primary-action','data-label':'Save'},childNodes:[{id:21,type:2,tagName:'span',childNodes:[{id:22,type:3,textContent:'Save'}]}]}]}
+  const rows=[event(0,4,{href:'http://app/desk/sales-invoice/new-1',width:1000,height:800}),event(1,2,{node:frappe,initialOffset:{top:0,left:0}}),
+    event(100,3,{source:2,type:2,id:21,x:10,y:10}),
+    event(400,3,{source:0,adds:[],removes:[{parentId:20,id:21}],texts:[],attributes:[{id:20,attributes:{'data-label':'Submit'}}]}),
+    event(410,3,{source:0,adds:[{parentId:20,node:{id:30,type:2,tagName:'span',attributes:{},childNodes:[]}},{parentId:30,node:{id:31,type:3,textContent:'bmit'}}],removes:[],texts:[],attributes:[]}),
+    event(2100,3,{source:2,type:2,id:30,x:10,y:10}),event(2105,3,{source:2,type:2,id:20,x:10,y:10}),
+  ]
+  await withEvents(rows,async file=>{
+    const t=await readTimeline(file,{start_time:new Date(base).toISOString()}),clicks=t.items.filter(e=>e.kind==='click')
+    assert.deepEqual(clicks.map(c=>c.label),['Save','Submit','Submit'])
+    assert.ok(!detectCandidates(t).some(c=>c.kind==='D14'&&c.element==='Save'))
+  })
+  // A lower-ranked attribute (title) cannot override an explicit aria-label; removing the label attribute clears it.
+  const aria={id:1,type:2,tagName:'div',childNodes:[{id:40,type:2,tagName:'button',attributes:{'aria-label':'Apply'},childNodes:[]}]}
+  const rows2=[event(0,4,{href:'http://app/desk/item',width:1000,height:800}),event(1,2,{node:aria,initialOffset:{top:0,left:0}}),
+    event(100,3,{source:0,adds:[],removes:[],texts:[],attributes:[{id:40,attributes:{title:'Save'}}]}),event(200,3,{source:2,type:2,id:40,x:1,y:1}),
+    event(300,3,{source:0,adds:[],removes:[],texts:[],attributes:[{id:40,attributes:{'aria-label':null}}]}),event(400,3,{source:2,type:2,id:40,x:1,y:1})]
+  await withEvents(rows2,async file=>{const t=await readTimeline(file,{start_time:new Date(base).toISOString()});assert.deepEqual(t.items.filter(e=>e.kind==='click').map(c=>c.label),['Apply',undefined])})
+})

@@ -10,7 +10,7 @@
 import type { Timeline, TimelineItem } from './replay-timeline.ts'
 
 export const DETECTOR_CONFIG = Object.freeze({
-    version: 'rv-d1-15-r1-r2-s1-s3-v2',
+    version: 'rv-d1-15-r1-r2-s1-s3-v3',
     rageClicks: 3, rageGapMs: 1000, rageManhattanPx: 30,
     deadResponseMs: 2500, deadScrollMs: 100,
     errorClickMs: 1000,
