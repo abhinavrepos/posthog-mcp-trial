@@ -22,6 +22,7 @@ import { audit, chatCaller, loadAccess } from './access.ts'
 import { captionedFile } from '../core/comments.ts'
 import { getClip, handleReplays, pruneOldClips, streamMp4 } from './replays.ts'
 import { retentionJobState, startReplayRetention } from './replayretention.ts'
+import { replayVisionEnabled, replayVisionJobState, startReplayVision, stopReplayVision } from './replayvision-worker.ts'
 import { startSurveySync, surveySyncJobState } from './surveysync.ts'
 import { publicRequestFailure } from './failure.ts'
 
@@ -175,7 +176,7 @@ const server = createServer((req, res) => {
             if (url.pathname === '/healthz') return send(res, 200, 'ok')
             // For the status page: up, and which switches are on. No secrets, no data.
             // Jobs: name, level and a plain reason only (core/jobhealth.ts); the status service shows them.
-            if (url.pathname === '/health') return send(res, 200, { ok: true, features: featureState(), jobs: [retentionJobState(), surveySyncJobState(), ...jobStates()] })
+            if (url.pathname === '/health') return send(res, 200, { ok: true, features: featureState(), jobs: [retentionJobState(), ...(replayVisionEnabled() ? [replayVisionJobState()] : []), surveySyncJobState(), ...jobStates()] })
             if (url.pathname === '/favicon.ico') {
                 res.writeHead(204, { 'cache-control': 'max-age=86400' })
                 return res.end()
@@ -243,6 +244,7 @@ void migrateSurveys()
 const stopSurveySync = startSurveySync()
 
 const stop = async () => {
+    stopReplayVision()
     clearInterval(migrationTimer)
     stopSurveySync()
     server.close()
@@ -253,3 +255,4 @@ process.on('SIGINT', stop)
 process.on('SIGTERM', stop)
 // Session replay retention set on the admin page (off by default): once a UTC day, see replayretention.ts.
 startReplayRetention()
+startReplayVision()

@@ -23,7 +23,9 @@ import { PostHogError, replayUrl } from '../core/posthog.ts'
 import { recordingInfo, type RecordingInfo } from '../core/recording-info.ts'
 import { downloadName, formatClock, HourlyLimit, parseReplayInput, parseStartTime } from '../core/replay-input.ts'
 import { handleSystem } from './system.ts'
-import { audit, can, canSeeSystem, canUseSurveys, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
+import { audit, can, canSeeReplayInsights, canSeeSystem, canUseSurveys, csrfCookie, currentViewer, loadAccess, ROLE_TEXT, sessionCookie, signIn, signOut, type Role, type Viewer } from './access.ts'
+import { handleReplayVision } from './replayvision.ts'
+import { replayVisionEnabled } from './replayvision-worker.ts'
 import { handleAdmin } from './admin.ts'
 import { handleLive, liveHtml } from './live.ts'
 import { handleSurveys } from './surveyspage.ts'
@@ -384,6 +386,8 @@ export async function handleReplays(req: IncomingMessage, res: ServerResponse, u
     if (/^\/replays\/(watch|dashboards|codenames)(?:\/|$)/.test(p) || p.startsWith('/replays/admin/privacy')) {json(res,404,{error:'Not found.'});return true}
 
     const viewer = await currentViewer(req)
+    // Replay Vision (experiment): only when FEATURE_REPLAY_VISION=on; otherwise these paths behave as before.
+    if (replayVisionEnabled() && (p === '/replays/vision' || p.startsWith('/replays/vision/'))) return handleReplayVision(req,res,url,viewer)
     if (p === '/replays' || p === '/replays/') {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' })
         res.end(!viewer ? loginHtml() : can(viewer.role, 'watch') ? pageHtml(viewer) : noAccessHtml(viewer))
@@ -827,12 +831,13 @@ return{set(list,keep){items=list||[];if(!keep)page=0;draw()},redraw:draw,get pag
 
 export const APP_NAME = config.app.name
 export const APP_TAG = config.app.tag
-export type Section = 'Replay clips' | 'Pinned' | 'Live'  | 'Surveys' | 'Chat' | 'System' | 'Admin'
+export type Section = 'Replay clips' | 'Replay Vision' | 'Pinned' | 'Live'  | 'Surveys' | 'Chat' | 'System' | 'Admin'
 
 /** The header on every page: the product name, the sections this person may open, and sign out. */
 // Line icons (24px grid, 1.75 stroke), inline so the app needs nothing from the internet.
 const ICON: Record<string, string> = {
     'Replay clips': '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m10 9 5 3-5 3z"/>',
+    'Replay Vision': '<rect x="2" y="4" width="20" height="16" rx="2"/><circle cx="12" cy="12" r="4"/><path d="M12 7v1M12 16v1"/>',
     Pinned: '<path d="M9 3h6l-1 6 4 4H6l4-4z"/><path d="M12 13v8"/>',
     Live: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
     Surveys: '<path d="M21 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/>',
@@ -875,6 +880,7 @@ keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeou
     const tabs = (
         [
             ['Replay clips', '/replays', 'watch'],
+            ['Replay Vision', '/replays/vision', 'insights'],
             ['Live', '/replays/live', 'watch'],
             ['Pinned', '/replays/pinned', 'watch'],
             ['Surveys', '/replays/surveys', 'surveys'],
@@ -883,8 +889,8 @@ keep();addEventListener('load',keep);addEventListener('hashchange',()=>setTimeou
             ['Admin', '/replays/admin', 'admin'],
         ] as const
     )
-        .filter(([, , need]) => need === 'system' ? canSeeSystem(v) : need === 'surveys' ? config.surveys.enabled && canUseSurveys(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need as Role))
-        .map(([name, href]) => ({ group: ['Replay clips', 'Live', 'Pinned'].includes(name) ? 'Monitor' : name === 'Surveys' ? 'Engage' : 'Manage', html: `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${icon(name)}<span>${name}</span></a>` }))
+        .filter(([, , need]) => need === 'insights' ? replayVisionEnabled() && canSeeReplayInsights(v) : need === 'system' ? canSeeSystem(v) : need === 'surveys' ? config.surveys.enabled && canUseSurveys(v) : need === 'connect' ? config.features.lensMcp && canConnect(v) : can(v.role, need as Role))
+        .map(([name, href]) => ({ group: ['Replay clips', 'Replay Vision', 'Live', 'Pinned'].includes(name) ? 'Monitor' : name === 'Surveys' ? 'Engage' : 'Manage', html: `<a href="${href}"${name === section ? ' aria-current="page"' : ''}>${icon(name)}<span>${name}</span></a>` }))
         .reduce((out, item, i, all) => out + (i === 0 || all[i - 1]!.group !== item.group ? `<div class="v-nav-group"><span>${item.group}</span>` : '') + item.html + (i === all.length - 1 || all[i + 1]!.group !== item.group ? '</div>' : ''), '')
     const initials = (v.name || v.email).split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('')
     return `${skip}${mainId}<header class="shell">${brand}<nav aria-label="Sections">${tabs}</nav><details class="hdr acct"><summary aria-label="Account for ${esc(v.name || v.email.split('@')[0])}"><span class="avatar" aria-hidden="true">${esc(initials)}</span><span class="who-short"><b>${esc(v.name || v.email.split('@')[0])}</b><span>${esc(ROLE_TEXT[v.role].replace(/ \(.*\)$/, ''))}</span></span></summary><div class="acct-menu"><span class="who">${esc(v.email)}</span><span class="muted small">${esc(ROLE_TEXT[v.role])}</span><button class="secondary" id="signout" type="button">Sign out</button></div></details></header>

@@ -17,6 +17,7 @@ import { getSetting, setSetting, tx } from '../core/db.ts'
 import { hogql, type Row } from '../core/posthog.ts'
 import { audit } from './access.ts'
 import { deleteClip, getClip, listClips } from './replays.ts'
+import {deleteVisionSession} from './replayvision-worker.ts'
 
 export const RETENTION_KEY = 'replay_retention_days'
 const WATERMARK = 'replay_retention_watermark' // last recording handled: { start, id }
@@ -381,6 +382,7 @@ export async function runReplayRetention(deps: Partial<Deps> = {}): Promise<RunR
                     setSetting(STATE, { ...state, remaining, deleted_total: (state.deleted_total ?? 0) + Number(r === 'deleted') })
                 })
                 deleteReplayCache(rec.id)
+                deleteVisionSession(rec.id)
             }
             if (batch.length < want) break // last page
             await d.sleep(250) // a breath between batches for PostHog

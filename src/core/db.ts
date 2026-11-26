@@ -310,6 +310,8 @@ const MIGRATIONS: string[] = [
      CREATE TABLE rv_cursor (project_id TEXT NOT NULL, scope TEXT NOT NULL, keyset_json TEXT NOT NULL DEFAULT '{}', last_success_at TEXT, last_error_code TEXT, PRIMARY KEY(project_id,scope));
      CREATE TABLE rv_vision_approval (run_id INTEGER PRIMARY KEY REFERENCES rv_run(id) ON DELETE CASCADE, approved_by TEXT NOT NULL, approved_at TEXT NOT NULL, redaction_digest TEXT NOT NULL, expires_at TEXT NOT NULL);`,
     `CREATE TABLE rv_secret (name TEXT PRIMARY KEY, ciphertext TEXT NOT NULL, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL);`,
+    `ALTER TABLE rv_run ADD COLUMN requested_by TEXT;
+     CREATE INDEX rv_finding_run ON rv_finding(run_id);`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

@@ -860,6 +860,7 @@ step_settings() {
     # Account setup may be skipped on an update; public links still follow current answers.
     set_secret POSTHOG_PUBLIC_HOST "$POSTHOG_PUBLIC_URL"
     for k in "${APP_KEYS[@]}"; do set_secret "$k" "${!k:-}"; n=$((n + 1)); done
+    [ -n "$(read_env_file "$SECRETS" REPLAY_VISION_MASTER_KEY)" ] || set_secret REPLAY_VISION_MASTER_KEY "$(openssl rand -hex 32)"
     # Any other setting from .env.example that the --config file sets, copied as it is.
     if [ -n "$CONFIG" ]; then
         for k in $(grep -oE '^[A-Z_]+=' "$APP_DIR/.env.example" | tr -d =); do
