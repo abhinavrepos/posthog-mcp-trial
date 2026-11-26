@@ -92,9 +92,19 @@ export async function saveNativeSurvey(raw:unknown,id?:string):Promise<PostHogSu
         const prior=old.questions||[]
         const qs=payload.questions as typeof prior
         qs.forEach(q=>{ if(!q.id){ const matches=prior.filter(p=>p.type===q.type&&p.question===q.question); if(matches.length===1) q.id=matches[0].id } })
+        if(payload.start_date && !old.start_date){
+            // PostHog activates the targeting flag only on a launch PATCH: save first, then launch.
+            const {start_date,...rest}=payload
+            await api<PostHogSurvey>(`${id}/`,'PATCH',rest)
+            return api<PostHogSurvey>(`${id}/`,'PATCH',{start_date})
+        }
         return api<PostHogSurvey>(`${id}/`,'PATCH',payload)
     }
-    return api<PostHogSurvey>('','POST',payload)
+    // A survey created with start_date keeps its targeting flag inactive (verified on PostHog):
+    // create the draft, then launch it with a PATCH as PostHog's own screen does.
+    const {start_date,...draft}=payload
+    const created=await api<PostHogSurvey>('','POST',draft)
+    return start_date?api<PostHogSurvey>(`${created.id}/`,'PATCH',{start_date}):created
 }
 
 /** Rewrites an old Signal survey once. Multi-step order has no native equivalent, so those
