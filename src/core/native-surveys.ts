@@ -120,7 +120,7 @@ async function performLegacyMigration(survey:PostHogSurvey):Promise<PostHogSurve
     delete native.lensChain;delete native.events
     native.events={values:[{name:last.event,...(last.properties?{propertyFilters:last.properties}:{})}],repeatedActivation:(conditions?.events as {repeatedActivation?:boolean}|undefined)?.repeatedActivation??false}
     native.seenSurveyWaitPeriodInDays=Math.max(Number(native.seenSurveyWaitPeriodInDays)||0,Number(chain.quietDaysAfterClose)||0,Math.ceil((Number(chain.gapHours)||0)/24),chain.maxPerUser?1:0)
-    const appearance={...(survey.appearance||{}),surveyPopupDelaySeconds:Math.ceil((Number(chain.ready?.maxWaitMs)||0)/1000)}
+    const appearance={...(survey.appearance||{}),surveyPopupDelaySeconds:chain.ready?2:0}
     const audience=chain.audience
     const pattern=audience?.clients?.length?`^[^|]*\\|[^|]*\\|(?:${audience.clients.map(c=>c.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|')})\\|`:undefined
     const targeting_flag_filters=pattern||audience?.sample&&audience.sample<100?{groups:[{properties:pattern?[{key:'distinct_id',type:'person',value:pattern,operator:'regex'}]:[],rollout_percentage:audience?.sample??100}]}:undefined
