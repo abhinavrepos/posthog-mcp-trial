@@ -1,0 +1,74 @@
+{
+  "plan": {
+    "seed": 220031,
+    "phase": "heldout",
+    "user": "rv.eval.4@example.test",
+    "persona": "Explorer",
+    "workflow": "invoice",
+    "injection": "validation_loop",
+    "dose": 2,
+    "planned_severity": "High",
+    "cohort": "I2-validation-abandon-u3",
+    "cohort_users": 3,
+    "abandon_after": true
+  },
+  "session_id": "01a219ce-0254-7df8-b1c0-3b679a94f2ed",
+  "truth": [
+    {
+      "id": "220031:0",
+      "session_id": "01a219ce-0254-7df8-b1c0-3b679a94f2ed",
+      "kind": "validation_loop",
+      "screen": "/desk/accounts/sales-invoice/new",
+      "element": "Debit To",
+      "t_start": 1795729277222,
+      "t_end": 1795729282365,
+      "expected_detectors": [
+        "D4",
+        "D7"
+      ],
+      "expected_severity": "High",
+      "dose": 2,
+      "seed": 220031,
+      "observed": true
+    },
+    {
+      "id": "220031:1",
+      "session_id": "01a219ce-0254-7df8-b1c0-3b679a94f2ed",
+      "kind": "abandon",
+      "screen": "/desk/accounts/sales-invoice/new",
+      "element": "Items",
+      "t_start": 1795729284567,
+      "t_end": 1795729286240,
+      "expected_detectors": [
+        "D5"
+      ],
+      "expected_severity": "High",
+      "dose": 2,
+      "seed": 220031,
+      "observed": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "opened_invoice",
+      "ok": true,
+      "at": 1795729264505
+    },
+    {
+      "name": "party_input_attempted",
+      "ok": true,
+      "at": 1795729269367
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795729277222,
+      "detail": "item=true,qty=true,rate=true"
+    },
+    {
+      "name": "abandoned_after_errors",
+      "ok": true,
+      "at": 1795729288116
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+ "sessions": 72,
+ "complete": 72,
+ "finding_kinds": {
+  "D14": 8
+ },
+ "sessions_with_non_d14_sm_finding": {
+  "n": 0,
+  "d": 72,
+  "value": 0,
+  "ci95": [
+   0,
+   0.0506529398113964
+  ]
+ },
+ "calibrated_screens": [
+  "accounts receivable:report",
+  "purchase order:new",
+  "sales invoice:new"
+ ]
+}

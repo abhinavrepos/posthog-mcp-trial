@@ -1,0 +1,35 @@
+{
+  "plan": {
+    "seed": 100140,
+    "phase": "calibration",
+    "user": "rv.cal.4@example.test",
+    "persona": "Explorer",
+    "workflow": "invoice"
+  },
+  "session_id": "01a2196d-c8df-782a-9590-a0ff5c0099d2",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_invoice",
+      "ok": true,
+      "at": 1795722958223
+    },
+    {
+      "name": "party_input_attempted",
+      "ok": true,
+      "at": 1795722964919
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795722972336,
+      "detail": "item=true,qty=true,rate=true"
+    },
+    {
+      "name": "saved_draft",
+      "ok": false,
+      "at": 1795722975600,
+      "detail": "Please fill the following mandatory fields before saving: Customer is required. Payment Due Date is required. Debit To is required. | Please"
+    }
+  ]
+}

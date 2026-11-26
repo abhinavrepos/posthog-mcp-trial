@@ -1,0 +1,40 @@
+{
+  "plan": {
+    "seed": 100051,
+    "phase": "calibration",
+    "user": "rv.cal.5@example.test",
+    "persona": "Returning",
+    "workflow": "purchase"
+  },
+  "session_id": "01a21968-1da8-7503-8444-448584d40f28",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_purchase",
+      "ok": true,
+      "at": 1795722586156
+    },
+    {
+      "name": "party_selected",
+      "ok": true,
+      "at": 1795722588815
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795722594964,
+      "detail": "item=true,qty=true,rate=true"
+    },
+    {
+      "name": "saved_draft",
+      "ok": true,
+      "at": 1795722597408
+    },
+    {
+      "name": "submitted",
+      "ok": true,
+      "at": 1795722600042,
+      "detail": "docstatus=1"
+    }
+  ]
+}

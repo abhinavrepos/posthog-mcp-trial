@@ -1,0 +1,35 @@
+{
+  "plan": {
+    "seed": 100041,
+    "phase": "calibration",
+    "user": "rv.cal.4@example.test",
+    "persona": "Explorer",
+    "workflow": "purchase"
+  },
+  "session_id": "01a21967-37c0-7733-95e5-e89f284d1ede",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_purchase",
+      "ok": true,
+      "at": 1795722527359
+    },
+    {
+      "name": "party_selected",
+      "ok": true,
+      "at": 1795722533339
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795722541165,
+      "detail": "item=true,qty=true,rate=true"
+    },
+    {
+      "name": "saved_draft",
+      "ok": false,
+      "at": 1795722544123,
+      "detail": "Please fill the following mandatory fields before saving: Supplier is required. In Items, Required By is required in every row. | Please fil"
+    }
+  ]
+}

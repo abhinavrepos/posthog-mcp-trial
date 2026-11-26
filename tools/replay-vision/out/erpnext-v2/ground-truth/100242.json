@@ -1,0 +1,29 @@
+{
+  "plan": {
+    "seed": 100242,
+    "phase": "calibration",
+    "user": "rv.cal.4@example.test",
+    "persona": "Explorer",
+    "workflow": "report"
+  },
+  "session_id": "01a219c0-87b3-71e7-a6f2-15a22bb3686b",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_report",
+      "ok": true,
+      "at": 1795728380744
+    },
+    {
+      "name": "report_filters_applied",
+      "ok": true,
+      "at": 1795728387519,
+      "detail": "{\"date\":\"2026-11-01\",\"group\":1}"
+    },
+    {
+      "name": "report_inspected",
+      "ok": true,
+      "at": 1795728388856
+    }
+  ]
+}

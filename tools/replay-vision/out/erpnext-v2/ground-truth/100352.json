@@ -1,0 +1,29 @@
+{
+  "plan": {
+    "seed": 100352,
+    "phase": "calibration",
+    "user": "rv.cal.5@example.test",
+    "persona": "Returning",
+    "workflow": "report"
+  },
+  "session_id": "01a219c7-0764-7bce-a676-76b375a4ac03",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_report",
+      "ok": true,
+      "at": 1795728806980
+    },
+    {
+      "name": "report_filters_applied",
+      "ok": true,
+      "at": 1795728811349,
+      "detail": "{\"date\":\"2026-11-01\",\"group\":1}"
+    },
+    {
+      "name": "report_inspected",
+      "ok": true,
+      "at": 1795728812669
+    }
+  ]
+}

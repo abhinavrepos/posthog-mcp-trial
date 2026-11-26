@@ -1,0 +1,40 @@
+{
+  "plan": {
+    "seed": 100000,
+    "phase": "calibration",
+    "user": "rv.cal.0@example.test",
+    "persona": "Expert",
+    "workflow": "invoice"
+  },
+  "session_id": "01a21962-16e1-7325-954e-0a32ac2b6ab0",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_invoice",
+      "ok": true,
+      "at": 1795722191914
+    },
+    {
+      "name": "party_selected",
+      "ok": true,
+      "at": 1795722193432
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795722197967,
+      "detail": "item=true,qty=true,rate=true"
+    },
+    {
+      "name": "saved_draft",
+      "ok": true,
+      "at": 1795722200392
+    },
+    {
+      "name": "submitted",
+      "ok": true,
+      "at": 1795722203018,
+      "detail": "docstatus=1"
+    }
+  ]
+}

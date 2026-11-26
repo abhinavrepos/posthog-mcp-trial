@@ -1,0 +1,29 @@
+{
+  "plan": {
+    "seed": 200002,
+    "phase": "heldout",
+    "user": "rv.eval.0@example.test",
+    "persona": "Expert",
+    "workflow": "report"
+  },
+  "session_id": "01a21971-8d33-7268-adc8-4b6d9db9c27e",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_report",
+      "ok": true,
+      "at": 1795723204151
+    },
+    {
+      "name": "report_filters_applied",
+      "ok": true,
+      "at": 1795723208260,
+      "detail": "{\"date\":\"2026-11-01\",\"group\":1}"
+    },
+    {
+      "name": "report_inspected",
+      "ok": true,
+      "at": 1795723209381
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "plan": {
+    "seed": 220120,
+    "phase": "heldout",
+    "user": "rv.eval.0@example.test",
+    "persona": "Expert",
+    "workflow": "invoice",
+    "injection": "revisit",
+    "dose": 2,
+    "planned_severity": "Medium",
+    "cohort": "I7-revisit-u6",
+    "cohort_users": 6
+  },
+  "session_id": "01a219d9-5f96-7323-88f3-80ccede74f63",
+  "truth": [
+    {
+      "id": "220120:0",
+      "session_id": "01a219d9-5f96-7323-88f3-80ccede74f63",
+      "kind": "revisit",
+      "screen": "/desk/accounts/sales-invoice/new",
+      "element": "Customer ↔ invoice",
+      "t_start": 1795730009156,
+      "t_end": 1795730019113,
+      "expected_detectors": [
+        "R1"
+      ],
+      "expected_severity": "Medium",
+      "dose": 2,
+      "seed": 220120,
+      "observed": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "opened_invoice",
+      "ok": true,
+      "at": 1795730009156
+    },
+    {
+      "name": "party_input_attempted",
+      "ok": true,
+      "at": 1795730021977
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795730027206,
+      "detail": "item=true,qty=true,rate=true"
+    },
+    {
+      "name": "saved_draft",
+      "ok": true,
+      "at": 1795730029660
+    },
+    {
+      "name": "submitted",
+      "ok": true,
+      "at": 1795730032307,
+      "detail": "docstatus=1"
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "plan": {
+    "seed": 220150,
+    "phase": "heldout",
+    "user": "rv.eval.3@example.test",
+    "persona": "Careful",
+    "workflow": "purchase",
+    "injection": "slow_wait",
+    "dose": 6000,
+    "planned_severity": "Medium",
+    "cohort": "I3-wait-6s-u3",
+    "cohort_users": 3
+  },
+  "session_id": "01a219df-4813-7cb2-be18-d82e6b98ecb2",
+  "truth": [
+    {
+      "id": "220150:0",
+      "session_id": "01a219df-4813-7cb2-be18-d82e6b98ecb2",
+      "kind": "slow_wait",
+      "screen": "/desk/buying/purchase-order/PUR-ORD-2026-00042",
+      "element": "Save",
+      "t_start": 1795730408441,
+      "t_end": 1795730415927,
+      "expected_detectors": [
+        "D10"
+      ],
+      "expected_severity": "Medium",
+      "dose": 6000,
+      "seed": 220150,
+      "observed": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "opened_purchase",
+      "ok": true,
+      "at": 1795730395880
+    },
+    {
+      "name": "party_input_attempted",
+      "ok": true,
+      "at": 1795730401312
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795730408441,
+      "detail": "item=true,qty=true,rate=true"
+    },
+    {
+      "name": "saved_draft",
+      "ok": true,
+      "at": 1795730417756
+    },
+    {
+      "name": "submitted",
+      "ok": true,
+      "at": 1795730420661,
+      "detail": "docstatus=1"
+    }
+  ]
+}
