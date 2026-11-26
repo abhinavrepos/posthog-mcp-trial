@@ -2,7 +2,7 @@
 """Remove Signal's former survey lock (the @lens_surveys_* Caddy blocks) from compose files that copied it,
 e.g. docker-compose.site.yml. Keeps everything else byte for byte; writes <file>.before-unlock first.
     python3 strip-lock.py docker-compose.site.yml [...]"""
-import shutil, sys
+import json, shutil, sys
 
 def strip(text):
     out, skip, depth = [], False, 0
@@ -24,7 +24,14 @@ changed = 0
 for path in sys.argv[1:]:
     text = open(path).read()
     if '@lens_surveys' not in text: continue
-    new = strip(text)
+    try: doc = json.loads(text)  # site files can be JSON: the Caddyfile is one string there
+    except ValueError: doc = None
+    if isinstance(doc, dict):
+        env = doc.get('services', {}).get('proxy', {}).get('environment', {})
+        if isinstance(env.get('CADDYFILE'), str): env['CADDYFILE'] = strip(env['CADDYFILE'])
+        new = json.dumps(doc, indent=2) + '\n'
+    else:
+        new = strip(text)
     if '@lens_surveys' in new: sys.exit(f'{path}: lock found in an unexpected shape; not changed')
     shutil.copy2(path, path + '.before-unlock')
     open(path, 'w').write(new)
