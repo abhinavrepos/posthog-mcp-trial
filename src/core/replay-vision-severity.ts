@@ -53,7 +53,7 @@ export function classifySeverity(raw:SeverityInput):SeverityResult {
  if(U<=1&&severity!=='Low'){severity='Low';rule+='; capped Low: single user'}
  const weak=raw.weak_only===true||WEAK_CODES.has(raw.kind)||raw.kind==='D14'||(raw.kind==='S1'&&!raw.corroborated)
  if(weak&&severity!=='Low'){severity='Low';rule+=`; capped Low: ${raw.kind==='D14'?'D14 not yet calibrated':'supporting-only signal'}`}
- const reason=`${severity}: ${rule}. U/N ${U}/${N??'unknown'}${raw.observed_rate_lower_bound?' (p lower bound)':''}; median lost ${Math.round(T/1000)} s; A ${A}; ${raw.calibrated?'calibrated':'uncalibrated'}; signal ${raw.kind}`
+ const reason=`${severity}: ${rule}. U/N ${U}/${N??'unknown'}${raw.observed_rate_lower_bound?' (p lower bound)':''}; median lost ${T<10_000?(T/1000).toFixed(1):Math.round(T/1000)} s; A ${A}; ${raw.calibrated?'calibrated':'uncalibrated'}; signal ${raw.kind}`
  return {severity,reason,calibrated:raw.calibrated,users_affected:U,users_reached:N,rule}
 }
 export function atLeast(a:Severity,b:Severity):boolean{return rank[a]>=rank[b]}
