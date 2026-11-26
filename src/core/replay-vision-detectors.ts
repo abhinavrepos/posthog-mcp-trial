@@ -265,7 +265,7 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
         const lastError = visibleErrors.between(v.start, next.start, true).at(-1)
         const afterFriction = out.some((c) => c.screen === v.screen && (c.kind === 'D3' || c.kind === 'D4' || c.kind === 'D10') && c.start_ms >= v.start && c.end_ms <= next.start)
         const lastField = attemptEdits.slice().reverse().find((e) => e.label)?.label
-        add('D5', [attemptEdits[0]!, ...(lastError ? [lastError] : []), lastEdit], { edits: attemptEdits.length, success_observed: false, exit_to: next.screen, after_friction: afterFriction, last_error: !!lastError, last_field: lastField ?? 'unknown', lost_ms: next.start - v.start }, lastField ?? 'Form', 'Abandon form', v.screen)
+        add('D5', [attemptEdits[0]!, ...(lastError ? [lastError] : []), lastEdit], { edits: new Set(attemptEdits.map((e) => `${e.window_id}|${e.node_id}`)).size, input_events: attemptEdits.length, success_observed: false, exit_to: next.screen, after_friction: afterFriction, last_error: !!lastError, last_field: lastField ?? 'unknown', lost_ms: next.start - v.start }, lastField ?? 'Form', 'Abandon form', v.screen)
     }
 
     // D6 field hesitation (focus → first input ≥3 s, no other field typed meanwhile) and D7 returns (≥3 focuses), per visit.

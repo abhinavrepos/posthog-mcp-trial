@@ -311,3 +311,11 @@ test('inputs the page sets by script (no prior focus on the field) are not user 
     assert.equal(d5?.facts.edits, 1)
     assert.equal(d5?.element, 'Customer')
 })
+
+test('D5 edits counts distinct fields, not keystrokes ("editing 75 fields" was 5 fields typed key by key)', () => {
+    const typed = (t0: number, label: string, n: number) => Array.from({ length: n }, (_, i) => ({ offset_ms: t0 + i * 40, kind: 'input_activity' as const, label, node_id: nodeOf(label), scripted: i > 0 }))
+    const t = tl([nav(0, 'sales invoice:new'), ...typed(1000, 'Customer', 22), ...typed(3000, 'Due Date', 10), nav(6000, 'customer:list'), click(7000, 'Customer')])
+    const d5 = detectCandidates(t).find((c) => c.kind === 'D5')
+    assert.equal(d5?.facts.edits, 2)
+    assert.equal(d5?.facts.input_events, 32)
+})
