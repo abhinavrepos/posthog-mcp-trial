@@ -4,18 +4,17 @@
 import { all, run } from './db.ts'
 import { config, jiraConfigured } from './config.ts'
 import { getIssue } from '../jira/client.ts'
-import type { QueueAlert, SurveyView } from './surveys.ts'
+import type { SurveyView } from './surveys.ts'
 
 export const ACKNOWLEDGEMENT = 'I acknowledge that this launches a survey that Reval users will see, and that I have read the rules above.'
 
 /** The four rules, filled in for this survey. */
-export function launchRules(s: Pick<SurveyView, 'clients' | 'sample_percent' | 'steps' | 'show' | 'pacing'>, queue?: Pick<QueueAlert, 'level' | 'alert'>): string[] {
+export function launchRules(s: Pick<SurveyView, 'clients' | 'sample_percent' | 'steps' | 'show' | 'days_between_surveys' | 'type' | 'conditions'>): string[] {
     const who = s.clients === 'all' ? 'every client' : s.clients.join(', ')
-    const p = s.pacing ?? { per_user: config.surveys.perUser, gap_hours: config.surveys.gapHours, quiet_days_after_close: config.surveys.quietDaysAfterClose }
     return [
-        `It reaches Reval users at once: ${s.sample_percent < 100 ? `${s.sample_percent}% of the users of ` : 'users of '}${who} see it in Reval, bottom right, as soon as they ${s.steps.length ? `finish the steps (${s.steps.join(' → ')})` : 'do its steps'} and the page has loaded${s.show === 'every_time' ? ', every time they do' : ', once per user'}.`,
-        `Users are protected from survey fatigue: never more than ${p.per_user} running surveys per user at once, at least ${p.gap_hours} hours between any two, and those already in ${p.per_user} wait for this one.${queue && queue.level !== 'clear' ? ` Right now: ${queue.alert.replace(/^⚠\s*/, '').split('. ')[0]}.` : ''}`,
-        `A user who presses × never sees it again and gets no survey for ${p.quiet_days_after_close} days; one who ignores it twice stops seeing it. Wording mistakes cannot be taken back from users who already answered.`,
+        `This ${s.type} survey targets ${s.sample_percent}% of ${who}. ${s.steps.length ? `Native triggers: ${s.steps.join(', ')}.` : 'No event trigger is set.'} PostHog evaluates its conditions and targeting flag.`,
+        `PostHog's native survey rules apply. The wait period after any survey is ${s.days_between_surveys} days. ${s.show === 'every_time' ? 'It can activate repeatedly.' : 'It is scheduled once.'}`,
+        `Confirm the audience and trigger before launch. Wording mistakes cannot be taken back from users who already answered.`,
         'Answers are kept in PostHog and shown on the Surveys page to everyone with a survey role. It runs until someone stops it here or in chat; stopping keeps the answers.',
     ]
 }

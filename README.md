@@ -35,7 +35,7 @@ questions, when another tool fits better, limits and defaults, and one correct c
 - `pin_graph`: save `{title, chart: {type: 'line'|'bar'|'table', x: [...], series: [{name, values: [...]}]}, note?}`. At most 20 series and 500 points; series lengths must match `x`.
 - `list_pinned`: list saved snapshots.
 - `unpin_graph`: delete your own graph; an admin may delete any graph.
-- `design_survey`, `save_survey`, `stop_survey`, `list_surveys`, `survey_results`: survey tools, according to the caller's survey role. Launching stays on the Surveys page. A `design_survey` reach estimate over more than 90 days uses the last 90 days and says so; a slow one returns a job handle.
+- `design_survey`, `save_survey`, `stop_survey`, `list_surveys`, `survey_results`: survey tools, according to the caller's survey role. Launching stays on the Surveys page. `design_survey` validates native PostHog fields and returns a draft plan.
 
 PostHog tools require its upstream MCP URL/key. Survey tools require its survey key. Replay and person tools from PostHog are allowed. Results are not masked. `src/mcp/output-filter.ts` contains the single pass-through hook at the output boundary.
 
@@ -89,34 +89,21 @@ theme follows the computer's light or dark setting (dark when there is none); `d
 Signal itself, so pages load nothing from outside and work offline. The shared styles are in
 `src/service/volt.ts`; routes, element ids, form names and page scripts are those of the earlier pages.
 
-## Surveys on Reval
+## Native PostHog surveys
 
-A survey shows after a user does its steps, in order, in one browser session. Other actions in between are
-fine. Steps name what Reval sends, not what people see:
+Signal configures PostHog's own surveys through its public API. The browser uses unmodified posthog-js and PostHog serves its original `surveys.js`. `design_survey` validates a native survey, `save_survey` creates a draft or updates a survey, `stop_survey` stops or archives it, and `list_surveys` / `survey_results` report shown, answered, dismissed, and answers. A caller with the launch survey role can set `start_date` explicitly to launch; the edit role can change drafts only. The Signal Surveys page still offers a launch flow with its ticket and acknowledgement check. PostHog's own survey UI and API are also available.
 
-- **Screens** by `dialog_id`. Reports send their menu id: Hedge Designation is `LinkListReqv`, not its Ext
-  dialog `DlgHedgeDesigListReport` and not its title.
-- **Buttons** by their exact label (`action_name`). `Export`, `XLS Export`, `XLSX Export` and `CSV Export` are
-  four different buttons; for any of them use an `event` step on `Event` with `action_name` containing `Export`.
-- **Clients**: Reval puts the client in the user id (`ENV|SITE|CLIENT|USER`), not on events, so client-limited
-  surveys need `CLIENT_FROM_DISTINCT_ID=3`.
+Use PostHog's native field names. A survey can set `name`, `description`, `type` (`popover`, `api`, `widget`, `external_survey`), `questions`, `appearance`, `conditions`, `targeting_flag_filters`, `linked_flag_id`, schedule and response limit. Questions support open text, links, ratings, single and multiple choice, optional answers, button labels, choices, shuffling, open choice, and native branching. Appearance includes position, colors, text, widget settings, thank-you and intro screens, and `surveyPopupDelaySeconds`. Conditions include URL and match type, selector, device types, event names with `propertyFilters` and `repeatedActivation`, cancel events, PostHog action IDs, wait period, and linked flag variant. Targeting filters can use person properties, cohorts, and rollout percentage. `start_date`, `end_date`, `archived`, `schedule`, `iteration_count`, `iteration_frequency_days`, and `responses_limit` are also configurable. The MCP rejects unsupported keys with a field path.
 
-Example, "after a user opens Hedge Designation and then exports from it":
-`steps: [{opens: 'LinkListReqv'}, {button: 'Export', dialog: 'LinkListReqv'}]`. It does not show for opening
-the report alone, for an export in another screen, or for an export before the report was opened; it shows
-when the export happens, also minutes later, once Reval's loading mask has gone.
+PostHog automatically renders `popover` and `widget` surveys. An `api` survey needs an application renderer; `external_survey` uses PostHog's hosted page.
 
-A survey launched while Reval is already open shows without a reload. posthog-js reads its flags (a survey's
-targeting flag is one) once per page load, so the survey engine reloads flags and surveys every 5 minutes while
-the page is visible, and when it comes back into view (at most once a minute). When the page loaded while no
-survey was running, PostHog's script starts with survey display off; the engine turns it on once PostHog's
-remote config lists surveys again, as a reload would. Steps done before the launch do not count: after a launch,
-users do the steps again. `window.__lensSurveyRefreshMs` changes the interval (0 turns it off).
+Example: `save_survey({"name":"Export feedback","type":"popover","questions":[{"type":"rating","question":"How was the export?","scale":5}],"conditions":{"events":{"values":[{"name":"Export"}]},"seenSurveyWaitPeriodInDays":14},"appearance":{"position":"right","surveyPopupDelaySeconds":3},"clients":["SEM"]})`. PostHog's event condition accepts event-property filters, for example `{"name":"Event","propertyFilters":{"action_name":{"operator":"exact","values":["Export"]}}}`. Native surveys cannot enforce an ordered sequence of events or wait for Reval's loading mask.
 
-`design_survey` adds warnings, never errors, when a step's screen, button or field, or the client audience,
-matched nothing in the last 30 days of events, with close matches (for example `LinkListReqv` for
-`DlgHedgeDesigListReport`). These checks use their own fixed 30-day window and a 40-second limit per query, run next to the reach estimate, and never hold
-up other queries; if PostHog cannot answer them, one warning says the check was skipped.
+Client targeting uses a native `distinct_id` regex in `targeting_flag_filters`, verified through `/flags?v=2` on the local PostHog for existing and new IDs. For Reval IDs such as `C1DEV|01|SEM|SEMOPS`, `clients:["SEM"]` targets `^[^|]*\\|[^|]*\\|(?:SEM)\\|`. The `$distinct_id` key does not match; use `distinct_id`. No transformation or new person property is needed. Signal's `clients` shorthand resolves names and writes this native filter; `sample_percent` sets the targeting flag rollout. Reval must identify the user before flags load; anonymous IDs will not match. Historical analytics still use `CLIENT_FROM_DISTINCT_ID=3` independently. Existing Signal chain surveys are migrated on their first read after upgrade: the final event and its property filters become a native event trigger, and old conditions are removed. Running multi-step surveys are stopped for review; one-step surveys retain their status. An ordered chain cannot be represented exactly by PostHog. Review migrated triggers and audiences before relaunch.
+
+The normal install and upgrade path runs `deploy/posthog/survey-engine/apply.sh --remove` to unmount Signal's old renderer and restore PostHog's own survey UI and API. It removes only Signal-owned compose overrides.
+
+The configurator uses PostHog's public survey API and native action and feature-flag fields. It does not set `appearance.whiteLabel`: this server requires a paid entitlement for that field. PostHog's survey footer remains unchanged.
 
 ## When PostHog or storage fails
 
@@ -130,31 +117,7 @@ keys, file paths or stack traces.
 ## Testing
 
 - `npx tsc --noEmit` and `npm test -- --test-concurrency=1`: the unit and integration suite.
-- `pnpm reval-sim [name filter]`: a simulated Reval (Ext JS classic, one page whose URL never changes, about
-  100 screens as MDI tabs, floating windows, report parameter windows, grids, message boxes, toasts and an
-  iframe) with the real posthog-js and the survey engine as `deploy/posthog/survey-engine/build.mjs` builds
-  it, served by a stand-in PostHog. Surveys are made through Signal, and 43 flows in headless Chrome check
-  when each survey shows and when it must not: the Hedge Designation then Export order, steps before
-  posthog-js has loaded, reopened tabs, tab switches, loading masks and modal windows, client and sample
-  audiences, per-user limits and gaps, show once or every time, dismissals, logout and a new user without a
-  reload, client change, a survey launched while the page is open, and 100 screens in a row. Ext JS (GPL) is not in this repository: set
-  `REVAL_VENDOR` to a folder with `extjs/ext-all.js` and the classic theme, and `posthog-js/` (an npm
-  package copy). Results go to `run/reval-sim/results.json`. The startup hook in `array.js` is built only for verified
-  posthog-js files (hashes in `build.mjs`: 1.443.0, 1.454.2, and 1.450.0 as PostHog's web image serves it, which is
-  PostHog's own build, not npm's); to verify a new one, put PostHog's served `array.js` and `surveys.js` in a vendor
-  copy's `posthog-js/dist/`, add the hash and run all flows with that `REVAL_VENDOR`.
-- `tools/reval-sim/real-sessions.ts`: the same simulated Reval against a real self-hosted PostHog (its own
-  posthog-js, flags service and survey engine). It makes and launches a Hedge Designation then Export survey
-  through Signal, waits until PostHog serves its targeting flag, then runs `SESSIONS` (120) browser sessions,
-  `PARALLEL` (6) at a time: exports right away or after 3 to 4 minutes, opens without exporting, exports
-  elsewhere or first, and another client. It reports sessions as expected and the delay from Export to the
-  survey on screen (min, median, p95, max), and writes `run/real-sessions/results-<stamp>.json`. Set
-  `REAL_PH`, `REAL_TOKEN` (project token), `REAL_KEY` (personal key with survey write) and `REAL_PROJECT`.
-  The project needs surveys turned on (`surveys_opt_in`), and PostHog must serve the Signal survey engine.
-- `tools/reval-sim/real-live-launch.ts`: a survey launched while Reval is open, against a real PostHog. `PAGES`
-  (6) pages open and do the steps first, then Signal launches the survey; after the engine's refresh (`REFRESH_MS`,
-  20000) the same pages, without a reload, do the steps again and must see it. `CONTROL` (2) pages run with the
-  refresh off and must see nothing. Same `REAL_*` settings; results in `run/real-live-launch/`.
+- `test/native-surveys.test.ts`: validates native survey fields, client targeting and rejected legacy inputs.
 - MCP regression (`docs/mcp-regression.md`): `tools/mcp-regression/run.mts` asks the 100 questions of
   `questions.json` to Claude (Sonnet) with only the Signal MCP connected, against a real PostHog, and grades the answers
   on ClickHouse; `nightly.sh` fails below 95%. `test/mcp-regression-gate.test.ts` (in `npm test`) checks the questions

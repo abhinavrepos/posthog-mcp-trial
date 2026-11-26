@@ -567,22 +567,28 @@ test('find_sessions keeps target-screen matches when over 10 actions match, show
     const at=s.matched_actions.map((a:{at:string})=>String(a.at));assert.deepEqual(at,[...at].sort())
 })
 
-test('chat cannot change a running survey; nothing is sent to PostHog',async t=>{
-    const running={id:'s-run',name:'Live one',type:'popover',created_at:'2026-11-01T00:00:00Z',start_date:'2026-11-02T00:00:00Z',end_date:null,archived:false,questions:[{id:'q',question:'Easy?',type:'rating',scale:5}],conditions:{},appearance:{}}
+test('chat can update a running native survey through PostHog',async t=>{
+    const id='00000000-0000-0000-0000-000000000001'
+    const running={id,name:'Live one',type:'popover',created_at:'2026-11-01T00:00:00Z',start_date:'2026-11-02T00:00:00Z',end_date:null,archived:false,questions:[{id:'q',question:'Easy?',type:'rating',scale:5}],conditions:{},appearance:{}}
     const writes:string[]=[]
     t.mock.method(globalThis,'fetch',async(url:unknown,init?:RequestInit)=>{
-        if(init?.method && init.method!=='GET')writes.push(`${init.method} ${String(url)}`)
-        return String(url).includes('/surveys/s-run/')?Response.json(running):Response.json({results:[]})
+        if(init?.method==='PATCH'){writes.push(String(init.body));return Response.json(running)}
+        return String(url).includes('/surveys/'+id+'/')?Response.json(running):Response.json({results:[]})
     })
     const server=new McpServer({name:'test',version:'1'});registerTools(server,undefined,{who:'pm@example.com',email:'pm@example.com',surveyRole:'launch'})
     const [a,b]=InMemoryTransport.createLinkedPair();await server.connect(a);const client=new Client({name:'test',version:'1'});await client.connect(b)
     try {
-        const r=await client.callTool({name:'save_survey',arguments:{survey_id:'s-run',name:'Live one',questions:[{type:'rating',text:'Easy?'}],steps:[{opens:'DlgTask01'}]}})
-        const txt=(r.content as {text:string}[])[0]!.text
-        assert.match(txt,/drafts only/);assert.match(txt,/Nothing was saved/)
-        assert.deepEqual(writes.filter(w=>w.includes('/surveys')),[])
-        const names=(await client.listTools()).tools.map(t=>t.name)
-        assert.ok(!names.some(n=>/launch/.test(n)))
+        const r=await client.callTool({name:'save_survey',arguments:{survey_id:id,name:'Live one',questions:[{type:'rating',question:'Easy?'}],conditions:{events:{values:[{name:'Export'}]}}}})
+        assert.ok(!r.isError,JSON.stringify(r))
+        assert.equal(writes.length,1)
+        assert.equal(JSON.parse(writes[0]).conditions.events.values[0].name,'Export')
+        const editServer=new McpServer({name:'edit',version:'1'});registerTools(editServer,undefined,{who:'editor@example.com',email:'editor@example.com',surveyRole:'edit'})
+        const [c,d]=InMemoryTransport.createLinkedPair();await editServer.connect(c);const editor=new Client({name:'edit',version:'1'});await editor.connect(d)
+        try {
+            const denied=await editor.callTool({name:'save_survey',arguments:{name:'Live now',questions:[{type:'open',question:'Why?'}],start_date:new Date().toISOString()}})
+            assert.ok(denied.isError)
+            assert.equal(writes.length,1)
+        } finally {await editor.close()}
     } finally {await client.close()}
 })
 

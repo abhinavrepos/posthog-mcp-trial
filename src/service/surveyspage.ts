@@ -4,8 +4,8 @@ import { ToolInputError } from '../core/toolinputerror.ts'
 // their team come back to see them. Admins, and anyone an admin ticked "Surveys" for.
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-import { config, surveysActive } from '../core/config.ts'
-import { archiveSurvey, conflictsFor, estimateReach, getSurvey, launchSurvey, listSurveys, queueAlert, stopSurvey, surveyAnswers, surveyOverview, surveyResults, viewOf } from '../core/surveys.ts'
+import { surveysActive } from '../core/config.ts'
+import { archiveSurvey, getSurvey, launchSurvey, stopSurvey, surveyAnswers, surveyOverview, surveyResults, viewOf } from '../core/surveys.ts'
 import { ACKNOWLEDGEMENT, checkTicket, jiraTicketUrl, launchesOf, launchRules, recordLaunch } from '../core/launches.ts'
 import { jiraConfigured } from '../core/config.ts'
 import { audit, canSurvey, canUseSurveys, SURVEY_ROLE_TEXT, type Viewer } from './access.ts'
@@ -33,9 +33,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 export async function launchCheck(id: string) {
     const s = await getSurvey(id)
     const v = viewOf(s)
-    const chain = s.conditions?.lensChain
-    const queue = chain ? queueAlert(chain, conflictsFor(chain, { id: s.id }, await listSurveys())) : undefined
-    return { survey: { id: v.id, name: v.name, status: v.status }, rules: launchRules(v, queue), queue, acknowledgement: ACKNOWLEDGEMENT, jira_checked: jiraConfigured() }
+    return { survey: { id: v.id, name: v.name, status: v.status }, rules: launchRules(v), acknowledgement: ACKNOWLEDGEMENT, jira_checked: jiraConfigured() }
 }
 const days = (url: URL, fallback: number) => Math.min(365, Math.max(1, Number(url.searchParams.get('days')) || fallback))
 
@@ -74,12 +72,6 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
             }
         }
         if (m && m[2] === 'launch-check' && req.method === 'GET') return (json(res, 200, await launchCheck(m[1])), true)
-        if (m && m[2] === 'reach' && req.method === 'GET') {
-            const s = await getSurvey(m[1])
-            const chain = s.conditions?.lensChain
-            if (chain?.managedBy !== 'lens') return (json(res, 400, { error: 'Only surveys made in Signal have steps to count.' }), true)
-            return (json(res, 200, await estimateReach(chain, days(url, 14))), true)
-        }
         if (m && m[2] && ['launch', 'stop', 'archive'].includes(m[2]) && req.method === 'POST') {
             if (!canSurvey(v.role === 'admin' ? 'launch' : v.surveys, 'launch')) return (json(res, 403, { error: 'Launching, stopping and archiving surveys needs the "Also launch and stop surveys" survey role. Ask an admin.' }), true)
             if (m[2] === 'launch') {
@@ -90,7 +82,7 @@ export async function handleSurveys(req: IncomingMessage, res: ServerResponse, u
                 if (!ticket.ok) return (json(res, 400, { error: ticket.error }), true)
                 const check = await launchCheck(m[1])
                 const s = await launchSurvey(m[1])
-                recordLaunch({ survey_id: s.id, survey_name: s.name, ticket: ticket.key, ticket_summary: ticket.summary ?? null, launched_by: v.email, via: 'Surveys page', rules: check.rules, clients: s.conditions?.lensChain?.audience?.clients || [] })
+                recordLaunch({ survey_id: s.id, survey_name: s.name, ticket: ticket.key, ticket_summary: ticket.summary ?? null, launched_by: v.email, via: 'Surveys page', rules: check.rules, clients: viewOf(s).clients })
                 audit(v.email, 'survey.launched', { survey: s.id, name: s.name, ticket: ticket.key })
                 return (json(res, 200, { ok: true, ticket: ticket.key }), true)
             }
@@ -264,7 +256,7 @@ th,td{padding:8px 3px;font-size:12px}
 <div class="row"><button type="button" class="ghost" id="l-cancel">Cancel</button><button type="submit" id="l-go" disabled>Launch survey</button></div>
 </form></dialog>
 <script>${PAGER_JS}
-${CLIENT.replace('__BRAND__', JSON.stringify(config.surveys.brand)).replace('__CAN_LAUNCH__', JSON.stringify(v.role === 'admin' || canSurvey(v.surveys, 'launch')))}</script></body></html>`
+${CLIENT.replace('__BRAND__', JSON.stringify('PostHog')).replace('__CAN_LAUNCH__', JSON.stringify(v.role === 'admin' || canSurvey(v.surveys, 'launch')))}</script></body></html>`
 }
 
 // Runs in the browser. Survey names, questions and answers come from people: everything goes through esc().
@@ -302,6 +294,8 @@ $('days').onchange=()=>{listMessage('Loading surveys…');loadList(true)}
 const SHADOW={soft:'var(--pop)',strong:'0 16px 44px rgba(0,0,0,.38)',none:'none'},PAD={compact:'14px 16px',normal:'20px 22px',roomy:'26px 28px'}
 // A faithful sketch of the popover over an app window, placed where PostHog puts it (right = bottom right).
 function preview(s){const l=s.look||{},bg=color(l.background)||'#fff',fg=color(l.text)||'#14213d',sub=color(l.text_subtle)||'#5b6577',bt=color(l.button)||'#0b5cad',btt=color(l.button_text)||'#fff',rb=color(l.rating)||'#f1f4f8',ra=color(l.rating_active)||bt,bd=color(l.border)||'#d8dee8',ib=color(l.input_background)||'#f7f9fc',it=color(l.input_text)||fg
+  if(s.type==='api')return '<p class="small muted">API surveys need an application renderer; PostHog does not display them automatically.</p>'
+  if(s.type==='external_survey')return '<p class="small muted">External surveys use PostHog’s hosted survey page.</p>'
   const q=s.questions[0];if(!q)return '<p class="small muted">No questions to preview. Add a question in chat.</p>'
   const pos=String(l.position||'right'),w=Math.min(l.max_width||340,360),r=l.corner_radius==null?14:l.corner_radius
   const vertical=pos.startsWith('top')?'start':pos.startsWith('middle')?'center':'end'
@@ -318,8 +312,8 @@ function preview(s){const l=s.look||{},bg=color(l.background)||'#fff',fg=color(l
     +(l.thank_you?'<p class="small muted">After the answer: "'+esc(l.thank_you)+'"'+(l.thank_you_text?' · '+esc(l.thank_you_text):'')+'</p>':'')
     +(s.questions.length>1||l.thank_you?'</details>':'')}
 
-function chain(s){const st=s.steps.map((t,i)=>'<div class="st"><b>Step '+(i+1)+'</b>'+esc(t)+'</div>').join('<span class="ar" aria-hidden="true">→</span>')
-  return '<div class="chain">'+(st||'<div class="st">No steps</div>')+'<span class="ar" aria-hidden="true">→</span><div class="st end"><b>Then</b>Survey shows'+(s.waits_for_page?' once the page has loaded':'')+'</div></div>'}
+function chain(s){const triggers=s.steps.map(t=>'<div class="st">'+esc(t)+'</div>').join('')
+  return '<div class="chain">'+(triggers||'<div class="st">No event trigger; PostHog uses the other native conditions.</div>')+'</div>'}
 
 function bars(dist){const e=Object.entries(dist||{}),max=Math.max(1,...e.map(x=>x[1]));return '<div class="bars">'+e.map(([k,n])=>'<div class="row"><span>'+esc(k)+'</span><div><div class="bar" aria-hidden="true" style="width:'+(n/max*100)+'%"></div></div><span class="n">'+num(n)+'</span></div>').join('')+'</div>'}
 
@@ -333,21 +327,20 @@ async function show(id){const period=$('days').value;current=id;$('list').queryS
   const s=r.survey
   const acts=!CAN_LAUNCH?'<span class="small muted">Ask an admin for launch access.</span>':(s.status==='draft'||s.status==='stopped'?'<button type="button" id="a-launch">'+(s.status==='draft'?'Launch':'Start again')+'</button>':'')+(s.status==='running'?'<button type="button" class="danger" id="a-stop">Stop</button>':'')+'<details><summary>More actions</summary><button type="button" id="a-archive" class="ghost">Archive</button></details>'
   const launched=(r.launches||[])[0]
-  const facts=[['Clients',(s.clients==='all'?'Every client':s.clients.join(', '))+(s.sample_percent<100?' · '+s.sample_percent+'% of their users':'')],['Shows',s.show==='every_time'?'Every time the steps happen':'Once per user'],['Time to complete steps',s.within_minutes?num(s.within_minutes)+' minutes':'No limit (same page)'],
-    ['Starts over when',s.reset_on.length?s.reset_on.join('; '):'Never (a page reload starts over)'],['Days between any two surveys',s.days_between_surveys||'None'],['User limits',s.pacing?'At most '+s.pacing.per_user+' running at once · '+s.pacing.gap_hours+' h apart at least · '+s.pacing.quiet_days_after_close+' quiet days after a close':'PostHog rules only'],['Only on pages containing',s.url_contains||'Any page'],['Stops after',s.max_responses?num(s.max_responses)+' answers':'No limit'],
+  const facts=[['Clients',(s.clients==='all'?'Every client':s.clients.join(', '))+(s.sample_percent<100?' · '+s.sample_percent+'% of their users':'')],['Shows',s.show==='every_time'?'Repeated activation':'Once per user'],['Type',s.type],
+    ['Native triggers',s.steps.length?s.steps.join('; '):'No event trigger'],['Days between any two surveys',s.days_between_surveys||'None'],['Only on pages containing',s.url_contains||'Any page'],['Stops after',s.max_responses?num(s.max_responses)+' answers':'No limit'],
     ['Made',when(s.created)+(s.created_by?' by '+s.created_by:'')+(s.made_by_lens?' (Signal)':' (in PostHog)')],['Running since',s.started?when(s.started):'Not launched'+(s.stopped?'':'')]].concat(s.stopped?[['Stopped',when(s.stopped)]]:[]).concat(launched?[['Launched under',launched.ticket+(launched.ticket_summary?' · '+launched.ticket_summary:'')+' · by '+launched.launched_by+' ('+launched.via+'), '+when(launched.at)]]:[])
   const qs=r.questions.map((q,i)=>'<div class="q"><h3><span class="muted">'+(i+1)+'. </span>'+esc(q.text.replace(/^Q:\s*/i,''))+'</h3><p class="small muted">'+num(q.answers)+' answers'+(q.recent?' · Newest first':'')+(q.average!=null?' · average '+num(q.average):'')+(q.nps?' · NPS '+num(q.nps.score)+' ('+num(q.nps.promoters)+' promoters, '+num(q.nps.passives)+' passives, '+num(q.nps.detractors)+' detractors)':'')+'</p>'+(q.distribution?'<div id="dist-'+i+'"></div><div id="dist-pager-'+i+'"></div>':'')+(q.recent?'<div id="answers-'+i+'"></div><div id="answers-pager-'+i+'"></div><p class="small muted" id="answers-status-'+i+'" role="status" aria-live="polite"></p><button type="button" class="ghost" id="answers-more-'+i+'" aria-controls="answers-'+i+'">Show more</button>':'')+'</div>').join('')
   $('detail').innerHTML='<div class="card"><span class="chip '+esc(s.status)+'">'+esc(STATUS[s.status])+'</span><div class="head"><h2>'+esc(s.name)+'</h2><div class="acts">'+acts+'</div></div>'+(s.description?'<details><summary>About this survey</summary><p class="muted">'+esc(s.description)+'</p></details>':'')+'<p id="a-msg" class="small" role="status" aria-live="polite"></p>'
     +'</div>'
-    +(r.queue?'<div class="conf'+(r.queue.level==='clear'?' ok':'')+'" role="'+(r.queue.level==='clear'?'status':'alert')+'"><b>'+(r.queue.level==='clear'?'No survey overlap':'Survey overlap')+'</b><details><summary>Survey pacing</summary><p>'+esc(r.queue.alert)+'</p></details>'+(r.conflicts.length?'<ul id="conflict-rows"></ul><div id="conflict-pager"></div>':'')+'</div>':'')+(s.pacing?'<details class="pacing"><summary>User limits</summary><p>'+esc('User limits: '+num(s.pacing.per_user)+' running at once · at least '+num(s.pacing.gap_hours)+' hours apart · '+num(s.pacing.quiet_days_after_close)+' quiet days after dismissal.')+'</p></details>':'')
-    +'<div class="card"><h2>Results · last '+esc(period)+' days</h2>'+(r.freshness?'<p class="small muted" role="status">Showing cached results from '+esc(when(r.freshness.cached_at))+' while they refresh.</p>':'')+'<div class="tiles"><div class="tile"><span>Shown</span><b>'+num(r.shown)+'</b></div><div class="tile"><span>Answered</span><b>'+num(r.answered)+'</b></div><div class="tile"><span>Answer rate</span><b>'+(r.response_rate==null?'–':r.response_rate+'%')+'</b></div></div><div class="secondary-metrics"><div><span>Dismissed</span> <b>'+num(r.dismissed)+'</b></div>'+(r.chain_completed!=null?'<div><span>Steps completed</span> <b>'+num(r.chain_completed)+'</b></div>':'')+'</div>'
+    +'<div class="card"><h2>Results · last '+esc(period)+' days</h2>'+(r.freshness?'<p class="small muted" role="status">Showing cached results from '+esc(when(r.freshness.cached_at))+' while they refresh.</p>':'')+'<div class="tiles"><div class="tile"><span>Shown</span><b>'+num(r.shown)+'</b></div><div class="tile"><span>Answered</span><b>'+num(r.answered)+'</b></div><div class="tile"><span>Answer rate</span><b>'+(r.response_rate==null?'–':r.response_rate+'%')+'</b></div></div><div class="secondary-metrics"><div><span>Dismissed</span> <b>'+num(r.dismissed)+'</b></div>'+'</div>'
 
-    +(r.chain_completed!=null&&r.chain_completed>r.shown?'<details><summary>How this works</summary><p class="small muted">Some completed steps do not show a survey. A survey may not show if the user already answered or dismissed it, saw another survey recently, or the page stayed busy.</p></details>':'')+'</div>'
+    +'</div>'
     +'<div class="card"><h2>Answers by question</h2>'+(qs||'<p class="muted">No questions yet. Add one in chat.</p>')+'</div>'
     +'<details><summary>Daily activity</summary>'+perDay(r.by_day)+'</details>'
     +'<details><summary>By client</summary><p class="small muted">Ordered by times shown.'+(r.by_client_truncated?' Showing the first 5,000 clients.':'')+'</p>'+(r.by_client.length?'<div class="table-wrap" role="region" aria-label="Survey results by client" tabindex="0"><table><caption class="sr-only">Survey results by client</caption><thead><tr><th scope="col">Client</th><th scope="col" class="n">Shown</th><th scope="col" class="n">Answered</th><th scope="col" class="n">Dismissed</th></tr></thead><tbody id="client-rows"></tbody></table></div><div id="client-pager"></div>':'<p class="small muted">No activity yet. Results appear here after users see the survey.</p>')+'</details>'
     +'<details><summary>When it shows &amp; settings</summary>'+chain(s)+'<div class="facts">'+facts.map(([k,x])=>'<div><span>'+esc(k)+'</span>'+esc(x)+'</div>').join('')+'</div>'
-    +(s.made_by_lens?'<p style="margin-top:10px"><button type="button" id="a-reach" class="ghost">Estimate reach · last 14 days</button></p><div id="reach" aria-live="polite"></div>':'')+'</details>'
+    +'</details>'
     +'<details open><summary>Preview survey</summary>'+preview(s)+'</details>'
   // Present the existing result sections as tabs without changing their contents or IDs.
   const detail=$('detail'), result=[...detail.children].find(e=>e.classList?.contains('card')&&e.querySelector('h2')?.textContent?.startsWith('Results'))
@@ -381,7 +374,7 @@ async function show(id){const period=$('days').value;current=id;$('list').queryS
   if($('a-launch'))$('a-launch').onclick=()=>openLaunch(id)
   if($('a-stop'))$('a-stop').onclick=act('stop','Stop showing "'+s.name+'"? Its answers stay.')
   if($('a-archive'))$('a-archive').onclick=act('archive','Archive "'+s.name+'"? It stops and leaves this list. Its answers stay in PostHog.')
-  if($('a-reach'))$('a-reach').onclick=async ev=>{const button=ev.currentTarget;if(button.disabled)return;button.disabled=true;$('reach').innerHTML='<p class="small muted">Counting…</p>';try{const x=await api('/replays/surveys/api/survey/'+encodeURIComponent(id)+'/reach');$('reach').innerHTML='<p><b>'+num(x.sessions)+'</b> sessions, '+num(x.users)+' users at '+num(x.clients)+' clients.</p>'+bars(Object.fromEntries(x.by_step.map((b,i)=>['Step '+(i+1)+': '+b.step,b.sessions])))+(x.top_clients.length?'<p class="small muted">Most: '+x.top_clients.map(c=>esc(c.client)+' ('+num(c.sessions)+')').join(', ')+'</p>':'')+'<p class="small muted">'+esc(x.note)+'</p>'}catch(e){$('reach').innerHTML='<p class="err" role="alert">'+esc(e.message)+' Try counting again.</p>'}finally{button.disabled=false}}
+
 }
 // The safeguard: read the rules, give the Jira ticket, acknowledge; the server checks the same.
 let LAUNCH=null,launchRequest=0,launchOpener=null,launching=false

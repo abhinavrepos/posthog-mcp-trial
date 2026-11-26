@@ -1,6 +1,6 @@
-# Thin Signal: work summary (branch `thin-lens-volt`, PR #1)
+# Historical work summary (superseded by native surveys)
 
-Status as of 2026-11-25. Built on `thin-lens` (the thin display layer over PostHog). `master` and the other
+Historical status as of 2026-11-25. The custom survey engine described below was removed in the native-surveys upgrade; see the README for current behavior. Built on `thin-lens` (the thin display layer over PostHog). `master` and the other
 branches are kept unchanged. The full measured results are in [real-posthog-test.md](real-posthog-test.md).
 
 ## 1. Surveys on Reval: why the Hedge Designation survey did not show
@@ -126,5 +126,5 @@ Output: table client | score | users before→now | exports before→now | frict
 1. Pull `thin-lens-volt` (or merge PR #1). This includes the `query-run` fix.
 2. Run `deploy/posthog-mcp/up.sh` to restart PostHog's MCP with a fresh key on current PostHog.
 3. Restart Signal.
-4. Run `deploy/posthog/survey-engine/apply.sh` and check that `/static/array.js` contains `__lensSurveyCapture`.
+4. Run `deploy/posthog/survey-engine/apply.sh --remove` to restore the original PostHog survey renderer and open its survey UI.
 5. Before the next PostHog upgrade, use Signal's upgrade script, which runs the premigrate step.

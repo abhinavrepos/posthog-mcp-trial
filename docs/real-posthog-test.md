@@ -1,3 +1,5 @@
+> Historical test record: the Signal survey engine and lens_chain events described below were removed in the native-surveys upgrade. See README for current behavior.
+
 # Real PostHog test: 400M events / 1 year, 120 survey sessions, Signal MCP
 
 Date: 2026-11-25. Code: `/root/tl-int`, branch `thin-lens-volt` (PR #1).

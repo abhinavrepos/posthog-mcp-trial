@@ -123,28 +123,14 @@ test('every tool description names what it answers, an example call, and limits'
     for (const name of ['resolve_client', 'find_sessions']) assert.ok((tools.find((x) => x.name === name)!.inputSchema.properties as any).window, `${name} takes window`)
 })
 
-test('design_survey: a reach estimate that fails is a "check skipped" warning, never a failed check of a valid survey', async (t) => {
-    const seen: string[] = []
-    t.mock.method(globalThis, 'fetch', async (url: unknown, init: RequestInit = {}) => {
-        if (String(url).includes('/surveys')) return Response.json({ results: [], next: null })
-        const q = JSON.parse(String(init.body || '{}')).query?.query as string || ''
-        seen.push(q)
-        if (q.includes('uniq(person) AS users')) return new Response('Query has hit the max execution time', { status: 500 })
-        if (q.includes('AS opens')) return Response.json({ columns: ['id', 'name', 'opens', 'closes', 'n'], results: [['LinkListReqv', 'Hedge Designation', 20, 0, 20]] })
-        if (q.includes('AS v, count() AS n')) return Response.json({ columns: ['v', 'n'], results: [['Export', 50]] })
-        if (q.includes('count() AS n')) return Response.json({ columns: ['n', 'carried', 'chosen'], results: [[1000, 1000, 100]] })
-        return Response.json({ columns: ['id'], results: [] })
-    })
-    clearClientCache()
+test('design_survey validates a native survey without querying PostHog', async (t) => {
+    const calls:string[]=[]
+    t.mock.method(globalThis,'fetch',async(url:unknown)=>{calls.push(String(url));return Response.json({results:[],next:null})})
     const server = new McpServer({ name: 'gate', version: '1' }); registerTools(server, undefined, { who: 'pm@example.com', email: 'pm@example.com', surveyRole: 'launch' })
-    const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(a)
-    const client = new Client({ name: 'gate', version: '1' }); await client.connect(b); t.after(() => client.close())
-    const r = await client.callTool({ name: 'design_survey', arguments: { name: 'Hedge export', questions: [{ type: 'rating', text: 'How easy was the export?' }], steps: [{ opens: 'LinkListReqv' }, { button: 'Export', dialog: 'LinkListReqv' }] } })
-    assert.ok(!r.isError, JSON.stringify(r).slice(0, 500))
-    const out = sc(r)
-    assert.ok(seen.some((q) => q.includes('uniq(person) AS users')), 'the reach estimate was attempted')
-    assert.equal(out.reach.skipped, 'PostHog did not answer in time')
-    assert.ok(out.problems.some((p: any) => p.where === 'reach' && /^Check skipped/.test(p.text)))
-    assert.ok(!out.problems.some((p: any) => p.level === 'error'))
-    assert.match((r.content as any)[0].text, /checks out/)
+    const [a,b] = InMemoryTransport.createLinkedPair(); await server.connect(a)
+    const client = new Client({name:'gate',version:'1'});await client.connect(b);t.after(()=>client.close())
+    const r=await client.callTool({name:'design_survey',arguments:{name:'Export feedback',questions:[{type:'rating',question:'How easy was export?',scale:5}],conditions:{events:{values:[{name:'Export'}]}}}})
+    assert.ok(!r.isError,JSON.stringify(r).slice(0,500))
+    assert.equal(sc(r).survey.conditions.events.values[0].name,'Export')
+    assert.equal(calls.length,0)
 })

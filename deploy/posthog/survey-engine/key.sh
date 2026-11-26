@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Gives Lens its own PostHog API key for surveys: survey read and write, limited to the Lens project,
 # nothing else (no events, persons, flags or replays). Lens reads events and answers with its normal
-# read-only key. Writes POSTHOG_SURVEY_API_KEY and POSTHOG_SURVEY_GATE (the secret PostHog's proxy
-# wants on survey calls) into .secrets.env.
+# read-only key. Writes POSTHOG_SURVEY_API_KEY into .secrets.env.
 #
 #   deploy/posthog/survey-engine/key.sh             # make it if .secrets.env has none
 #   deploy/posthog/survey-engine/key.sh --new-key   # replace it
@@ -28,11 +27,21 @@ else:
 open(path, "w").write("\n".join(lines) + "\n")
 PY
 }
-# The gate: a secret Lens sends with survey calls; PostHog's proxy refuses survey calls without it.
-if [ -z "$(get POSTHOG_SURVEY_GATE)" ] || [ "${1:-}" = --new-key ]; then put POSTHOG_SURVEY_GATE "$(python3 -c 'import secrets; print(secrets.token_hex(24))')"; fi
-if [ -n "$(get POSTHOG_SURVEY_API_KEY)" ] && [ "${1:-}" != --new-key ]; then exit 0; fi
 email="$(get POSTHOG_ADMIN_EMAIL)"; project="$(get POSTHOG_PROJECT_ID)"
 [ -n "$email" ] && [ -n "$project" ] || { echo "POSTHOG_ADMIN_EMAIL or POSTHOG_PROJECT_ID is missing in $SECRETS."; exit 1; }
+if [ -n "$(get POSTHOG_SURVEY_API_KEY)" ] && [ "${1:-}" != --new-key ]; then
+    scopes="$(cd "$POSTHOG_DIR" && docker compose exec -T -e ADMIN_EMAIL="$email" web python manage.py shell 2>/dev/null <<'PY'
+import os
+from posthog.models import User
+from posthog.models.personal_api_key import PersonalAPIKey
+user=User.objects.get(email=os.environ['ADMIN_EMAIL'])
+key=PersonalAPIKey.objects.filter(user=user,label='lens-surveys').first()
+required={'survey:read','survey:write','action:read','feature_flag:read','feature_flag:write'}
+print('SCOPES_OK=' + str(int(key is not None and required.issubset(set(key.scopes or [])))))
+PY
+)" || true
+    if grep -q 'SCOPES_OK=1' <<< "$scopes"; then exit 0; fi
+fi
 out=$(cd "$POSTHOG_DIR" && docker compose exec -T -e ADMIN_EMAIL="$email" -e PROJECT_ID="$project" web python manage.py shell 2>/dev/null <<'PY'
 import os
 from posthog.models import User
@@ -47,7 +56,7 @@ PersonalAPIKey.objects.create(
     label="lens-surveys",
     secure_value=hash_key_value(token),
     mask_value=mask_key_value(token),
-    scopes=["survey:read", "survey:write"],
+    scopes=["survey:read", "survey:write", "action:read", "feature_flag:read", "feature_flag:write"],
     scoped_teams=[int(os.environ["PROJECT_ID"])],
 )
 print("SURVEY_KEY=" + token)
@@ -56,4 +65,4 @@ PY
 key="$(echo "$out" | grep '^SURVEY_KEY=' | cut -d= -f2-)"
 [ -n "$key" ] || { echo "PostHog did not return the survey key:"; echo "$out" | tail -5; exit 1; }
 put POSTHOG_SURVEY_API_KEY "$key"
-echo "Made Lens's survey key (survey read and write, project $project only), label lens-surveys."
+echo "Made Signal's survey configurator key (survey read/write, action read, feature flag read/write, project $project only), label lens-surveys."

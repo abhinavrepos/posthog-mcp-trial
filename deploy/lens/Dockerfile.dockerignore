@@ -14,10 +14,6 @@ deploy/*
 !deploy/status
 deploy/status/status.env
 # The survey engine's sources and fixture, for its tests (the service itself does not load them).
-!deploy/posthog/survey-engine/engine.js
-!deploy/posthog/survey-engine/bootstrap.js
-!deploy/posthog/survey-engine/build.mjs
-!deploy/posthog/survey-engine/fixtures
 # The PostHog static-caching rule, for its test.
 !deploy/posthog/tuning-static.caddy
 demo-app

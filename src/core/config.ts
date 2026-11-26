@@ -116,11 +116,8 @@ export const config = {
         mcpUrl: env('POSTHOG_MCP_URL'),
         mcpViaLens: flag('POSTHOG_MCP_VIA_LENS', true),
         mcpApiKey: env('POSTHOG_MCP_API_KEY'), // a personal key for PostHog MCP
-        // Signal surveys: a key with survey read and write only (deploy/posthog/survey-engine/key.sh).
+        // Native survey configurator key, scoped to this PostHog project.
         surveyApiKey: env('POSTHOG_SURVEY_API_KEY'),
-        // Sent with every survey API call; PostHog's proxy refuses survey calls without it, which closes
-        // PostHog's own survey screens and API to everyone but Signal (deploy/posthog/survey-engine/apply.sh).
-        surveyGate: env('POSTHOG_SURVEY_GATE'),
     },
     // Which MCP servers Claude gets. Each can be switched off on its own; both are on by default.
     features: {
@@ -135,13 +132,6 @@ export const config = {
     // Surveys made from Signal (MCP tools and the Surveys page). Takes effect only with POSTHOG_SURVEY_API_KEY.
     surveys: {
         enabled: flag('FEATURE_SURVEYS', true),
-        brand: env('SURVEY_BRAND', 'Survey by ION'),
-        // A user is in at most this many running surveys at once; later ones wait until they finish one.
-        perUser: intSetting('SURVEYS_PER_USER', 2, 1, 10),
-        // Never two surveys within this many hours for a user (24 at least).
-        gapHours: intSetting('SURVEYS_MIN_GAP_HOURS', 24, 24, 8760),
-        // After a user closes a survey with the cross: no survey for them for this many days.
-        quietDaysAfterClose: intSetting('SURVEYS_QUIET_DAYS_AFTER_CLOSE', 7, 0, 90),
     },
     // How your events name things. The defaults match the demo app.
     properties: {

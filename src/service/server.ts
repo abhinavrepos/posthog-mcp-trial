@@ -10,7 +10,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 
 import { shutdownClips } from '../core/clip.ts'
 import { warmClientNames } from '../core/resolve.ts'
-import { config, jiraConfigured, posthogMcpActive } from '../core/config.ts'
+import { config, jiraConfigured, posthogMcpActive, surveysActive } from '../core/config.ts'
+import { listSurveys } from '../core/surveys.ts'
 import { verifyClipLink } from '../core/links.ts'
 import { bearerAuthorized, handlePosthogMcp } from '../mcp/posthog-proxy.ts'
 import { lensServerInfo } from '../mcp/server-info.ts'
@@ -229,9 +230,20 @@ server.requestTimeout = 300_000
 
 server.listen(config.service.port, '0.0.0.0', () => log('Signal listening', { port: config.service.port, features: featureState() }))
 
+// A read migrates former Signal surveys through PostHog's public API. Retry while PostHog starts.
+const migrationTimer = setInterval(() => { void migrateSurveys() }, 10 * 60_000)
+migrationTimer.unref()
+async function migrateSurveys(): Promise<void> {
+    if (!surveysActive()) { clearInterval(migrationTimer); return }
+    try { await listSurveys(); clearInterval(migrationTimer) }
+    catch (error) { log('survey migration retry pending', { reason: plainReason(error) }) }
+}
+void migrateSurveys()
+
 const stopSurveySync = startSurveySync()
 
 const stop = async () => {
+    clearInterval(migrationTimer)
     stopSurveySync()
     server.close()
     await shutdownClips().catch(() => {})
