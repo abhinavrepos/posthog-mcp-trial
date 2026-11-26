@@ -15,6 +15,7 @@ import { BUDGET, budgetRow, dayOf } from '../core/replay-vision-budget.ts'
 import { dismissInsight, listInsights } from '../core/replay-vision-insights.ts'
 import { humanScreen } from '../core/replay-vision-aggregate.ts'
 import { providerStatus } from '../core/replay-vision-llm.ts'
+import { setClientVisionOptIn } from '../core/replay-vision-frames.ts'
 
 const json = (res: ServerResponse, status: number, data: unknown) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(data)) }
 async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -78,6 +79,14 @@ export async function handleReplayVision(req: IncomingMessage, res: ServerRespon
             const ok = dismissInsight(dismiss[1]!, v.email)
             audit(v.email, 'replay_vision.insight_dismissed', { id: dismiss[1] })
             json(res, ok ? 200 : 404, ok ? { ok } : { error: 'Insight not found.' })
+            return true
+        }
+        if (p === '/replays/vision/api/client-policy' && req.method === 'POST') {
+            const b = await body(req), client = String(b.client ?? '').trim()
+            if (!/^[\w@.:+-]{1,120}$/.test(client) || typeof b.vision_opt_in !== 'boolean') { json(res, 400, { error: 'Give an exact client id and vision_opt_in true or false.' }); return true }
+            setClientVisionOptIn(client, b.vision_opt_in, v.email)
+            audit(v.email, 'replay_vision.client_vision_policy', { client, vision_opt_in: b.vision_opt_in })
+            json(res, 200, { ok: true })
             return true
         }
         if (p === '/replays/vision/api/provider-key' && req.method === 'POST') {

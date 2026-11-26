@@ -14,6 +14,8 @@ import { GENERIC, validateInsight, type InsightDraft } from './replay-vision-val
 import type { Candidate } from './replay-vision-detectors.ts'
 import type { SanitizedWindow } from './replay-timeline.ts'
 import { readProviderKey } from './replay-vision-secrets.ts'
+import type { Aggregate } from './replay-vision-aggregate.ts'
+import type { ExchangeProvider as Exchange } from './replay-vision-provider.ts'
 import {
     AnthropicProvider, ExchangeProvider, buildExplanationParams, costMicros, customIdFor, estimateInputTokens, parseProviderMessage, sessionAlias, worstCaseMicros,
     DEFAULT_MODEL, LIMITS, PROMPT_VERSION, type Explanation, type InsightFacts, type ProviderWindow, type ReplayVisionProvider,
@@ -186,4 +188,63 @@ export function validateWithStored(insightId: string, cause: string, fix: string
 /** The accepted explanation for an insight, if any (used by refreshInsights and the MCP output). */
 export function acceptedExplanation(insightId: string): { cause: string; fix: string; model: string; custom_id: string } | undefined {
     return one<{ cause: string; fix: string; model: string; custom_id: string }>(`SELECT cause, fix, model, custom_id FROM rv_llm_explanation WHERE insight_id = ? AND state = 'accepted' ORDER BY updated_at DESC LIMIT 1`, insightId)
+}
+
+// ---------------------------------------------------------------- offline two-pass use (evaluation harness)
+
+export interface OfflineRequest { custom_id: string; insight_id: string; sent_ids: string[]; params_model: string }
+/**
+ * Pass 1 for an evaluation without a key: write one exchange request per aggregate (top `limit`), return
+ * the manifest. No database, no budget ledger (the harness owns its run); same builder and sanitization.
+ */
+export async function offlineRequests(aggregates: Aggregate[], windowsFor: StageDeps['windowsFor'], provider: Exchange, salt: string, limit = 10): Promise<OfflineRequest[]> {
+    const out: OfflineRequest[] = []
+    for (const a of aggregates.slice(0, limit)) {
+        const d = a.draft
+        const bySession = new Map<string, number>()
+        for (const c of d.citations) if (!bySession.has(c.session_id) && bySession.size < 3) bySession.set(c.session_id, c.offset_ms)
+        const windows: ProviderWindow[] = []
+        for (const [sid, at] of bySession) { try { for (const w of (await windowsFor(sid, [at])).slice(0, 1)) windows.push({ session_alias: sessionAlias(sid, salt), window: w }) } catch {} }
+        if (!windows.length) continue
+        const facts: InsightFacts = { insight_ref: a.id.slice(0, 8), screen: d.screen, element: d.element, step: a.members[0]!.candidate.step, signals: d.signals, users_affected: d.users_affected, users_reached: d.users_reached, sessions_affected: d.sessions_affected, behaviour: d.behaviour, outcome: d.outcome, median_lost_s: Math.round(d.time_lost_ms / 1000), severity: d.severity, coverage: d.limitations.slice(0, 6) }
+        const params = buildExplanationParams(facts, windows)
+        if (estimateInputTokens(params) > LIMITS.maxInputTokens) continue
+        const custom_id = customIdFor(a.id, params)
+        await provider.submit(custom_id, params)
+        out.push({ custom_id, insight_id: a.id, sent_ids: windows.flatMap((w) => w.window.events.map((e) => `${w.session_alias}:${e.id}`)), params_model: params.model })
+    }
+    return out
+}
+export interface OfflineResult { custom_id: string; insight_id: string; state: 'accepted' | 'rejected' | 'insufficient' | 'skipped_timeout' | 'failed'; reason?: string; cause?: string; fix?: string; rubric_score?: number; input_tokens: number; output_tokens: number; cost_micros: number }
+/** Pass 2: read responses (missing → skipped_timeout once the deadline passed, never faked) and apply the same guards as the service. */
+export async function offlineCollect(manifest: OfflineRequest[], aggregates: Aggregate[], provider: Exchange, submittedAt: number): Promise<OfflineResult[]> {
+    const byId = new Map(aggregates.map((a) => [a.id, a]))
+    const out: OfflineResult[] = []
+    for (const m of manifest) {
+        const p = await provider.poll(m.custom_id, null, submittedAt)
+        const base = { custom_id: m.custom_id, insight_id: m.insight_id, input_tokens: 0, output_tokens: 0, cost_micros: 0 }
+        if (p.state === 'pending' || p.state === 'expired') { out.push({ ...base, state: 'skipped_timeout' }); continue }
+        if (p.state === 'failed') { out.push({ ...base, state: 'failed', reason: p.error }); continue }
+        const parsed = parseProviderMessage(p.message)
+        const usage = { input_tokens: parsed.input_tokens, output_tokens: parsed.output_tokens, cost_micros: costMicros(parsed.input_tokens, parsed.output_tokens, false) }
+        const a = byId.get(m.insight_id)
+        if (!parsed.ok || !parsed.explanation || !a) { out.push({ ...base, ...usage, state: 'rejected', reason: parsed.error ?? 'insight_missing' }); continue }
+        const x = parsed.explanation
+        const v = checkOffline(x, new Set(m.sent_ids), a)
+        out.push({ ...base, ...usage, state: v.state, reason: v.reason, cause: x.likely_cause, fix: x.fix, rubric_score: v.score ?? undefined })
+    }
+    return out
+}
+/** checkExplanation() without the database: evidence comes from the aggregate's member moments. */
+export function checkOffline(x: Explanation, sentIds: Set<string>, a: Aggregate): { state: 'accepted' | 'rejected' | 'insufficient'; score: number | null; reason?: string } {
+    if (x.decision === 'insufficient_evidence') return { state: 'insufficient', score: null }
+    if (!x.cited_event_ids.length) return { state: 'rejected', score: null, reason: 'no_citations' }
+    if (x.cited_event_ids.some((id) => !sentIds.has(id) && ![...sentIds].some((s) => s.endsWith(`:${id}`)))) return { state: 'rejected', score: null, reason: 'hallucinated_citation' }
+    if (!/^Likely cause:/i.test(x.likely_cause) || !/^Fix:/i.test(x.fix)) return { state: 'rejected', score: null, reason: 'format' }
+    if (GENERIC.test(x.likely_cause) || GENERIC.test(x.fix)) return { state: 'rejected', score: null, reason: 'generic_claim' }
+    if (/@|https?:|\b\d{6,}\b/.test(x.likely_cause + x.fix)) return { state: 'rejected', score: null, reason: 'personal_or_url_text' }
+    const fix = x.fix.toLowerCase()
+    if (!fix.includes(a.draft.element.toLowerCase()) && !fix.includes(a.draft.screen.split(':')[0]!.toLowerCase())) return { state: 'rejected', score: null, reason: 'fix_not_specific' }
+    const v = validateInsight({ ...a.draft, cause: x.likely_cause, fix: x.fix }, a.members.map((m) => ({ session_id: m.session_id, candidate: m.candidate })))
+    return v.valid ? { state: 'accepted', score: v.score } : { state: 'rejected', score: v.score, reason: `rubric:${v.reasons.join(',') || 'score'}` }
 }

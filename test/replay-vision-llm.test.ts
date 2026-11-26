@@ -218,3 +218,18 @@ test('window mode in the worker thread returns only sanitized ±20 s windows fro
     const text = JSON.stringify(w)
     for (const m of raw.matchAll(/"textContent":"([^"]{6,40})"/g)) assert.ok(!text.includes(m[1]!), `page text leaked: ${m[1]}`)
 })
+
+test('offline two-pass helpers: pass 1 writes requests and stops; pass 2 applies the same guards without a database', async () => {
+    const { aggregateInsights } = await import('../src/core/replay-vision-aggregate.ts')
+    const d4 = (s: number): Cand => ({ kind: 'D4', start_ms: s, end_ms: s + 8000, score: 4, screen: 'sales invoice:new', element: 'Save', step: 'Save', event_ids: ['41', '42'], facts: { cycles: 2, span_ms: 8000, lost_ms: 8000 }, limitations: [], strength: 'strong' })
+    const aggs = aggregateInsights(['a', 'b', 'c'].map((u) => ({ session_id: `off-${u}-000000`, user_id: u, candidate: d4(10_000), time_lost_ms: 8000, abandoned: false })), new Map([['sales invoice:new', { users: 6, source: 't' }]]), new Map())
+    const exDir = join(dir, 'ex-offline'), provider = new PV.ExchangeProvider(exDir, 50)
+    const t0 = Date.now()
+    const manifest = await L.offlineRequests(aggs, async (_s, o) => o.map(window), provider, 'salt')
+    assert.equal(manifest.length, 1); assert.equal(requests(exDir).length, 1)
+    assert.equal((await L.offlineCollect(manifest, aggs, provider, t0))[0]!.state, 'skipped_timeout', 'no answer yet: skipped, never faked')
+    const alias = manifest[0]!.sent_ids[0]!.split(':')[0]
+    answer(exDir, manifest[0]!.custom_id, { decision: 'explain', likely_cause: 'Likely cause: Debit To is validated only after Save, so the visible error (event 42) comes before users edit Debit To (event 43).', fix: 'Fix: on Sales Invoice (new), validate Debit To inline before Save.', cited_event_ids: [`${alias}:42`, `${alias}:43`], confidence: 'med', unsupported: [] })
+    const [res] = await L.offlineCollect(manifest, aggs, provider, t0)
+    assert.equal(res!.state, 'accepted'); assert.ok(res!.rubric_score! >= 14); assert.equal(res!.input_tokens, 1500)
+})
