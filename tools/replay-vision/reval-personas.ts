@@ -26,8 +26,9 @@ function injectionScript(kind: string, dose: number): string {
     return `(() => {
   const kind=${JSON.stringify(kind)},dose=${Number(dose) || 0};window.RV_TRUTH=[];
   const mark=(element,phase)=>window.RV_TRUTH.push({at:Date.now(),kind,element,phase});
-  // I3: one screen's /Dialog request takes dose ms (Reval's slow open). Patch the table before reval.js reads it.
-  if(kind==='slow_wait'){let cfg;Object.defineProperty(window,'REVAL_CFG',{configurable:true,get:()=>cfg,set:(v)=>{for(const s of v.screens)if(s.menu==='DlgHedgeRel'){s.loadMs=dose;mark('Hedge Relationship','patched')}cfg=v}})}
+  // I3: one screen opens dose ms late (Reval's slow open): the /Dialog request (the simulator caps it at 10 s) plus the
+  // viewport mask's settle time for the rest. Patch the screen table before reval.js reads it.
+  if(kind==='slow_wait'){let cfg;Object.defineProperty(window,'REVAL_CFG',{configurable:true,get:()=>cfg,set:(v)=>{for(const s of v.screens)if(s.menu==='DlgHedgeRel'){s.loadMs=Math.min(dose,10000);s.settleMs=Math.max(s.settleMs,dose-10000+400);mark('Hedge Relationship','patched')}cfg=v}})}
   const apply=()=>{
     if(!window.Ext||!Ext.ComponentQuery)return;
     // I5: an inert decorative Apply button in the IR Swap toolbar.
@@ -49,9 +50,15 @@ class Driver {
     }
     async clickId(id: string | null): Promise<boolean> {
         if (!id) return false
-        const box = await (await this.page.$(`[id="${id.replace(/"/g, "")}"]`))?.boundingBox()
-        if (!box || !box.width || !box.height) return false
-        const x = box.x + box.width * (.3 + .4 * this.random()), y = box.y + box.height * (.3 + .4 * this.random())
+        // Click where a user can: a point inside the element that hit-tests to it (Ext clips overflowing toolbar buttons).
+        const points = await this.page.evaluate((elId) => {
+            const el = document.getElementById(elId); if (!el) return []
+            const r = el.getBoundingClientRect(), out: [number, number][] = []
+            for (let i = 1; i <= 5; i++) for (let j = 1; j <= 3; j++) { const x = r.left + r.width * i / 6, y = r.top + r.height * j / 4, hit = document.elementFromPoint(x, y); if (hit && (hit === el || el.contains(hit))) out.push([x, y]) }
+            return out
+        }, id)
+        if (!points.length) return false
+        const [x, y] = points[Math.floor(this.random() * points.length)]!
         await this.move(x, y); await this.page.mouse.click(x, y); return true
     }
     async typeInto(id: string | null, value: string): Promise<boolean> {
@@ -110,7 +117,9 @@ export async function driveReval(c: LabConfig, revalUrl: string, plan: RevalPlan
             await settled(); await sleep(300 + 500 * random()); return !!shown
         }
         const fill = async (menu: string, label: string, value: string) => d.typeInto(await q.field(page, menu, label), value)
-        const press = async (menu: string, label: string) => { const ok = await d.clickId(await q.button(page, menu, label)); await sleep(500 + 400 * random()); return ok }
+        // A press counts only if Reval itself logged the button event (a click that misses is a failed step, not a success).
+        const pressCount = (label: string) => page.evaluate((l) => (window as any).Reval.log.filter((x: any) => x.category === 'Event' && x.props?.action_name === l).length, label)
+        const press = async (menu: string, label: string) => { const before = await pressCount(label); await d.clickId(await q.button(page, menu, label)); await sleep(500 + 400 * random()); return (await pressCount(label)) > before }
         const tab = async (menu: string, title: string) => { const ok = await d.clickId(await q.tab(page, menu, title)); await sleep(400 + 600 * random()); return ok }
         const closeTab = async (menu: string) => { const ok = await d.clickId(await q.closeTool(page, menu)); await sleep(400 + 400 * random()); return ok }
         const ok = async () => { const id = await q.msgOk(page); if (id) { await sleep(500 + 900 * random() * d.speed); await d.clickId(id) } return !!id }
