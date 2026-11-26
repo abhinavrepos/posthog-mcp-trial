@@ -126,3 +126,13 @@ keys, file paths or stack traces.
   compared with ClickHouse (`CLICKHOUSE_URL`), with latencies, row caps and errors (`run/real-mcp/`).
 - `npm run ui-shots -- <folder>`: screenshots of every page and tab at 1440 and 375 pixels in dark and light,
   plus empty and error states, against a stand-in PostHog with sample data.
+
+## Updating a server from a laptop (no AWS)
+
+1. On the laptop (WSL), in this repo on the branch to ship: `bash deploy/update/build-on-laptop.sh`.
+   It writes `signal-code.tar.gz` and `signal-image.tar.gz` to Windows Downloads, checks them and prints checksums.
+2. Copy both files with WinSCP (Binary mode) to the server's home folder.
+3. On the server: `tar -xzf signal-code.tar.gz -O deploy/update/apply-on-server.sh > signal-apply.sh && sudo bash signal-apply.sh`.
+   It keeps a rollback copy, swaps code and image, removes Signal's former survey engine from PostHog,
+   updates the survey key's scopes and restarts Signal. The last line printed is the rollback command.
+   Settings: `LENS_DIR` (default `~/posthog-lens`), `POSTHOG_DIR` (default `~/posthog-sept`).
