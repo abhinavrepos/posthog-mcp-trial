@@ -284,3 +284,13 @@ test('baselines use every admitted deterministic run incl. zero-hit visits, neve
     for (const s of sessions) deleteSessionData(s)
     assert.equal(one<{ n: number }>('SELECT count(*) AS n FROM rv_insight')!.n, 0)
 })
+
+test('co-starting signals are cited once per moment; equal rounded ranges print once', () => {
+    const f = { distance_px: 5000, d_over_h: 7, d_over_p: 2.9, reversals: 8, page_lower_bound_px: 1810, hunting_rule: 'reversals', lost_ms: 12_000 }
+    const sc = (k: Cand['kind'], s: number) => cand(k, s, f, { element: 'Item list', step: 'Scroll', screen: 'item:list', strength: k === 'S2' ? 'weak' : 'medium' })
+    const ms = ['a', 'b'].flatMap((u, i) => (['S1', 'S2', 'S3'] as const).map((k) => moment(`s-${u}`, u, sc(k, 1000 + i * 37))))
+    const [a] = aggregateInsights(ms, new Map([['item:list', { users: 5, source: 't' }]]), new Map())
+    assert.deepEqual(a!.draft.citations.map((c) => c.session_id), ['s-a', 's-b'])
+    assert.match(a!.draft.behaviour, /scrolled 7\.0× the visible height in Item list with 8 direction reversals/)
+    assert.ok(!/(\d[^–]*)–\1/.test(a!.draft.behaviour), 'no "x–x" ranges')
+})

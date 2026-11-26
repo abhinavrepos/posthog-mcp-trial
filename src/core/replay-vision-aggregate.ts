@@ -38,13 +38,14 @@ const WEAK = new Set<DetectorCode>(['D8', 'D9', 'S2', 'D15'])
 const sevRank: Record<Severity, number> = { High: 2, Medium: 1, Low: 0 }
 
 export function humanScreen(key: string): string {
+    if (key.startsWith('/')) return `page "${key}"`
     const [doc, kind, sub] = key.split(':')
     if (!kind) return key
     const name = (doc ?? '').replace(/\b\w/g, (c) => c.toUpperCase())
     return `${name} (${kind === 'new' ? 'new' : kind === 'form' ? 'saved form' : kind}${sub ? ', ' + sub : ''})`
 }
-const s = (ms: number) => `${Math.round(ms / 1000)} s`
-const range = (xs: number[], f: (x: number) => string = String) => { const v = xs.filter(Number.isFinite); if (!v.length) return '?'; const lo = Math.min(...v), hi = Math.max(...v); return lo === hi ? f(lo) : `${f(lo)}–${f(hi)}` }
+const s = (ms: number) => (Math.abs(ms) < 10_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`)
+const range = (xs: number[], f: (x: number) => string = String) => { const v = xs.filter(Number.isFinite); if (!v.length) return '?'; const lo = f(Math.min(...v)), hi = f(Math.max(...v)); return lo === hi ? lo : `${lo}–${hi}` }
 function median(values: number[]): number { const v = values.filter(Number.isFinite).sort((a, b) => a - b); if (!v.length) return 0; const m = v.length >> 1; return v.length % 2 ? v[m]! : (v[m - 1]! + v[m]!) / 2 }
 const num = (m: Moment, k: string) => Number(m.candidate.facts[k])
 
@@ -191,9 +192,11 @@ export function aggregateInsights(moments: Moment[], reach: Map<string, Reach | 
         })
         // Citations: one per session first (earliest), then extra moments, 2–5 in total.
         const ordered = [...group].sort((a, b) => a.candidate.start_ms - b.candidate.start_ms || a.session_id.localeCompare(b.session_id))
-        const selected: Moment[] = [], used = new Set<string>()
-        for (const m of ordered) { if (selected.length === 5) break; if (!used.has(m.session_id)) { selected.push(m); used.add(m.session_id) } }
-        for (const m of ordered) { if (selected.length === 5) break; if (!selected.includes(m)) selected.push(m) }
+        // One citation per distinct (session, moment start): co-starting signals (e.g. S1/S2/S3) are one moment.
+        const selected: Moment[] = [], used = new Set<string>(), at = new Set<string>()
+        const citeKey = (m: Moment) => `${m.session_id}|${Math.floor(m.candidate.start_ms / 1000)}`
+        for (const m of ordered) { if (selected.length === 5) break; if (!used.has(m.session_id) && !at.has(citeKey(m))) { selected.push(m); used.add(m.session_id); at.add(citeKey(m)) } }
+        for (const m of ordered) { if (selected.length === 5) break; if (!at.has(citeKey(m))) { selected.push(m); at.add(citeKey(m)) } }
         const citations = selected.map((m) => ({ session_id: m.session_id, offset_ms: m.candidate.start_ms, event_ids: [m.candidate.event_ids[0]!], url: replayUrl(m.session_id, Math.floor(m.candidate.start_ms / 1000)), signal: m.candidate.kind }))
         const text = describe(family, group, c.screen, c.element, U, sessions.size)
         const limitations = [...new Set(group.flatMap((m) => m.candidate.limitations))].slice(0, 8)
