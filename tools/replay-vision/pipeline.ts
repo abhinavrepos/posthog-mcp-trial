@@ -26,10 +26,10 @@ export interface PipelineOutput {frozen:{hash:string;baseline_hash:string;detect
 
 /** llmPass1: also write B' exchange request files (exact Messages API bodies) for every cohort-scope insight and a manifest,
  * then stop: pass 2 (offlineCollect) runs only when responses exist. Nothing is sent anywhere by this code. */
-export async function runPipeline(out:string,captures:Captured[],scopes:ScopeDef[],controlSeeds:number[],llmPass1=false):Promise<PipelineOutput>{
+export async function runPipeline(out:string,captures:Captured[],scopes:ScopeDef[],controlSeeds:number[],llmPass1=false,cacheDir?:string,opts:{freezeOnly?:boolean;expectHash?:string}={}):Promise<PipelineOutput>{
  const dbFile=join(out,'pipeline.db');for(const f of [dbFile,dbFile+'-wal',dbFile+'-shm'])rmSync(f,{force:true})
  process.env.TRIAGE_DB=dbFile
- const cache=join(out,'snapshots');mkdirSync(cache,{recursive:true})
+ const cache=cacheDir??join(out,'snapshots');mkdirSync(cache,{recursive:true})
  const {getRecording,getSnapshotsJsonl}=await import('../../src/core/posthog.ts')
  const {analyzeFile,replayAppEvents}=await import('../../src/core/replay-vision.ts')
  const {queueReplayVision}=await import('../../src/service/replayvision-worker.ts')
@@ -74,7 +74,9 @@ export async function runPipeline(out:string,captures:Captured[],scopes:ScopeDef
  const baselineJson=JSON.stringify([...baselines].sort(([a],[b])=>a.localeCompare(b)))
  const calibratedScreens=[...new Set([...baselines].filter(([k,b])=>k.startsWith('DWELL|')&&isCalibrated(b)).map(([k])=>k.split('|')[1]))].sort()
  const frozen={hash:createHash('sha256').update(JSON.stringify({DETECTOR_CONFIG,SEVERITY_CONFIG})+baselineJson).digest('hex'),baseline_hash:createHash('sha256').update(baselineJson).digest('hex'),detectors_version:DETECTOR_CONFIG.version,severity_version:SEVERITY_CONFIG.version,calibration_sessions:cal.length,calibrated_screens:calibratedScreens}
- writeFileSync(join(out,'frozen-config.json'),JSON.stringify({...frozen,at:new Date().toISOString(),detectors:DETECTOR_CONFIG,severity:SEVERITY_CONFIG},null,2))
+ if(opts.expectHash&&opts.expectHash!==frozen.hash)throw new Error(`frozen config mismatch: pre-registered ${opts.expectHash}, recomputed ${frozen.hash}`)
+ if(!opts.expectHash)writeFileSync(join(out,'frozen-config.json'),JSON.stringify({...frozen,at:new Date().toISOString(),detectors:DETECTOR_CONFIG,severity:SEVERITY_CONFIG},null,2))
+ if(opts.freezeOnly){writeFileSync(join(out,'calibration-baselines.json'),JSON.stringify(Object.fromEntries(baselines),null,1));return {frozen,sessions,scopes:{}}}
  writeFileSync(join(out,'calibration-baselines.json'),JSON.stringify(Object.fromEntries(baselines),null,1))
  // 2. Held-out, with the frozen context only.
  const ctx=baselineContext(baselines)

@@ -326,3 +326,26 @@ test('D5 last_error needs a Save/Submit attempt: a required-field highlight whil
     const t2 = tl([nav(0, 'sales invoice:new'), edit(1000, 'Customer'), click(1400, 'Save'), verr(1500), edit(2000, 'Rate'), nav(6000, 'customer:list'), click(7000, 'Customer')])
     assert.equal(detectCandidates(t2).find((c) => c.kind === 'D5')?.facts.last_error, true)
 })
+
+test('D14 repeats need a command target: clicks into a text field, select or its label are not repeats', () => {
+    const t = tl([nav(0, 'sales invoice:new'), click(1000, 'Customer', { tag: 'input', role: 'combobox' }), click(5000, 'Customer', { tag: 'input', role: 'combobox' }), click(9000, 'Due Date', { tag: 'label' }), click(12_000, 'Due Date', { tag: 'label' })])
+    assert.ok(!detectCandidates(t).some((c) => c.kind === 'D14'))
+    const t2 = tl([nav(0, 'sales invoice:new'), click(1000, 'Save'), click(5000, 'Save')])
+    assert.ok(detectCandidates(t2).some((c) => c.kind === 'D14' && c.element === 'Save'), 'a repeated Save still counts')
+})
+
+test('decision 2: one strong D4/D1/D3/D5 moment in one user publishes as Low with one citation; a medium single moment does not', () => {
+    const one = (kind: 'D4' | 'D6', strength: 'strong' | 'medium'): Moment[] => [{ session_id: '01a21941-ae93-7fed-899a-f69c4136b001', user_id: 'u1', time_lost_ms: 3000, abandoned: false,
+        candidate: { kind, start_ms: 1000, end_ms: 4000, score: 1, screen: 'sales invoice:new', element: kind === 'D4' ? 'Save' : 'Due Date', step: 'Save', event_ids: ['e1'], facts: kind === 'D4' ? { cycles: 2, span_ms: 3000, lost_ms: 3000 } : { hesitation_ms: 6000, lost_ms: 3000 }, limitations: [], strength } }]
+    const reach = new Map([['sales invoice:new', { users: 6, source: 'test' }]])
+    const d4 = aggregateInsights(one('D4', 'strong'), reach, new Map())
+    assert.equal(d4.length, 1)
+    assert.equal(d4[0]!.draft.severity, 'Low')
+    assert.equal(d4[0]!.draft.citations.length, 1)
+    assert.equal(d4[0]!.draft.single_session, true)
+    assert.equal(aggregateInsights(one('D6', 'medium'), reach, new Map()).length, 0)
+    // The validator allows one citation only for that case: the same draft claiming 2 users or Medium is invalid.
+    const draft = d4[0]!.draft, ev = d4[0]!.members.map((m) => ({ session_id: m.session_id, candidate: m.candidate }))
+    assert.equal(validateInsight({ ...draft, severity: 'Medium' }, ev).valid, false)
+    assert.equal(validateInsight({ ...draft, single_moment: false }, ev).valid, false)
+})

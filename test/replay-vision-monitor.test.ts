@@ -80,7 +80,8 @@ test('quiet period: a discovered run waits one stable re-check, then analyses on
     assert.equal(await W.processRun(W.claimNext(d.now())!, d), 'complete')
     assert.equal(d.analyzed.length, 1)
     assert.equal(one<{ n: number }>('SELECT count(*) AS n FROM rv_finding WHERE run_id = ?', id)!.n, 1)
-    assert.ok(one<{ n: number }>("SELECT count(*) AS n FROM rv_insight")!.n === 0, 'one user: no published insight')
+    // Orchestrator decision 2: one strong D4 moment in one user publishes as a Low, single-session insight (one citation).
+    assert.deepEqual(all<{ scope_key: string; severity: string; users_affected: number }>('SELECT scope_key, severity, users_affected FROM rv_insight ORDER BY scope_key').map((i) => [i.scope_key, i.severity, i.users_affected]), [['client:C1', 'Low', 1], ['user:u1', 'Low', 1]], 'one user: one Low insight per scope')
     // The recording grew after analysis: re-queue of the new end supersedes the old run and hides its findings.
     const later = new Date(T0 - 600_000).toISOString()
     d.ends.set(sid(1), later)
@@ -153,8 +154,11 @@ test('three watched users with the same loop publish one ranked insight; deletio
     for (const n of [1, 2, 3]) { const e = new Date(T0 - 1200_000 - n).toISOString(); d.ends.set(sid(n), e); const id = W.queueReplayVision(sid(n), e, 'C1', `u${n}`, [w]); run(`UPDATE rv_run SET state = 'stable_wait' WHERE id = ?`, id) }
     for (let i = 0; i < 3; i++) await W.processRun(W.claimNext(d.now())!, d)
     const ins = all<{ severity: string; users_affected: number; users_reached: number; reach_source: string; scope_key: string }>('SELECT severity, users_affected, users_reached, reach_source, scope_key FROM rv_insight')
-    assert.deepEqual(ins.map((i) => [i.scope_key, i.users_affected, i.users_reached, i.reach_source]), [['client:C1', 3, 10, 'fake $pageview']])
-    assert.equal(ins[0]!.severity, 'Medium', 'strong D4 in 3 users is High, capped Medium on a cold screen')
+    const client = ins.filter((i) => i.scope_key === 'client:C1')
+    assert.deepEqual(client.map((i) => [i.scope_key, i.users_affected, i.users_reached, i.reach_source]), [['client:C1', 3, 10, 'fake $pageview']])
+    assert.equal(client[0]!.severity, 'Medium', 'strong D4 in 3 users is High, capped Medium on a cold screen')
+    // Each user's own scope holds one strong single moment: Low, one user (decision 2).
+    assert.deepEqual(ins.filter((i) => i.scope_key.startsWith('user:')).map((i) => [i.scope_key, i.severity, i.users_affected]).sort(), [['user:u1', 'Low', 1], ['user:u2', 'Low', 1], ['user:u3', 'Low', 1]])
     W.deleteVisionSession(sid(1))
     assert.equal(one<{ n: number }>('SELECT count(*) AS n FROM rv_run WHERE session_id = ?', sid(1))!.n, 0)
     // Watch removal: runs no longer referenced are pruned; retention removes old data.

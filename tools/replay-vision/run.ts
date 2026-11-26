@@ -12,14 +12,18 @@ import {dirname,join} from 'node:path'
 import {checkApplication,ensureLabUsers,ensureFixtures,labConfig,recordingOptIn} from './setup.ts'
 import type {Readiness} from './capture.ts'
 import {drivePlan,type Captured} from './personas.ts'
-import {plans as designPlans,COHORTS,CONTROL_SEEDS} from './design.ts'
+import {plans as designPlans,devPlans,COHORTS,controlSeeds,cohortSeed,type HeldoutRun} from './design.ts'
 
-const base=dirname(fileURLToPath(import.meta.url)),smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-purchase')
-const out=join(base,'out',process.argv.includes('--smoke-purchase')?'smoke-purchase':smoke?'smoke':'erpnext-v2'),c=labConfig()
+const base=dirname(fileURLToPath(import.meta.url)),smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-purchase'),dev=process.argv.includes('--dev')
+// --run-c: fresh held-out set (new seeds) in out/erpnext-run-c; calibration sessions and the snapshot cache are shared with out/erpnext-v2.
+const heldoutRun:HeldoutRun=process.argv.includes('--run-c')?'C':'A'
+const out=join(base,'out',process.argv.includes('--smoke-purchase')?'smoke-purchase':smoke?'smoke':dev?'erpnext-dev':heldoutRun==='C'?'erpnext-run-c':'erpnext-v2'),c=labConfig()
+const shared=join(base,'out','erpnext-v2')
 process.env.POSTHOG_HOST=c.host;process.env.POSTHOG_PROJECT_ID=c.projectId;process.env.POSTHOG_PERSONAL_API_KEY=c.personalKey;process.env.POSTHOG_PROJECT_TOKEN=c.token
 // The injected scroll-hunt target is a lab label, added to the product's label vocabulary for this run only.
 process.env.REPLAY_VISION_LABELS=[process.env.REPLAY_VISION_LABELS,'Item 190'].filter(Boolean).join(',')
-const plans=()=>designPlans(process.argv.includes('--smoke-purchase')?'purchase':smoke?'invoice':false)
+const plans=()=>dev?{calibration:devPlans(),heldout:[]}:designPlans(process.argv.includes('--smoke-purchase')?'purchase':smoke?'invoice':false,heldoutRun)
+const CONTROL_SEEDS=controlSeeds(heldoutRun)
 
 async function load<T>(file:string):Promise<T[]>{try{return (await readFile(file,'utf8')).split('\n').filter(Boolean).map(x=>JSON.parse(x))}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return [];throw e}}
 async function startProxy(){const p=spawn(process.execPath,['--import','tsx',join(base,'proxy.ts')],{cwd:process.cwd(),env:process.env,stdio:['ignore','pipe','pipe']})
@@ -29,7 +33,8 @@ async function startProxy(){const p=spawn(process.execPath,['--import','tsx',joi
 /** Captures of the current design only, last attempt per seed (the pilot seeds 2100xx are not part of it). */
 async function currentCaptures():Promise<Captured[]>{
  const p=plans(),seeds=new Set([...p.calibration,...p.heldout].map(x=>x.seed)),bySeed=new Map<number,Captured>()
- for(const x of await load<Captured>(join(out,'sessions.jsonl')))if(seeds.has(x.plan.seed))bySeed.set(x.plan.seed,x)
+ const files=heldoutRun==='C'?[join(shared,'sessions.jsonl'),join(out,'sessions.jsonl')]:[join(out,'sessions.jsonl')]
+ for(const f of files)for(const x of await load<Captured>(f))if(seeds.has(x.plan.seed)&&(f===join(out,'sessions.jsonl')||x.plan.phase==='calibration'))bySeed.set(x.plan.seed,x)
  return [...bySeed.values()]
 }
 async function capture(){
@@ -42,7 +47,8 @@ async function capture(){
   const {captureSession}=await import('./capture.ts')
   const capturesFile=join(out,'sessions.jsonl'),readinessFile=join(out,'readiness.jsonl')
   const captures=await load<Captured>(capturesFile),readiness=await load<Readiness>(readinessFile)
-  for(const phase of ['calibration','heldout'] as const){
+  // Run C reuses the calibration sessions captured for run A (calibration data, never held-out).
+  for(const phase of (heldoutRun==='C'?['heldout']:['calibration','heldout']) as ('calibration'|'heldout')[]){
    for(const p of plan[phase]){
     if(captures.some(x=>x.plan.seed===p.seed&&x.session_id))continue
     const result=await drivePlan(c,p,fixtures)
@@ -67,7 +73,9 @@ async function evaluate(){
  const {runPipeline}=await import('./pipeline.ts')
  const {score,calibrationSummary}=await import('./score.ts')
  const {writeReport}=await import('./report.ts')
- const pipeline=await runPipeline(out,captures,COHORTS.map((k,i)=>({id:k.id,seeds:Array.from({length:k.users},(_,j)=>220000+i*10+j)})),CONTROL_SEEDS,process.argv.includes('--llm-pass1'))
+ // Run C: the config + calibration baselines were frozen (--freeze-only) before any run C session was analysed; refuse to score on a different hash.
+ const preRegistered=heldoutRun==='C'?JSON.parse(await readFile(join(out,'frozen-config.json'),'utf8')).hash as string:undefined
+ const pipeline=await runPipeline(out,captures,COHORTS.map((k,i)=>({id:k.id,seeds:Array.from({length:k.users},(_,j)=>cohortSeed(heldoutRun,i,j))})),CONTROL_SEEDS,process.argv.includes('--llm-pass1'),join(shared,'snapshots'),{expectHash:preRegistered})
  await writeFile(join(out,'pipeline.json'),JSON.stringify(pipeline))
  const held=score(captures,pipeline,COHORTS,CONTROL_SEEDS),cal=calibrationSummary(captures,pipeline)
  await writeFile(join(out,'heldout-score.json'),JSON.stringify(held,null,1))
@@ -85,9 +93,10 @@ async function scoreOnly(dir:string){
  console.log(JSON.stringify({rescored:dir,precision:held.precision,moment:held.precision_moment_level}))
 }
 async function main(){
+ if(process.argv.includes('--freeze-only')){await mkdir(out,{recursive:true});const captures=(await currentCaptures()).filter(x=>x.plan.phase==='calibration');const {runPipeline}=await import('./pipeline.ts');const p=await runPipeline(out,captures,[],[],false,join(shared,'snapshots'),{freezeOnly:true});console.log(JSON.stringify({frozen:p.frozen}));return}
  const so=process.argv.indexOf('--score-only');if(so>0){await scoreOnly(join(out,process.argv[so+1]||'.'));return}
  await mkdir(join(out,'ground-truth'),{recursive:true})
  if(!process.argv.includes('--rescore'))await capture()
- if(!process.argv.includes('--capture')&&!smoke)await evaluate()
+ if(!process.argv.includes('--capture')&&!smoke&&!dev)await evaluate()
 }
 main().catch(e=>{console.error(e instanceof Error?e.stack:'error');process.exitCode=1})

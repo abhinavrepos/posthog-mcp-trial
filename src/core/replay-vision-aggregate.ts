@@ -35,6 +35,8 @@ export const FAMILY: Record<DetectorCode, string> = {
 /** §7 weights: candidate ordering hints within a severity band only. D14 has no weight until calibrated. */
 export const WEIGHT: Record<DetectorCode, number> = { D5: 5, D4: 4, D3: 4, D10: 3, D1: 3, D2: 2, R1: 2, R2: 2, S3: 2, D6: 1, D7: 1, D12: 1, S1: 0.5, D8: 0.5, D9: 0.5, S2: 0, D14: 0, D15: 0 }
 const WEAK = new Set<DetectorCode>(['D8', 'D9', 'S2', 'D15'])
+/** Detectors whose single strong moment in one user may publish as a Low, one-citation insight. */
+export const SINGLE_MOMENT_KINDS = new Set<DetectorCode>(['D1', 'D3', 'D4', 'D5'])
 const sevRank: Record<Severity, number> = { High: 2, Medium: 1, Low: 0 }
 
 export function humanScreen(key: string): string {
@@ -160,7 +162,11 @@ export function aggregateInsights(moments: Moment[], reach: Map<string, Reach | 
         const c = group[0]!.candidate, family = FAMILY[c.kind]
         const users = new Set(group.map((m) => m.user_id)), U = users.size
         const sessions = new Set(group.map((m) => m.session_id))
-        if (U < 2 && (sessions.size !== 1 || new Set(group.map((m) => m.candidate.start_ms)).size < 2)) continue
+        // Single user: needs two moments in the session, or (orchestrator decision 2) one STRONG D1/D3/D4/D5 moment,
+        // which may publish as Low with one citation. Weak/medium single moments stay unpublished.
+        const singleMoment = U === 1 && sessions.size === 1 && new Set(group.map((m) => m.candidate.start_ms)).size === 1
+        const strongSingle = singleMoment && group.some((m) => SINGLE_MOMENT_KINDS.has(m.candidate.kind) && m.candidate.strength === 'strong')
+        if (U < 2 && (sessions.size !== 1 || (singleMoment && !strongSingle))) continue
         const r = reach.get(c.screen)
         const N = r && Number.isFinite(r.users) && r.users >= U ? r.users : null
         // Binary detectors: a calibrated screen must show a rate increase (Wilson lower bound above both comparison rates).
@@ -206,7 +212,7 @@ export function aggregateInsights(moments: Moment[], reach: Map<string, Reach | 
         const outcome = abandonedUsers ? `${abandonedUsers} of ${U} affected users abandoned the form without saving; ${lostText}` : `No abandonment observed; ${lostText}`
         const draft: InsightDraft = {
             screen: c.screen, element: c.element, behaviour: text.behaviour, users_affected: U, users_reached: N, sessions_affected: sessions.size, citations,
-            outcome, time_lost_ms: T, cause: text.cause, fix: text.fix, signals: [...kinds].sort(), confidence, limitations, severity: severity.severity, single_session: U === 1,
+            outcome, time_lost_ms: T, cause: text.cause, fix: text.fix, signals: [...kinds].sort(), confidence, limitations, severity: severity.severity, single_session: U === 1, ...(strongSingle ? { single_moment: true } : {}),
         }
         const rubric = validateInsight(draft, group.map((m) => ({ session_id: m.session_id, candidate: m.candidate })))
         if (!rubric.valid) continue

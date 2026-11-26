@@ -98,3 +98,22 @@ test('sanitized prompt windows thin script-set input bursts and keep the events 
   assert.equal(small.events.at(-1)?.id, 'save')
   assert.deepEqual(small.events.map(e=>e.t_ms), [...small.events.map(e=>e.t_ms)].sort((a,b)=>a-b))
 })
+
+test('rrweb Focus interactions (MouseInteraction type 5) are focus items, so D6 hesitation fires on real recordings; TouchMove is pointer data', async () => {
+  // Shape of the ERPNext I1 development sessions: click into Due Date (mousedown/up/focus/click), ~7 s pause, then typing.
+  const form={id:1,type:2,tagName:'div',childNodes:[{id:50,type:2,tagName:'div',attributes:{'data-fieldname':'due_date'},childNodes:[{id:51,type:2,tagName:'input',attributes:{}}]}]}
+  const rows=[event(0,4,{href:'http://app/desk/sales-invoice/new',width:1000,height:800}),event(1,2,{node:form,initialOffset:{top:0,left:0}}),
+    event(1000,3,{source:2,type:1,id:51,x:5,y:5}),event(1001,3,{source:2,type:5,id:51}),event(1002,3,{source:2,type:0,id:51,x:5,y:5}),event(1003,3,{source:2,type:2,id:51,x:5,y:5}),
+    event(1500,3,{source:6,positions:[{x:9,y:9,id:51,timeOffset:0}]}),
+    event(8000,3,{source:2,type:2,id:51,x:5,y:5}),event(8100,3,{source:5,id:51,text:'*'}),event(8200,3,{source:5,id:51,text:'**'})]
+  await withEvents(rows,async file=>{
+    const t=await readTimeline(file,{start_time:new Date(base).toISOString()})
+    assert.equal(t.items.filter(e=>e.kind==='focus').length,1)
+    assert.equal(t.items.find(e=>e.kind==='focus')?.label,'Due Date')
+    assert.equal(t.items.filter(e=>e.kind==='pointer').length,1,'TouchMove positions are pointer samples')
+    const hits=detectCandidates(t)
+    const d6=hits.find(h=>h.kind==='D6')
+    assert.ok(d6&&Number(d6.facts.hesitation_ms)>=7000&&d6.element==='Due Date')
+    assert.ok(!hits.some(h=>h.kind==='D14'),'clicking into the same field twice is not a repeated command')
+  })
+})

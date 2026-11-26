@@ -10,7 +10,7 @@
 import type { Timeline, TimelineItem } from './replay-timeline.ts'
 
 export const DETECTOR_CONFIG = Object.freeze({
-    version: 'rv-d1-15-r1-r2-s1-s3-v5',
+    version: 'rv-d1-15-r1-r2-s1-s3-v6',
     rageClicks: 3, rageGapMs: 1000, rageManhattanPx: 30,
     deadResponseMs: 2500, deadScrollMs: 100,
     errorClickMs: 1000,
@@ -55,6 +55,8 @@ export interface Visit { screen: string; start: number; end: number; id: string;
 const byTime = (a: TimelineItem, b: TimelineItem) => a.offset_ms - b.offset_ms || a.event_id.localeCompare(b.event_id, 'en', { numeric: true })
 const manhattan = (a: TimelineItem, b: TimelineItem) => Math.abs((a.x ?? 0) - (b.x ?? 0)) + Math.abs((a.y ?? 0) - (b.y ?? 0))
 const isInput = (e: TimelineItem) => e.kind === 'click' || e.kind === 'input_activity' || e.kind === 'focus' || e.kind === 'scroll'
+/** A click that enters a form field (text input, select, its label) rather than issuing a command. */
+const isFieldEntry = (e: TimelineItem) => ['input', 'textarea', 'select', 'label'].includes(e.tag ?? '') || ['combobox', 'textbox', 'searchbox', 'spinbutton'].includes(e.role ?? '')
 const isPrimaryClick = (e: TimelineItem) => e.kind === 'click' && (e.interaction === 2 || e.interaction === undefined)
 export const doctypeOf = (screen: string) => screen.split(':')[0] ?? screen
 
@@ -402,6 +404,7 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
     for (let i = 1; i < pc.length; i++) {
         const a = pc[i - 1]!, b = pc[i]!, gap = b.offset_ms - a.offset_ms
         if (!a.label || a.label !== b.label || loopSubmits.has(b) || rage.has(b) || gap <= cfg.repeatMinMs || gap >= cfg.repeatMaxMs) continue
+        if (isFieldEntry(a) || isFieldEntry(b)) continue // clicking into a field again is not a repeated command
         if (navs.any(a.offset_ms, b.offset_ms) || errors.any(a.offset_ms, b.offset_ms)) continue
         add('D14', [a, b], { repeat_ms: gap, pattern: 'repeat', lost_ms: gap }, a.label)
     }

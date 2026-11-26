@@ -1,5 +1,7 @@
-# Only the evaluation of record is committed; debugging runs, the snapshot cache and the pipeline DB stay local.
+# Only the evaluations of record are committed; debugging runs, snapshot caches and pipeline DBs stay local.
 out/*
 !out/erpnext-v2/
-out/erpnext-v2/snapshots/
-out/erpnext-v2/pipeline.db*
+!out/erpnext-run-c/
+!out/erpnext-dev/
+out/*/snapshots/
+out/*/pipeline.db*
