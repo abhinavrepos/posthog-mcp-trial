@@ -40,13 +40,13 @@ async function resolveClients(names:string[]|undefined):Promise<string[]|undefin
 export function registerSurveyTools(server:McpServer,caller:Pick<ChatCaller,'who'|'surveyRole'>={who:'mcp',surveyRole:'launch'}):void{
     const allowed=new Set(surveyToolNames(caller.surveyRole));if(!allowed.size)return
     const reg=((name:string,...rest:unknown[])=>(allowed.has(name)?(server.registerTool as (...a:unknown[])=>unknown)(name,...rest):undefined)) as typeof server.registerTool
-    reg('design_survey',{title:'Validate a native PostHog survey',description:'Validate every field of a native PostHog survey before saving. Supply name, type, questions, and optional appearance, conditions, targeting, schedule and audience. Event triggers may carry propertyFilters, e.g. {"name":"PageView","propertyFilters":{"dialog_id":{"operator":"exact","values":["DlgRepAmort"]}}}; clients:["SEM"] limits the audience. Example: {"name":"Feedback","questions":[{"type":"open","question":"Why?"}]}.',inputSchema:nativeSurveyInput.shape,outputSchema:ANALYSIS_OUTPUT,annotations:{readOnlyHint:true}},async args=>{
+    reg('design_survey',{title:'Validate a native PostHog survey',description:'Validate every field of a native PostHog survey before saving. Supply name, type, questions, and optional appearance, conditions, targeting, schedule and audience. Event triggers may carry propertyFilters, e.g. {"name":"PageView","propertyFilters":{"dialog_id":{"operator":"exact","values":["DlgRepAmort"]}}}; clients:["SEM"] limits the audience. Example: {"name":"Feedback","questions":[{"type":"open","question":"Why?"}]}.',inputSchema:nativeSurveyInput.strict(),outputSchema:ANALYSIS_OUTPUT,annotations:{readOnlyHint:true}},async args=>{
         const spec=nativeValidation(args)
         const clients=await resolveClients(spec.clients)
         const body=nativePayload({...spec,clients})
         return result('Valid native PostHog survey. Save it with save_survey; launch it on the Surveys page.',{survey:body,page:pageUrl(),note:'PostHog evaluates native conditions and targeting when launched.'})
     })
-    reg('save_survey',{title:'Save or update a native PostHog survey',description:'Create a native PostHog survey as a draft, or update one with survey_id. Provide the complete survey spec. Set start_date explicitly to launch; end_date stops it. Example: {"name":"Feedback","questions":[{"type":"open","question":"Why?"}]}.',inputSchema:{...nativeSurveyInput.shape,survey_id:z.string().optional()}},async args=>{
+    reg('save_survey',{title:'Save or update a native PostHog survey',description:'Create a native PostHog survey as a draft, or update one with survey_id. Provide the complete survey spec. Set start_date explicitly to launch; end_date stops it. Example: {"name":"Feedback","questions":[{"type":"open","question":"Why?"}]}.',inputSchema:nativeSurveyInput.extend({survey_id:z.string().optional()}).strict()},async args=>{
         const {survey_id,...raw}=args
         const spec=nativeValidation(raw)
         if(caller.surveyRole!=='launch'){
