@@ -67,7 +67,13 @@ async function inflate(v: unknown, budget: {n:number}): Promise<unknown> {
     if(budget.n>MAX_INFLATED) throw new Error('inflated_cap')
     return JSON.parse(out.toString('utf8'))
 }
-function nodeWalk(root: unknown, map: Map<number,NodeInfo>, labels: Map<number,string>, budget:{n:number}, parent=0): boolean {
+/** The label text the user SEES for a form field: a <label> (or its text) inside the field's container, keyed by the
+ * nearest ancestor with a schema field name (data-fieldname). Updated as labels change (e.g. a relabelled field). */
+function noteVisibleLabel(labelNode:number, text:string, map:Map<number,NodeInfo>, visible:Map<number,string>):void {
+    let id=labelNode
+    for(let depth=0;depth<6&&id;depth++){const n=map.get(id);if(!n)return;if(n.field){visible.set(id,text);return}id=n.parent}
+}
+function nodeWalk(root: unknown, map: Map<number,NodeInfo>, labels: Map<number,string>, budget:{n:number}, parent=0, visible:Map<number,string>=new Map()): boolean {
     const stack: [unknown,number][]=[[root,parent]]
     while(stack.length) {
         const [value,p]=stack.pop()!, n=rec(value); if(!n) continue
@@ -82,7 +88,9 @@ function nodeWalk(root: unknown, map: Map<number,NodeInfo>, labels: Map<number,s
             for(let i=0;i<queue.length&&i<30;i++){const child=rec(queue[i]);if(!child)continue;if(typeof child.textContent==='string')raw+=child.textContent.slice(0,100);else if(Array.isArray(child.childNodes))queue.push(...child.childNodes.slice(0,8))}
             label=safeLabel(raw)
         }
-        if(id!==undefined) {if(!map.has(id)){if(budget.n>=MAX_NODES)return false;budget.n++}map.set(id,{parent:p,tag,role:String(a.role||'').slice(0,30),label,label_rank,attrs,field:fieldLabel(a['data-fieldname'])||undefined,frame_x:finite(Number(a.rr_left)),frame_y:finite(Number(a.rr_top))});if(label)labels.set(p,labels.has(p)&&labels.get(p)!==label?'':label)}
+        if(id!==undefined) {if(!map.has(id)){if(budget.n>=MAX_NODES)return false;budget.n++}map.set(id,{parent:p,tag,role:String(a.role||'').slice(0,30),label,label_rank,attrs,field:fieldLabel(a['data-fieldname'])||undefined,frame_x:finite(Number(a.rr_left)),frame_y:finite(Number(a.rr_top))});if(label)labels.set(p,labels.has(p)&&labels.get(p)!==label?'':label)
+            if(label&&tag==='label')noteVisibleLabel(id,label,map,visible)
+            else if(label&&!tag&&map.get(p)?.tag==='label')noteVisibleLabel(p,label,map,visible)}
         const children=Array.isArray(n.childNodes)?n.childNodes:[]
         if(stack.length+children.length>MAX_NODES)return false
         for(let i=children.length-1;i>=0;i--) stack.push([children[i],id??p])
@@ -102,7 +110,7 @@ function visibleState(root:unknown):{error:boolean;mask:boolean;maskId?:number} 
 }
 export async function readTimeline(file: string, metadata: {start_time:string;app_events?:{timestamp:string;event:string;path?:string}[]}): Promise<Timeline> {
     const coverage:Coverage={state:'complete',lines:0,bad_lines:0,full_snapshot_seen:false,meta_seen:false,pointer_seen:false,click_seen:false,dom_seen:false,input_masked:true,iframe_seen:false,iframe_unseen:false,canvas_unseen:true,clock_anomaly:false,truncated:false,reasons:[]}
-    const items:TimelineItem[]=[], maps=new Map<string,Map<number,NodeInfo>>(), labelMaps=new Map<string,Map<number,string>>(), screens=new Set<string>()
+    const items:TimelineItem[]=[], maps=new Map<string,Map<number,NodeInfo>>(), labelMaps=new Map<string,Map<number,string>>(), visibleMaps=new Map<string,Map<number,string>>(), screens=new Set<string>()
     const budget={n:0},nodeBudget={n:0}, start=Date.parse(metadata.start_time), validStart=Number.isFinite(start)?start:0
     let width=0,height=0,previous=-Infinity,rawBytes=0,skipNodes=false
     const masks=new Map<string,Set<number>>()
@@ -124,24 +132,28 @@ export async function readTimeline(file: string, metadata: {start_time:string;ap
         previous=t
         const map=maps.get(windowId)??new Map<number,NodeInfo>(); maps.set(windowId,map)
         const labels=labelMaps.get(windowId)??new Map<number,string>();labelMaps.set(windowId,labels)
+        const visible=visibleMaps.get(windowId)??new Map<number,string>();visibleMaps.set(windowId,visible)
         if(maps.size>32){coverage.state='oversize';coverage.truncated=true;coverage.reasons.push('window_cap');break}
         const base={event_id:`${coverage.lines}`,offset_ms:offset,raw_offset_ms:raw,window_id:windowId,source:'rrweb' as const}
-        const target=(id:unknown):{node_id?:number;tag?:string;role?:string;label?:string;frame_id?:number;frame_x:number;frame_y:number}=>{const n=map.get(safeId(id)??NaN);if(!n)return {frame_x:0,frame_y:0};let label=n.label||n.field||'';let parent=n.parent,frameId:number|undefined,frameX=0,frameY=0;for(let depth=0;depth<32&&parent;depth++){const ancestor=map.get(parent);if(!label&&depth<3)label=ancestor?.label||labels.get(parent)||'';if(!label&&depth<6&&ancestor?.field)label=ancestor.field;if(ancestor?.tag==='iframe'){frameId=parent;coverage.iframe_seen=true;if(ancestor.frame_x===undefined||ancestor.frame_y===undefined){if(!coverage.reasons.includes('iframe_offset_unknown'))coverage.reasons.push('iframe_offset_unknown')}else{frameX+=ancestor.frame_x;frameY+=ancestor.frame_y}}parent=ancestor?.parent??0}return {node_id:safeId(id),tag:n.tag,role:n.role,label:label||undefined,frame_id:frameId,frame_x:frameX,frame_y:frameY} }
+        const target=(id:unknown):{node_id?:number;tag?:string;role?:string;label?:string;frame_id?:number;frame_x:number;frame_y:number}=>{const n=map.get(safeId(id)??NaN);if(!n)return {frame_x:0,frame_y:0};
+            // Precedence: an explicit aria-label/data-label/title, then the label the user sees on the field's container, then own text, then the schema name.
+            let seen='';for(let q:number|undefined=safeId(id),depth=0;q&&depth<8&&!seen;depth++){seen=visible.get(q)??'';q=map.get(q)?.parent}
+            let label=(n.label_rank>0?n.label:'')||seen||n.label||n.field||'';let parent=n.parent,frameId:number|undefined,frameX=0,frameY=0;for(let depth=0;depth<32&&parent;depth++){const ancestor=map.get(parent);if(!label&&depth<3)label=ancestor?.label||labels.get(parent)||'';if(!label&&depth<6&&ancestor?.field)label=ancestor.field;if(ancestor?.tag==='iframe'){frameId=parent;coverage.iframe_seen=true;if(ancestor.frame_x===undefined||ancestor.frame_y===undefined){if(!coverage.reasons.includes('iframe_offset_unknown'))coverage.reasons.push('iframe_offset_unknown')}else{frameX+=ancestor.frame_x;frameY+=ancestor.frame_y}}parent=ancestor?.parent??0}return {node_id:safeId(id),tag:n.tag,role:n.role,label:label||undefined,frame_id:frameId,frame_x:frameX,frame_y:frameY} }
         try {
           const d=rec(typeof e.data==='string'?await inflate(e.data,budget):e.data)
           if(!d)throw new Error('data_shape')
           if(type===4) {coverage.meta_seen=true;width=finite(d.width)??width;height=finite(d.height)??height;const key=screenKey(String(d.href||'/'));screens.add(key);items.push({...base,kind:'navigation',screen:key})}
           else if(type===2) {
             const node=await inflate(d.node,budget)
-            nodeBudget.n-=map.size;map.clear();labels.clear()
-            if(!nodeWalk(node,map,labels,nodeBudget)){coverage.state='oversize';coverage.reasons.push('node_cap');skipNodes=true;nodeBudget.n-=map.size;map.clear();labels.clear()}
+            nodeBudget.n-=map.size;map.clear();labels.clear();visible.clear()
+            if(!nodeWalk(node,map,labels,nodeBudget,0,visible)){coverage.state='oversize';coverage.reasons.push('node_cap');skipNodes=true;nodeBudget.n-=map.size;map.clear();labels.clear();visible.clear()}
             else {coverage.full_snapshot_seen=true;coverage.dom_seen=true}
             items.push({...base,kind:'mutation'})
           } else if(type===3) {
             const source=d.source
             if(source===0) {
                 for(const field of ['adds','removes','texts','attributes']) d[field]=await inflate(d[field],budget)
-                if(!skipNodes && Array.isArray(d.adds)) for(const add of d.adds.slice(0,MAX_NODES)) {const a=rec(add); if(!a?.node)continue; if(!nodeWalk(a.node,map,labels,nodeBudget,safeId(a.parentId)??0)){skipNodes=true;coverage.state='oversize';coverage.reasons.push('node_cap');nodeBudget.n-=map.size;map.clear();labels.clear();break}const state=visibleState(a.node);if(state.error)items.push({...base,event_id:`${coverage.lines}:e${items.length}`,kind:'error',error_kind:'visible',error_text:'visible validation error'});if(state.mask){const id=state.maskId;if(id!==undefined){const set=masks.get(windowId)??new Set<number>();set.add(id);masks.set(windowId,set)}items.push({...base,event_id:`${coverage.lines}:w${items.length}`,kind:'coverage',label:'wait_start'})}}
+                if(!skipNodes && Array.isArray(d.adds)) for(const add of d.adds.slice(0,MAX_NODES)) {const a=rec(add); if(!a?.node)continue; if(!nodeWalk(a.node,map,labels,nodeBudget,safeId(a.parentId)??0,visible)){skipNodes=true;coverage.state='oversize';coverage.reasons.push('node_cap');nodeBudget.n-=map.size;map.clear();labels.clear();visible.clear();break}const state=visibleState(a.node);if(state.error)items.push({...base,event_id:`${coverage.lines}:e${items.length}`,kind:'error',error_kind:'visible',error_text:'visible validation error'});if(state.mask){const id=state.maskId;if(id!==undefined){const set=masks.get(windowId)??new Set<number>();set.add(id);masks.set(windowId,set)}items.push({...base,event_id:`${coverage.lines}:w${items.length}`,kind:'coverage',label:'wait_start'})}}
                 if(Array.isArray(d.removes))for(const removed of d.removes.slice(0,MAX_NODES)){const id=safeId(rec(removed)?.id);if(id!==undefined&&masks.get(windowId)?.delete(id))items.push({...base,event_id:`${coverage.lines}:x${items.length}`,kind:'coverage',label:'wait_end'});if(id!==undefined&&map.delete(id))nodeBudget.n--}
                 if(Array.isArray(d.attributes))for(const change of d.attributes.slice(0,MAX_NODES)){const c=rec(change),attrs=rec(c?.attributes);if(!attrs)continue;const node=map.get(safeId(c?.id)??NaN);if(node){const before=node.label;for(const [k,r] of LABEL_ATTRS){if(!(k in attrs)||r<node.label_rank)continue;const l=safeLabel(attrs[k]);if(l){node.label=l;node.label_rank=r;break}if(attrs[k]===null&&r===node.label_rank){node.label='';node.label_rank=0}}if(before&&node.label!==before&&labels.get(node.parent)===before){if(node.label)labels.set(node.parent,node.label);else labels.delete(node.parent)}}const cls=typeof attrs.class==='string'?attrs.class:'';if(attrs['aria-invalid']==='true'||/\b(has-error|msgprint|invalid-feedback)\b/.test(cls)){items.push({...base,event_id:`${coverage.lines}:a${items.length}`,kind:'error',error_kind:'visible',error_text:'visible validation error'});break}}
                 coverage.dom_seen=true;items.push({...base,kind:'mutation'})

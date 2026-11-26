@@ -10,7 +10,7 @@
 import type { Timeline, TimelineItem } from './replay-timeline.ts'
 
 export const DETECTOR_CONFIG = Object.freeze({
-    version: 'rv-d1-15-r1-r2-s1-s3-v6',
+    version: 'rv-d1-15-r1-r2-s1-s3-v7',
     rageClicks: 3, rageGapMs: 1000, rageManhattanPx: 30,
     deadResponseMs: 2500, deadScrollMs: 100,
     errorClickMs: 1000,
@@ -58,6 +58,8 @@ const byTime = (a: TimelineItem, b: TimelineItem) => a.offset_ms - b.offset_ms |
 const manhattan = (a: TimelineItem, b: TimelineItem) => Math.abs((a.x ?? 0) - (b.x ?? 0)) + Math.abs((a.y ?? 0) - (b.y ?? 0))
 const isInput = (e: TimelineItem) => e.kind === 'click' || e.kind === 'input_activity' || e.kind === 'focus' || e.kind === 'scroll'
 /** A click that enters a form field (text input, select, its label) rather than issuing a command. */
+/** A form field a user types into or picks from (D7 field returns count only these, never buttons). */
+const isFieldTarget = (e: TimelineItem) => ['input', 'textarea', 'select'].includes(e.tag ?? '') || ['combobox', 'textbox', 'searchbox', 'spinbutton'].includes(e.role ?? '')
 const isFieldEntry = (e: TimelineItem) => ['input', 'textarea', 'select', 'label'].includes(e.tag ?? '') || ['combobox', 'textbox', 'searchbox', 'spinbutton'].includes(e.role ?? '')
 const isPrimaryClick = (e: TimelineItem) => e.kind === 'click' && (e.interaction === 2 || e.interaction === undefined)
 export const doctypeOf = (screen: string) => screen.split(':')[0] ?? screen
@@ -276,7 +278,7 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
     }
 
     // D6 field hesitation (focus → first input ≥3 s, no other field typed meanwhile) and D7 returns (≥3 focuses), per visit.
-    const focusAll = new Series(events.filter((e) => e.kind === 'focus' && !!e.label))
+    const focusAll = new Series(events.filter((e) => e.kind === 'focus' && !!e.label && isFieldTarget(e)))
     for (const v of visits.length ? visits : [{ screen: timeline.screens[0] ?? 'unknown_screen', start: -1, end: Infinity, id: '', index: 0 }]) {
         const byField = new Map<string, TimelineItem[]>()
         for (const f of focusAll.between(v.start, v.end, true).slice(0, 2000)) byField.set(f.label!, [...(byField.get(f.label!) ?? []), f])
@@ -402,11 +404,18 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
         }
     }
 
+    // A user's click comes with a mousedown (rrweb MouseInteraction 1) on the same element just before; a script's
+    // element.click() dispatches only the click. Applied only when the recording has mousedowns at all (detectable).
+    const presses = events.filter((e) => e.kind === 'click' && e.interaction === 1 && e.node_id !== undefined)
+    const pressesSeen = presses.length > 0
+    const pressSeries = new Series(presses)
+    const pressedBefore = (c: TimelineItem) => c.interaction === undefined || !!pressSeries.any(c.offset_ms - 1500, c.offset_ms, (p) => p.node_id === c.node_id && p.window_id === c.window_id)
     // D14 repeated command with no state change, or undo/Cancel within 10 s after a save (Low, no rank weight).
     for (let i = 1; i < pc.length; i++) {
         const a = pc[i - 1]!, b = pc[i]!, gap = b.offset_ms - a.offset_ms
         if (!a.label || a.label !== b.label || loopSubmits.has(b) || rage.has(b) || gap <= cfg.repeatMinMs || gap >= cfg.repeatMaxMs) continue
         if (isFieldEntry(a) || isFieldEntry(b)) continue // clicking into a field again is not a repeated command
+        if (pressesSeen && (!pressedBefore(a) || !pressedBefore(b))) continue // a script's element.click() has no mousedown: not a user repeat
         if (navs.any(a.offset_ms, b.offset_ms) || errors.any(a.offset_ms, b.offset_ms)) continue
         add('D14', [a, b], { repeat_ms: gap, pattern: 'repeat', lost_ms: gap }, a.label)
     }

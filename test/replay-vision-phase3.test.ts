@@ -40,7 +40,7 @@ const nav = (t: number, screen: string): Partial<Item> => ({ offset_ms: t, kind:
 const click = (t: number, label?: string, extra: Partial<Item> = {}): Partial<Item> => ({ offset_ms: t, kind: 'click', interaction: 2, label, tag: 'button', x: 100, y: 100, ...extra })
 const nodeOf = (label: string) => 1000 + [...label].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 100_000, 7)
 const edit = (t: number, label = 'Customer'): Partial<Item> => ({ offset_ms: t, kind: 'input_activity', label, node_id: nodeOf(label) })
-const focus = (t: number, label: string): Partial<Item> => ({ offset_ms: t, kind: 'focus', label })
+const focus = (t: number, label: string, tag = 'input'): Partial<Item> => ({ offset_ms: t, kind: 'focus', label, tag })
 const verr = (t: number): Partial<Item> => ({ offset_ms: t, kind: 'error', error_kind: 'visible' })
 const scroll = (t: number, y: number): Partial<Item> => ({ offset_ms: t, kind: 'scroll', scroll_y: y, scroll_id: 1 })
 const kinds = (c: Cand[]) => c.map((x) => x.kind)
@@ -348,4 +348,24 @@ test('decision 2: one strong D4/D1/D3/D5 moment in one user publishes as Low wit
     const draft = d4[0]!.draft, ev = d4[0]!.members.map((m) => ({ session_id: m.session_id, candidate: m.candidate }))
     assert.equal(validateInsight({ ...draft, severity: 'Medium' }, ev).valid, false)
     assert.equal(validateInsight({ ...draft, single_moment: false }, ev).valid, false)
+})
+
+test('v7: D7 field returns count only field targets, never a focused button', () => {
+    const t = tl([nav(0, 'sales invoice:new'), focus(1000, 'Save', 'button'), focus(3000, 'Save', 'button'), focus(5000, 'Save', 'button'), focus(7000, 'Save', 'button')])
+    assert.ok(!kinds(detectCandidates(t)).includes('D7'), 'buttons take focus too; returning to a button is not a field return')
+    const f = tl([nav(0, 'sales invoice:new'), focus(1000, 'Due Date'), focus(3000, 'Due Date'), focus(5000, 'Due Date')])
+    assert.ok(detectCandidates(f).some((c) => c.kind === 'D7' && c.element === 'Due Date'))
+})
+
+test('v7: D14 ignores a click without a mousedown on the same element (a script click), when mousedowns are recorded', () => {
+    const press = (t: number, node: number): Partial<Item> => ({ offset_ms: t, kind: 'click', interaction: 1, node_id: node, label: 'Save', tag: 'button' })
+    const save = (t: number, node: number) => click(t, 'Save', { node_id: node })
+    // User Save (mousedown + click), then the page's own .click() 4 s later: not a repeat.
+    const script = tl([nav(0, 'purchase order:new'), press(990, 5), save(1000, 5), save(5000, 5)])
+    assert.ok(!detectCandidates(script).some((c) => c.kind === 'D14'))
+    // Two real presses: still a repeat.
+    const user = tl([nav(0, 'purchase order:new'), press(990, 5), save(1000, 5), press(4990, 5), save(5000, 5)])
+    assert.ok(detectCandidates(user).some((c) => c.kind === 'D14' && c.element === 'Save'))
+    // No mousedowns recorded at all: undetectable, the old behaviour stays.
+    assert.ok(detectCandidates(tl([nav(0, 'purchase order:new'), save(1000, 5), save(5000, 5)])).some((c) => c.kind === 'D14'))
 })

@@ -1,0 +1,62 @@
+{
+  "plan": {
+    "seed": 130010,
+    "phase": "calibration",
+    "user": "rv.cal.0@example.test",
+    "persona": "Expert",
+    "workflow": "invoice",
+    "injection": "validation_loop",
+    "dose": 2,
+    "planned_severity": "High",
+    "cohort": "dev-I2"
+  },
+  "session_id": "01a21a37-8f1b-721b-81c4-d559789159ff",
+  "truth": [
+    {
+      "id": "130010:0",
+      "session_id": "01a21a37-8f1b-721b-81c4-d559789159ff",
+      "kind": "validation_loop",
+      "screen": "/desk/accounts/sales-invoice/new",
+      "element": "Debit To",
+      "t_start": 1795736190616,
+      "t_end": 1795736193597,
+      "expected_detectors": [
+        "D4",
+        "D7"
+      ],
+      "expected_severity": "High",
+      "dose": 2,
+      "seed": 130010,
+      "observed": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "opened_invoice",
+      "ok": true,
+      "at": 1795736182402
+    },
+    {
+      "name": "party_input_attempted",
+      "ok": true,
+      "at": 1795736184957
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795736190605,
+      "detail": "item=true,qty=true,rate=true"
+    },
+    {
+      "name": "saved_draft",
+      "ok": true,
+      "at": 1795736195407
+    },
+    {
+      "name": "submitted",
+      "ok": true,
+      "at": 1795736198077,
+      "detail": "docstatus=1"
+    }
+  ]
+}

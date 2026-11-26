@@ -117,3 +117,18 @@ test('rrweb Focus interactions (MouseInteraction type 5) are focus items, so D6 
     assert.ok(!hits.some(h=>h.kind==='D14'),'clicking into the same field twice is not a repeated command')
   })
 })
+
+test('v7: insights name the label the user SAW (the field container\'s <label>, including a relabel), falling back to the schema name', async () => {
+  // Frappe shape: div.frappe-control[data-fieldname=due_date] > label "Due Date" + input; the label is then relabelled.
+  const form={id:1,type:2,tagName:'div',childNodes:[{id:60,type:2,tagName:'div',attributes:{'data-fieldname':'posting_date'},childNodes:[{id:61,type:2,tagName:'label',childNodes:[{id:62,type:3,textContent:'Posting Date'}]},{id:63,type:2,tagName:'div',childNodes:[{id:64,type:2,tagName:'input',attributes:{'data-fieldname':'posting_date'}}]}]},
+    {id:70,type:2,tagName:'div',attributes:{'data-fieldname':'due_date'},childNodes:[{id:71,type:2,tagName:'label',childNodes:[{id:72,type:3,textContent:'Private text 4711'}]},{id:73,type:2,tagName:'input',attributes:{}}]}]}
+  const rows=[event(0,4,{href:'http://app/desk/sales-invoice/new',width:1000,height:800}),event(1,2,{node:form,initialOffset:{top:0,left:0}}),
+    event(1000,3,{source:2,type:2,id:64,x:5,y:5}),
+    event(2000,3,{source:0,adds:[{parentId:61,node:{id:65,type:3,textContent:'Effective Value Date'}}],removes:[{parentId:61,id:62}],texts:[],attributes:[]}),
+    event(3000,3,{source:2,type:2,id:64,x:5,y:5}),event(4000,3,{source:2,type:2,id:73,x:5,y:5})]
+  await withEvents(rows,async file=>{
+    const t=await readTimeline(file,{start_time:new Date(base).toISOString()}),labels=t.items.filter(e=>e.kind==='click').map(c=>c.label)
+    assert.deepEqual(labels,['Posting Date','Effective Value Date','Due Date'],'visible label, then the relabel; a non-vocabulary label falls back to the schema name')
+    assert.ok(!JSON.stringify(t).includes('4711'))
+  })
+})

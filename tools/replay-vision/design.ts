@@ -50,4 +50,9 @@ export const CONTROL_SEEDS=controlSeeds('A')
 
 /** Development set for decision 4 (hesitation gap): I1 sessions by the CALIBRATION users with their own seeds, captured
  * into out/erpnext-dev. Never part of calibration baselines, held-out scoring or run C. */
-export function devPlans():Plan[]{return Array.from({length:6},(_,u)=>({seed:130000+u,phase:'calibration' as const,user:`rv.cal.${u}@example.test`,persona:personas[u],workflow:'invoice' as const,injection:'hesitation' as const,dose:6,planned_severity:'Medium' as const,cohort:'dev-I1'}))}
+export function devPlans():Plan[]{return [
+ ...Array.from({length:6},(_,u)=>({seed:130000+u,phase:'calibration' as const,user:`rv.cal.${u}@example.test`,persona:personas[u],workflow:'invoice' as const,injection:'hesitation' as const,dose:6,planned_severity:'Medium' as const,cohort:'dev-I1'})),
+ // v7 development (decision 1 after run C): D7 on buttons (I2) and D14 on the injection's script click (I3).
+ ...Array.from({length:3},(_,u)=>({seed:130010+u,phase:'calibration' as const,user:`rv.cal.${u}@example.test`,persona:personas[u],workflow:'invoice' as const,injection:'validation_loop' as const,dose:2,planned_severity:'High' as const,cohort:'dev-I2'})),
+ ...Array.from({length:3},(_,u)=>({seed:130020+u,phase:'calibration' as const,user:`rv.cal.${u+3}@example.test`,persona:personas[u+3],workflow:'purchase' as const,injection:'slow_wait' as const,dose:6000,planned_severity:'Medium' as const,cohort:'dev-I3'})),
+]}
