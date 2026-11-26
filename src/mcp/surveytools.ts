@@ -40,7 +40,7 @@ async function resolveClients(names:string[]|undefined):Promise<string[]|undefin
 export function registerSurveyTools(server:McpServer,caller:Pick<ChatCaller,'who'|'surveyRole'>={who:'mcp',surveyRole:'launch'}):void{
     const allowed=new Set(surveyToolNames(caller.surveyRole));if(!allowed.size)return
     const reg=((name:string,...rest:unknown[])=>(allowed.has(name)?(server.registerTool as (...a:unknown[])=>unknown)(name,...rest):undefined)) as typeof server.registerTool
-    reg('design_survey',{title:'Validate a native PostHog survey',description:'Validate every field of a native PostHog survey before saving. Supply name, type, questions, and optional appearance, conditions, targeting, schedule and audience. Events are native event names; use PostHog actions for property-filtered event triggers. Example: {"name":"Feedback","questions":[{"type":"open","question":"Why?"}]}.',inputSchema:nativeSurveyInput.shape,outputSchema:ANALYSIS_OUTPUT,annotations:{readOnlyHint:true}},async args=>{
+    reg('design_survey',{title:'Validate a native PostHog survey',description:'Validate every field of a native PostHog survey before saving. Supply name, type, questions, and optional appearance, conditions, targeting, schedule and audience. Event triggers may carry propertyFilters, e.g. {"name":"PageView","propertyFilters":{"dialog_id":{"operator":"exact","values":["DlgRepAmort"]}}}; clients:["SEM"] limits the audience. Example: {"name":"Feedback","questions":[{"type":"open","question":"Why?"}]}.',inputSchema:nativeSurveyInput.shape,outputSchema:ANALYSIS_OUTPUT,annotations:{readOnlyHint:true}},async args=>{
         const spec=nativeValidation(args)
         const clients=await resolveClients(spec.clients)
         const body=nativePayload({...spec,clients})
