@@ -40,6 +40,38 @@ set -euo pipefail
 
 POSTHOG_APP_TAG="${POSTHOG_APP_TAG:-latest}"
 INSTALL_DIR="${POSTHOG_INSTALL_DIR:-/opt/posthog}"
+
+# Keep an existing shared secret. Atomic replacement avoids a half-written .env after power loss.
+ensureRecordingApiJwtSecret() {
+    local dir="${1:-$INSTALL_DIR}" changed
+    changed="$(python3 - "$dir/.env" <<'PY'
+import os, secrets, sys, tempfile
+path = sys.argv[1]
+with open(path, encoding='utf-8') as f:
+    lines = f.readlines()
+current = [line.split('=', 1)[1].strip().strip('"\'') for line in lines if line.startswith('RECORDING_API_JWT_SECRET=')]
+if current and current[-1]:
+    print('unchanged')
+else:
+    lines = [line for line in lines if not line.startswith('RECORDING_API_JWT_SECRET=')]
+    lines.append('RECORDING_API_JWT_SECRET=' + secrets.token_urlsafe(48) + '\n')
+    fd, temp = tempfile.mkstemp(prefix='.env.', dir=os.path.dirname(path))
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp): os.unlink(temp)
+    print('created')
+PY
+)" || return
+    if [ "$changed" = created ] && command -v docker >/dev/null 2>&1 && [ -f "$dir/docker-compose.yml" ]; then
+        (cd "$dir" && docker compose up -d --no-deps --force-recreate web recording-api >/dev/null)
+    fi
+}
 REPO_URL="https://github.com/PostHog/posthog.git"
 COMPOSE_STANDALONE_VERSION="v2.33.1"
 MIN_RAM_GB=7          # AWS reports an "8 GB" instance as about 7.6 GB.
@@ -817,6 +849,7 @@ addresses_only() {
     local out=docker-compose.override.yml
     ask_domain "$1"
     write_env
+    ensureRecordingApiJwtSecret "$INSTALL_DIR"
     # Someone else's docker-compose.override.yml is kept: the addresses go in a file of their own.
     if [ -f docker-compose.override.yml ] && ! head -1 docker-compose.override.yml | grep -q 'install-posthog-hobby.sh'; then
         out=docker-compose.addresses.yml
@@ -890,4 +923,8 @@ if ! declare -F require_root >/dev/null || ! declare -F step >/dev/null; then
     exit 1
 fi
 
-main "$@"
+if [ "${1:-}" = --ensure-recording-secret ]; then
+    ensureRecordingApiJwtSecret "$INSTALL_DIR"
+else
+    main "$@"
+fi

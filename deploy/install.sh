@@ -678,6 +678,7 @@ lost_http_cookies() {
 
 step_addresses() {
     CURRENT=addresses; step "PostHog addresses"
+    POSTHOG_INSTALL_DIR="$POSTHOG_DIR" bash "$HERE/posthog/install-posthog-hobby.sh" --ensure-recording-secret
     if [ "$KEEP_POSTHOG_ADDRESSES" = yes ]; then
         POSTHOG_INSTALL_DIR="$POSTHOG_DIR" bash "$HERE/posthog/install-posthog-hobby.sh" --boot-service </dev/null
         python3 "$HERE/offline/site-config.py" "$POSTHOG_DIR"
