@@ -184,5 +184,20 @@ export class ExchangeProvider implements ReplayVisionProvider {
             await new Promise((r) => setTimeout(r, intervalMs))
         }
     }
-    async capabilities() { return { text: true, batch: false, image_input: false, verified: false } }
+    /**
+     * The exchange has no API key here, so it cannot ask the Models API itself. The operator who answers the
+     * requests (and holds the key) may write <dir>/capabilities.json from models.retrieve():
+     * {"model":"claude-haiku-5-5","source":"models.retrieve","image_input":true,"checked_at":"<ISO>"}.
+     * Only that exact shape, for this model, checked within 30 days, counts as verified; anything else is unverified.
+     */
+    async capabilities(model: string = DEFAULT_MODEL) {
+        try {
+            const raw = await readFile(join(this.dir, 'capabilities.json'), 'utf8')
+            if (raw.length > 4096) throw new Error('oversize')
+            const c = JSON.parse(raw) as { model?: unknown; source?: unknown; image_input?: unknown; checked_at?: unknown }
+            const fresh = typeof c.checked_at === 'string' && Date.now() - Date.parse(c.checked_at) <= 30 * 86_400_000 && Date.parse(c.checked_at) <= Date.now() + 60_000
+            if (c.model === model && c.source === 'models.retrieve' && typeof c.image_input === 'boolean' && fresh) return { text: true, batch: false, image_input: c.image_input, verified: true }
+        } catch { /* no or invalid file: unverified */ }
+        return { text: true, batch: false, image_input: false, verified: false }
+    }
 }

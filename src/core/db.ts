@@ -315,6 +315,12 @@ const MIGRATIONS: string[] = [
     `CREATE TABLE rv_llm_explanation (custom_id TEXT PRIMARY KEY, insight_id TEXT NOT NULL, scope_key TEXT NOT NULL, run_id INTEGER, provider TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL,
        state TEXT NOT NULL, decision TEXT, cause TEXT, fix TEXT, cited_json TEXT NOT NULL DEFAULT '[]', confidence TEXT, rubric_score INTEGER, input_tokens INTEGER, output_tokens INTEGER, cost_micros INTEGER, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
      CREATE INDEX rv_llm_explanation_insight ON rv_llm_explanation(insight_id, state);`,
+    // Watch fully (night-run decision): per watched user, off by default; one frames+timeline request per run.
+    `ALTER TABLE rv_watch ADD COLUMN watch_fully INTEGER NOT NULL DEFAULT 0;
+     CREATE TABLE rv_watch_fully_job (custom_id TEXT PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES rv_run(id) ON DELETE CASCADE, session_id TEXT NOT NULL,
+       provider TEXT NOT NULL, model TEXT NOT NULL, state TEXT NOT NULL, sent_json TEXT NOT NULL DEFAULT '{}', frames_json TEXT NOT NULL DEFAULT '[]',
+       findings_json TEXT, error_code TEXT, input_tokens INTEGER, output_tokens INTEGER, cost_micros INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+     CREATE UNIQUE INDEX rv_watch_fully_run ON rv_watch_fully_job(run_id);`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

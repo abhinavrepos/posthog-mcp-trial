@@ -12,7 +12,7 @@
 import { stat } from 'node:fs/promises'
 import { config } from '../core/config.ts'
 import { all, one, run, tx } from '../core/db.ts'
-import { withSnapshotsFile } from '../core/clip.ts'
+import { clipFrames, renderClip, withSnapshotsFile } from '../core/clip.ts'
 import { getRecording, PostHogError } from '../core/posthog.ts'
 import { analyzeFile, analysisVersion, replayAppEvents, type AnalysisResult } from '../core/replay-vision.ts'
 import { discoverFinishedRecordings, type Discovered } from '../core/replay-vision-discovery.ts'
@@ -22,6 +22,8 @@ import { deleteSessionData, refreshInsights, screenReach, storeFindings } from '
 import type { DetectorContext } from '../core/replay-vision-detectors.ts'
 import type { SanitizedWindow } from '../core/replay-timeline.ts'
 import { collectExplanations, externalAnalysisAllowed, prepareExplanations, selectProvider } from '../core/replay-vision-llm.ts'
+import { collectWatchFully, prepareWatchFully, watchFullyAvailability, type WatchFrame } from '../core/replay-vision-watch.ts'
+import { WATCH_LIMITS, type WatchPlan } from '../core/replay-vision-watch-plan.ts'
 
 const DAY = 86_400_000
 export const MONITOR = Object.freeze({
@@ -49,6 +51,9 @@ export interface VisionDeps {
     reach(scope: { client?: string | null; user?: string | null }, from: Date, to: Date): Promise<Map<string, { users: number; source: string; lower_bound?: boolean }>>
     /** Sanitized ±20 s windows around offsets of one recording, for the B′ text stage. */
     windowsFor(sessionId: string, offsetsMs: number[]): Promise<SanitizedWindow[]>
+    /** Watch fully: frame plan + sanitized timeline (worker), and the planned frames rendered by the clip renderer. Absent = stage off. */
+    watchPlanFor?(sessionId: string): Promise<WatchPlan>
+    renderWatchFrames?(sessionId: string, plan: WatchPlan): Promise<WatchFrame[]>
 }
 export const realDeps: VisionDeps = {
     now: () => Date.now(),
@@ -63,6 +68,24 @@ export const realDeps: VisionDeps = {
         const meta = await getRecording(sessionId)
         const r = await withSnapshotsFile(sessionId, (file) => analyzeFile(file, { start_time: meta.start_time }, MONITOR.analysisTimeoutMs, {}, offsets))
         return r.windows ?? []
+    },
+    watchPlanFor: async (sessionId) => {
+        const meta = await getRecording(sessionId)
+        const r = await withSnapshotsFile(sessionId, (file) => analyzeFile(file, { start_time: meta.start_time }, MONITOR.analysisTimeoutMs, {}, undefined, true))
+        if (!r.watch) throw new Error(`watch_plan_failed:${r.coverage.reasons.join(',')}`)
+        return r.watch
+    },
+    // The existing clip renderer (PostHog rasterizer, sandboxed Chrome as the service's non-root user), one clip per
+    // planned range, then one PNG per planned frame scaled to WATCH_LIMITS.frameWidth. Missing frames are skipped.
+    renderWatchFrames: async (sessionId, plan) => {
+        const out: WatchFrame[] = []
+        for (const range of plan.ranges) {
+            const clip = await renderClip({ sessionId, startOffsetS: range.start_s, durationS: range.duration_s }, 'replay-vision:watch-fully')
+            const frames = plan.frames.filter((f) => f.t_ms / 1000 >= clip.start_offset_s && f.t_ms / 1000 <= clip.end_offset_s)
+            const pngs = await clipFrames(clip.file, frames.map((f) => Math.max(0, f.t_ms / 1000 - clip.start_offset_s)), WATCH_LIMITS.frameWidth)
+            pngs.forEach((png, i) => { if (frames[i]) out.push({ png, frame: frames[i]! }) })
+        }
+        return out
     },
 }
 
@@ -254,6 +277,25 @@ export async function textStage(deps: VisionDeps = realDeps): Promise<void> {
     }
 }
 
+/** Last Watch-fully capability check, for the status page (never assumed available). */
+export const watchStatus: { available: boolean | null; reason: string; checked_at: string | null } = { available: null, reason: 'not checked yet', checked_at: null }
+/** Watch fully: collect answers, then send at most one session per tick (render cost is real). Off unless every gate passes. */
+export async function watchStage(deps: VisionDeps = realDeps): Promise<void> {
+    if (!deps.watchPlanFor || !deps.renderWatchFrames) return
+    if (!externalAnalysisAllowed()) return
+    const provider = selectProvider(true)
+    if (!provider) return
+    const a = await watchFullyAvailability(provider)
+    Object.assign(watchStatus, { available: a.available, reason: a.reason, checked_at: new Date(deps.now()).toISOString() })
+    const since = new Date(deps.now() - 1000).toISOString()
+    const got = await collectWatchFully({ provider })
+    if (got.accepted_findings) for (const r of all<{ client_id: string | null; distinct_id: string | null }>(`SELECT DISTINCT r.client_id, r.distinct_id FROM rv_watch_fully_job j JOIN rv_run r ON r.id = j.run_id WHERE j.state = 'complete' AND j.updated_at >= ? LIMIT 20`, since)) {
+        for (const scope of [r.client_id ? { client: r.client_id } : null, r.distinct_id ? { user: r.distinct_id } : null]) if (scope) refreshInsights(scope, { now: new Date(deps.now()) })
+    }
+    if (stopping || !a.available) return
+    await prepareWatchFully({ provider, planFor: deps.watchPlanFor, render: deps.renderWatchFrames, externalAllowed: true, enabled: replayVisionEnabled(), now: deps.now }, 1)
+}
+
 let timer: NodeJS.Timeout | undefined, busy = false, stopping = false
 export async function replayVisionTick(deps: VisionDeps = realDeps): Promise<void> {
     if (!replayVisionEnabled() || busy || stopping) return
@@ -270,6 +312,7 @@ export async function replayVisionTick(deps: VisionDeps = realDeps): Promise<voi
             await processRun(r, deps)
         }
         await textStage(deps)
+        await watchStage(deps)
         pruneVision(deps.now())
     } catch (e) {
         status.lastError = 'internal_error'

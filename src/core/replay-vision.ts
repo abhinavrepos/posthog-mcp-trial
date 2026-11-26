@@ -4,13 +4,14 @@ import { getRecording,hogql } from './posthog.ts'
 import { DETECTOR_CONFIG, type Candidate, type DetectorContext } from './replay-vision-detectors.ts'
 import type { Coverage, SanitizedWindow } from './replay-timeline.ts'
 import type {SessionMetric} from './replay-vision-metrics.ts'
+import type { WatchPlan } from './replay-vision-watch-plan.ts'
 
 export const analysisVersion=DETECTOR_CONFIG.version
-export interface AnalysisResult {coverage:Coverage|{state:string;reasons:string[]};candidates:Candidate[];metrics:SessionMetric[];screens:string[];events:number;windows?:SanitizedWindow[]}
+export interface AnalysisResult {coverage:Coverage|{state:string;reasons:string[]};candidates:Candidate[];metrics:SessionMetric[];screens:string[];events:number;windows?:SanitizedWindow[];watch?:WatchPlan}
 /** Normalize and detect in a resource-limited worker thread; never throws, a timeout or crash yields an empty partial result. */
-export function analyzeFile(file:string,metadata:{start_time:string;app_events?:{timestamp:string;event:string;path?:string}[]},timeoutMs=60_000,context:DetectorContext={},windows?:number[]):Promise<AnalysisResult> {
+export function analyzeFile(file:string,metadata:{start_time:string;app_events?:{timestamp:string;event:string;path?:string}[]},timeoutMs=60_000,context:DetectorContext={},windows?:number[],watchPlan=false):Promise<AnalysisResult> {
   return new Promise(resolve=>{
-    const worker=new Worker(new URL('./replay-vision-worker-thread.ts',import.meta.url),{workerData:{file,metadata:{start_time:metadata.start_time,app_events:metadata.app_events},context,windows},resourceLimits:{maxOldGenerationSizeMb:128,maxYoungGenerationSizeMb:16,stackSizeMb:4},execArgv:['--import','tsx']})
+    const worker=new Worker(new URL('./replay-vision-worker-thread.ts',import.meta.url),{workerData:{file,metadata:{start_time:metadata.start_time,app_events:metadata.app_events},context,windows,watchPlan},resourceLimits:{maxOldGenerationSizeMb:128,maxYoungGenerationSizeMb:16,stackSizeMb:4},execArgv:['--import','tsx']})
     let done=false
     const finish=(r:AnalysisResult)=>{if(done)return;done=true;clearTimeout(timer);void worker.terminate().catch(()=>{});resolve(r)}
     const failed=(reason:string):AnalysisResult=>({coverage:{state:'partial',reasons:[reason]},candidates:[],metrics:[],screens:[],events:0})

@@ -35,6 +35,7 @@ const GROUNDED: Partial<Record<DetectorCode, (f: Candidate['facts']) => boolean>
     R2: (f) => Number(f.reopens) >= 3,
     S3: (f) => Number(f.reversals) >= 3 || Number(f.d_over_p_before_click) >= 2,
     D14: (f) => typeof f.pattern === 'string',
+    V1: (f) => Number(f.cited_events) >= 1 && Number(f.frames) >= 1,
 }
 const GENERATED_ID = /^\d+$|^ext-|^ext-comp|^[a-f0-9]{8,}$|^:|^#/i
 

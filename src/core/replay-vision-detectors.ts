@@ -29,7 +29,7 @@ export const DETECTOR_CONFIG = Object.freeze({
     maxCandidates: 5000,
 })
 export type DetectorConfig = typeof DETECTOR_CONFIG
-export type DetectorCode = 'D1'|'D2'|'D3'|'D4'|'D5'|'D6'|'D7'|'D8'|'D9'|'D10'|'R1'|'R2'|'D12'|'S1'|'S2'|'S3'|'D14'|'D15'
+export type DetectorCode = 'D1'|'D2'|'D3'|'D4'|'D5'|'D6'|'D7'|'D8'|'D9'|'D10'|'R1'|'R2'|'D12'|'S1'|'S2'|'S3'|'D14'|'D15'|'V1'
 export interface Candidate {
     kind: DetectorCode; start_ms: number; end_ms: number; score: number
     screen: string; element: string; step: string; event_ids: string[]
@@ -46,6 +46,8 @@ export const STRENGTH: Record<DetectorCode, Candidate['strength']> = {
     D1: 'strong', D3: 'strong', D4: 'strong', D5: 'strong',
     D2: 'medium', D6: 'medium', D7: 'medium', D10: 'medium', R1: 'medium', R2: 'medium', D12: 'medium', S1: 'medium', S3: 'medium', D14: 'medium',
     D8: 'weak', D9: 'weak', S2: 'weak', D15: 'weak',
+    // V1: a Watch-fully finding (frames + timeline, Haiku 5.5), accepted only with valid timeline citations.
+    V1: 'medium',
 }
 export const SUBMIT_LABELS = new Set(['Save', 'Submit', 'Save & Submit'])
 const HELP_LABELS = new Set(['Help', 'Search'])

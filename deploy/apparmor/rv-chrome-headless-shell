@@ -1,0 +1,20 @@
+# AppArmor profile for the clip renderer's chrome-headless-shell on Ubuntu 23.10+ hosts that run the service
+# outside the Lens container (lab boxes; production uses deploy/lens with seccomp-chrome.json as user "triage").
+#
+# Ubuntu sets kernel.apparmor_restrict_unprivileged_userns=1, so Chrome's sandbox fails ("No usable sandbox")
+# even for a non-root user. This profile grants user namespaces to ONE binary path only, the same pattern as
+# Ubuntu's own /etc/apparmor.d/chrome; the restriction stays on for everything else. Chrome must still run as a
+# non-root user with its sandbox on: never as root, never with --no-sandbox.
+#
+# Install (root):  cp deploy/apparmor/rv-chrome-headless-shell /etc/apparmor.d/ && apparmor_parser -r /etc/apparmor.d/rv-chrome-headless-shell
+# Then put a readable copy of chrome-headless-shell under /opt/rv-chrome/<version>/ and set CHROME_HEADLESS_SHELL
+# (config.clip.chromePath) to it; run the service (or the renderer) as the non-root application user.
+# Check:           sudo -u <app user> /opt/rv-chrome/<version>/chrome-headless-shell-linux64/chrome-headless-shell --headless --dump-dom 'data:text/html,<body>ok</body>'
+abi <abi/5.0>,
+include <tunables/global>
+
+profile rv-chrome-headless-shell /opt/rv-chrome/*/chrome-headless-shell-linux64/chrome-headless-shell flags=(unconfined) {
+  userns,
+  @{exec_path} mr,
+  include if exists <local/rv-chrome-headless-shell>
+}

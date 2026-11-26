@@ -9,7 +9,8 @@ import { all, run } from '../core/db.ts'
 import { getRecording } from '../core/posthog.ts'
 import { canSeeReplayInsights, audit, type Viewer } from './access.ts'
 import { APP_NAME, esc, headerHtml, PAGE_CSS, loginHtml } from './replays.ts'
-import { forceRerun, queueReplayVision, replayVisionEnabled, replayVisionJobState } from './replayvision-worker.ts'
+import { forceRerun, queueReplayVision, replayVisionEnabled, replayVisionJobState, watchStatus } from './replayvision-worker.ts'
+import { setWatchFully, WATCH_STATUS_LIMITS } from '../core/replay-vision-watch.ts'
 import { browserKeyAllowed, providerKeyConfigured, storeProviderKey } from '../core/replay-vision-secrets.ts'
 import { BUDGET, budgetRow, dayOf } from '../core/replay-vision-budget.ts'
 import { dismissInsight, listInsights } from '../core/replay-vision-insights.ts'
@@ -23,11 +24,11 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
     for await (const part of req) { s += part; if (s.length > 10_000) throw new Error('body_too_large') }
     try { const v = JSON.parse(s || '{}'); return v && typeof v === 'object' && !Array.isArray(v) ? v : {} } catch { return {} }
 }
-interface Watch { id: number; kind: string; value: string; enabled: number; max_sessions_per_day: number; created_by: string; created_at: string }
+interface Watch { id: number; kind: string; value: string; enabled: number; max_sessions_per_day: number; created_by: string; created_at: string; watch_fully: number }
 
 
 export function visionOverview() {
-    const watches = all<Watch>('SELECT id, kind, value, enabled, max_sessions_per_day, created_by, created_at FROM rv_watch ORDER BY id DESC LIMIT 100')
+    const watches = all<Watch>('SELECT id, kind, value, enabled, max_sessions_per_day, created_by, created_at, watch_fully FROM rv_watch ORDER BY id DESC LIMIT 100')
     const scopes = all<{ scope_key: string; n: number }>(`SELECT scope_key, count(*) AS n FROM rv_insight WHERE dismissed_at IS NULL GROUP BY scope_key ORDER BY n DESC LIMIT 50`)
     const insights = scopes.flatMap((s) => listInsights(s.scope_key, 20).map((i) => ({ ...i, scope: s.scope_key })))
     const day = dayOf()
@@ -36,6 +37,7 @@ export function visionOverview() {
     return {
         enabled: replayVisionEnabled(), mode: provider.mode, provider, provider_configured: providerKeyConfigured(), browser_key_allowed: browserKeyAllowed(),
         watches, insights, status: replayVisionJobState(),
+        watch_fully: { ...watchStatus, users_on: watches.filter((w) => w.kind === 'distinct_id' && w.watch_fully === 1).length, limits: WATCH_STATUS_LIMITS, note: 'Watch fully sends idle-trimmed frames of whole sessions (rendered page content, inputs masked) plus the sanitized timeline, only for watched users with it switched on, only for clients with vision opt-in, within the provider budget; findings are kept only when they cite timeline events.' },
         budget: { day, sessions: `${g.used_sessions}/${BUDGET.dailySessions}`, download_mb: `${(g.used_download_bytes / 1048576).toFixed(1)}/${(BUDGET.dailyDownloadBytes / 1048576).toFixed(0)}`, llm_calls: `${g.used_llm_calls}+${g.reserved_llm_calls} reserved/${BUDGET.dailyLlmCalls}`, cost_usd: `${(g.estimated_cost_micros / 1e6).toFixed(4)}+${(g.reserved_cost_micros / 1e6).toFixed(4)} reserved/${(BUDGET.dailyCostMicros / 1e6).toFixed(2)}` },
         coverage_note: 'Clicks, input activity and scroll positions are recovered from the recording; cursor movement is sampled (about 20 Hz), typed values are masked, cross-origin frames and canvas are unseen.',
     }
@@ -72,6 +74,15 @@ export async function handleReplayVision(req: IncomingMessage, res: ServerRespon
             run('DELETE FROM rv_watch WHERE id = ?', Number(remove[1])) // links cascade; retention prunes runs no watch references
             audit(v.email, 'replay_vision.watch_removed', { id: Number(remove[1]) })
             json(res, 200, { ok: true })
+            return true
+        }
+        const fully = /^\/replays\/vision\/api\/watch\/(\d{1,9})\/watch-fully$/.exec(p)
+        if (fully && req.method === 'POST') {
+            const b = await body(req)
+            if (typeof b.on !== 'boolean') { json(res, 400, { error: 'Give on: true or false.' }); return true }
+            const ok = setWatchFully(Number(fully[1]), b.on)
+            audit(v.email, 'replay_vision.watch_fully', { watch: Number(fully[1]), on: b.on })
+            json(res, ok ? 200 : 404, ok ? { ok } : { error: 'Watch fully applies to a watched user (distinct id) only.' })
             return true
         }
         const dismiss = /^\/replays\/vision\/api\/insight\/([a-f0-9]{24})\/dismiss$/.exec(p)
@@ -117,7 +128,7 @@ export function visionHtml(v: Viewer): string {
     const o = visionOverview()
     const admin = v.role === 'admin'
     const t = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`
-    const watchRows = o.watches.map((w) => `<tr><td>${esc(w.kind === 'client' ? 'Client' : 'Distinct id')}</td><td>${esc(w.value)}</td><td>${w.max_sessions_per_day}/day</td><td>${esc(w.created_by)}</td><td>${admin ? `<button data-remove="${w.id}" class="secondary">Remove</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="5">No watched clients or users.</td></tr>'
+    const watchRows = o.watches.map((w) => `<tr><td>${esc(w.kind === 'client' ? 'Client' : 'Distinct id')}</td><td>${esc(w.value)}</td><td>${w.max_sessions_per_day}/day</td><td>${esc(w.created_by)}</td><td>${w.kind === 'distinct_id' ? (admin ? `<label><input type="checkbox" data-fully="${w.id}"${w.watch_fully ? ' checked' : ''}> Watch fully</label>` : (w.watch_fully ? 'Watch fully' : '')) : ''}</td><td>${admin ? `<button data-remove="${w.id}" class="secondary">Remove</button>` : ''}</td></tr>`).join('') || '<tr><td colspan="6">No watched clients or users.</td></tr>'
     const cards = o.insights.map((i) => `<article class="card insight"><header><span class="pill ${SEV_CLASS[i.severity] ?? ''}">${esc(i.severity)}</span> <b>${esc(humanScreen(i.screen))} › ${esc(i.element)}</b> <span class="muted">${esc(i.step)} · ${esc(i.scope)}</span></header>
 <p>${esc(`${i.users_affected} of ${i.users_reached ?? 'unknown'} users`)} · ${i.sessions_affected} sessions · median ${Math.round(i.time_lost_ms / 1000)} s lost per affected user · ${i.abandoned_users} abandoned</p>
 <p>${esc(i.text.replace(/^\[\w+\] /, '').replace(/ Evidence:.*$/, ''))}</p>
@@ -131,14 +142,15 @@ export function visionHtml(v: Viewer): string {
 <section class="card"><h2>Ranked insights</h2>${cards}</section>
 <section class="card"><h2>Status</h2><p>${esc(String(o.status.detail))}</p><p>Runs: ${counts}. Recordings without a trustworthy identity: ${o.status.unmatched_recordings}. Last scan: ${esc(o.status.last_scan_at ?? 'not yet')}.</p>
 <p>Today (${esc(o.budget.day)} UTC): sessions ${esc(o.budget.sessions)} · downloads ${esc(o.budget.download_mb)} MB · LLM calls ${esc(o.budget.llm_calls)} · spend $${esc(o.budget.cost_usd)}</p>
-<p>LLM provider: ${esc(o.provider.detail)}.</p><p class="muted small">Causes marked as model-written passed the same citation and rubric checks as the templates; all counts, severities and links are computed in code.</p>
+<p>LLM provider: ${esc(o.provider.detail)}.</p><p>Watch fully: ${o.watch_fully.available === true ? 'available' : o.watch_fully.available === false ? 'unavailable' : 'not checked yet'} (${esc(o.watch_fully.reason)}); ${o.watch_fully.users_on} watched users switched on.</p><p class="muted small">Causes marked as model-written passed the same citation and rubric checks as the templates; all counts, severities and links are computed in code.</p>
 ${admin && o.browser_key_allowed ? '<form id="provider-key"><label>Anthropic API key <input name="key" type="password" autocomplete="off" required></label> <button>Save encrypted key</button></form>' : ''}</section>
-<section class="card"><h2>Watch list</h2><div class="table-wrap"><table><thead><tr><th>Kind</th><th>Exact identity</th><th>Daily cap</th><th>Added by</th><th></th></tr></thead><tbody>${watchRows}</tbody></table></div>
+<section class="card"><h2>Watch list</h2><div class="table-wrap"><table><thead><tr><th>Kind</th><th>Exact identity</th><th>Daily cap</th><th>Added by</th><th>Mode</th><th></th></tr></thead><tbody>${watchRows}</tbody></table></div>
 ${admin ? '<form id="watch"><select name="kind" aria-label="Kind"><option value="client">Client</option><option value="distinct_id">Distinct id</option></select> <input name="value" required maxlength="120" placeholder="Exact client id or distinct id" aria-label="Exact identity"> <button>Add watch</button></form>' : ''}</section>
 ${admin ? '<section class="card"><h2>Analyse one recording</h2><form id="analyze"><input name="session_id" required placeholder="Session id" aria-label="Session id"> <button>Queue analysis</button></form></section>' : ''}
 <p id="msg" role="status"></p></main>
 <script>const msg=t=>document.getElementById('msg').textContent=t;const call=(u,m,b)=>fetch(u,{method:m,headers:{'content-type':'application/json','x-clip-page':'1'},body:b?JSON.stringify(b):undefined}).then(async r=>{const j=await r.json().catch(()=>({}));msg(j.error||'Saved');if(r.ok)location.reload()});
 for(const b of document.querySelectorAll('[data-remove]'))b.onclick=()=>call('/replays/vision/api/watch/'+b.dataset.remove,'DELETE');
+for(const b of document.querySelectorAll('[data-fully]'))b.onchange=()=>call('/replays/vision/api/watch/'+b.dataset.fully+'/watch-fully','POST',{on:b.checked});
 for(const b of document.querySelectorAll('[data-dismiss]'))b.onclick=()=>call('/replays/vision/api/insight/'+b.dataset.dismiss+'/dismiss','POST');
 for(const name of ['watch','analyze','provider-key']){const f=document.getElementById(name);if(f)f.onsubmit=e=>{e.preventDefault();call('/replays/vision/api/'+name,'POST',Object.fromEntries(new FormData(f)))}}</script></body></html>`
 }

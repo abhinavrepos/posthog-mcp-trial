@@ -30,10 +30,10 @@ export interface AggregateOptions {
 
 export const FAMILY: Record<DetectorCode, string> = {
     D4: 'validation', D7: 'field-returns', D3: 'error', D1: 'rage', D2: 'dead', D14: 'repeat', D10: 'wait', D5: 'abandon',
-    D6: 'hesitation', D8: 'hesitation', D12: 'hesitation', D9: 'cursor', R1: 'loop', R2: 'reopen', S1: 'scroll', S2: 'scroll', S3: 'scroll', D15: 'idle',
+    D6: 'hesitation', D8: 'hesitation', D12: 'hesitation', D9: 'cursor', R1: 'loop', R2: 'reopen', S1: 'scroll', S2: 'scroll', S3: 'scroll', D15: 'idle', V1: 'vision',
 }
 /** §7 weights: candidate ordering hints within a severity band only. D14 has no weight until calibrated. */
-export const WEIGHT: Record<DetectorCode, number> = { D5: 5, D4: 4, D3: 4, D10: 3, D1: 3, D2: 2, R1: 2, R2: 2, S3: 2, D6: 1, D7: 1, D12: 1, S1: 0.5, D8: 0.5, D9: 0.5, S2: 0, D14: 0, D15: 0 }
+export const WEIGHT: Record<DetectorCode, number> = { D5: 5, D4: 4, D3: 4, D10: 3, D1: 3, D2: 2, R1: 2, R2: 2, S3: 2, D6: 1, D7: 1, D12: 1, S1: 0.5, D8: 0.5, D9: 0.5, S2: 0, D14: 0, D15: 0, V1: 1 }
 const WEAK = new Set<DetectorCode>(['D8', 'D9', 'S2', 'D15'])
 /** Detectors whose single strong moment in one user may publish as a Low, one-citation insight. */
 export const SINGLE_MOMENT_KINDS = new Set<DetectorCode>(['D1', 'D3', 'D4', 'D5'])
@@ -130,6 +130,14 @@ function describe(family: string, g: Moment[], screen: string, el: string, U: nu
                 behaviour: `${users} scrolled ${range(g.map((m) => num(m, 'd_over_h')), (x) => x.toFixed(1))}× the visible height in ${el} with ${range(g.map((m) => num(m, 'reversals')))} direction reversals${s3.length ? ', without clicking or typing between reversals' : ''} (${sessions} sessions; page extent ≥ ${range(g.map((m) => num(m, 'page_lower_bound_px')), (x) => `${x} px`)})`,
                 cause: `Likely cause: the target in ${el} on ${where} is hard to find by scrolling (${range(g.map((m) => num(m, 'reversals')))} up/down reversals of at least a quarter screen each, no search or filter used).`,
                 fix: `Fix: on ${where}, put search/filter above ${el}, sort the most likely target first, and keep the list short by default.`,
+            }
+        }
+        case 'vision': {
+            // Text from the validated model finding (frames + timeline); counts and citations stay code-computed.
+            const first = [...g].sort((a, b) => String(a.candidate.facts.summary).length - String(b.candidate.facts.summary).length)[0]!.candidate.facts
+            return {
+                behaviour: `${users} ran into a problem at ${el} seen in the session frames and cited timeline events: ${String(first.summary)} (${sessions} sessions, ${g.length} moments)`,
+                cause: String(first.likely_cause), fix: String(first.fix),
             }
         }
         default: return { behaviour: `${users} had ${g.length} ${g[0]!.candidate.kind} moments at ${el}`, cause: '', fix: '' }
