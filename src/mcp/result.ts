@@ -10,6 +10,7 @@ const SOURCES: Record<string,string> = {
     resolve_client: 'PostHog events (HogQL, live)', find_sessions: 'PostHog events and recordings (HogQL, live)', posthog_exec: 'PostHog MCP tools',
     data_guide: 'Signal app event map and PostHog coverage', get_replay_link: 'PostHog recordings and Signal clips', pin_graph: 'Signal snapshots', list_pinned: 'Signal snapshots', unpin_graph: 'Signal snapshots',
     design_survey: 'PostHog surveys and events', save_survey: 'PostHog surveys', stop_survey: 'PostHog surveys', list_surveys: 'PostHog surveys and survey events', survey_results: 'PostHog survey events',
+    replay_friction:'Signal validated Replay Vision insights',analyze_replay:'PostHog recordings and Signal Replay Vision runs',replay_vision_status:'Signal Replay Vision queue',
 }
 /** Every successful result starts with what it covers: the resolved window, the filters, the source and how much is shown. */
 export function withContext(result: any, tool: string, args: Record<string, unknown> = {}, window?: Record<string, unknown>) {

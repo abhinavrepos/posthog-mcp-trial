@@ -20,6 +20,8 @@ import { baselineContext, loadBaselines, recomputeBaselines, runMetrics } from '
 import { addDownloadBytes, admitSession, BUDGET, startupReconcile } from '../core/replay-vision-budget.ts'
 import { deleteSessionData, refreshInsights, screenReach, storeFindings } from '../core/replay-vision-insights.ts'
 import type { DetectorContext } from '../core/replay-vision-detectors.ts'
+import type { SanitizedWindow } from '../core/replay-timeline.ts'
+import { collectExplanations, externalAnalysisAllowed, prepareExplanations, selectProvider } from '../core/replay-vision-llm.ts'
 
 const DAY = 86_400_000
 export const MONITOR = Object.freeze({
@@ -45,6 +47,8 @@ export interface VisionDeps {
     analyze(file: string, metadata: { start_time: string; app_events?: { timestamp: string; event: string; path?: string }[] }, timeoutMs: number, ctx: DetectorContext): Promise<AnalysisResult>
     fileSize(file: string): Promise<number>
     reach(scope: { client?: string | null; user?: string | null }, from: Date, to: Date): Promise<Map<string, { users: number; source: string; lower_bound?: boolean }>>
+    /** Sanitized ±20 s windows around offsets of one recording, for the B′ text stage. */
+    windowsFor(sessionId: string, offsetsMs: number[]): Promise<SanitizedWindow[]>
 }
 export const realDeps: VisionDeps = {
     now: () => Date.now(),
@@ -55,6 +59,11 @@ export const realDeps: VisionDeps = {
     analyze: analyzeFile,
     fileSize: async (f) => (await stat(f)).size,
     reach: (scope, from, to) => screenReach(from, to, scope),
+    windowsFor: async (sessionId, offsets) => {
+        const meta = await getRecording(sessionId)
+        const r = await withSnapshotsFile(sessionId, (file) => analyzeFile(file, { start_time: meta.start_time }, MONITOR.analysisTimeoutMs, {}, offsets))
+        return r.windows ?? []
+    },
 }
 
 export interface VisionRun { id: number; session_id: string; recording_end: string; state: string; attempts: number; client_id: string | null; distinct_id: string | null; requested_by: string | null }
@@ -233,6 +242,18 @@ export function pruneVision(now = Date.now()): number {
     })
 }
 
+/** B′: explain the top insights of each scope (off unless external analysis is allowed and a provider is configured). */
+export async function textStage(deps: VisionDeps = realDeps): Promise<void> {
+    if (!externalAnalysisAllowed()) return
+    const provider = selectProvider(true)
+    if (!provider) return
+    await collectExplanations({ provider, now: deps.now })
+    for (const s of all<{ scope_key: string }>(`SELECT DISTINCT scope_key FROM rv_insight WHERE dismissed_at IS NULL LIMIT 20`)) {
+        if (stopping) break
+        await prepareExplanations(s.scope_key, { provider, windowsFor: deps.windowsFor, now: deps.now }, 5)
+    }
+}
+
 let timer: NodeJS.Timeout | undefined, busy = false, stopping = false
 export async function replayVisionTick(deps: VisionDeps = realDeps): Promise<void> {
     if (!replayVisionEnabled() || busy || stopping) return
@@ -248,6 +269,7 @@ export async function replayVisionTick(deps: VisionDeps = realDeps): Promise<voi
             if (!r) break
             await processRun(r, deps)
         }
+        await textStage(deps)
         pruneVision(deps.now())
     } catch (e) {
         status.lastError = 'internal_error'

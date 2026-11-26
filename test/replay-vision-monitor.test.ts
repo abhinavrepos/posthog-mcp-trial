@@ -38,6 +38,7 @@ function fake(over: Partial<Deps> & { clock?: { t: number }; ends?: Map<string, 
         analyze: async (_f, _m) => { analyzed.push(_m.start_time); return okResult() },
         fileSize: async () => 1000,
         reach: async () => new Map([['sales invoice:new', { users: 10, source: 'fake $pageview' }]]),
+        windowsFor: async () => [],
         ...over,
     }
 }

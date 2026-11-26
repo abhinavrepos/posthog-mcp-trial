@@ -312,6 +312,9 @@ const MIGRATIONS: string[] = [
     `CREATE TABLE rv_secret (name TEXT PRIMARY KEY, ciphertext TEXT NOT NULL, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL);`,
     `ALTER TABLE rv_run ADD COLUMN requested_by TEXT;
      CREATE INDEX rv_finding_run ON rv_finding(run_id);`,
+    `CREATE TABLE rv_llm_explanation (custom_id TEXT PRIMARY KEY, insight_id TEXT NOT NULL, scope_key TEXT NOT NULL, run_id INTEGER, provider TEXT NOT NULL, model TEXT NOT NULL, prompt_version TEXT NOT NULL,
+       state TEXT NOT NULL, decision TEXT, cause TEXT, fix TEXT, cited_json TEXT NOT NULL DEFAULT '[]', confidence TEXT, rubric_score INTEGER, input_tokens INTEGER, output_tokens INTEGER, cost_micros INTEGER, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+     CREATE INDEX rv_llm_explanation_insight ON rv_llm_explanation(insight_id, state);`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

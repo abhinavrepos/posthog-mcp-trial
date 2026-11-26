@@ -28,9 +28,10 @@ import { runRecipe } from './recipes.ts'
 import { EXAMPLES, D } from './descriptions.ts'
 import { withContext } from './result.ts'
 import { waitForReplayClip } from './replay-clip.ts'
+import {registerReplayVisionTools,replayVisionToolNames} from './replay-vision-tools.ts'
 export const DIRECT_CALL = 'Call directly with JSON arguments.'
 export const CORE_TOOLS=['get_job_result','data_guide','resolve_client','find_sessions','get_replay_link','pin_graph','list_pinned','unpin_graph']
-export const lensToolNames=()=>[...(posthogMcpActive() && config.posthog.mcpViaLens ? ['posthog_exec'] : []),...CORE_TOOLS,...surveyToolNames()]
+export const lensToolNames=()=>[...(posthogMcpActive() && config.posthog.mcpViaLens ? ['posthog_exec'] : []),...CORE_TOOLS,...surveyToolNames(),...replayVisionToolNames()]
 type Caller=Pick<ChatCaller,'who'|'surveyRole'> & Partial<ChatCaller>
 export function sessionIdOf(value:string) {return (/\/replay\/([\w-]+)/.exec(value)?.[1] || value).trim()}
 const renders:number[]=[]
@@ -115,4 +116,5 @@ export function registerTools(server:McpServer,_ai?:unknown,caller?:Caller,_raw=
     server.registerTool('list_pinned',{description:D.list_pinned,inputSchema:{limit:z.number().int().min(1).max(100).default(50),offset:z.number().int().min(0).default(0)},annotations:{readOnlyHint:true}},async({limit,offset})=>jsonResult('Pinned',listPinned(limit,offset).map(({chart,...g})=>({...g,type:chart.type,url:pinnedUrl(g.id)}))))
     server.registerTool('unpin_graph',{description:D.unpin_graph,inputSchema:{id:z.string({error:'id is the snapshot id from pin_graph or list_pinned, e.g. {"id":"6f1e2d3c-4b5a-4c7d-8e9f-0a1b2c3d4e5f"}'}).uuid({error:'id must be a snapshot UUID from pin_graph or list_pinned'})}},async({id})=>jsonResult('Graph deleted',{deleted:unpinGraph(id,caller?.email || caller?.who || 'stdio',caller?.admin)}))
     registerSurveyTools(server,caller)
+    registerReplayVisionTools(server,caller) // only with FEATURE_REPLAY_VISION=on and a personal token with the insights grant
 }

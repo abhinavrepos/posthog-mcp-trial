@@ -142,7 +142,7 @@ export function refreshInsights(scope: { client?: string | null; user?: string |
     return { scope_key: scopeKey, runs: runs.length, moments: moments.length, insights, rejected: 0 }
 }
 
-export interface StoredInsight { id: string; severity: string; text: string; screen: string; element: string; step: string; users_affected: number; users_reached: number | null; sessions_affected: number; time_lost_ms: number; abandoned_users: number; calibrated: boolean; reach_source: string | null; severity_reason: string; cause: string; fix: string; confidence: string; rubric_score: number; citations: { session_id: string; offset_ms: number; url: string }[]; signals: string[]; limitations: string[]; dismissed: boolean; updated_at: string }
+export interface StoredInsight { id: string; severity: string; text: string; cause_source: string; screen: string; element: string; step: string; users_affected: number; users_reached: number | null; sessions_affected: number; time_lost_ms: number; abandoned_users: number; calibrated: boolean; reach_source: string | null; severity_reason: string; cause: string; fix: string; confidence: string; rubric_score: number; citations: { session_id: string; offset_ms: number; url: string }[]; signals: string[]; limitations: string[]; dismissed: boolean; updated_at: string }
 
 /** Ranked validated insights of a scope: multi-user before single-session, then severity, users, abandonment. */
 export function listInsights(scopeKey: string, limit = 20, offset = 0, includeDismissed = false): StoredInsight[] {
@@ -151,11 +151,15 @@ export function listInsights(scopeKey: string, limit = 20, offset = 0, includeDi
         scopeKey, Math.min(200, Math.max(1, limit)), Math.max(0, offset))
     return rows.map((r) => {
         const b = JSON.parse(String(r.behaviour_json)), sev = JSON.parse(String(r.severity_reason_json)), rub = JSON.parse(String(r.rubric_json))
+        // An LLM cause/fix is shown only after it passed citation and rubric checks (replay-vision-llm.ts); otherwise the template.
+        const llm = all<{ cause: string; fix: string; model: string }>(`SELECT cause, fix, model FROM rv_llm_explanation WHERE insight_id = ? AND state = 'accepted' ORDER BY updated_at DESC LIMIT 1`, String(r.id))[0]
+        const cause = llm?.cause ?? String(r.cause), fix = llm?.fix ?? String(r.fix)
+        const text = llm ? String(b.display ?? '').replace(String(r.cause), cause).replace(String(r.fix), fix) : String(b.display ?? '')
         return {
-            id: String(r.id), severity: String(r.severity), text: String(b.display ?? ''), screen: String(r.screen_key), element: String(r.element_key), step: String(r.step_key),
+            id: String(r.id), severity: String(r.severity), text, cause_source: llm ? `llm:${llm.model} (validated)` : 'template', screen: String(r.screen_key), element: String(r.element_key), step: String(r.step_key),
             users_affected: Number(r.users_affected), users_reached: r.users_reached === null ? null : Number(r.users_reached), sessions_affected: Number(r.sessions_affected),
             time_lost_ms: Number(r.time_lost_ms), abandoned_users: Number(r.abandoned_users), calibrated: !!r.calibrated, reach_source: r.reach_source as string | null,
-            severity_reason: String(sev.reason ?? ''), cause: String(r.cause), fix: String(r.fix), confidence: String(r.confidence), rubric_score: Number(rub.score),
+            severity_reason: String(sev.reason ?? ''), cause, fix, confidence: String(r.confidence), rubric_score: Number(rub.score),
             citations: (b.citations ?? []).map((c: { session_id: string; offset_ms: number; url: string }) => ({ session_id: c.session_id, offset_ms: c.offset_ms, url: c.url })),
             signals: b.signals ?? [], limitations: b.limitations ?? [], dismissed: !!r.dismissed_at, updated_at: String(r.updated_at),
         }

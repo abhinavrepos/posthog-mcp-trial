@@ -14,6 +14,7 @@ import { browserKeyAllowed, providerKeyConfigured, storeProviderKey } from '../c
 import { BUDGET, budgetRow, dayOf } from '../core/replay-vision-budget.ts'
 import { dismissInsight, listInsights } from '../core/replay-vision-insights.ts'
 import { humanScreen } from '../core/replay-vision-aggregate.ts'
+import { providerStatus } from '../core/replay-vision-llm.ts'
 
 const json = (res: ServerResponse, status: number, data: unknown) => { res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(data)) }
 async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -23,9 +24,6 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 }
 interface Watch { id: number; kind: string; value: string; enabled: number; max_sessions_per_day: number; created_by: string; created_at: string }
 
-/** Provider / egress lines for the page; replaced by the LLM layer's own status when it is installed. */
-export let visionProviderStatus: () => { mode: string; detail: string } = () => ({ mode: 'deterministic', detail: providerKeyConfigured() ? 'key configured; external analysis off' : 'no key; deterministic only' })
-export function setVisionProviderStatus(f: typeof visionProviderStatus) { visionProviderStatus = f }
 
 export function visionOverview() {
     const watches = all<Watch>('SELECT id, kind, value, enabled, max_sessions_per_day, created_by, created_at FROM rv_watch ORDER BY id DESC LIMIT 100')
@@ -33,7 +31,7 @@ export function visionOverview() {
     const insights = scopes.flatMap((s) => listInsights(s.scope_key, 20).map((i) => ({ ...i, scope: s.scope_key })))
     const day = dayOf()
     const g = budgetRow(day, 'global')
-    const provider = visionProviderStatus()
+    const provider = providerStatus()
     return {
         enabled: replayVisionEnabled(), mode: provider.mode, provider, provider_configured: providerKeyConfigured(), browser_key_allowed: browserKeyAllowed(),
         watches, insights, status: replayVisionJobState(),
@@ -124,7 +122,7 @@ export function visionHtml(v: Viewer): string {
 <section class="card"><h2>Ranked insights</h2>${cards}</section>
 <section class="card"><h2>Status</h2><p>${esc(String(o.status.detail))}</p><p>Runs: ${counts}. Recordings without a trustworthy identity: ${o.status.unmatched_recordings}. Last scan: ${esc(o.status.last_scan_at ?? 'not yet')}.</p>
 <p>Today (${esc(o.budget.day)} UTC): sessions ${esc(o.budget.sessions)} · downloads ${esc(o.budget.download_mb)} MB · LLM calls ${esc(o.budget.llm_calls)} · spend $${esc(o.budget.cost_usd)}</p>
-<p>LLM provider: ${esc(o.provider.detail)}.</p>
+<p>LLM provider: ${esc(o.provider.detail)}.</p><p class="muted small">Causes marked as model-written passed the same citation and rubric checks as the templates; all counts, severities and links are computed in code.</p>
 ${admin && o.browser_key_allowed ? '<form id="provider-key"><label>Anthropic API key <input name="key" type="password" autocomplete="off" required></label> <button>Save encrypted key</button></form>' : ''}</section>
 <section class="card"><h2>Watch list</h2><div class="table-wrap"><table><thead><tr><th>Kind</th><th>Exact identity</th><th>Daily cap</th><th>Added by</th><th></th></tr></thead><tbody>${watchRows}</tbody></table></div>
 ${admin ? '<form id="watch"><select name="kind" aria-label="Kind"><option value="client">Client</option><option value="distinct_id">Distinct id</option></select> <input name="value" required maxlength="120" placeholder="Exact client id or distinct id" aria-label="Exact identity"> <button>Add watch</button></form>' : ''}</section>

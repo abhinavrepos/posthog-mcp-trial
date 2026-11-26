@@ -170,3 +170,34 @@ export async function readTimeline(file: string, metadata: {start_time:string;ap
     if(items.length*160>20*1024*1024){items.length=Math.floor(20*1024*1024/160);coverage.state='oversize';coverage.truncated=true;coverage.reasons.push('timeline_cap')}
     return {items,coverage,start_time:metadata.start_time,width,height,screens:[...screens]}
 }
+
+/** One sanitized ±window around a moment, for the B′ text prompt: safe labels and timings only, no text, values, URLs or ids. */
+export interface SanitizedEvent { id: string; t_ms: number; kind: TimelineKind; label?: string; tag?: string; role?: string; x?: number; y?: number; scroll_y?: number; error?: string; screen?: string }
+export interface SanitizedWindow { center_ms: number; start_ms: number; end_ms: number; events: SanitizedEvent[]; dropped_pointer_samples: number; coverage: string[] }
+const SAFE_TAG = /^[a-z][a-z0-9-]{0,15}$/
+const SAFE_ROLE = /^[a-z]{1,20}$/
+/**
+ * Cut [center−before, center+after] out of a timeline. Pointer samples are thinned to one per
+ * 500 ms and coordinates rounded to 25 px; labels are already vocabulary-checked by the reducer.
+ */
+export function sanitizedWindow(t: Timeline, center: number, before = 20_000, after = 20_000, maxEvents = 160): SanitizedWindow {
+    const start = Math.max(0, center - before), end = center + after
+    const events: SanitizedEvent[] = []
+    let lastPointer = -Infinity, dropped = 0
+    const round = (v?: number) => (v === undefined ? undefined : Math.round(v / 25) * 25)
+    for (const e of t.items) {
+        if (e.offset_ms < start || e.offset_ms > end || e.kind === 'mutation') continue
+        if (e.kind === 'pointer') { if (e.offset_ms - lastPointer < 500) { dropped++; continue } lastPointer = e.offset_ms }
+        if (events.length >= maxEvents) { dropped++; continue }
+        events.push({
+            id: e.event_id.slice(0, 24), t_ms: Math.round(e.offset_ms), kind: e.kind,
+            ...(e.label && LABELS.has(e.label) || (e.label && /^[A-Z][A-Za-z ]{0,40}$/.test(e.label)) ? { label: e.label } : {}),
+            ...(e.tag && SAFE_TAG.test(e.tag) ? { tag: e.tag } : {}), ...(e.role && SAFE_ROLE.test(e.role) ? { role: e.role } : {}),
+            ...(e.x !== undefined ? { x: round(e.x), y: round(e.y) } : {}), ...(e.scroll_y !== undefined ? { scroll_y: round(e.scroll_y) } : {}),
+            ...(e.kind === 'error' ? { error: e.error_kind ?? 'unknown' } : {}), ...(e.kind === 'navigation' && e.screen ? { screen: e.screen.slice(0, 80) } : {}),
+            ...(e.kind === 'coverage' && e.label ? { label: e.label === 'wait_start' ? 'overlay shown' : e.label === 'wait_end' ? 'overlay removed' : undefined } : {}),
+        })
+    }
+    const coverage = [t.coverage.state, ...t.coverage.reasons.slice(0, 4)].filter((x) => x !== 'complete')
+    return { center_ms: center, start_ms: start, end_ms: end, events, dropped_pointer_samples: dropped, coverage }
+}
