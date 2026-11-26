@@ -9,13 +9,20 @@ const MAX_INFLATED = 64 * 1024 * 1024
 const MAX_FIELD = 8 * 1024 * 1024
 const MAX_EVENTS = 200_000
 const MAX_NODES = 80_000
-const LABELS = new Set(['Save','Submit','Cancel','Apply','Help','Customer','Company','Debit To','Posting Date','Effective Value Date','Payment Due Date','Items','Item Name','Search','Quotation','Sales Order','Sales Invoice','Payment Entry','Delivery Note','Item','Accounts Receivable','Calculate','Calculator','Export','Market Data Snapshot'])
+const DEFAULT_LABELS = ['Save','Submit','Cancel','Apply','Help','Customer','Company','Debit To','Posting Date','Effective Value Date','Payment Due Date','Items','Item Name','Search','Quotation','Sales Order','Sales Invoice','Payment Entry','Delivery Note','Item','Accounts Receivable','Calculate','Calculator','Export','Market Data Snapshot','Draft','Save & Submit','Get Items From','Create','New','Add Row','Edit','Delete','Duplicate','Print','Menu','Close','Back','Next','Previous','Filter','Sort','Refresh','Report','Settings']
+/** Visible labels allowed to leave the reducer: the default vocabulary plus REPLAY_VISION_LABELS (comma separated). Anything else is private text. */
+const LABELS = new Set([...DEFAULT_LABELS, ...String(process.env.REPLAY_VISION_LABELS || '').split(',').map((x) => x.trim()).filter((x) => x && x.length <= 60)])
+/** Frappe/ERPNext schema field names (data-fieldname) are code identifiers, not user content: humanize them to a label. */
+export function fieldLabel(v: unknown): string {
+    if (typeof v !== 'string' || !/^[a-z][a-z0-9_]{0,60}$/.test(v)) return ''
+    return v.split('_').filter(Boolean).map((w) => w[0]!.toUpperCase() + w.slice(1)).join(' ')
+}
 type Raw = Record<string, unknown>
 export type TimelineKind = 'pointer'|'click'|'scroll'|'input_activity'|'focus'|'navigation'|'mutation'|'error'|'app_action'|'coverage'
-export interface TimelineItem { event_id: string; offset_ms: number; raw_offset_ms: number; window_id: string; frame_id?: number; kind: TimelineKind; source: 'rrweb'|'app'; x?: number; y?: number; node_id?: number; tag?: string; role?: string; label?: string; screen?: string; scroll_y?: number; scroll_id?: number; error_text?: string; interaction?: number }
+export interface TimelineItem { event_id: string; offset_ms: number; raw_offset_ms: number; window_id: string; frame_id?: number; kind: TimelineKind; source: 'rrweb'|'app'; x?: number; y?: number; node_id?: number; tag?: string; role?: string; label?: string; screen?: string; scroll_y?: number; scroll_id?: number; error_text?: string; error_kind?: 'visible'|'console'|'exception'|'network'; interaction?: number }
 export interface Coverage { state: 'complete'|'partial'|'oversize'; lines: number; bad_lines: number; full_snapshot_seen: boolean; meta_seen: boolean; pointer_seen: boolean; click_seen: boolean; dom_seen: boolean; input_masked: boolean; iframe_seen: boolean; iframe_unseen: boolean; canvas_unseen: boolean; clock_anomaly: boolean; truncated: boolean; reasons: string[] }
 export interface Timeline { items: TimelineItem[]; coverage: Coverage; start_time: string; width: number; height: number; screens: string[] }
-interface NodeInfo { parent: number; tag: string; role: string; label: string; attrs: string; frame_x?:number;frame_y?:number }
+interface NodeInfo { parent: number; tag: string; role: string; label: string; attrs: string; field?: string; frame_x?:number;frame_y?:number }
 const rec = (v: unknown): Raw | undefined => v && typeof v === 'object' && !Array.isArray(v) ? v as Raw : undefined
 const finite = (v: unknown): number | undefined => typeof v === 'number' && Number.isFinite(v) ? v : undefined
 const safeId = (v: unknown): number | undefined => { const n=finite(v); return n !== undefined && Number.isSafeInteger(n) ? n : undefined }
@@ -64,14 +71,14 @@ function nodeWalk(root: unknown, map: Map<number,NodeInfo>, labels: Map<number,s
         const [value,p]=stack.pop()!, n=rec(value); if(!n) continue
         const id=safeId(n.id), a=rec(n.attributes)||{}, tag=typeof n.tagName==='string'?n.tagName.toLowerCase().slice(0,30):''
         const attrs=String(a.class||'').slice(0,200)
-        let label=safeLabel(a['aria-label'])||safeLabel(a.title)||safeLabel(n.textContent)
+        let label=safeLabel(a['aria-label'])||safeLabel(a['data-label'])||safeLabel(a.title)||safeLabel(n.textContent)
         if(!label && ['button','label','a','span'].includes(tag)){
             const queue=[...(Array.isArray(n.childNodes)?n.childNodes:[])].slice(0,12)
             let raw=''
             for(let i=0;i<queue.length&&i<30;i++){const child=rec(queue[i]);if(!child)continue;if(typeof child.textContent==='string')raw+=child.textContent.slice(0,100);else if(Array.isArray(child.childNodes))queue.push(...child.childNodes.slice(0,8))}
             label=safeLabel(raw)
         }
-        if(id!==undefined) {if(!map.has(id)){if(budget.n>=MAX_NODES)return false;budget.n++}map.set(id,{parent:p,tag,role:String(a.role||'').slice(0,30),label,attrs,frame_x:finite(Number(a.rr_left)),frame_y:finite(Number(a.rr_top))});if(label)labels.set(p,labels.has(p)&&labels.get(p)!==label?'':label)}
+        if(id!==undefined) {if(!map.has(id)){if(budget.n>=MAX_NODES)return false;budget.n++}map.set(id,{parent:p,tag,role:String(a.role||'').slice(0,30),label,attrs,field:fieldLabel(a['data-fieldname'])||undefined,frame_x:finite(Number(a.rr_left)),frame_y:finite(Number(a.rr_top))});if(label)labels.set(p,labels.has(p)&&labels.get(p)!==label?'':label)}
         const children=Array.isArray(n.childNodes)?n.childNodes:[]
         if(stack.length+children.length>MAX_NODES)return false
         for(let i=children.length-1;i>=0;i--) stack.push([children[i],id??p])
@@ -84,7 +91,7 @@ function visibleState(root:unknown):{error:boolean;mask:boolean;maskId?:number} 
         const n=rec(queue[i]);if(!n)continue
         const a=rec(n.attributes)||{}, cls=typeof a.class==='string'?a.class:''
         if(a.role==='alert'||/\b(msgprint|has-error|invalid-feedback)\b/.test(cls)||a['aria-invalid']==='true')return {error:true,mask:false}
-        if(/\b(x-mask|freeze|loading-overlay)\b/.test(cls)||a.role==='progressbar')return {error:false,mask:true,maskId:safeId(n.id)}
+        if(/\b(x-mask|freeze|freeze-message-container|loading-overlay)\b/.test(cls)||a.id==='freeze'||a.role==='progressbar')return {error:false,mask:true,maskId:safeId(n.id)}
         if(Array.isArray(n.childNodes))for(const child of n.childNodes){if(queue.length>=3000)break;queue.push(child)}
     }
     return {error:false,mask:false}
@@ -115,7 +122,7 @@ export async function readTimeline(file: string, metadata: {start_time:string;ap
         const labels=labelMaps.get(windowId)??new Map<number,string>();labelMaps.set(windowId,labels)
         if(maps.size>32){coverage.state='oversize';coverage.truncated=true;coverage.reasons.push('window_cap');break}
         const base={event_id:`${coverage.lines}`,offset_ms:offset,raw_offset_ms:raw,window_id:windowId,source:'rrweb' as const}
-        const target=(id:unknown):{node_id?:number;tag?:string;role?:string;label?:string;frame_id?:number;frame_x:number;frame_y:number}=>{const n=map.get(safeId(id)??NaN);if(!n)return {frame_x:0,frame_y:0};let label=n.label;let parent=n.parent,frameId:number|undefined,frameX=0,frameY=0;for(let depth=0;depth<32&&parent;depth++){const ancestor=map.get(parent);if(!label&&depth<3)label=labels.get(parent)||'';if(ancestor?.tag==='iframe'){frameId=parent;coverage.iframe_seen=true;if(ancestor.frame_x===undefined||ancestor.frame_y===undefined){if(!coverage.reasons.includes('iframe_offset_unknown'))coverage.reasons.push('iframe_offset_unknown')}else{frameX+=ancestor.frame_x;frameY+=ancestor.frame_y}}parent=ancestor?.parent??0}return {node_id:safeId(id),tag:n.tag,role:n.role,label:label||undefined,frame_id:frameId,frame_x:frameX,frame_y:frameY} }
+        const target=(id:unknown):{node_id?:number;tag?:string;role?:string;label?:string;frame_id?:number;frame_x:number;frame_y:number}=>{const n=map.get(safeId(id)??NaN);if(!n)return {frame_x:0,frame_y:0};let label=n.label||n.field||'';let parent=n.parent,frameId:number|undefined,frameX=0,frameY=0;for(let depth=0;depth<32&&parent;depth++){const ancestor=map.get(parent);if(!label&&depth<3)label=labels.get(parent)||'';if(!label&&depth<6&&ancestor?.field)label=ancestor.field;if(ancestor?.tag==='iframe'){frameId=parent;coverage.iframe_seen=true;if(ancestor.frame_x===undefined||ancestor.frame_y===undefined){if(!coverage.reasons.includes('iframe_offset_unknown'))coverage.reasons.push('iframe_offset_unknown')}else{frameX+=ancestor.frame_x;frameY+=ancestor.frame_y}}parent=ancestor?.parent??0}return {node_id:safeId(id),tag:n.tag,role:n.role,label:label||undefined,frame_id:frameId,frame_x:frameX,frame_y:frameY} }
         try {
           const d=rec(typeof e.data==='string'?await inflate(e.data,budget):e.data)
           if(!d)throw new Error('data_shape')
@@ -130,8 +137,9 @@ export async function readTimeline(file: string, metadata: {start_time:string;ap
             const source=d.source
             if(source===0) {
                 for(const field of ['adds','removes','texts','attributes']) d[field]=await inflate(d[field],budget)
-                if(!skipNodes && Array.isArray(d.adds)) for(const add of d.adds.slice(0,MAX_NODES)) {const a=rec(add); if(!a?.node)continue; if(!nodeWalk(a.node,map,labels,nodeBudget,safeId(a.parentId)??0)){skipNodes=true;coverage.state='oversize';coverage.reasons.push('node_cap');nodeBudget.n-=map.size;map.clear();labels.clear();break}const state=visibleState(a.node);if(state.error)items.push({...base,kind:'error',error_text:'visible validation error'});if(state.mask){const id=state.maskId;if(id!==undefined){const set=masks.get(windowId)??new Set<number>();set.add(id);masks.set(windowId,set)}items.push({...base,kind:'coverage',label:'wait_start'})}}
-                if(Array.isArray(d.removes))for(const removed of d.removes.slice(0,MAX_NODES)){const id=safeId(rec(removed)?.id);if(id!==undefined&&masks.get(windowId)?.delete(id))items.push({...base,kind:'coverage',label:'wait_end'});if(id!==undefined&&map.delete(id))nodeBudget.n--}
+                if(!skipNodes && Array.isArray(d.adds)) for(const add of d.adds.slice(0,MAX_NODES)) {const a=rec(add); if(!a?.node)continue; if(!nodeWalk(a.node,map,labels,nodeBudget,safeId(a.parentId)??0)){skipNodes=true;coverage.state='oversize';coverage.reasons.push('node_cap');nodeBudget.n-=map.size;map.clear();labels.clear();break}const state=visibleState(a.node);if(state.error)items.push({...base,event_id:`${coverage.lines}:e${items.length}`,kind:'error',error_kind:'visible',error_text:'visible validation error'});if(state.mask){const id=state.maskId;if(id!==undefined){const set=masks.get(windowId)??new Set<number>();set.add(id);masks.set(windowId,set)}items.push({...base,event_id:`${coverage.lines}:w${items.length}`,kind:'coverage',label:'wait_start'})}}
+                if(Array.isArray(d.removes))for(const removed of d.removes.slice(0,MAX_NODES)){const id=safeId(rec(removed)?.id);if(id!==undefined&&masks.get(windowId)?.delete(id))items.push({...base,event_id:`${coverage.lines}:x${items.length}`,kind:'coverage',label:'wait_end'});if(id!==undefined&&map.delete(id))nodeBudget.n--}
+                if(Array.isArray(d.attributes))for(const change of d.attributes.slice(0,MAX_NODES)){const c=rec(change),attrs=rec(c?.attributes);if(!attrs)continue;const cls=typeof attrs.class==='string'?attrs.class:'';if(attrs['aria-invalid']==='true'||/\b(has-error|msgprint|invalid-feedback)\b/.test(cls)){items.push({...base,event_id:`${coverage.lines}:a${items.length}`,kind:'error',error_kind:'visible',error_text:'visible validation error'});break}}
                 coverage.dom_seen=true;items.push({...base,kind:'mutation'})
             } else if(source===1 && Array.isArray(d.positions)) {
                 for(const p of d.positions.slice(0,10_000)){const q=rec(p);if(!q)continue;const x=finite(q.x),y=finite(q.y);if(x===undefined||y===undefined)continue;const {frame_x,frame_y,...targetInfo}=target(q.id),pTime=t+(finite(q.timeOffset)??0),pRaw=pTime-validStart;items.push({...base,event_id:`${coverage.lines}:${items.length}`,offset_ms:Math.max(0,pRaw),raw_offset_ms:pRaw,kind:'pointer',x:x+frame_x,y:y+frame_y,...targetInfo});coverage.pointer_seen=true}
@@ -139,6 +147,15 @@ export async function readTimeline(file: string, metadata: {start_time:string;ap
             else if(source===3) items.push({...base,kind:'scroll',scroll_id:safeId(d.id),scroll_y:finite(d.y),...target(d.id)})
             else if(source===5) items.push({...base,kind:'input_activity',...target(d.id)})
             else if(source===6) items.push({...base,kind:'focus',...target(d.id)})
+          } else if(type===5) {
+            // posthog-js custom events: SPA URL changes arrive as $url_changed/$pageview with an href payload.
+            const tag=typeof d.tag==='string'?d.tag:'',payload=rec(d.payload)
+            if((tag==='$url_changed'||tag==='$pageview')&&typeof payload?.href==='string'){const key=screenKey(payload.href);screens.add(key);items.push({...base,kind:'navigation',screen:key})}
+          } else if(type===6) {
+            // Plugin events: keep only the fact of an error, never the console payload or request body.
+            const plugin=typeof d.plugin==='string'?d.plugin:'',payload=rec(d.payload)
+            if(plugin.startsWith('rrweb/console')&&payload?.level==='error')items.push({...base,kind:'error',error_kind:'console',error_text:'console error'})
+            else if(plugin.startsWith('rrweb/network')&&Array.isArray(payload?.requests)&&payload.requests.slice(0,200).some(r=>{const status=finite(rec(r)?.responseStatus);return status!==undefined&&(status===0||status>=500)}))items.push({...base,kind:'error',error_kind:'network',error_text:'failed request'})
           }
         } catch(err) {coverage.bad_lines++;skipNodes=true;coverage.reasons.push(err instanceof Error?err.message.slice(0,40):'decode');if(coverage.reasons.at(-1)?.includes('cap')||coverage.reasons.at(-1)?.includes('length')){coverage.state='oversize';coverage.truncated=true;break}}
       }
@@ -147,7 +164,7 @@ export async function readTimeline(file: string, metadata: {start_time:string;ap
     for(const [i,app] of (metadata.app_events||[]).slice(0,500).entries()){
         const ms=Date.parse(app.timestamp)-validStart;if(!Number.isFinite(ms))continue
         if(app.event==='$pageview'&&app.path){const key=screenKey(app.path);screens.add(key);items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app',kind:'navigation',source:'app',screen:key})}
-        else if(app.event==='$exception')items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app',kind:'error',source:'app',error_text:'exception event'})
+        else if(app.event==='$exception')items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app',kind:'error',error_kind:'exception',source:'app',error_text:'exception event'})
     }
     if(!coverage.full_snapshot_seen || !coverage.meta_seen || skipNodes || coverage.bad_lines/Math.max(1,coverage.lines)>.01) {if(coverage.state==='complete')coverage.state='partial';if(!coverage.full_snapshot_seen)coverage.reasons.push('missing_snapshot')}
     if(items.length*160>20*1024*1024){items.length=Math.floor(20*1024*1024/160);coverage.state='oversize';coverage.truncated=true;coverage.reasons.push('timeline_cap')}

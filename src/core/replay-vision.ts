@@ -1,17 +1,19 @@
 import { Worker } from 'node:worker_threads'
 import { withSnapshotsFile } from './clip.ts'
 import { getRecording,hogql } from './posthog.ts'
-import { DETECTOR_CONFIG, type Candidate } from './replay-vision-detectors.ts'
+import { DETECTOR_CONFIG, type Candidate, type DetectorContext } from './replay-vision-detectors.ts'
 import type { Coverage } from './replay-timeline.ts'
+import type {SessionMetric} from './replay-vision-metrics.ts'
 
 export const analysisVersion=DETECTOR_CONFIG.version
-export interface AnalysisResult {coverage:Coverage|{state:string;reasons:string[]};candidates:Candidate[];screens:string[];events:number}
-export function analyzeFile(file:string,metadata:{start_time:string;app_events?:{timestamp:string;event:string;path?:string}[]},timeoutMs=60_000):Promise<AnalysisResult> {
+export interface AnalysisResult {coverage:Coverage|{state:string;reasons:string[]};candidates:Candidate[];metrics:SessionMetric[];screens:string[];events:number}
+/** Normalize and detect in a resource-limited worker thread; never throws, a timeout or crash yields an empty partial result. */
+export function analyzeFile(file:string,metadata:{start_time:string;app_events?:{timestamp:string;event:string;path?:string}[]},timeoutMs=60_000,context:DetectorContext={}):Promise<AnalysisResult> {
   return new Promise(resolve=>{
-    const worker=new Worker(new URL('./replay-vision-worker-thread.ts',import.meta.url),{workerData:{file,metadata},resourceLimits:{maxOldGenerationSizeMb:128,maxYoungGenerationSizeMb:16,stackSizeMb:4},execArgv:['--import','tsx']})
+    const worker=new Worker(new URL('./replay-vision-worker-thread.ts',import.meta.url),{workerData:{file,metadata:{start_time:metadata.start_time,app_events:metadata.app_events},context},resourceLimits:{maxOldGenerationSizeMb:128,maxYoungGenerationSizeMb:16,stackSizeMb:4},execArgv:['--import','tsx']})
     let done=false
     const finish=(r:AnalysisResult)=>{if(done)return;done=true;clearTimeout(timer);void worker.terminate().catch(()=>{});resolve(r)}
-    const failed=(reason:string):AnalysisResult=>({coverage:{state:'partial',reasons:[reason]},candidates:[],screens:[],events:0})
+    const failed=(reason:string):AnalysisResult=>({coverage:{state:'partial',reasons:[reason]},candidates:[],metrics:[],screens:[],events:0})
     const timer=setTimeout(()=>finish(failed('timeout')),timeoutMs)
     worker.once('message',(value:AnalysisResult)=>finish(value))
     worker.once('error',()=>finish(failed('worker_crash')))
@@ -23,8 +25,8 @@ export async function replayAppEvents(sessionId:string):Promise<{timestamp:strin
   try {const rows=await hogql(`SELECT timestamp,event,toString(properties.$pathname) AS path FROM events WHERE toString(properties.$session_id)={sid} AND timestamp>=now()-INTERVAL 30 DAY ORDER BY timestamp LIMIT 500`,{sid:sessionId},{timeoutMs:10_000,retries:0});app_events=rows.map(r=>({timestamp:String(r.timestamp),event:String(r.event),path:String(r.path||'')}))}catch{}
   return app_events
 }
-export async function analyzeSession(sessionId:string):Promise<AnalysisResult> {
+export async function analyzeSession(sessionId:string,context:DetectorContext={}):Promise<AnalysisResult> {
   const recording=await getRecording(sessionId)
   const app_events=await replayAppEvents(sessionId)
-  return withSnapshotsFile(sessionId,file=>analyzeFile(file,{...recording,app_events}))
+  return withSnapshotsFile(sessionId,file=>analyzeFile(file,{start_time:recording.start_time,app_events},60_000,context))
 }
