@@ -233,3 +233,17 @@ test('offline two-pass helpers: pass 1 writes requests and stops; pass 2 applies
     const [res] = await L.offlineCollect(manifest, aggs, provider, t0)
     assert.equal(res!.state, 'accepted'); assert.ok(res!.rubric_score! >= 14); assert.equal(res!.input_tokens, 1500)
 })
+
+test('fitWindows drops the last-cited windows until the request fits the 8k input cap, and reports only the windows sent', () => {
+    const big = (center: number, n: number): Win => ({ center_ms: center, start_ms: center - 20_000, end_ms: center + 20_000, dropped_pointer_samples: 0, coverage: [],
+        events: Array.from({ length: n }, (_, i) => ({ id: `${center}-${i}`, t_ms: center - 20_000 + i * 200, kind: 'click' as const, label: 'Save', tag: 'button', x: 100, y: 100 })) })
+    const facts = { insight_ref: 'abcd1234', screen: 'sales invoice:new', element: 'Save', step: 'Save', signals: ['D4'], users_affected: 3, users_reached: 6, sessions_affected: 3, behaviour: 'b', outcome: 'o', median_lost_s: 2, severity: 'High' as const, coverage: [] }
+    const windows = [1, 2, 3].map((k) => ({ session_alias: `S${k}`, window: big(k * 10_000, 160) }))
+    const all3 = PV.estimateInputTokens(PV.buildExplanationParams(facts, windows))
+    assert.ok(all3 > PV.LIMITS.maxInputTokens, `fixture must exceed the cap (${all3})`)
+    const fit = L.fitWindows(facts, windows)!
+    assert.ok(fit && fit.sent.length >= 1 && fit.sent.length < 3)
+    assert.ok(PV.estimateInputTokens(fit.params) <= PV.LIMITS.maxInputTokens)
+    assert.deepEqual(fit.sent.map((w) => w.session_alias), windows.slice(0, fit.sent.length).map((w) => w.session_alias))
+    assert.equal(L.fitWindows(facts, [{ session_alias: 'S9', window: big(5000, 5000) }]), null)
+})

@@ -186,22 +186,38 @@ const SAFE_ROLE = /^[a-z]{1,20}$/
  */
 export function sanitizedWindow(t: Timeline, center: number, before = 20_000, after = 20_000, maxEvents = 160): SanitizedWindow {
     const start = Math.max(0, center - before), end = center + after
-    const events: SanitizedEvent[] = []
+    const kept: TimelineItem[] = []
     let lastPointer = -Infinity, dropped = 0
+    const lastInput = new Map<string, number>()
     const round = (v?: number) => (v === undefined ? undefined : Math.round(v / 25) * 25)
+    // Same edit rule as the detectors: an input counts only on a field the user clicked or focused in this screen visit
+    // (ERPNext sets ~200 labelled field values by script on form open). Of a click's rrweb interactions only the click
+    // itself and focus are kept (mouse down/up and blur repeat it).
+    const engaged = new Set<string>()
     for (const e of t.items) {
-        if (e.offset_ms < start || e.offset_ms > end || e.kind === 'mutation') continue
+        if (e.offset_ms > end) break
+        if (e.kind === 'navigation') engaged.clear()
+        if ((e.kind === 'click' || e.kind === 'focus') && e.node_id !== undefined) engaged.add(`${e.window_id}|${e.node_id}`)
+        if (e.offset_ms < start || e.kind === 'mutation') continue
+        if (e.kind === 'input_activity' && (e.node_id === undefined || !engaged.has(`${e.window_id}|${e.node_id}`))) { dropped++; continue }
+        if (e.kind === 'click' && e.interaction !== undefined && e.interaction !== 2 && e.interaction !== 5) { dropped++; continue }
         if (e.kind === 'pointer') { if (e.offset_ms - lastPointer < 500) { dropped++; continue } lastPointer = e.offset_ms }
-        if (events.length >= maxEvents) { dropped++; continue }
-        events.push({
+        // Input activity is thinned per label to one event a second: typing is one event per key, and apps such as
+        // ERPNext set hundreds of values by script when a form opens, which would otherwise fill the window.
+        if (e.kind === 'input_activity') { const k = e.label ?? ''; if (e.offset_ms - (lastInput.get(k) ?? -Infinity) < 1000) { dropped++; continue } lastInput.set(k, e.offset_ms) }
+        kept.push(e)
+    }
+    // Over the cap, keep the events nearest the moment (not the earliest ones), then restore time order.
+    const selected = kept.length <= maxEvents ? kept : kept.map((e, i) => ({ e, i })).sort((a, b) => Math.abs(a.e.offset_ms - center) - Math.abs(b.e.offset_ms - center) || a.i - b.i).slice(0, maxEvents).sort((a, b) => a.i - b.i).map((x) => x.e)
+    dropped += kept.length - selected.length
+    const events: SanitizedEvent[] = selected.map((e) => ({
             id: e.event_id.slice(0, 24), t_ms: Math.round(e.offset_ms), kind: e.kind,
             ...(e.label && LABELS.has(e.label) || (e.label && /^[A-Z][A-Za-z ]{0,40}$/.test(e.label)) ? { label: e.label } : {}),
             ...(e.tag && SAFE_TAG.test(e.tag) ? { tag: e.tag } : {}), ...(e.role && SAFE_ROLE.test(e.role) ? { role: e.role } : {}),
             ...(e.x !== undefined ? { x: round(e.x), y: round(e.y) } : {}), ...(e.scroll_y !== undefined ? { scroll_y: round(e.scroll_y) } : {}),
             ...(e.kind === 'error' ? { error: e.error_kind ?? 'unknown' } : {}), ...(e.kind === 'navigation' && e.screen ? { screen: e.screen.slice(0, 80) } : {}),
             ...(e.kind === 'coverage' && e.label ? { label: e.label === 'wait_start' ? 'overlay shown' : e.label === 'wait_end' ? 'overlay removed' : undefined } : {}),
-        })
-    }
+        }))
     const coverage = [t.coverage.state, ...t.coverage.reasons.slice(0, 4)].filter((x) => x !== 'complete')
     return { center_ms: center, start_ms: start, end_ms: end, events, dropped_pointer_samples: dropped, coverage }
 }

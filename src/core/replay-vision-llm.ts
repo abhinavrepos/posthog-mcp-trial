@@ -76,15 +76,16 @@ export async function prepareExplanations(scopeKey: string, deps: StageDeps, lim
             try { for (const w of (await deps.windowsFor(sid, offsets.slice(0, 1))).slice(0, 1)) windows.push({ session_alias: sessionAlias(sid, salt), window: w }) } catch { /* recording gone: explain from the remaining windows */ }
         }
         if (!windows.length) { bump(report, 'no_windows'); continue }
-        const params = buildExplanationParams(insightFacts(ins), windows)
-        if (estimateInputTokens(params) > LIMITS.maxInputTokens) { bump(report, 'input_cap'); continue }
+        const fit = fitWindows(insightFacts(ins), windows)
+        if (!fit) { bump(report, 'input_cap'); continue }
+        const params = fit.params, sentWindows = fit.sent
         const customId = customIdFor(ins.id, params)
         const runId = one<{ id: number }>(`SELECT id FROM rv_run WHERE session_id = ? AND state IN ('complete','partial') ORDER BY id DESC LIMIT 1`, ins.citations[0]!.session_id)?.id
         if (runId === undefined) { bump(report, 'no_run'); continue }
         if (!reserveProvider(customId, runId, worstCaseMicros(params), deps.provider.name, 'global', now())) { bump(report, 'budget'); continue }
         const ts = new Date(now()).toISOString()
         run(`INSERT OR IGNORE INTO rv_llm_explanation(custom_id, insight_id, scope_key, run_id, provider, model, prompt_version, state, cited_json, created_at, updated_at) VALUES(?,?,?,?,?,?,?,'intent',?,?,?)`,
-            customId, ins.id, scopeKey, runId, deps.provider.name, params.model, PROMPT_VERSION, JSON.stringify(windows.flatMap((w) => w.window.events.map((e) => `${w.session_alias}:${e.id}`)).slice(0, 2000)), ts, ts)
+            customId, ins.id, scopeKey, runId, deps.provider.name, params.model, PROMPT_VERSION, JSON.stringify(sentWindows.flatMap((w) => w.window.events.map((e) => `${w.session_alias}:${e.id}`)).slice(0, 2000)), ts, ts)
         try {
             const sub = await deps.provider.submit(customId, params)
             markSubmitted(customId, sub.batch_id, now())
@@ -197,6 +198,11 @@ export interface OfflineRequest { custom_id: string; insight_id: string; sent_id
  * Pass 1 for an evaluation without a key: write one exchange request per aggregate (top `limit`), return
  * the manifest. No database, no budget ledger (the harness owns its run); same builder and sanitization.
  */
+/** Build the request with as many cited windows as fit the input cap (dropping the last-cited sessions first); null if even one does not fit. */
+export function fitWindows(facts: InsightFacts, windows: ProviderWindow[]): { params: ReturnType<typeof buildExplanationParams>; sent: ProviderWindow[] } | null {
+    for (let n = windows.length; n >= 1; n--) { const sent = windows.slice(0, n), params = buildExplanationParams(facts, sent); if (estimateInputTokens(params) <= LIMITS.maxInputTokens) return { params, sent } }
+    return null
+}
 export async function offlineRequests(aggregates: Aggregate[], windowsFor: StageDeps['windowsFor'], provider: Exchange, salt: string, limit = 10): Promise<OfflineRequest[]> {
     const out: OfflineRequest[] = []
     for (const a of aggregates.slice(0, limit)) {
@@ -207,11 +213,12 @@ export async function offlineRequests(aggregates: Aggregate[], windowsFor: Stage
         for (const [sid, at] of bySession) { try { for (const w of (await windowsFor(sid, [at])).slice(0, 1)) windows.push({ session_alias: sessionAlias(sid, salt), window: w }) } catch {} }
         if (!windows.length) continue
         const facts: InsightFacts = { insight_ref: a.id.slice(0, 8), screen: d.screen, element: d.element, step: a.members[0]!.candidate.step, signals: d.signals, users_affected: d.users_affected, users_reached: d.users_reached, sessions_affected: d.sessions_affected, behaviour: d.behaviour, outcome: d.outcome, median_lost_s: Math.round(d.time_lost_ms / 1000), severity: d.severity, coverage: d.limitations.slice(0, 6) }
-        const params = buildExplanationParams(facts, windows)
-        if (estimateInputTokens(params) > LIMITS.maxInputTokens) continue
+        const fit = fitWindows(facts, windows)
+        if (!fit) continue
+        const params = fit.params, sentWindows = fit.sent
         const custom_id = customIdFor(a.id, params)
         await provider.submit(custom_id, params)
-        out.push({ custom_id, insight_id: a.id, sent_ids: windows.flatMap((w) => w.window.events.map((e) => `${w.session_alias}:${e.id}`)), params_model: params.model })
+        out.push({ custom_id, insight_id: a.id, sent_ids: sentWindows.flatMap((w) => w.window.events.map((e) => `${w.session_alias}:${e.id}`)), params_model: params.model })
     }
     return out
 }

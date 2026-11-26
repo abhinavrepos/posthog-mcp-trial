@@ -79,3 +79,22 @@ test('a data-label attribute mutation relabels the button (Frappe Save -> Submit
     event(300,3,{source:0,adds:[],removes:[],texts:[],attributes:[{id:40,attributes:{'aria-label':null}}]}),event(400,3,{source:2,type:2,id:40,x:1,y:1})]
   await withEvents(rows2,async file=>{const t=await readTimeline(file,{start_time:new Date(base).toISOString()});assert.deepEqual(t.items.filter(e=>e.kind==='click').map(c=>c.label),['Apply',undefined])})
 })
+
+test('sanitized prompt windows thin script-set input bursts and keep the events nearest the moment', async () => {
+  const {sanitizedWindow} = await import('../src/core/replay-timeline.ts')
+  // ERPNext shape: ~200 unlabelled inputs within 1 s of opening the form, then the cited Save click 10 s later.
+  const items = [
+    {event_id:'1',offset_ms:0,raw_offset_ms:0,window_id:'w',kind:'navigation' as const,source:'rrweb' as const,screen:'sales invoice:new'},
+    ...Array.from({length:200},(_,i)=>({event_id:`i${i}`,offset_ms:700+i*4,raw_offset_ms:700+i*4,window_id:'w',kind:'input_activity' as const,source:'rrweb' as const,node_id:100+i})),
+    {event_id:'save',offset_ms:10_000,raw_offset_ms:10_000,window_id:'w',kind:'click' as const,source:'rrweb' as const,label:'Save',tag:'button'},
+  ]
+  const tl = {items, coverage:{state:'complete',lines:1,bad_lines:0,full_snapshot_seen:true,meta_seen:true,pointer_seen:false,click_seen:true,dom_seen:true,input_masked:true,iframe_seen:false,iframe_unseen:false,canvas_unseen:false,clock_anomaly:false,truncated:false,reasons:[]}, start_time:new Date(base).toISOString(), width:1000, height:800, screens:['sales invoice:new']} as any
+  const w = sanitizedWindow(tl, 10_000)
+  assert.equal(w.events.filter(e=>e.kind==='input_activity').length, 0)
+  assert.ok(w.events.some(e=>e.id==='save'&&e.label==='Save'))
+  // With a tiny cap the cited click survives because selection is by distance to the moment, in time order.
+  const small = sanitizedWindow({...tl, items:[...items.slice(0,1), ...items.slice(1,201).flatMap((e,i)=>[{...e,event_id:`f${i}`,kind:'focus' as const,label:`F${i}`,offset_ms:e.offset_ms-1,raw_offset_ms:e.offset_ms-1},{...e,offset_ms:e.offset_ms+i*40,raw_offset_ms:e.offset_ms+i*40,label:`F${i}`}]), items[201]]}, 10_000, 20_000, 20_000, 5)
+  assert.equal(small.events.length, 5)
+  assert.equal(small.events.at(-1)?.id, 'save')
+  assert.deepEqual(small.events.map(e=>e.t_ms), [...small.events.map(e=>e.t_ms)].sort((a,b)=>a-b))
+})
