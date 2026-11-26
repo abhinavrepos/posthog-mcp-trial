@@ -68,11 +68,11 @@ async function migrateIfNeeded(raw:PostHogSurvey):Promise<PostHogSurvey>{
 }
 export async function freshSurvey(id:string):Promise<PostHogSurvey|null>{try{return migrateIfNeeded(await surveyApi<PostHogSurvey>(`${checkId(id)}/`))}catch(e){if(/\b404\b|not found/i.test(String((e as Error)?.message??e)))return null;throw e}}
 export function listSurveys():Promise<PostHogSurvey[]>{return cachedSurvey(['list'],loadSurveys)}
-async function loadSurveys():Promise<PostHogSurvey[]>{const out:PostHogSurvey[]=[];const failures:string[]=[];let path='?limit=100';for(let i=0;i<20&&path;i++){const page=await surveyApi<{results:PostHogSurvey[];next:string|null}>(path);if(!Array.isArray(page.results))throw new PostHogError('PostHog surveys → 502: unreadable answer (invalid survey list)',502);for(const raw of page.results){
+async function loadSurveys():Promise<PostHogSurvey[]>{const out:PostHogSurvey[]=[];let path='?limit=100';for(let i=0;i<20&&path;i++){const page=await surveyApi<{results:PostHogSurvey[];next:string|null}>(path);if(!Array.isArray(page.results))throw new PostHogError('PostHog surveys → 502: unreadable answer (invalid survey list)',502);for(const raw of page.results){
+            // A former Signal-chain survey that cannot be migrated is left out of the list, never fatal.
             try { out.push(await migrateIfNeeded(raw)) }
-            catch { console.error('survey migration failed',raw.id);failures.push(raw.id) }
+            catch (e) { console.error('survey migration failed', raw.id, String((e as Error)?.message ?? e).slice(0, 300)) }
         };path=page.next?`?${new URL(page.next).searchParams.toString()}`:''}
-    if(failures.length)throw new ToolInputError(`Could not migrate legacy surveys ${failures.join(', ')}. Signal will retry; these surveys must be reviewed before use.`)
     return out}
 function normalSurvey(s:PostHogSurvey):PostHogSurvey{if(!s||typeof s.id!=='string')throw new PostHogError('Invalid PostHog survey',502);return {...s,name:String(s.name??''),questions:Array.isArray(s.questions)?s.questions:[],created_at:String(s.created_at??'')}}
 export const getSurvey=(id:string):Promise<PostHogSurvey>=>cachedSurvey(['get',checkId(id)],async()=>migrateIfNeeded(await surveyApi<PostHogSurvey>(`${id}/`)))
