@@ -10,7 +10,7 @@
 import type { Timeline, TimelineItem } from './replay-timeline.ts'
 
 export const DETECTOR_CONFIG = Object.freeze({
-    version: 'rv-d1-15-r1-r2-s1-s3-v4',
+    version: 'rv-d1-15-r1-r2-s1-s3-v5',
     rageClicks: 3, rageGapMs: 1000, rageManhattanPx: 30,
     deadResponseMs: 2500, deadScrollMs: 100,
     errorClickMs: 1000,
@@ -262,7 +262,10 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
         if (!attemptEdits.length) continue
         const lastEdit = attemptEdits.at(-1)!
         if (next.start - lastEdit.offset_ms < cfg.abandonQuietMs) continue
-        const lastError = visibleErrors.between(v.start, next.start, true).at(-1)
+        // Only an error shown after a Save/Submit attempt is a validation error; Frappe also marks a required field red
+        // (has-error-mandatory) while it is briefly empty during typing, which is not a rejected attempt.
+        const firstSubmit = primary.between(v.start, next.start, true).find((e) => !!e.label && SUBMIT_LABELS.has(e.label))
+        const lastError = firstSubmit ? visibleErrors.between(firstSubmit.offset_ms, next.start, true).at(-1) : undefined
         const afterFriction = out.some((c) => c.screen === v.screen && (c.kind === 'D3' || c.kind === 'D4' || c.kind === 'D10') && c.start_ms >= v.start && c.end_ms <= next.start)
         const lastField = attemptEdits.slice().reverse().find((e) => e.label)?.label
         add('D5', [attemptEdits[0]!, ...(lastError ? [lastError] : []), lastEdit], { edits: new Set(attemptEdits.map((e) => `${e.window_id}|${e.node_id}`)).size, input_events: attemptEdits.length, success_observed: false, exit_to: next.screen, after_friction: afterFriction, last_error: !!lastError, last_field: lastField ?? 'unknown', lost_ms: next.start - v.start }, lastField ?? 'Form', 'Abandon form', v.screen)

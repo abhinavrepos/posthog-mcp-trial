@@ -319,3 +319,10 @@ test('D5 edits counts distinct fields, not keystrokes ("editing 75 fields" was 5
     assert.equal(d5?.facts.edits, 2)
     assert.equal(d5?.facts.input_events, 32)
 })
+
+test('D5 last_error needs a Save/Submit attempt: a required-field highlight while typing is not a validation error', () => {
+    const t = tl([nav(0, 'sales invoice:new'), edit(1000, 'Customer'), verr(1500), edit(2000, 'Rate'), nav(6000, 'customer:list'), click(7000, 'Customer')])
+    assert.equal(detectCandidates(t).find((c) => c.kind === 'D5')?.facts.last_error, false)
+    const t2 = tl([nav(0, 'sales invoice:new'), edit(1000, 'Customer'), click(1400, 'Save'), verr(1500), edit(2000, 'Rate'), nav(6000, 'customer:list'), click(7000, 'Customer')])
+    assert.equal(detectCandidates(t2).find((c) => c.kind === 'D5')?.facts.last_error, true)
+})
