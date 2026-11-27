@@ -1,0 +1,25 @@
+{
+ "sessions": 72,
+ "complete": 72,
+ "finding_kinds": {
+  "D14": 13,
+  "D1": 2,
+  "D8": 1
+ },
+ "sessions_with_non_d14_sm_finding": {
+  "n": 2,
+  "d": 72,
+  "value": 0.027777777777777776,
+  "ci95": [
+   0.007650861466140463,
+   0.09574358168906727
+  ]
+ },
+ "calibrated_screens": [
+  "cashflow report:screen",
+  "hedge designation:screen",
+  "hedge relationship:screen",
+  "ir swap:screen",
+  "loan:screen"
+ ]
+}

@@ -1,0 +1,83 @@
+{
+  "plan": {
+    "seed": 520080,
+    "phase": "heldout",
+    "user": "RVEVAL2",
+    "persona": "Hurried",
+    "workflow": "amortisation",
+    "injection": "scroll_hunt",
+    "dose": 40,
+    "planned_severity": "Medium",
+    "cohort": "R-I6-trade-list-hunt-u6",
+    "cohort_users": 6
+  },
+  "session_id": "01a21aad-20e0-7cb8-b4ce-1ef326ae750f",
+  "distinct_id": "C1DEV|01|SEM|RVEVAL2",
+  "truth": [
+    {
+      "id": "520080:0",
+      "session_id": "01a21aad-20e0-7cb8-b4ce-1ef326ae750f",
+      "kind": "scroll_hunt",
+      "screen": "trade list:screen",
+      "element": "Trade List",
+      "t_start": 1795743902566,
+      "t_end": 1795743905694,
+      "expected_detectors": [
+        "S1",
+        "S2",
+        "S3"
+      ],
+      "expected_severity": "Medium",
+      "dose": 40,
+      "seed": 520080,
+      "observed": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "opened_loan",
+      "ok": true,
+      "at": 1795743886755
+    },
+    {
+      "name": "amortisation_tab",
+      "ok": true,
+      "at": 1795743887918
+    },
+    {
+      "name": "closed_loan",
+      "ok": true,
+      "at": 1795743890667
+    },
+    {
+      "name": "opened_report",
+      "ok": true,
+      "at": 1795743893031
+    },
+    {
+      "name": "report_params",
+      "ok": true,
+      "at": 1795743893945
+    },
+    {
+      "name": "report_run",
+      "ok": true,
+      "at": 1795743894917
+    },
+    {
+      "name": "report_scrolled",
+      "ok": true,
+      "at": 1795743896898
+    },
+    {
+      "name": "report_export",
+      "ok": true,
+      "at": 1795743898142
+    },
+    {
+      "name": "opened_trade_list",
+      "ok": true,
+      "at": 1795743900649
+    }
+  ]
+}

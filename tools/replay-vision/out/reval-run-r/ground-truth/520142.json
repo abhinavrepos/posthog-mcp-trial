@@ -1,0 +1,96 @@
+{
+  "plan": {
+    "seed": 520142,
+    "phase": "heldout",
+    "user": "RVEVAL4",
+    "persona": "Explorer",
+    "workflow": "hedge",
+    "injection": "slow_wait",
+    "dose": 15000,
+    "planned_severity": "Medium",
+    "cohort": "R-I3-hedge-open-15s-u3",
+    "cohort_users": 3
+  },
+  "session_id": "01a21ab8-7926-799d-a139-15d0a3cb6970",
+  "distinct_id": "C1DEV|01|SEM|RVEVAL4",
+  "truth": [
+    {
+      "id": "520142:0",
+      "session_id": "01a21ab8-7926-799d-a139-15d0a3cb6970",
+      "kind": "slow_wait",
+      "screen": "hedge relationship:screen",
+      "element": "Hedge Relationship",
+      "t_start": 1795744627797,
+      "t_end": 1795744645402,
+      "expected_detectors": [
+        "D10"
+      ],
+      "expected_severity": "Medium",
+      "dose": 15000,
+      "seed": 520142,
+      "observed": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "opened_hedge",
+      "ok": true,
+      "at": 1795744645402
+    },
+    {
+      "name": "hedge_fields",
+      "ok": true,
+      "at": 1795744648030
+    },
+    {
+      "name": "effectiveness_tab",
+      "ok": true,
+      "at": 1795744649116
+    },
+    {
+      "name": "documentation_tab",
+      "ok": true,
+      "at": 1795744650524
+    },
+    {
+      "name": "designation_tab",
+      "ok": true,
+      "at": 1795744651796
+    },
+    {
+      "name": "saved",
+      "ok": true,
+      "at": 1795744652591
+    },
+    {
+      "name": "approved",
+      "ok": true,
+      "at": 1795744654268
+    },
+    {
+      "name": "closed",
+      "ok": true,
+      "at": 1795744656420
+    },
+    {
+      "name": "opened_report",
+      "ok": true,
+      "at": 1795744659161
+    },
+    {
+      "name": "report_params",
+      "ok": true,
+      "at": 1795744662368
+    },
+    {
+      "name": "report_run",
+      "ok": true,
+      "at": 1795744663615
+    },
+    {
+      "name": "report_export",
+      "ok": true,
+      "at": 1795744666887
+    }
+  ]
+}

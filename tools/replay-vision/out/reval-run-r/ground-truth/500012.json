@@ -1,0 +1,54 @@
+{
+  "plan": {
+    "seed": 500012,
+    "phase": "heldout",
+    "user": "RVEVAL1",
+    "persona": "Novice",
+    "workflow": "amortisation"
+  },
+  "session_id": "01a21a9e-5a78-7d80-b72d-1e9b8dd8082c",
+  "distinct_id": "C1DEV|01|SEM|RVEVAL1",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_loan",
+      "ok": true,
+      "at": 1795742918969
+    },
+    {
+      "name": "amortisation_tab",
+      "ok": true,
+      "at": 1795742919987
+    },
+    {
+      "name": "closed_loan",
+      "ok": true,
+      "at": 1795742922531
+    },
+    {
+      "name": "opened_report",
+      "ok": true,
+      "at": 1795742925336
+    },
+    {
+      "name": "report_params",
+      "ok": true,
+      "at": 1795742927981
+    },
+    {
+      "name": "report_run",
+      "ok": true,
+      "at": 1795742929203
+    },
+    {
+      "name": "report_scrolled",
+      "ok": true,
+      "at": 1795742932251
+    },
+    {
+      "name": "report_export",
+      "ok": true,
+      "at": 1795742934508
+    }
+  ]
+}

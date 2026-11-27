@@ -119,8 +119,12 @@ export function score(captured:Captured[],p:PipelineOutput,cohorts:Cohort[],cont
  }
  const negative=cohorts.filter(k=>!k.planned).map(k=>{const sessions=new Set(held.filter(c=>c.plan.cohort===k.id).map(c=>c.session_id!));const x=cohortInsight(p.scopes[k.id]?.insights??[],k.injection,injectionScreen(k,labels),sessions);return {cohort:k.id,insight:x?{severity:x.severity,users:x.users_affected}:null,d10_hits:hits.filter(h=>sessions.has(h.session_id)&&h.kind==='D10').length}})
  const matrix=Object.fromEntries(['Low','Medium','High'].map(a=>[a,Object.fromEntries(LEVELS.map(b=>[b,severity.filter(s=>s.planned===a&&s.predicted===b).length]))]))
- const series=['I2-validation','I5-dead-apply','I6-scroll-hunt','I7-revisit'].map(prefix=>{const rows=severity.filter(s=>new RegExp(`^${prefix}-u\\d$`).test(s.cohort)).sort((a,b)=>a.users-b.users);let inversions=0;for(let i=1;i<rows.length;i++)if(LEVELS.indexOf(rows[i].predicted)<LEVELS.indexOf(rows[i-1].predicted))inversions++;return {series:prefix,levels:rows.map(r=>`${r.users}u:${r.predicted}`),inversions}})
- const dosePairs:[number,number][]=severity.filter(s=>/^(I2-validation|I5-dead-apply|I6-scroll-hunt|I7-revisit)-u\d$/.test(s.cohort)).map(s=>[s.users,LEVELS.indexOf(s.predicted)])
+ // Dose series: cohorts that differ only by their '-u<N>' user dose (generic across apps).
+ const bySeries=new Map<string,typeof severity>()
+ for(const r of severity){const m=/^(.*)-u(\d+)$/.exec(r.cohort);if(!m)continue;const list=bySeries.get(m[1]!)??[];list.push(r);bySeries.set(m[1]!,list)}
+ const seriesRows=[...bySeries].filter(([,rows])=>new Set(rows.map(r=>r.users)).size>1)
+ const series=seriesRows.map(([prefix,rows0])=>{const rows=[...rows0].sort((a,b)=>a.users-b.users);let inversions=0;for(let i=1;i<rows.length;i++)if(LEVELS.indexOf(rows[i]!.predicted)<LEVELS.indexOf(rows[i-1]!.predicted))inversions++;return {series:prefix,levels:rows.map(r=>`${r.users}u:${r.predicted}`),inversions}})
+ const dosePairs:[number,number][]=seriesRows.flatMap(([,rows])=>rows.map(r=>[r.users,LEVELS.indexOf(r.predicted)] as [number,number]))
  // Insight quality across every scope (aggregateInsights returns only validated insights, i.e. what would be published).
  const allInsights=Object.entries(p.scopes).flatMap(([id,s])=>s.insights.map(x=>({scope:id,x,sessions:new Set(s.sessions)})))
  let citations=0,hallucinated=0

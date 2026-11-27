@@ -1,0 +1,92 @@
+{
+  "plan": {
+    "seed": 520011,
+    "phase": "heldout",
+    "user": "RVEVAL2",
+    "persona": "Hurried",
+    "workflow": "deal",
+    "injection": "validation_loop",
+    "dose": 2,
+    "planned_severity": "High",
+    "cohort": "R-I2-cap-validation-u3",
+    "cohort_users": 3
+  },
+  "session_id": "01a21aa3-c7d1-767a-95ba-3b958435ff39",
+  "distinct_id": "C1DEV|01|SEM|RVEVAL2",
+  "truth": [
+    {
+      "id": "520011:0",
+      "session_id": "01a21aa3-c7d1-767a-95ba-3b958435ff39",
+      "kind": "validation_loop",
+      "screen": "cap / floor:screen",
+      "element": "Save",
+      "t_start": 1795743283940,
+      "t_end": 1795743293085,
+      "expected_detectors": [
+        "D4",
+        "D7"
+      ],
+      "expected_severity": "High",
+      "dose": 2,
+      "seed": 520011,
+      "observed": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "opened_deal",
+      "ok": true,
+      "at": 1795743273652
+    },
+    {
+      "name": "trade_date",
+      "ok": true,
+      "at": 1795743274320
+    },
+    {
+      "name": "counterparty",
+      "ok": true,
+      "at": 1795743274921
+    },
+    {
+      "name": "notional",
+      "ok": true,
+      "at": 1795743275192
+    },
+    {
+      "name": "cashflow_tab",
+      "ok": true,
+      "at": 1795743276454
+    },
+    {
+      "name": "recalc",
+      "ok": true,
+      "at": 1795743277114
+    },
+    {
+      "name": "terms_tab",
+      "ok": true,
+      "at": 1795743278223
+    },
+    {
+      "name": "saved",
+      "ok": true,
+      "at": 1795743278884
+    },
+    {
+      "name": "closed",
+      "ok": true,
+      "at": 1795743281053
+    },
+    {
+      "name": "opened_cap",
+      "ok": true,
+      "at": 1795743282802
+    },
+    {
+      "name": "cap_given_up",
+      "ok": true,
+      "at": 1795743294871
+    }
+  ]
+}
