@@ -4,6 +4,7 @@
 //   npx tsx tools/replay-vision/run.ts --rescore  evaluate only (product pipeline + scoring + report), no browser
 //   npx tsx tools/replay-vision/run.ts --score-only run-a-frozen-v3   re-score an archived pipeline.json
 //   npx tsx tools/replay-vision/run.ts --rescore --llm-pass1   also write B' exchange request files + manifest (nothing is sent)
+//   npx tsx tools/replay-vision/run.ts --llm-pass2 out/erpnext-v2   validate saved exchange responses only
 //   npx tsx tools/replay-vision/run.ts --smoke    one injected invoice session into out/smoke
 import {spawn} from 'node:child_process'
 import {mkdir,readFile,writeFile,appendFile} from 'node:fs/promises'
@@ -17,7 +18,7 @@ import {plans as designPlans,devPlans,COHORTS,controlSeeds,cohortSeed,type Heldo
 const base=dirname(fileURLToPath(import.meta.url)),smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-purchase'),dev=process.argv.includes('--dev')
 // --run-c: fresh held-out set (new seeds) in out/erpnext-run-c; calibration sessions and the snapshot cache are shared with out/erpnext-v2.
 const heldoutRun:HeldoutRun=process.argv.includes('--run-c')?'C':'A'
-const out=join(base,'out',process.argv.includes('--smoke-purchase')?'smoke-purchase':smoke?'smoke':dev?'erpnext-dev':heldoutRun==='C'?'erpnext-run-c':'erpnext-v2'),c=labConfig()
+const out=join(base,'out',process.argv.includes('--smoke-purchase')?'smoke-purchase':smoke?'smoke':dev?'erpnext-dev':heldoutRun==='C'?'erpnext-run-c':'erpnext-v2'),c=process.argv.includes('--llm-pass2')?{host:'',projectId:'',personalKey:'',token:'',app:''}:labConfig()
 const shared=join(base,'out','erpnext-v2')
 process.env.POSTHOG_HOST=c.host;process.env.POSTHOG_PROJECT_ID=c.projectId;process.env.POSTHOG_PERSONAL_API_KEY=c.personalKey;process.env.POSTHOG_PROJECT_TOKEN=c.token
 // The injected scroll-hunt target is a lab label, added to the product's label vocabulary for this run only.
@@ -93,6 +94,7 @@ async function scoreOnly(dir:string){
  console.log(JSON.stringify({rescored:dir,precision:held.precision,moment:held.precision_moment_level}))
 }
 async function main(){
+ const pass2=process.argv.indexOf('--llm-pass2');if(pass2>0){if(!process.argv[pass2+1])throw new Error('--llm-pass2 requires an output directory');const {collectPass2}=await import('./llm-pass2.ts');const {directory,total,unique_responses,counts}=await collectPass2(process.argv[pass2+1]!);console.log(JSON.stringify({directory,total,unique_responses,counts}));return}
  if(process.argv.includes('--freeze-only')){await mkdir(out,{recursive:true});const captures=(await currentCaptures()).filter(x=>x.plan.phase==='calibration');const {runPipeline}=await import('./pipeline.ts');const p=await runPipeline(out,captures,[],[],false,join(shared,'snapshots'),{freezeOnly:true});console.log(JSON.stringify({frozen:p.frozen}));return}
  const so=process.argv.indexOf('--score-only');if(so>0){await scoreOnly(join(out,process.argv[so+1]||'.'));return}
  await mkdir(join(out,'ground-truth'),{recursive:true})

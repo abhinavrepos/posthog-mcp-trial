@@ -2,7 +2,7 @@
 // and the MCP access rules. No network: the `anthropic` provider is not called here (no key).
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { forAll } from './rv-prop.ts'
@@ -55,6 +55,8 @@ test('response guard: valid JSON passes; refusal, max_tokens, bad JSON, wrong sc
     assert.equal(PV.parseProviderMessage(message(null, { content: [{ type: 'text', text: '{not json' }] })).error, 'invalid_json')
     assert.equal(PV.parseProviderMessage(message({ ...good, confidence: 'certain' })).error, 'schema_mismatch')
     assert.equal(PV.parseProviderMessage(message({ ...good, cited_event_ids: 'x' })).error, 'schema_mismatch')
+    assert.equal(PV.parseProviderMessage(message({ ...good, unsupported: ['A specific observation needs a complete sentence to explain its limit without inventing a cause.'] })).ok, true)
+    assert.equal(PV.parseProviderMessage(message({ ...good, unsupported: ['x'.repeat(601)] })).error, 'schema_mismatch')
     forAll(300, 9, (r) => {
         const junk = r.pick([null, 1, 'x', [], {}, { type: 'message' }, { type: 'message', role: 'assistant', content: r.pick([null, 'x', [{ type: 'text', text: r.pick(['', '{}', '[]', 'null', '"a"', JSON.stringify({ ...good, decision: r.pick(['x', 1, null]) })]) }]]) }])
         const out = PV.parseProviderMessage(junk)
@@ -232,6 +234,19 @@ test('offline two-pass helpers: pass 1 writes requests and stops; pass 2 applies
     answer(exDir, manifest[0]!.custom_id, { decision: 'explain', likely_cause: 'Likely cause: Debit To is validated only after Save, so the visible error (event 42) comes before users edit Debit To (event 43).', fix: 'Fix: on Sales Invoice (new), validate Debit To inline before Save.', cited_event_ids: [`${alias}:42`, `${alias}:43`], confidence: 'med', unsupported: [] })
     const [res] = await L.offlineCollect(manifest, aggs, provider, t0)
     assert.equal(res!.state, 'accepted'); assert.ok(res!.rubric_score! >= 14); assert.equal(res!.input_tokens, 1500)
+    const archive = join(dir, 'archive'), exchange = join(archive, 'llm-exchange'), a = aggs[0]!
+    mkdirSync(archive); cpSync(exDir, exchange, { recursive: true })
+    writeFileSync(join(exchange, 'manifest.json'), JSON.stringify([{ ...manifest[0], scope: 'dev' }]))
+    const sessions = Object.fromEntries(a.members.map(m => [m.session_id, { user: m.user_id, analysis: { candidates: [m.candidate] } }]))
+    const insight = { id: a.id, screen: a.draft.screen, element: a.draft.element, users_affected: a.draft.users_affected, users_reached: a.draft.users_reached,
+        sessions_affected: a.draft.sessions_affected, citations: a.draft.citations, time_lost_ms: a.draft.time_lost_ms, severity: a.draft.severity,
+        text: a.text, members: a.members.map(m => ({ session_id: m.session_id, kind: m.candidate.kind, start_ms: m.candidate.start_ms, end_ms: m.candidate.end_ms, event_ids: m.candidate.event_ids })) }
+    writeFileSync(join(archive, 'pipeline.json'), JSON.stringify({ sessions, scopes: { dev: { insights: [insight] } } }))
+    writeFileSync(join(archive, 'report.md'), '# Dev report\n')
+    const { collectPass2 } = await import('../tools/replay-vision/llm-pass2.ts')
+    const summary = await collectPass2(archive)
+    assert.deepEqual(summary.counts, { accepted: 1, rejected: 0, insufficient: 0, skipped_timeout: 0, failed: 0 })
+    assert.match(readFileSync(join(archive, 'report.md'), 'utf8'), /LLM pass 2.*\n[\s\S]*accepted/)
 })
 
 test('fitWindows drops the last-cited windows until the request fits the 8k input cap, and reports only the windows sent', () => {

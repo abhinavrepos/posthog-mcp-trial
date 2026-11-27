@@ -13,6 +13,7 @@ NODE_OPTIONS=--disable-warning=ExperimentalWarning npx tsx tools/replay-vision/r
 NODE_OPTIONS=--disable-warning=ExperimentalWarning npx tsx tools/replay-vision/run.ts --rescore  # evaluate only (no browser)
 NODE_OPTIONS=--disable-warning=ExperimentalWarning npx tsx tools/replay-vision/run.ts --score-only run-a-frozen-v3  # re-score an archived pipeline.json
 NODE_OPTIONS=--disable-warning=ExperimentalWarning npx tsx tools/replay-vision/run.ts --rescore --llm-pass1  # also write B' exchange requests (nothing is sent)
+NODE_OPTIONS=--disable-warning=ExperimentalWarning npx tsx tools/replay-vision/run.ts --llm-pass2 tools/replay-vision/out/erpnext-v2  # validate archived responses; no PostHog access
 NODE_OPTIONS=--disable-warning=ExperimentalWarning npx tsx tools/replay-vision/run.ts --smoke    # one injected session -> out/smoke
 NODE_OPTIONS=--disable-warning=ExperimentalWarning npx tsx tools/replay-vision/probe-snapshot.ts # FullSnapshot root-cause probe
 node --import tsx --test tools/replay-vision/score.test.ts
@@ -159,6 +160,7 @@ complete recording.
 | `heldout-score.json`, `calibration-score.json` | Scores |
 | `report.md` | The report (currently run B, post-hoc, detectors v5) |
 | `llm-exchange/` | B′ pass 1: `requests/<custom_id>.json` (exact Messages API bodies, sanitized, session aliases only) and `manifest.json`; answers go to `responses/` for pass 2 (`offlineCollect`) |
+| `llm-exchange/pass2-results.json` | Pass 2 validation, including accepted/rejected/insufficient counts; also appended to `report.md` |
 | `run-a-frozen-v3/` | Run A, the held-out headline: frozen config hash, `pipeline.json` from detectors v3 (commit `df293ad`), its scores and report, re-scored with the final scorer via `run.ts --score-only run-a-frozen-v3` |
 
 Run B re-analysed the same sessions after three detector fixes that were found by reading run A's held-out errors.

@@ -102,9 +102,9 @@ export function parseProviderMessage(raw: unknown): ParsedResponse {
     let j: Record<string, unknown>
     try { j = JSON.parse(text) } catch { return { ok: false, error: 'invalid_json', ...usage } }
     const str = (v: unknown, max: number) => typeof v === 'string' && v.length <= max
-    const arr = (v: unknown) => Array.isArray(v) && v.length <= 40 && v.every((x) => str(x, 64))
+    const arr = (v: unknown, itemMax: number) => Array.isArray(v) && v.length <= 40 && v.every((x) => str(x, itemMax))
     if (!j || typeof j !== 'object' || !['explain', 'insufficient_evidence'].includes(j.decision as string) || !str(j.likely_cause, 600) || !str(j.fix, 600)
-        || !arr(j.cited_event_ids) || !['high', 'med', 'low'].includes(j.confidence as string) || !arr(j.unsupported)) return { ok: false, error: 'schema_mismatch', ...usage }
+        || !arr(j.cited_event_ids, 64) || !['high', 'med', 'low'].includes(j.confidence as string) || !arr(j.unsupported, 600)) return { ok: false, error: 'schema_mismatch', ...usage }
     return { ok: true, explanation: j as unknown as Explanation, ...usage }
 }
 
