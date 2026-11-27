@@ -58,8 +58,18 @@ class Driver {
             return out
         }, id)
         if (!points.length) return false
-        const [x, y] = points[Math.floor(this.random() * points.length)]!
-        await this.move(x, y); await this.page.mouse.click(x, y); return true
+        let [x, y] = points[Math.floor(this.random() * points.length)]!
+        await this.move(x, y)
+        // Moving can change what is under the cursor (an Ext menu opens on hover while another menu is active): look
+        // again, as a user does, and re-aim before clicking.
+        for (let k = 0; k < 2; k++) {
+            const ok = await this.page.evaluate((elId, px, py) => { const el = document.getElementById(elId), hit = document.elementFromPoint(px, py); return !!el && !!hit && (hit === el || el.contains(hit)) }, id, x, y)
+            if (ok) break
+            const again = await this.page.evaluate((elId) => { const el = document.getElementById(elId); if (!el) return null; const r = el.getBoundingClientRect(); for (let i = 1; i <= 5; i++) for (let j = 1; j <= 3; j++) { const px = r.left + r.width * i / 6, py = r.top + r.height * j / 4, hit = document.elementFromPoint(px, py); if (hit && (hit === el || el.contains(hit))) return [px, py] } return null }, id)
+            if (!again) return false
+            ;[x, y] = again as [number, number]; await this.move(x, y)
+        }
+        await this.page.mouse.click(x, y); return true
     }
     async typeInto(id: string | null, value: string): Promise<boolean> {
         if (!(await this.clickId(id))) return false
@@ -111,10 +121,21 @@ export async function driveReval(c: LabConfig, revalUrl: string, plan: RevalPlan
             truth.push({ id: `${plan.seed}:${truth.length}`, session_id, kind: kind as Truth['kind'], screen, element, t_start: start, t_end: end, expected_detectors: kind === 'slow_wait' && (plan.dose ?? 0) < 3000 ? [] : expected[kind], expected_severity: plan.planned_severity ?? 'Low', dose: plan.dose ?? 1, seed: plan.seed, observed })
         }
         const settled = () => page.waitForFunction(() => (window as any).Reval.masks() === 0, { timeout: 25_000 }).then(() => true, () => false)
+        // Open a screen from the toolbar menu like a user: click the menu, and if it did not open (Ext menu buttons toggle),
+        // click again; then the item; the open is real once Reval shows its viewport mask or the screen (up to 3 tries).
+        const itemVisible = (name: string) => page.evaluate((n) => { const m = (Ext as any).ComponentQuery.query('menuitem').find((x: any) => x.text === n); if (!m || !m.isVisible(true) || !m.el) return false; const r = m.el.dom.getBoundingClientRect(), hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!hit && m.el.dom.contains(hit) }, name)
+        const exists = (menu: string) => page.evaluate((m) => !!(Ext as any).ComponentQuery.query('[revalMenu]').find((x: any) => x.revalMenu === m && x.xtype !== 'menuitem'), menu)
         const openVia = async (group: string, name: string, menu: string) => {
-            const opened = await d.clickId(await q.menuButton(page, group)) && (await sleep(250 + 250 * random()), await d.clickId(await q.menuItem(page, name)))
-            const shown = opened && await page.waitForFunction((m) => !!(Ext as any).ComponentQuery.query('[revalMenu]').find((x: any) => x.revalMenu === m && x.xtype !== 'menuitem'), { timeout: 25_000 }, menu).then(() => true, () => false)
-            await settled(); await sleep(300 + 500 * random()); return !!shown
+            for (let attempt = 0; attempt < 3 && !(await exists(menu)); attempt++) {
+                for (let k = 0; k < 3 && !(await itemVisible(name)); k++) { await d.clickId(await q.menuButton(page, group)); await sleep(300 + 200 * random()) }
+                if (!(await itemVisible(name))) continue
+                await d.clickId(await q.menuItem(page, name))
+                const started = await page.waitForFunction((m) => (window as any).Reval.masks() > 0 || !!(Ext as any).ComponentQuery.query('[revalMenu]').find((x: any) => x.revalMenu === m && x.xtype !== 'menuitem'), { timeout: 2500 }, menu).then(() => true, () => false)
+                if (started) break
+            }
+            const shown = await page.waitForFunction((m) => !!(Ext as any).ComponentQuery.query('[revalMenu]').find((x: any) => x.revalMenu === m && x.xtype !== 'menuitem'), { timeout: 25_000 }, menu).then(() => true, () => false)
+            if (process.env.RV_DEBUG) console.error('openVia', menu, shown, await page.evaluate(() => JSON.stringify({ masks: (window as any).Reval.masks(), log: (window as any).Reval.log.slice(-3).map((x: any) => x.category + ':' + (x.props?.dialog_id ?? '') + ':' + (x.props?.action ?? x.props?.action_name ?? '')) })))
+            await settled(); await sleep(300 + 500 * random()); return shown
         }
         const fill = async (menu: string, label: string, value: string) => d.typeInto(await q.field(page, menu, label), value)
         // A press counts only if Reval itself logged the button event (a click that misses is a failed step, not a success).
