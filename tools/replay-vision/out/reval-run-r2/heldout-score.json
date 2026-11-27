@@ -1,0 +1,918 @@
+{
+ "n_heldout_sessions": 70,
+ "n_analysed": 70,
+ "coverage": {
+  "complete": 70,
+  "partial": 0
+ },
+ "n_truth": 49,
+ "undelivered": [],
+ "n_hits": 89,
+ "tp": 49,
+ "fp": 40,
+ "fn": 0,
+ "precision": {
+  "n": 49,
+  "d": 89,
+  "value": 0.550561797752809,
+  "ci95": [
+   0.4472614742822269,
+   0.6496778287888103
+  ]
+ },
+ "recall": {
+  "n": 49,
+  "d": 49,
+  "value": 1,
+  "ci95": [
+   0.9272997032640948,
+   1
+  ]
+ },
+ "precision_moment_level": {
+  "n": 69,
+  "d": 89,
+  "value": 0.7752808988764045,
+  "ci95": [
+   0.6782244712364706,
+   0.8495561788169537
+  ]
+ },
+ "sm_precision_moment_level": {
+  "n": 59,
+  "d": 79,
+  "value": 0.7468354430379747,
+  "ci95": [
+   0.6410553271149313,
+   0.8297226395105322
+  ]
+ },
+ "sm_precision": {
+  "n": 39,
+  "d": 79,
+  "value": 0.4936708860759494,
+  "ci95": [
+   0.3863008454295994,
+   0.6016279246569272
+  ]
+ },
+ "sm_precision_injected_sessions": {
+  "n": 39,
+  "d": 79,
+  "value": 0.4936708860759494,
+  "ci95": [
+   0.3863008454295994,
+   0.6016279246569272
+  ]
+ },
+ "matched_element_agreement": {
+  "n": 49,
+  "d": 49,
+  "value": 1,
+  "ci95": [
+   0.9272997032640948,
+   1
+  ]
+ },
+ "per_detector": {
+  "D1": {
+   "tp": 10,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   }
+  },
+  "D10": {
+   "tp": 6,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 6,
+    "d": 6,
+    "value": 1,
+    "ci95": [
+     0.6096569663469354,
+     1
+    ]
+   },
+   "recall": {
+    "n": 6,
+    "d": 6,
+    "value": 1,
+    "ci95": [
+     0.6096569663469354,
+     1
+    ]
+   }
+  },
+  "D12": {
+   "tp": 0,
+   "fp": 0,
+   "fn": 3,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 0,
+    "d": 0,
+    "value": null,
+    "ci95": null
+   },
+   "recall": {
+    "n": 0,
+    "d": 3,
+    "value": 0,
+    "ci95": [
+     0,
+     0.5615060804490177
+    ]
+   }
+  },
+  "D2": {
+   "tp": 0,
+   "fp": 0,
+   "fn": 10,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 0,
+    "d": 0,
+    "value": null,
+    "ci95": null
+   },
+   "recall": {
+    "n": 0,
+    "d": 10,
+    "value": 0,
+    "ci95": [
+     0,
+     0.2775401687666166
+    ]
+   }
+  },
+  "D4": {
+   "tp": 10,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   }
+  },
+  "D5": {
+   "tp": 0,
+   "fp": 20,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 0,
+    "d": 20,
+    "value": 0,
+    "ci95": [
+     0,
+     0.16113012549493333
+    ]
+   },
+   "recall": {
+    "n": 0,
+    "d": 0,
+    "value": null,
+    "ci95": null
+   }
+  },
+  "D6": {
+   "tp": 3,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 3,
+    "d": 3,
+    "value": 1,
+    "ci95": [
+     0.4384939195509822,
+     1
+    ]
+   },
+   "recall": {
+    "n": 3,
+    "d": 3,
+    "value": 1,
+    "ci95": [
+     0.4384939195509822,
+     1
+    ]
+   }
+  },
+  "D7": {
+   "tp": 10,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   }
+  },
+  "D8": {
+   "tp": 0,
+   "fp": 0,
+   "fn": 3,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 0,
+    "d": 0,
+    "value": null,
+    "ci95": null
+   },
+   "recall": {
+    "n": 0,
+    "d": 3,
+    "value": 0,
+    "ci95": [
+     0,
+     0.5615060804490177
+    ]
+   }
+  },
+  "R1": {
+   "tp": 10,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   }
+  },
+  "R2": {
+   "tp": 0,
+   "fp": 0,
+   "fn": 10,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 0,
+    "d": 0,
+    "value": null,
+    "ci95": null
+   },
+   "recall": {
+    "n": 0,
+    "d": 10,
+    "value": 0,
+    "ci95": [
+     0,
+     0.2775401687666166
+    ]
+   }
+  },
+  "S1": {
+   "tp": 0,
+   "fp": 0,
+   "fn": 10,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 0,
+    "d": 0,
+    "value": null,
+    "ci95": null
+   },
+   "recall": {
+    "n": 0,
+    "d": 10,
+    "value": 0,
+    "ci95": [
+     0,
+     0.2775401687666166
+    ]
+   }
+  },
+  "S2": {
+   "tp": 10,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   }
+  },
+  "S3": {
+   "tp": 10,
+   "fp": 0,
+   "fn": 0,
+   "fp_on_controls": 0,
+   "precision": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   }
+  }
+ },
+ "per_injection": {
+  "validation_loop": {
+   "tp": 10,
+   "fn": 0,
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "dead_button": {
+   "tp": 10,
+   "fn": 0,
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "hesitation": {
+   "tp": 3,
+   "fn": 0,
+   "recall": {
+    "n": 3,
+    "d": 3,
+    "value": 1,
+    "ci95": [
+     0.4384939195509822,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "revisit": {
+   "tp": 10,
+   "fn": 0,
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "reopen": {
+   "tp": 0,
+   "fn": 0,
+   "recall": {
+    "n": 0,
+    "d": 0,
+    "value": null,
+    "ci95": null
+   },
+   "missed": []
+  },
+  "scroll_hunt": {
+   "tp": 10,
+   "fn": 0,
+   "recall": {
+    "n": 10,
+    "d": 10,
+    "value": 1,
+    "ci95": [
+     0.7224598312333834,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "slow_wait": {
+   "tp": 6,
+   "fn": 0,
+   "recall": {
+    "n": 6,
+    "d": 6,
+    "value": 1,
+    "ci95": [
+     0.6096569663469354,
+     1
+    ]
+   },
+   "missed": []
+  },
+  "abandon": {
+   "tp": 0,
+   "fn": 0,
+   "recall": {
+    "n": 0,
+    "d": 0,
+    "value": null,
+    "ci95": null
+   },
+   "missed": []
+  }
+ },
+ "controls": {
+  "sessions": 18,
+  "with_any_finding": {
+   "n": 0,
+   "d": 18,
+   "value": 0,
+   "ci95": [
+    0,
+    0.17588455058237484
+   ]
+  },
+  "with_sm_finding": {
+   "n": 0,
+   "d": 18,
+   "value": 0,
+   "ci95": [
+    0,
+    0.17588455058237484
+   ]
+  },
+  "with_non_d14_sm_finding": {
+   "n": 0,
+   "d": 18,
+   "value": 0,
+   "ci95": [
+    0,
+    0.17588455058237484
+   ]
+  },
+  "finding_kinds": {},
+  "published_insights": []
+ },
+ "severity": {
+  "cohorts": [
+   {
+    "cohort": "R-I2-cap-validation-u1",
+    "users": 1,
+    "planned": "Low",
+    "predicted": "Low",
+    "reason": "Low: anomalous finding (no High/Medium rule met). U/N 1/1; median lost 7.2 s; A 0; uncalibrated; signal D4",
+    "insight_users": 1,
+    "calibrated": false,
+    "text": "[Low] Cap / Floor (screen) › Save: single session: clicked Save and got a visible validation error 3 times in a row, editing fields between attempts (1 sessions, 7.2 s per loop); No abandonment observed; median 7.2 s lost per affected user. Likely cause: the requirement behind the validation error shown after Save is not visible before clicking, so the edits users make between attempts do not resolve it. Fix: on Cap / Floor (screen), validate the fields Save depends on inline as they are filled, and name the failing field next to Save instead of only in the error message. Evidence: http://localhost/project/1/replay/01a21b63-7937-7344-b364-061ce9e8c690?t=13 @0:13. Signals: D4, confidence low."
+   },
+   {
+    "cohort": "R-I2-cap-validation-u3",
+    "users": 3,
+    "planned": "High",
+    "predicted": "Medium",
+    "reason": "Medium: strong D4 (3 cycles) in 3>=3 users; capped Medium: uncalibrated screen (cold start, no abandonment). U/N 3/3; median lost 11 s; A 0; uncalibrated; signal D4",
+    "insight_users": 3,
+    "calibrated": false,
+    "text": "[Medium] Cap / Floor (screen) › Save: 3 of 3 users / 3 sessions: clicked Save and got a visible validation error 3 times in a row, editing fields between attempts (3 sessions, 8.6 s–12 s per loop); No abandonment observed; median 11 s lost per affected user. Likely cause: the requirement behind the validation error shown after Save is not visible before clicking, so the edits users make between attempts do not resolve it. Fix: on Cap / Floor (screen), validate the fields Save depends on inline as they are filled, and name the failing field next to Save instead of only in the error message. Evidence: http://localhost/project/1/replay/01a21b65-2bd5-7920-8ac6-62f74ecea5ab?t=15 @0:15, http://localhost/project/1/replay/01a21b64-8ba2-795e-9043-c098630dd9b1?t=18 @0:18, http://localhost/project/1/replay/01a21b63-e8fe-7172-b1fd-27c03eb0c445?t=21 @0:21. Signals: D4, confidence high."
+   },
+   {
+    "cohort": "R-I2-cap-validation-u6",
+    "users": 6,
+    "planned": "High",
+    "predicted": "Medium",
+    "reason": "Medium: strong D4 (3 cycles) in 6>=3 users; capped Medium: uncalibrated screen (cold start, no abandonment). U/N 6/6; median lost 10 s; A 0; uncalibrated; signal D4",
+    "insight_users": 6,
+    "calibrated": false,
+    "text": "[Medium] Cap / Floor (screen) › Save: 6 of 6 users / 6 sessions: clicked Save and got a visible validation error 3 times in a row, editing fields between attempts (6 sessions, 6.7 s–15 s per loop); No abandonment observed; median 10 s lost per affected user. Likely cause: the requirement behind the validation error shown after Save is not visible before clicking, so the edits users make between attempts do not resolve it. Fix: on Cap / Floor (screen), validate the fields Save depends on inline as they are filled, and name the failing field next to Save instead of only in the error message. Evidence: http://localhost/project/1/replay/01a21b68-17a7-7b5f-86f3-453925fddbf8?t=16 @0:16, http://localhost/project/1/replay/01a21b68-93a4-7ee7-b6f5-1ed3a459af30?t=17 @0:17, http://localhost/project/1/replay/01a21b66-e2ac-7829-b447-cf38f8023d28?t=17 @0:17, http://localhost/project/1/replay/01a21b66-548a-7db6-898f-9847b8ce33f5?t=19 @0:19, http://localhost/project/1/replay/01a21b67-67e7-7bea-b4f5-13c46a53f964?t=19 @0:19. Signals: D4, confidence high."
+   },
+   {
+    "cohort": "R-I5-dead-apply-u1",
+    "users": 1,
+    "planned": "Low",
+    "predicted": "None",
+    "reason": null,
+    "insight_users": null,
+    "calibrated": null,
+    "text": null
+   },
+   {
+    "cohort": "R-I5-dead-apply-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 3>=2 and p 50.0%>=10%. U/N 3/6; median lost 0.9 s; A 0; calibrated; signal D1; rate 3/9 vs prior 4%: increase",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[Medium] Ir Swap (screen) › Apply: 3 of 6 users / 3 sessions: clicked Apply 5 times within 0.8 s–1.4 s at the same spot (3 sessions); No abandonment observed; median 0.9 s lost per affected user. Likely cause: Apply gives no immediate visible feedback, so users click it again (5 clicks, each within 1 s and 30 px of the last). Fix: give Apply on Ir Swap (screen) an immediate pressed/disabled state and a progress indicator while its action runs. Evidence: http://localhost/project/1/replay/01a21b69-776b-79e9-ad98-7fd24a06c8b0?t=5 @0:05, http://localhost/project/1/replay/01a21b6a-8948-7108-81b9-fdbc9716aa57?t=8 @0:08, http://localhost/project/1/replay/01a21b87-e5e5-7031-98d5-27c559f9130f?t=8 @0:08. Signals: D1, confidence high."
+   },
+   {
+    "cohort": "R-I5-dead-apply-u6",
+    "users": 6,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 6>=2 and p 100.0%>=10%. U/N 6/6; median lost 1.1 s; A 0; calibrated; signal D1; rate 6/12 vs prior 4%: increase",
+    "insight_users": 6,
+    "calibrated": true,
+    "text": "[Medium] Ir Swap (screen) › Apply: 6 of 6 users / 6 sessions: clicked Apply 4–5 times within 0.7 s–1.4 s at the same spot (6 sessions); No abandonment observed; median 1.1 s lost per affected user. Likely cause: Apply gives no immediate visible feedback, so users click it again (4–5 clicks, each within 1 s and 30 px of the last). Fix: give Apply on Ir Swap (screen) an immediate pressed/disabled state and a progress indicator while its action runs. Evidence: http://localhost/project/1/replay/01a21b6b-30a5-7c03-a7d9-2c4d6ae758bf?t=4 @0:04, http://localhost/project/1/replay/01a21b6c-91fa-70de-a435-24e89bbc8335?t=4 @0:04, http://localhost/project/1/replay/01a21b6c-44aa-7938-9950-f5b8ecfc5947?t=5 @0:05, http://localhost/project/1/replay/01a21b6a-dd80-7b03-8de3-3b403354e7d4?t=6 @0:06, http://localhost/project/1/replay/01a21b6b-7458-72ea-9bf8-ff600592aa22?t=11 @0:11. Signals: D1, confidence high."
+   },
+   {
+    "cohort": "R-I6-trade-list-hunt-u1",
+    "users": 1,
+    "planned": "Low",
+    "predicted": "None",
+    "reason": null,
+    "insight_users": null,
+    "calibrated": null,
+    "text": null
+   },
+   {
+    "cohort": "R-I6-trade-list-hunt-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 3>=2 and p 100.0%>=10%. U/N 3/3; median lost 5.7 s; A 0; uncalibrated; signal S3",
+    "insight_users": 3,
+    "calibrated": false,
+    "text": "[Medium] Trade List (screen) › Scroll container: 3 of 3 users / 3 sessions: scrolled 1.7× the visible height in Scroll container with 5 direction reversals, without clicking or typing between reversals (3 sessions; page extent ≥ 1055 px); No abandonment observed; median 5.7 s lost per affected user. Likely cause: the target in Scroll container on Trade List (screen) is hard to find by scrolling (5 up/down reversals of at least a quarter screen each, no search or filter used). Fix: on Trade List (screen), put search/filter above Scroll container, sort the most likely target first, and keep the list short by default. Evidence: http://localhost/project/1/replay/01a21b6e-430b-74c7-9e8c-bc6568ab13db?t=21 @0:21, http://localhost/project/1/replay/01a21b6d-c3c5-7b27-be63-fd0b97d6bffb?t=24 @0:24, http://localhost/project/1/replay/01a21b6d-41dc-7fde-8562-2021d35c8937?t=24 @0:24. Signals: S2+S3, confidence med."
+   },
+   {
+    "cohort": "R-I6-trade-list-hunt-u6",
+    "users": 6,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 6>=2 and p 100.0%>=10%. U/N 6/6; median lost 5.7 s; A 0; uncalibrated; signal S3",
+    "insight_users": 6,
+    "calibrated": false,
+    "text": "[Medium] Trade List (screen) › Scroll container: 6 of 6 users / 6 sessions: scrolled 1.7× the visible height in Scroll container with 5 direction reversals, without clicking or typing between reversals (6 sessions; page extent ≥ 1055 px); No abandonment observed; median 5.7 s lost per affected user. Likely cause: the target in Scroll container on Trade List (screen) is hard to find by scrolling (5 up/down reversals of at least a quarter screen each, no search or filter used). Fix: on Trade List (screen), put search/filter above Scroll container, sort the most likely target first, and keep the list short by default. Evidence: http://localhost/project/1/replay/01a21b70-9d03-73f3-8441-530a16e6152f?t=18 @0:18, http://localhost/project/1/replay/01a21b6f-ab87-7193-a1b2-fd4cf2cf9cf2?t=20 @0:20, http://localhost/project/1/replay/01a21b6f-3a3c-7a52-8010-abd2ddd28c29?t=20 @0:20, http://localhost/project/1/replay/01a21b71-01c1-7508-b0cf-deec8183bbb2?t=24 @0:24, http://localhost/project/1/replay/01a21b6e-b5aa-725d-b89e-9acddf42465a?t=25 @0:25. Signals: S2+S3, confidence med."
+   },
+   {
+    "cohort": "R-I7-counterparty-lookup-u1",
+    "users": 1,
+    "planned": "Low",
+    "predicted": "None",
+    "reason": null,
+    "insight_users": null,
+    "calibrated": null,
+    "text": null
+   },
+   {
+    "cohort": "R-I7-counterparty-lookup-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 3>=2 and p 50.0%>=10%. U/N 3/6; median lost 6.1 s; A 0; calibrated; signal R1",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[Medium] Ir Swap (screen) › Counterparty: 3 of 6 users / 3 sessions: went from Ir Swap (screen) to Counterparty (screen) and straight back 2 times in one task, staying 2.9 s–3.7 s on Counterparty (screen) (3 sessions); No abandonment observed; median 6.1 s lost per affected user. Likely cause: information needed to finish Ir Swap (screen) is only shown on Counterparty (screen), so users leave to look it up (2 round trips per task). Fix: show the needed Counterparty (screen) details on Ir Swap (screen), e.g. as a preview next to the linked field, so users need not leave the form. Evidence: http://localhost/project/1/replay/01a21b71-fc53-77dc-810f-a8bc8a70a6d9?t=5 @0:05, http://localhost/project/1/replay/01a21b72-e9f6-789f-b257-04bd133f3782?t=9 @0:09, http://localhost/project/1/replay/01a21b72-60b5-716b-b943-ac7e44f349d6?t=11 @0:11. Signals: R1, confidence med."
+   },
+   {
+    "cohort": "R-I7-counterparty-lookup-u6",
+    "users": 6,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 6>=2 and p 100.0%>=10%. U/N 6/6; median lost 6.2 s; A 0; calibrated; signal R1",
+    "insight_users": 6,
+    "calibrated": true,
+    "text": "[Medium] Ir Swap (screen) › Counterparty: 6 of 6 users / 6 sessions: went from Ir Swap (screen) to Counterparty (screen) and straight back 2 times in one task, staying 2.7 s–3.4 s on Counterparty (screen) (6 sessions); No abandonment observed; median 6.2 s lost per affected user. Likely cause: information needed to finish Ir Swap (screen) is only shown on Counterparty (screen), so users leave to look it up (2 round trips per task). Fix: show the needed Counterparty (screen) details on Ir Swap (screen), e.g. as a preview next to the linked field, so users need not leave the form. Evidence: http://localhost/project/1/replay/01a21b73-d855-7bec-bb00-89e82bc0280a?t=4 @0:04, http://localhost/project/1/replay/01a21b75-82b2-7da6-aa33-9622494d7dbe?t=5 @0:05, http://localhost/project/1/replay/01a21b75-1884-74c4-9d1d-27e6fb956322?t=6 @0:06, http://localhost/project/1/replay/01a21b74-382b-7df0-b4c7-a21333f220fb?t=7 @0:07, http://localhost/project/1/replay/01a21b73-5d4f-7d4b-b6fb-5e732e0b6113?t=7 @0:07. Signals: R1, confidence med."
+   },
+   {
+    "cohort": "R-I3-hedge-open-6s-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 3>=2 and p 50.0%>=10%. U/N 3/6; median lost 6.5 s; A 0; calibrated; signal D10",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[Medium] Hedge Relationship (screen) › Hedge Relationship: 3 of 6 users / 3 sessions: waited 6.5 s (median 6.5 s) after Hedge Relationship before the screen responded (3 sessions; 18 clicks/keys during the waits); No abandonment observed; median 6.5 s lost per affected user. Likely cause: the response to Hedge Relationship is slow (loading overlay stayed visible for 6.5 s). Fix: profile the request behind Hedge Relationship on Hedge Relationship (screen), bring it under 3 s, and show progress with an estimated time while it runs. Evidence: http://localhost/project/1/replay/01a21b78-3d01-73e8-a294-e83659a6d1c7?t=1 @0:01, http://localhost/project/1/replay/01a21b77-33de-723d-8d12-ad66728dcbb0?t=1 @0:01, http://localhost/project/1/replay/01a21b77-bad0-78ac-8df0-f60a053b414d?t=2 @0:02. Signals: D10, confidence med."
+   },
+   {
+    "cohort": "R-I3-hedge-open-15s-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 2>=2 and p 33.3%>=10%. U/N 2/6; median lost 15 s; A 0; calibrated; signal D10",
+    "insight_users": 2,
+    "calibrated": true,
+    "text": "[Medium] Hedge Relationship (screen) › Hedge Relationship: 2 of 6 users / 2 sessions: waited 15 s (median 15 s) after Hedge Relationship before the screen responded (2 sessions; 11 clicks/keys during the waits); No abandonment observed; median 15 s lost per affected user. Likely cause: the response to Hedge Relationship is slow (loading overlay stayed visible for 15 s). Fix: profile the request behind Hedge Relationship on Hedge Relationship (screen), bring it under 3 s, and show progress with an estimated time while it runs. Evidence: http://localhost/project/1/replay/01a21b79-5dfa-738c-a36d-fe5b60aa07bf?t=1 @0:01, http://localhost/project/1/replay/01a21b78-b5c0-7e87-875a-a53c226657d0?t=2 @0:02. Signals: D10, confidence med."
+   },
+   {
+    "cohort": "R-I1-notional-relabel-u3",
+    "users": 3,
+    "planned": "Medium",
+    "predicted": "Medium",
+    "reason": "Medium: U 3>=2 and p 50.0%>=10%. U/N 3/6; median lost 2.2 s; A 0; calibrated; signal D6",
+    "insight_users": 3,
+    "calibrated": true,
+    "text": "[Medium] Ir Swap (screen) › Principal Amount: 3 of 6 users / 3 sessions: paused 5.1 s–7.2 s on Principal Amount before typing (3 sessions); No abandonment observed; median 2.2 s lost per affected user. Likely cause: the label Principal Amount does not tell users what to enter; first input came 5.1 s–7.2 s after focus. Fix: rename Principal Amount on Ir Swap (screen) to the term users expect and add a one-line description with an example under it. Evidence: http://localhost/project/1/replay/01a21b7a-918a-7564-922a-74bdc31bdd83?t=3 @0:03, http://localhost/project/1/replay/01a21b7b-422c-7243-9d5d-dfd1be7fec7e?t=3 @0:03, http://localhost/project/1/replay/01a21b7a-e1db-79b6-8d9c-0e3b42a4e2f4?t=6 @0:06. Signals: D6, confidence med."
+   }
+  ],
+  "negative_dose_controls": [
+   {
+    "cohort": "R-I3-hedge-open-2s-u3",
+    "insight": null,
+    "d10_hits": 0
+   }
+  ],
+  "matrix": {
+   "Low": {
+    "None": 3,
+    "Low": 1,
+    "Medium": 0,
+    "High": 0
+   },
+   "Medium": {
+    "None": 0,
+    "Low": 0,
+    "Medium": 9,
+    "High": 0
+   },
+   "High": {
+    "None": 0,
+    "Low": 0,
+    "Medium": 2,
+    "High": 0
+   }
+  },
+  "quadratic_weighted_kappa_4level": 0.708171206225681,
+  "quadratic_weighted_kappa_detected_only": 0.52,
+  "dose_spearman": 0.8528028654224418,
+  "series": [
+   {
+    "series": "R-I2-cap-validation",
+    "levels": [
+     "1u:Low",
+     "3u:Medium",
+     "6u:Medium"
+    ],
+    "inversions": 0
+   },
+   {
+    "series": "R-I5-dead-apply",
+    "levels": [
+     "1u:None",
+     "3u:Medium",
+     "6u:Medium"
+    ],
+    "inversions": 0
+   },
+   {
+    "series": "R-I6-trade-list-hunt",
+    "levels": [
+     "1u:None",
+     "3u:Medium",
+     "6u:Medium"
+    ],
+    "inversions": 0
+   },
+   {
+    "series": "R-I7-counterparty-lookup",
+    "levels": [
+     "1u:None",
+     "3u:Medium",
+     "6u:Medium"
+    ],
+    "inversions": 0
+   }
+  ]
+ },
+ "insight": {
+  "published": 20,
+  "hit_at_3": {
+   "n": 12,
+   "d": 15,
+   "value": 0.8,
+   "ci95": [
+    0.5481406466534955,
+    0.9295257935638959
+   ]
+  },
+  "hit_at_10": {
+   "n": 12,
+   "d": 15,
+   "value": 0.8,
+   "ci95": [
+    0.5481406466534955,
+    0.9295257935638959
+   ]
+  },
+  "per_cohort": [
+   {
+    "cohort": "R-I2-cap-validation-u1",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "R-I2-cap-validation-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "R-I2-cap-validation-u6",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "R-I5-dead-apply-u1",
+    "rank": null,
+    "hit3": false,
+    "hit10": false
+   },
+   {
+    "cohort": "R-I5-dead-apply-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "R-I5-dead-apply-u6",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "R-I6-trade-list-hunt-u1",
+    "rank": null,
+    "hit3": false,
+    "hit10": false
+   },
+   {
+    "cohort": "R-I6-trade-list-hunt-u3",
+    "rank": 2,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "R-I6-trade-list-hunt-u6",
+    "rank": 2,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "R-I7-counterparty-lookup-u1",
+    "rank": null,
+    "hit3": false,
+    "hit10": false
+   },
+   {
+    "cohort": "R-I7-counterparty-lookup-u3",
+    "rank": 2,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "R-I7-counterparty-lookup-u6",
+    "rank": 2,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "R-I3-hedge-open-6s-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "R-I3-hedge-open-15s-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   },
+   {
+    "cohort": "R-I1-notional-relabel-u3",
+    "rank": 1,
+    "hit3": true,
+    "hit10": true
+   }
+  ],
+  "mean_rubric": 17.7,
+  "generic": 0,
+  "citations": 67,
+  "hallucinated_citations": 0
+ },
+ "unmatched_hits_on_injected": [
+  "D7@cap / floor:screen Notional 12.8s",
+  "D7@cap / floor:screen Notional 21.5s",
+  "D7@cap / floor:screen Notional 18s",
+  "D7@cap / floor:screen Notional 14.9s",
+  "D7@cap / floor:screen Notional 20.8s",
+  "D7@cap / floor:screen Notional 18.7s",
+  "D7@cap / floor:screen Notional 17.4s",
+  "D7@cap / floor:screen Notional 18.7s",
+  "D7@cap / floor:screen Notional 16.2s",
+  "D7@cap / floor:screen Notional 16.9s",
+  "D5@cashflow report:screen Portfolio 8.9s",
+  "S3@trade list:screen Scroll container 19.6s",
+  "D5@cashflow report:screen Portfolio 10.8s",
+  "S3@trade list:screen Scroll container 24.9s",
+  "D5@cashflow report:screen Portfolio 9.9s",
+  "S3@trade list:screen Scroll container 24.4s",
+  "D5@cashflow report:screen Portfolio 9.2s",
+  "S3@trade list:screen Scroll container 21.1s",
+  "D5@cashflow report:screen Portfolio 10.9s",
+  "S3@trade list:screen Scroll container 25.1s",
+  "D5@cashflow report:screen Portfolio 9.1s",
+  "S3@trade list:screen Scroll container 20.8s",
+  "D5@cashflow report:screen Portfolio 9.2s",
+  "S3@trade list:screen Scroll container 20.1s",
+  "D5@cashflow report:screen Portfolio 9.8s",
+  "S3@trade list:screen Scroll container 25.6s",
+  "D5@cashflow report:screen Portfolio 8.2s",
+  "S3@trade list:screen Scroll container 18.6s",
+  "D5@cashflow report:screen Portfolio 10.9s",
+  "S3@trade list:screen Scroll container 24.6s",
+  "D5@ir swap:screen Counterparty 7.2s",
+  "D5@ir swap:screen Counterparty 2.9s",
+  "D5@ir swap:screen Counterparty 7.9s",
+  "D5@ir swap:screen Counterparty 7.1s",
+  "D5@ir swap:screen Counterparty 3.8s",
+  "D5@ir swap:screen Counterparty 2.9s",
+  "D5@ir swap:screen Counterparty 3.5s",
+  "D5@ir swap:screen Counterparty 3.4s",
+  "D5@ir swap:screen Counterparty 3.2s",
+  "D5@ir swap:screen Counterparty 2.9s"
+ ]
+}

@@ -1,0 +1,59 @@
+{
+  "plan": {
+    "seed": 700050,
+    "phase": "heldout",
+    "user": "RVEVAL5",
+    "persona": "Returning",
+    "workflow": "deal"
+  },
+  "session_id": "01a21b62-65be-79ff-9eaa-e043d671bfc4",
+  "distinct_id": "C1DEV|01|SEM|RVEVAL5",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_deal",
+      "ok": true,
+      "at": 1795755770077
+    },
+    {
+      "name": "trade_date",
+      "ok": true,
+      "at": 1795755771139
+    },
+    {
+      "name": "counterparty",
+      "ok": true,
+      "at": 1795755771956
+    },
+    {
+      "name": "notional",
+      "ok": true,
+      "at": 1795755772824
+    },
+    {
+      "name": "cashflow_tab",
+      "ok": true,
+      "at": 1795755774140
+    },
+    {
+      "name": "recalc",
+      "ok": true,
+      "at": 1795755775182
+    },
+    {
+      "name": "terms_tab",
+      "ok": true,
+      "at": 1795755775931
+    },
+    {
+      "name": "saved",
+      "ok": true,
+      "at": 1795755776889
+    },
+    {
+      "name": "closed",
+      "ok": true,
+      "at": 1795755779078
+    }
+  ]
+}

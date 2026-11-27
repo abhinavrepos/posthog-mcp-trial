@@ -1,0 +1,63 @@
+{
+  "plan": {
+    "seed": 620050,
+    "phase": "heldout",
+    "user": "rv.eval.0@example.test",
+    "persona": "Expert",
+    "workflow": "invoice",
+    "injection": "dead_button",
+    "dose": 5,
+    "planned_severity": "Medium",
+    "cohort": "I5-dead-apply-u3",
+    "cohort_users": 3
+  },
+  "session_id": "01a21b43-2f8e-7a77-80f3-18cbb0fbac7a",
+  "truth": [
+    {
+      "id": "620050:0",
+      "session_id": "01a21b43-2f8e-7a77-80f3-18cbb0fbac7a",
+      "kind": "dead_button",
+      "screen": "/desk/accounts/sales-invoice/new",
+      "element": "Apply",
+      "t_start": 1795753721454,
+      "t_end": 1795753725924,
+      "expected_detectors": [
+        "D1",
+        "D2"
+      ],
+      "expected_severity": "Medium",
+      "dose": 5,
+      "seed": 620050,
+      "observed": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "opened_invoice",
+      "ok": true,
+      "at": 1795753721454
+    },
+    {
+      "name": "party_input_attempted",
+      "ok": true,
+      "at": 1795753728876
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795753734283,
+      "detail": "item=true,qty=true,rate=true"
+    },
+    {
+      "name": "saved_draft",
+      "ok": true,
+      "at": 1795753736749
+    },
+    {
+      "name": "submitted",
+      "ok": true,
+      "at": 1795753739363,
+      "detail": "docstatus=1"
+    }
+  ]
+}

@@ -48,6 +48,8 @@ class Driver {
         for (let i = 1; i <= n; i++) { const t = i / n, c = 4 * t * (1 - t) * bend; await this.page.mouse.move(from.x + (x - from.x) * t + c, from.y + (y - from.y) * t - c); await sleep(Math.max(10, Math.min(75, (100 + 160 * Math.log2(1 + d / 80)) * this.speed / n))) }
         this.cursor = { x, y }
     }
+    /** Straight move (no bend): into an open menu, a user drops down from its button without crossing the toolbar. */
+    async slideTo(x: number, y: number) { const from = this.cursor, n = Math.max(3, Math.min(15, Math.round(Math.hypot(x - from.x, y - from.y) / 24))); for (let i = 1; i <= n; i++) { await this.page.mouse.move(from.x + (x - from.x) * i / n, from.y + (y - from.y) * i / n); await sleep(Math.max(10, 25 * this.speed)) } this.cursor = { x, y } }
     async clickId(id: string | null): Promise<boolean> {
         if (!id) return false
         // Click where a user can: a point inside the element that hit-tests to it (Ext clips overflowing toolbar buttons).
@@ -129,7 +131,12 @@ export async function driveReval(c: LabConfig, revalUrl: string, plan: RevalPlan
             for (let attempt = 0; attempt < 3 && !(await exists(menu)); attempt++) {
                 for (let k = 0; k < 3 && !(await itemVisible(name)); k++) { await d.clickId(await q.menuButton(page, group)); await sleep(300 + 200 * random()) }
                 if (!(await itemVisible(name))) continue
-                await d.clickId(await q.menuItem(page, name))
+                // Drop straight down from the menu button into the menu first: a curved path can cross the next toolbar
+                // button, which hover-opens its own menu over this one (seed 720041 of run R2 failed on exactly that).
+                const itemId = await q.menuItem(page, name)
+                const r = itemId ? await page.evaluate((i) => { const b = document.getElementById(i)!.getBoundingClientRect(); return [b.left, b.right, b.top + b.height / 2] }, itemId) : null
+                if (r) await d.slideTo(Math.min(Math.max(d.cursor.x, r[0]! + 8), r[1]! - 8), r[2]!)
+                await d.clickId(itemId)
                 const started = await page.waitForFunction((m) => (window as any).Reval.masks() > 0 || !!(Ext as any).ComponentQuery.query('[revalMenu]').find((x: any) => x.revalMenu === m && x.xtype !== 'menuitem'), { timeout: 2500 }, menu).then(() => true, () => false)
                 if (started) break
             }

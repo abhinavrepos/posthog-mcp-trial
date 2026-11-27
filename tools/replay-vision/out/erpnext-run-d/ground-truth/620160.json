@@ -1,0 +1,63 @@
+{
+  "plan": {
+    "seed": 620160,
+    "phase": "heldout",
+    "user": "rv.eval.5@example.test",
+    "persona": "Returning",
+    "workflow": "purchase",
+    "injection": "slow_wait",
+    "dose": 15000,
+    "planned_severity": "Medium",
+    "cohort": "I3-wait-15s-u3",
+    "cohort_users": 3
+  },
+  "session_id": "01a21b53-e1c3-7d31-8a78-80142a97ec7a",
+  "truth": [
+    {
+      "id": "620160:0",
+      "session_id": "01a21b53-e1c3-7d31-8a78-80142a97ec7a",
+      "kind": "slow_wait",
+      "screen": "/desk/buying/purchase-order/PUR-ORD-2026-00077",
+      "screen_start": "/desk/buying/purchase-order/new",
+      "element": "Save",
+      "t_start": 1795754824194,
+      "t_end": 1795754840475,
+      "expected_detectors": [
+        "D10"
+      ],
+      "expected_severity": "Medium",
+      "dose": 15000,
+      "seed": 620160,
+      "observed": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "opened_purchase",
+      "ok": true,
+      "at": 1795754814840
+    },
+    {
+      "name": "party_input_attempted",
+      "ok": true,
+      "at": 1795754818344
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795754824183,
+      "detail": "item=true,qty=true,rate=true"
+    },
+    {
+      "name": "saved_draft",
+      "ok": true,
+      "at": 1795754842306
+    },
+    {
+      "name": "submitted",
+      "ok": true,
+      "at": 1795754844899,
+      "detail": "docstatus=1"
+    }
+  ]
+}

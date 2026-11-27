@@ -1,0 +1,64 @@
+{
+  "plan": {
+    "seed": 620132,
+    "phase": "heldout",
+    "user": "rv.eval.4@example.test",
+    "persona": "Explorer",
+    "workflow": "invoice",
+    "injection": "hesitation",
+    "dose": 6,
+    "planned_severity": "Medium",
+    "cohort": "I1-hesitation-u3",
+    "cohort_users": 3
+  },
+  "session_id": "01a21b50-d274-7532-a68b-6eacc3e53316",
+  "truth": [
+    {
+      "id": "620132:0",
+      "session_id": "01a21b50-d274-7532-a68b-6eacc3e53316",
+      "kind": "hesitation",
+      "screen": "/desk/accounts/sales-invoice/new",
+      "element": "Effective Value Date",
+      "t_start": 1795754616405,
+      "t_end": 1795754622915,
+      "expected_detectors": [
+        "D6",
+        "D8",
+        "D12"
+      ],
+      "expected_severity": "Medium",
+      "dose": 6,
+      "seed": 620132,
+      "observed": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "opened_invoice",
+      "ok": true,
+      "at": 1795754615146
+    },
+    {
+      "name": "party_input_attempted",
+      "ok": true,
+      "at": 1795754626694
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795754634696,
+      "detail": "item=true,qty=true,rate=true"
+    },
+    {
+      "name": "saved_draft",
+      "ok": true,
+      "at": 1795754637685
+    },
+    {
+      "name": "submitted",
+      "ok": true,
+      "at": 1795754640760,
+      "detail": "docstatus=1"
+    }
+  ]
+}

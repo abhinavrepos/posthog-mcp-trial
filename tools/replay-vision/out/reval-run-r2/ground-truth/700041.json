@@ -1,0 +1,74 @@
+{
+  "plan": {
+    "seed": 700041,
+    "phase": "heldout",
+    "user": "RVEVAL4",
+    "persona": "Explorer",
+    "workflow": "hedge"
+  },
+  "session_id": "01a21b61-9e65-7e50-a2f5-3139ad9a0be5",
+  "distinct_id": "C1DEV|01|SEM|RVEVAL4",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_hedge",
+      "ok": true,
+      "at": 1795755715558
+    },
+    {
+      "name": "hedge_fields",
+      "ok": true,
+      "at": 1795755718415
+    },
+    {
+      "name": "effectiveness_tab",
+      "ok": true,
+      "at": 1795755719923
+    },
+    {
+      "name": "documentation_tab",
+      "ok": true,
+      "at": 1795755720750
+    },
+    {
+      "name": "designation_tab",
+      "ok": true,
+      "at": 1795755721986
+    },
+    {
+      "name": "saved",
+      "ok": true,
+      "at": 1795755723132
+    },
+    {
+      "name": "approved",
+      "ok": true,
+      "at": 1795755724793
+    },
+    {
+      "name": "closed",
+      "ok": true,
+      "at": 1795755726706
+    },
+    {
+      "name": "opened_report",
+      "ok": true,
+      "at": 1795755729416
+    },
+    {
+      "name": "report_params",
+      "ok": true,
+      "at": 1795755731221
+    },
+    {
+      "name": "report_run",
+      "ok": true,
+      "at": 1795755732652
+    },
+    {
+      "name": "report_export",
+      "ok": true,
+      "at": 1795755735631
+    }
+  ]
+}

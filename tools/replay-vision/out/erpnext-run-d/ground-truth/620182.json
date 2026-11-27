@@ -1,0 +1,51 @@
+{
+  "plan": {
+    "seed": 620182,
+    "phase": "heldout",
+    "user": "rv.eval.3@example.test",
+    "persona": "Careful",
+    "workflow": "invoice",
+    "injection": "abandon",
+    "dose": 1,
+    "planned_severity": "High",
+    "cohort": "D5-abandon-u3",
+    "cohort_users": 3
+  },
+  "session_id": "01a21b58-002a-7c93-bccf-1eadb8b4d17c",
+  "truth": [
+    {
+      "id": "620182:0",
+      "session_id": "01a21b58-002a-7c93-bccf-1eadb8b4d17c",
+      "kind": "abandon",
+      "screen": "/desk/accounts/sales-invoice/new",
+      "element": "Items",
+      "t_start": 1795755098800,
+      "t_end": 1795755100595,
+      "expected_detectors": [
+        "D5"
+      ],
+      "expected_severity": "High",
+      "dose": 1,
+      "seed": 620182,
+      "observed": true
+    }
+  ],
+  "steps": [
+    {
+      "name": "opened_invoice",
+      "ok": true,
+      "at": 1795755085972
+    },
+    {
+      "name": "party_input_attempted",
+      "ok": true,
+      "at": 1795755091268
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795755098800,
+      "detail": "item=true,qty=true,rate=true"
+    }
+  ]
+}

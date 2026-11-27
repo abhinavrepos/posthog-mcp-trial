@@ -1,0 +1,40 @@
+{
+  "plan": {
+    "seed": 600000,
+    "phase": "heldout",
+    "user": "rv.eval.0@example.test",
+    "persona": "Expert",
+    "workflow": "invoice"
+  },
+  "session_id": "01a21b37-50c9-74c0-9563-4bdaf367a45a",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_invoice",
+      "ok": true,
+      "at": 1795752943449
+    },
+    {
+      "name": "party_input_attempted",
+      "ok": true,
+      "at": 1795752946439
+    },
+    {
+      "name": "line_item_entered",
+      "ok": true,
+      "at": 1795752951867,
+      "detail": "item=true,qty=true,rate=true"
+    },
+    {
+      "name": "saved_draft",
+      "ok": true,
+      "at": 1795752954306
+    },
+    {
+      "name": "submitted",
+      "ok": true,
+      "at": 1795752956962,
+      "detail": "docstatus=1"
+    }
+  ]
+}
