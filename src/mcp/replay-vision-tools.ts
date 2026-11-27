@@ -17,6 +17,7 @@ import { providerStatus } from '../core/replay-vision-llm.ts'
 import { hasInsightGrant, type ChatCaller } from '../service/access.ts'
 import { forceRerun, queueReplayVision, replayVisionEnabled, replayVisionJobState } from '../service/replayvision-worker.ts'
 import { jsonResult } from './result.ts'
+import { attributableTo, sessionIdentity } from '../core/replay-vision.ts'
 
 export const replayVisionToolNames = () => (replayVisionEnabled() ? ['replay_friction', 'analyze_replay', 'replay_vision_status'] : [])
 const COVERAGE = 'Clicks, input activity and scroll positions come from the recording; cursor movement is sampled (about 20 Hz); typed values are masked; cross-origin frames and canvas are unseen. Counts, severities and links are computed in code.'
@@ -70,7 +71,7 @@ export function registerReplayVisionTools(server: McpServer, caller?: Partial<Ch
         const scope = user ? { user } : { client: match.id }
         const offset = cursor ? Number(cursor) : 0
         const rows = listInsights(scopeKeyOf(scope), limit + 1, offset)
-        let queued = 0, skipped = 0
+        let queued = 0, skipped = 0, ambiguous = 0
         if (analyze_missing) {
             // Up to five recent finished recordings of this client without a run, under the same caps (on-demand per person).
             const recent = await hogql(`SELECT toString(properties.$session_id) AS sid, max(timestamp) AS last, any(toString(distinct_id)) AS did FROM events
@@ -80,11 +81,16 @@ export function registerReplayVisionTools(server: McpServer, caller?: Partial<Ch
                 if (queued >= 5) break
                 const sid = String(r.sid)
                 if (!/^[\w-]{8,120}$/.test(sid) || one('SELECT 1 FROM rv_run WHERE session_id = ? AND state <> \'superseded\'', sid)) continue
-                try { const meta = await getRecording(sid); queueReplayVision(sid, meta.end_time, match.id, String(r.did || meta.distinct_id || ''), [], caller.email); queued++ } catch { skipped++ }
+                try {
+                    // Review M6: the events matched this client, but the whole recording must belong to it alone.
+                    const ident = await sessionIdentity(sid)
+                    if (!attributableTo(ident, match.id)) { ambiguous++; continue }
+                    const meta = await getRecording(sid); queueReplayVision(sid, meta.end_time, match.id, ident!.distinct_id || String(r.did || meta.distinct_id || ''), [], caller.email); queued++
+                } catch { skipped++ }
             }
         }
         const states = Object.fromEntries(all<{ state: string; n: number }>(`SELECT state, count(*) AS n FROM rv_run WHERE ${user ? 'distinct_id' : 'client_id'} = ? GROUP BY state`, user ?? match.id).map((x) => [x.state, x.n]))
-        const out = { client: match.id, ...(user ? { user } : {}), window_days, insights: [] as ReturnType<typeof compactInsight>[], next_cursor: null as string | null, truncated: false, recordings: states, queued_now: queued, unavailable_now: skipped, coverage: COVERAGE, mode: providerStatus().mode }
+        const out = { client: match.id, ...(user ? { user } : {}), window_days, insights: [] as ReturnType<typeof compactInsight>[], next_cursor: null as string | null, truncated: false, recordings: states, queued_now: queued, unavailable_now: skipped, ambiguous_identity: ambiguous, coverage: COVERAGE, mode: providerStatus().mode }
         for (const i of rows.slice(0, limit)) {
             const c = compactInsight(i)
             if (JSON.stringify(out).length + JSON.stringify(c).length > MAX_RESULT_CHARS) { out.truncated = true; break }
@@ -106,13 +112,12 @@ export function registerReplayVisionTools(server: McpServer, caller?: Partial<Ch
         if (mode === 'text' && providerStatus().mode !== 'text') return jsonResult('Replay analysis', { session_id, status: 'not_available', reason: providerStatus().detail })
         let r = one<{ id: number; state: string; client_id: string | null; coverage_json: string; error_code: string | null }>(`SELECT id, state, client_id, coverage_json, error_code FROM rv_run WHERE session_id = ? AND state <> 'superseded' ORDER BY id DESC LIMIT 1`, session_id)
         if (!r || force) {
-            const ident = await hogql(`SELECT uniqExact(toString(${P.client})) AS clients, any(toString(${P.client})) AS client, any(toString(distinct_id)) AS did FROM events WHERE toString(properties.$session_id) = {sid} AND timestamp >= now() - INTERVAL 30 DAY LIMIT 1`, { sid: session_id }, { timeoutMs: 10_000, retries: 0 })
-            const row = ident[0]
-            if (!row || Number(row.clients) !== 1 || !String(row.client || '')) throw new Error('This recording has no single, trustworthy client identity; it is not analysed.')
+            const ident = await sessionIdentity(session_id)
+            if (!ident || !attributableTo(ident, ident.client)) throw new Error('This recording has no single, trustworthy client identity; it is not analysed.')
             const meta = await getRecording(session_id)
-            const id = queueReplayVision(session_id, meta.end_time, String(row.client), String(row.did || meta.distinct_id || ''), [], caller.email)
+            const id = queueReplayVision(session_id, meta.end_time, ident.client, ident.distinct_id || String(meta.distinct_id || ''), [], caller.email)
             if (force) forceRerun(id)
-            r = { id, state: force ? 'pending' : one<{ state: string }>('SELECT state FROM rv_run WHERE id = ?', id)!.state, client_id: String(row.client), coverage_json: '{}', error_code: null }
+            r = { id, state: force ? 'pending' : one<{ state: string }>('SELECT state FROM rv_run WHERE id = ?', id)!.state, client_id: ident.client, coverage_json: '{}', error_code: null }
         }
         const moments = all<{ detector_codes_json: string; severity: string; screen_key: string; element_key: string; step_key: string; start_ms: number; evidence_json: string }>(
             'SELECT detector_codes_json, severity, screen_key, element_key, step_key, start_ms, evidence_json FROM rv_finding WHERE run_id = ? ORDER BY start_ms LIMIT 40', r.id)

@@ -218,6 +218,8 @@ export interface WatchDeps {
     render(sessionId: string, plan: WatchPlan): Promise<WatchFrame[]>
     externalAllowed: boolean
     enabled: boolean
+    /** End-to-end render deadline (default WATCH_LIMITS.renderDeadlineMs). */
+    renderDeadlineMs?: number
     model?: string
     now?: () => number
 }
@@ -226,6 +228,9 @@ const emptyReport = (): WatchReport => ({ prepared: 0, skipped: {}, collected: 0
 
 /** Whether image input is verified for the model (Models API, directly or via the exchange operator). Never assumed. */
 export async function watchFullyAvailability(provider: ReplayVisionProvider, model = DEFAULT_MODEL): Promise<{ available: boolean; reason: string }> {
+    // Egress policy (code review B1 + user decision): frames are unredacted page screenshots, so they go only to a
+    // self-hosted model; an external provider never receives them.
+    if (!provider.selfHosted) return { available: false, reason: 'frames would leave your infrastructure: Watch fully needs a self-hosted provider (frames are not redacted)' }
     try {
         const c = await provider.capabilities(model)
         if (!c.verified) return { available: false, reason: `image input for ${model} not verified: the cached Claude API reference does not state it; needs a Models API capability check (${provider.name} provider)` }
@@ -238,10 +243,13 @@ export function setWatchFully(watchId: number, on: boolean): boolean {
     return Number(run(`UPDATE rv_watch SET watch_fully = ? WHERE id = ? AND kind = 'distinct_id'`, on ? 1 : 0, watchId).changes) > 0
 }
 /** Runs eligible for Watch fully: analysed, user watch has watch_fully, client opted in to vision, not yet sent. */
-export function eligibleRuns(limit = 2): { id: number; session_id: string; distinct_id: string; client_id: string }[] {
+export function eligibleRuns(limit = 2, selfHosted = false): { id: number; session_id: string; distinct_id: string; client_id: string }[] {
+    // Self-hosted model: no per-client vision opt-in (data stays on the operator's infrastructure); the admin's per-user
+    // watch_fully switch still gates it. Otherwise the client must have vision_opt_in (unreachable today: external
+    // providers are refused by watchFullyAvailability).
     return all(`SELECT r.id, r.session_id, r.distinct_id, r.client_id FROM rv_run r
         JOIN rv_watch w ON w.kind = 'distinct_id' AND w.value = r.distinct_id AND w.enabled = 1 AND w.watch_fully = 1
-        JOIN rv_client_policy p ON p.client_id = r.client_id AND p.vision_opt_in = 1
+        ${selfHosted ? '' : 'JOIN rv_client_policy p ON p.client_id = r.client_id AND p.vision_opt_in = 1'}
         WHERE r.state IN ('complete','partial') AND r.mode = 'deterministic' AND NOT EXISTS (SELECT 1 FROM rv_watch_fully_job j WHERE j.run_id = r.id)
         ORDER BY r.completed_at DESC LIMIT ?`, Math.max(1, Math.min(10, limit)))
 }
@@ -253,18 +261,20 @@ export async function prepareWatchFully(deps: WatchDeps, limit = 2): Promise<Wat
     if (!deps.externalAllowed) { skip('external_analysis_off'); return report }
     const avail = await watchFullyAvailability(deps.provider, model)
     if (!avail.available) { skip('image_input_unavailable'); return report }
-    for (const r of eligibleRuns(limit)) {
+    for (const r of eligibleRuns(limit, deps.provider.selfHosted)) {
         let plan: WatchPlan
         try { plan = await deps.planFor(r.session_id) } catch { skip('plan_failed'); continue }
         if (!plan.frames.length) { skip('no_active_frames'); continue }
         let rendered: WatchFrame[]
-        try { rendered = await deps.render(r.session_id, plan) } catch { skip('render_failed'); continue }
+        // Review M7: the render (Chrome clip + ffmpeg frames) is bounded end to end; a hung render fails this session
+        // only, and the scheduler continues (a late Chrome render may still finish in the shared clip queue).
+        try { rendered = await withDeadline(deps.render(r.session_id, plan), deps.renderDeadlineMs ?? WATCH_LIMITS.renderDeadlineMs, 'render_timeout') } catch (e) { skip(e instanceof Error && e.message === 'render_timeout' ? 'render_timeout' : 'render_failed'); continue }
         const { kept } = boundFrames(rendered)
         if (!kept.length) { skip('no_frames'); continue }
         const fit = fitWatchRequest(plan, kept, model)
         if (!fit) { skip('input_cap'); continue }
         const customId = watchCustomId(r.id, fit.params)
-        if (!reserveProvider(customId, r.id, watchWorstCaseMicros(fit.params), deps.provider.name, 'global', now())) { skip('budget'); continue }
+        if (!reserveProvider(customId, r.id, deps.provider.priced ? watchWorstCaseMicros(fit.params) : 0, deps.provider.name, 'global', now())) { skip('budget'); continue }
         const ts = new Date(now()).toISOString()
         const sent: SentRecord = { events: plan.events, frames: fit.frames.map((f) => ({ t_ms: f.frame.t_ms, event_ids: f.frame.event_ids })) }
         run(`INSERT INTO rv_watch_fully_job(custom_id, run_id, session_id, provider, model, state, sent_json, frames_json, created_at, updated_at) VALUES(?,?,?,?,?,'intent',?,?,?,?)`,
@@ -273,7 +283,7 @@ export async function prepareWatchFully(deps: WatchDeps, limit = 2): Promise<Wat
             const sub = await deps.provider.submit(customId, fit.params)
             markSubmitted(customId, sub.batch_id, now())
             run(`UPDATE rv_watch_fully_job SET state = 'submitted', updated_at = ? WHERE custom_id = ?`, ts, customId)
-            if (sub.immediate !== undefined) await finishWatch(customId, { state: 'complete', message: sub.immediate }, report, deps.provider.batch)
+            if (sub.immediate !== undefined) await finishWatch(customId, { state: 'complete', message: sub.immediate }, report, deps.provider)
             report.prepared++
         } catch (e) {
             if (deps.provider.name === 'exchange' || e instanceof TypeError) { releaseProvider(customId); run(`UPDATE rv_watch_fully_job SET state = 'failed', error_code = 'submit_failed', updated_at = ? WHERE custom_id = ?`, ts, customId) }
@@ -291,12 +301,12 @@ export async function collectWatchFully(deps: Pick<WatchDeps, 'provider'>): Prom
         let p
         try { p = await deps.provider.poll(row.custom_id, row.batch_id, Date.parse(row.submitted_at ?? '') || Date.now()) } catch { continue }
         if (p.state === 'pending') continue
-        await finishWatch(row.custom_id, p, report, deps.provider.batch)
+        await finishWatch(row.custom_id, p, report, deps.provider)
     }
     return report
 }
 
-async function finishWatch(customId: string, p: Awaited<ReturnType<ReplayVisionProvider['poll']>>, report: WatchReport, batch: boolean) {
+async function finishWatch(customId: string, p: Awaited<ReturnType<ReplayVisionProvider['poll']>>, report: WatchReport, pricing: Pick<ReplayVisionProvider, 'batch' | 'priced'>) {
     const ts = new Date().toISOString()
     report.collected++
     if (p.state === 'expired') {
@@ -310,7 +320,7 @@ async function finishWatch(customId: string, p: Awaited<ReturnType<ReplayVisionP
         report.failed++; return
     }
     const parsed = parseWatchMessage(p.message)
-    const cost = costMicros(parsed.input_tokens, parsed.output_tokens, batch)
+    const cost = pricing.priced ? costMicros(parsed.input_tokens, parsed.output_tokens, pricing.batch) : 0
     markEnded(customId, { input_tokens: parsed.input_tokens, output_tokens: parsed.output_tokens, cost_micros: cost })
     reconcileProvider(customId, cost, parsed.input_tokens, parsed.output_tokens)
     const usage = [parsed.input_tokens, parsed.output_tokens, cost, ts, customId] as const
@@ -329,3 +339,9 @@ async function finishWatch(customId: string, p: Awaited<ReturnType<ReplayVisionP
 }
 /** LIMITS re-exported for status pages. */
 export const WATCH_STATUS_LIMITS = { ...WATCH_LIMITS, maxInputTokens: WATCH_MAX_INPUT_TOKENS, maxOutputTokens: WATCH_MAX_OUTPUT_TOKENS, textStageInputCap: LIMITS.maxInputTokens }
+
+/** Reject with `label` after ms; the underlying work is abandoned (callers must not rely on its completion). */
+export function withDeadline<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    let timer: NodeJS.Timeout | undefined
+    return Promise.race([p.finally(() => clearTimeout(timer)), new Promise<T>((_, reject) => { timer = setTimeout(() => reject(new Error(label)), ms); timer.unref?.() })])
+}

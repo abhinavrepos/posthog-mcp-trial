@@ -68,3 +68,16 @@ export async function analyzeSession(sessionId:string,context:DetectorContext={}
   const app_events=await replayAppEvents(sessionId)
   return withSnapshotsFile(sessionId,file=>analyzeFile(file,{start_time:recording.start_time,app_events},60_000,context))
 }
+
+/** Identity of one whole recording (code review M6): number of distinct clients over ALL its events, the client, a distinct id. */
+export interface SessionIdentity { clients: number; client: string; distinct_id: string }
+export async function sessionIdentity(sessionId: string): Promise<SessionIdentity | null> {
+  const { P } = await import('./props.ts')
+  const rows = await hogql(`SELECT uniqExact(toString(${P.client})) AS clients, any(toString(${P.client})) AS client, any(toString(distinct_id)) AS did FROM events WHERE toString(properties.$session_id) = {sid} AND timestamp >= now() - INTERVAL 30 DAY LIMIT 1`, { sid: sessionId }, { timeoutMs: 10_000, retries: 0 })
+  const r = rows[0]
+  return r ? { clients: Number(r.clients) || 0, client: String(r.client ?? ''), distinct_id: String(r.did ?? '') } : null
+}
+/** A recording may be analysed in a client's scope only if every one of its events belongs to exactly that client. */
+export function attributableTo(identity: SessionIdentity | null, clientId: string): boolean {
+  return !!identity && identity.clients === 1 && !!identity.client && identity.client === clientId
+}

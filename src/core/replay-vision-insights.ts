@@ -101,8 +101,11 @@ export function refreshInsights(scope: { client?: string | null; user?: string |
         moments.push(m); momentFinding.set(m, f.id)
     }
     // Abandonment: the session left that screen's new form (D5) after this moment.
-    const d5 = moments.filter((m) => m.candidate.kind === 'D5')
-    for (const m of moments) m.abandoned = d5.some((a) => a.session_id === m.session_id && a.candidate.screen === m.candidate.screen && a.candidate.end_ms >= m.candidate.start_ms)
+    // Review M5: index the latest D5 end per session+screen (linear), instead of scanning every D5 for every moment.
+    // Same result: some D5 on the screen ends at/after the moment's start <=> the latest such D5 does.
+    const lastD5 = new Map<string, number>()
+    for (const m of moments) if (m.candidate.kind === 'D5') { const k = `${m.session_id}|${m.candidate.screen}`; lastD5.set(k, Math.max(lastD5.get(k) ?? -Infinity, m.candidate.end_ms)) }
+    for (const m of moments) m.abandoned = (lastD5.get(`${m.session_id}|${m.candidate.screen}`) ?? -Infinity) >= m.candidate.start_ms
     const baselines = loadBaselines()
     const calibrated = new Map<string, boolean>()
     for (const [key, b] of baselines) { const screen = key.split('|')[1]!; if (key.startsWith('DWELL|') || !calibrated.has(screen)) calibrated.set(screen, isCalibrated(b)) }

@@ -314,15 +314,15 @@ function ffmpegPath(): string {
 }
 
 /** Grabs frames at the given seconds into a clip, as PNG buffers. */
-export async function clipFrames(file: string, atSeconds: number[], width = 960): Promise<Buffer[]> {
+export async function clipFrames(file: string, atSeconds: number[], width = 960, timeoutMs = 20_000): Promise<Buffer[]> {
     const frames: Buffer[] = []
     for (const t of atSeconds) {
         const out = join(config.clip.cacheDir, `frame-${process.pid}-${Date.now()}.png`)
-        await run(ffmpegPath(), ['-v', 'error', '-y', '-ss', String(Math.max(0, t)), '-i', file, '-frames:v', '1', '-vf', `scale=${width}:-2`, out])
-        if (existsSync(out)) {
-            frames.push(readFileSync(out))
-            rmSync(out, { force: true })
-        }
+        try {
+            // Review M7: a hung ffmpeg is killed (SIGKILL) after timeoutMs instead of blocking its caller.
+            await run(ffmpegPath(), ['-v', 'error', '-y', '-ss', String(Math.max(0, t)), '-i', file, '-frames:v', '1', '-vf', `scale=${width}:-2`, out], { timeout: timeoutMs, killSignal: 'SIGKILL' })
+            if (existsSync(out)) frames.push(readFileSync(out))
+        } finally { rmSync(out, { force: true }) }
     }
     return frames
 }

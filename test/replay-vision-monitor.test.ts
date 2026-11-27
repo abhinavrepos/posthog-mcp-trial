@@ -132,16 +132,28 @@ test('lease expiry recovers a crashed run; three crashes or timeouts end failed_
     assert.equal(await W.processRun(W.claimNext(d.now())!, d), 'unavailable')
 })
 
-test('daily and per-watch caps write skipped_budget; force recomputes in place', async () => {
+test('a daily cap defers the run to the next UTC day (not terminal, no attempt used); force recomputes in place', async () => {
     reset()
     const w = watch('client', 'C1', 1)
     const d = fake()
     const ids = [1, 2].map((n) => { const e = new Date(T0 - 1200_000 - n).toISOString(); d.ends.set(sid(n), e); const id = W.queueReplayVision(sid(n), e, 'C1', `u${n}`, [w]); run(`UPDATE rv_run SET state = 'stable_wait' WHERE id = ?`, id); return id })
     const results = [await W.processRun(W.claimNext(d.now())!, d), await W.processRun(W.claimNext(d.now())!, d)]
-    assert.deepEqual(results.sort(), ['complete', 'skipped_budget'])
-    const skipped = ids.find((id) => state(id).state === 'skipped_budget')!
-    assert.equal(state(skipped).error_code, `cap:watch:${w}`)
+    // Review M9: the refused run waits for the next UTC day as a retry, its attempts untouched.
+    assert.deepEqual(results.sort(), ['budget_wait', 'complete'])
+    const skipped = ids.find((id) => state(id).state === 'retry')!
+    assert.equal(state(skipped).error_code, `budget_wait:watch:${w}`)
+    const next = one<{ next_attempt_at: string; attempts: number }>('SELECT next_attempt_at, attempts FROM rv_run WHERE id = ?', skipped)!
+    assert.equal(next.attempts, 0)
+    assert.ok(Date.parse(next.next_attempt_at) >= Date.UTC(new Date(T0).getUTCFullYear(), new Date(T0).getUTCMonth(), new Date(T0).getUTCDate() + 1))
+    assert.equal(W.claimNext(d.now()), undefined, 'not claimable today')
     assert.equal(B.budgetRow(B.dayOf(T0), 'global').used_sessions, 1)
+    // The next day it is claimed and analysed (the new day's budget admits it).
+    d.clock.t = Date.parse(next.next_attempt_at) + 1000
+    assert.equal(await W.processRun(W.claimNext(d.now())!, d), 'complete')
+    // A recording older than the backlog window ends skipped_budget instead of waiting forever.
+    const old = new Date(T0 - 9 * 86_400_000).toISOString(); d.ends.set(sid(9), old)
+    const oldId = W.queueReplayVision(sid(9), old, 'C1', 'u9', [w]); run(`UPDATE rv_run SET state = 'stable_wait' WHERE id = ?`, oldId)
+    assert.equal(await W.processRun(W.claimNext(d.now())!, d), 'skipped_budget')
     const done = ids.find((id) => id !== skipped)!
     assert.ok(W.forceRerun(done))
     assert.equal(one<{ n: number }>('SELECT count(*) AS n FROM rv_run WHERE session_id = (SELECT session_id FROM rv_run WHERE id = ?)', done)!.n, 1, 'force never duplicates the run')
@@ -180,7 +192,7 @@ test('provider budget survives a crash at every step: reserve → submit → end
     const g = () => B.budgetRow(day, 'global')
     // Crash right after reserve (intent persisted, outcome unknown): kept, never resubmitted, expires after 24 h.
     assert.ok(B.reserveProvider('job-intent-1', runId, 1000, 'anthropic', 'global', T0))
-    assert.ok(B.reserveProvider('job-intent-1', runId, 1000, 'anthropic', 'global', T0), 'idempotent per custom id')
+    assert.equal(B.reserveProvider('job-intent-1', runId, 1000, 'anthropic', 'global', T0), false, 'review B3: an id is reserved once, never again')
     assert.equal(g().reserved_llm_calls, 1)
     assert.deepEqual(B.startupReconcile(T0 + 1000), { released_orphans: 0, expired: 0, reconciled: 0, uncertain: 1 })
     assert.equal(B.startupReconcile(T0 + B.BUDGET.providerMaxAgeMs + 1).expired, 1)
@@ -260,4 +272,21 @@ test('page API: sign-in, insight grant, admin-only writes, CSRF header, feature 
     assert.ok(!off.body.includes('Replay Vision ·'))
     assert.equal(W.replayVisionEnabled(), false)
     process.env.FEATURE_REPLAY_VISION = 'on'
+})
+
+test('review M4: infrastructure retries never consume the daily session allowance again', async () => {
+    reset()
+    const w = watch('client', 'C1')
+    let fails = 2
+    const d = fake({ withSnapshots: async (_id, use) => { if (fails-- > 0) throw new PostHogError('upstream', 500); return use('/dev/null') } })
+    const e = new Date(T0 - 1200_000).toISOString(); d.ends.set(sid(1), e)
+    const id = W.queueReplayVision(sid(1), e, 'C1', 'u1', [w]); run(`UPDATE rv_run SET state = 'stable_wait' WHERE id = ?`, id)
+    for (let i = 0; i < 3; i++) {
+        const r = W.claimNext(d.now())
+        if (!r) { d.clock.t += 11 * 60_000; i--; continue }
+        await W.processRun(r, d)
+    }
+    assert.equal(state(id).state, 'complete')
+    assert.equal(B.budgetRow(B.dayOf(T0), 'global').used_sessions, 1, 'admitted once despite two retries')
+    assert.equal(B.budgetRow(B.dayOf(T0), `watch:${w}`).used_sessions, 1)
 })

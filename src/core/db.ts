@@ -321,6 +321,8 @@ const MIGRATIONS: string[] = [
        provider TEXT NOT NULL, model TEXT NOT NULL, state TEXT NOT NULL, sent_json TEXT NOT NULL DEFAULT '{}', frames_json TEXT NOT NULL DEFAULT '[]',
        findings_json TEXT, error_code TEXT, input_tokens INTEGER, output_tokens INTEGER, cost_micros INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
      CREATE UNIQUE INDEX rv_watch_fully_run ON rv_watch_fully_job(run_id);`,
+    // Review M4: a run is admitted against the daily session budget once, whatever its retries.
+    `ALTER TABLE rv_run ADD COLUMN admitted_day TEXT;`,
 ]
 
 /** Runs fn in one transaction: all of its writes land, or none do. */

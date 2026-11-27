@@ -14,11 +14,12 @@ import { config } from '../core/config.ts'
 import { all, one, run, tx } from '../core/db.ts'
 import { clipFrames, renderClip, withSnapshotsFile } from '../core/clip.ts'
 import { getRecording, PostHogError } from '../core/posthog.ts'
-import { analyzeFile, analysisVersion, replayAppEvents, type AnalysisResult } from '../core/replay-vision.ts'
+import { analyzeFile, analysisVersion, attributableTo, replayAppEvents, sessionIdentity, type AnalysisResult, type SessionIdentity } from '../core/replay-vision.ts'
 import { discoverFinishedRecordings, type Discovered } from '../core/replay-vision-discovery.ts'
 import { baselineContext, loadBaselines, recomputeBaselines, runMetrics } from '../core/replay-vision-baseline.ts'
 import { addDownloadBytes, admitSession, BUDGET, startupReconcile } from '../core/replay-vision-budget.ts'
-import { deleteSessionData, refreshInsights, screenReach, storeFindings } from '../core/replay-vision-insights.ts'
+import { deleteSessionData, screenReach, storeFindings } from '../core/replay-vision-insights.ts'
+import { refreshInsightsOffThread } from '../core/replay-vision-refresh.ts'
 import type { DetectorContext } from '../core/replay-vision-detectors.ts'
 import type { AppEventInput, SanitizedWindow } from '../core/replay-timeline.ts'
 import { collectExplanations, externalAnalysisAllowed, prepareExplanations, selectProvider } from '../core/replay-vision-llm.ts'
@@ -36,6 +37,11 @@ export const MONITOR = Object.freeze({
     discoveryWindowMs: DAY,
     discoveryPagesPerTick: 5,
     runsPerTick: 2,
+    /** Review M9: a run refused by a daily cap waits for the next UTC day, up to this many days after the recording. */
+    budgetBacklogDays: 7,
+    /** Review M8: B' wall-clock budget and request cap per tick. */
+    textStageMs: 60_000,
+    textPerTick: 5,
     retentionDays: Math.min(90, Math.max(1, Number(process.env.REPLAY_VISION_RETENTION_DAYS) || 30)),
 })
 export const replayVisionEnabled = () => ['on', 'true', '1'].includes(String(process.env.FEATURE_REPLAY_VISION || 'off').toLowerCase())
@@ -52,6 +58,8 @@ export interface VisionDeps {
     /** Sanitized ±20 s windows around offsets of one recording, for the B′ text stage. */
     windowsFor(sessionId: string, offsetsMs: number[]): Promise<SanitizedWindow[]>
     /** Watch fully: frame plan + sanitized timeline (worker), and the planned frames rendered by the clip renderer. Absent = stage off. */
+    /** Review M6: the whole recording's identity, re-checked before analysis (absent in tests = not checked). */
+    identity?(sessionId: string): Promise<SessionIdentity | null>
     watchPlanFor?(sessionId: string): Promise<WatchPlan>
     renderWatchFrames?(sessionId: string, plan: WatchPlan): Promise<WatchFrame[]>
 }
@@ -69,6 +77,7 @@ export const realDeps: VisionDeps = {
         const r = await withSnapshotsFile(sessionId, (file) => analyzeFile(file, { start_time: meta.start_time }, MONITOR.analysisTimeoutMs, {}, offsets))
         return r.windows ?? []
     },
+    identity: sessionIdentity,
     watchPlanFor: async (sessionId) => {
         const meta = await getRecording(sessionId)
         const r = await withSnapshotsFile(sessionId, (file) => analyzeFile(file, { start_time: meta.start_time }, MONITOR.analysisTimeoutMs, {}, undefined, true))
@@ -82,7 +91,7 @@ export const realDeps: VisionDeps = {
         for (const range of plan.ranges) {
             const clip = await renderClip({ sessionId, startOffsetS: range.start_s, durationS: range.duration_s }, 'replay-vision:watch-fully')
             const frames = plan.frames.filter((f) => f.t_ms / 1000 >= clip.start_offset_s && f.t_ms / 1000 <= clip.end_offset_s)
-            const pngs = await clipFrames(clip.file, frames.map((f) => Math.max(0, f.t_ms / 1000 - clip.start_offset_s)), WATCH_LIMITS.frameWidth)
+            const pngs = await clipFrames(clip.file, frames.map((f) => Math.max(0, f.t_ms / 1000 - clip.start_offset_s)), WATCH_LIMITS.frameWidth, WATCH_LIMITS.frameTimeoutMs)
             pngs.forEach((png, i) => { if (frames[i]) out.push({ png, frame: frames[i]! }) })
         }
         return out
@@ -159,12 +168,22 @@ export async function processRun(r: VisionRun, deps: VisionDeps = realDeps): Pro
         const watches = all<{ id: number; max_sessions_per_day: number }>('SELECT w.id, w.max_sessions_per_day FROM rv_run_watch l JOIN rv_watch w ON w.id = l.watch_id WHERE l.run_id = ?', r.id)
         const scopes = [{ scope: 'global', limit: BUDGET.dailySessions }, ...watches.map((w) => ({ scope: `watch:${w.id}`, limit: Math.min(BUDGET.perWatchSessions, w.max_sessions_per_day) }))]
         if (r.requested_by) scopes.push({ scope: `person:${r.requested_by}`, limit: BUDGET.perPersonOnDemand })
-        if (r.attempts === 0) {
-            const refused = admitSession(scopes, now)
-            if (refused) {
+        // Review M6: re-check at processing time that the whole recording belongs to the run's client alone.
+        if (deps.identity && r.client_id && !attributableTo(await deps.identity(r.session_id), r.client_id)) {
+            run(`UPDATE rv_run SET state = 'skipped_identity', error_code = 'ambiguous_client', lease_until = NULL WHERE id = ?`, r.id)
+            return 'skipped_identity'
+        }
+        const refused = admitSession(scopes, now, r.id)
+        if (refused) {
+            // Review M9: a cap reached today is not a verdict on the recording: wait for the next UTC day (attempts
+            // untouched); recordings older than the backlog window end skipped_budget.
+            if (now - Date.parse(r.recording_end) > MONITOR.budgetBacklogDays * DAY) {
                 run(`UPDATE rv_run SET state = 'skipped_budget', error_code = ?, lease_until = NULL WHERE id = ?`, `cap:${refused}`, r.id)
                 return 'skipped_budget'
             }
+            const tomorrow = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate() + 1) + Math.floor(Math.random() * 30 * 60_000)
+            run(`UPDATE rv_run SET state = 'retry', error_code = ?, lease_until = NULL, next_attempt_at = ? WHERE id = ?`, `budget_wait:${refused}`, iso(tomorrow), r.id)
+            return 'budget_wait'
         }
         run('UPDATE rv_run SET attempts = attempts + 1 WHERE id = ?', r.id)
         counted = true
@@ -219,7 +238,8 @@ async function refreshScopes(r: VisionRun, deps: VisionDeps) {
         if (!scope) continue
         let reach
         try { reach = await deps.reach(scope, from, to) } catch { reach = undefined } // falls back to analysed recordings (labelled lower bound)
-        refreshInsights(scope, { now: to, reach })
+        const r = await refreshInsightsOffThread(scope, { now: to, reach })
+        if (!r.ok) console.error(JSON.stringify({ t: new Date().toISOString(), msg: 'replay vision refresh failed', error: r.error }))
     }
 }
 
@@ -270,11 +290,22 @@ export async function textStage(deps: VisionDeps = realDeps): Promise<void> {
     if (!externalAnalysisAllowed()) return
     const provider = selectProvider(true)
     if (!provider) return
+    // Review M8: B' work per tick is bounded by wall clock and a request cap; a persisted cursor rotates through the
+    // scopes so every scope is reached over successive ticks. Deterministic discovery/processing ran earlier in the tick.
+    const deadline = Date.now() + MONITOR.textStageMs
     await collectExplanations({ provider, now: deps.now })
-    for (const s of all<{ scope_key: string }>(`SELECT DISTINCT scope_key FROM rv_insight WHERE dismissed_at IS NULL LIMIT 20`)) {
-        if (stopping) break
-        await prepareExplanations(s.scope_key, { provider, windowsFor: deps.windowsFor, now: deps.now }, 5)
+    const scopes = all<{ scope_key: string }>(`SELECT DISTINCT scope_key FROM rv_insight WHERE dismissed_at IS NULL ORDER BY scope_key LIMIT 500`).map((x) => x.scope_key)
+    if (!scopes.length) return
+    const cur = one<{ keyset_json: string }>(`SELECT keyset_json FROM rv_cursor WHERE project_id = ? AND scope = 'bprime'`, config.posthog.projectId)
+    let start = 0
+    try { start = Math.max(0, Number(JSON.parse(cur?.keyset_json ?? '{}').next) || 0) % scopes.length } catch { /* fresh cursor */ }
+    let prepared = 0, visited = 0
+    for (; visited < scopes.length && !stopping && Date.now() < deadline && prepared < MONITOR.textPerTick; visited++) {
+        const r = await prepareExplanations(scopes[(start + visited) % scopes.length]!, { provider, windowsFor: deps.windowsFor, now: deps.now, deadline, maxPrepared: MONITOR.textPerTick - prepared }, 5)
+        prepared += r.prepared
     }
+    run(`INSERT INTO rv_cursor(project_id, scope, keyset_json, last_success_at) VALUES(?, 'bprime', ?, ?) ON CONFLICT(project_id, scope) DO UPDATE SET keyset_json = excluded.keyset_json, last_success_at = excluded.last_success_at`,
+        config.posthog.projectId, JSON.stringify({ next: (start + visited) % scopes.length }), iso(deps.now()))
 }
 
 /** Last Watch-fully capability check, for the status page (never assumed available). */
@@ -290,7 +321,7 @@ export async function watchStage(deps: VisionDeps = realDeps): Promise<void> {
     const since = new Date(deps.now() - 1000).toISOString()
     const got = await collectWatchFully({ provider })
     if (got.accepted_findings) for (const r of all<{ client_id: string | null; distinct_id: string | null }>(`SELECT DISTINCT r.client_id, r.distinct_id FROM rv_watch_fully_job j JOIN rv_run r ON r.id = j.run_id WHERE j.state = 'complete' AND j.updated_at >= ? LIMIT 20`, since)) {
-        for (const scope of [r.client_id ? { client: r.client_id } : null, r.distinct_id ? { user: r.distinct_id } : null]) if (scope) refreshInsights(scope, { now: new Date(deps.now()) })
+        for (const scope of [r.client_id ? { client: r.client_id } : null, r.distinct_id ? { user: r.distinct_id } : null]) if (scope) await refreshInsightsOffThread(scope, { now: new Date(deps.now()) })
     }
     if (stopping || !a.available) return
     await prepareWatchFully({ provider, planFor: deps.watchPlanFor, render: deps.renderWatchFrames, externalAllowed: true, enabled: replayVisionEnabled(), now: deps.now }, 1)

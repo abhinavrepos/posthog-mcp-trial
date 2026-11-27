@@ -35,12 +35,15 @@ export function budgetRow(day: string, scope = 'global'): BudgetRow {
 }
 
 /** Admit one deterministic session against every scope's limit, all or nothing. Returns the scope that refused, or null. */
-export function admitSession(scopes: { scope: string; limit: number }[], now = Date.now()): string | null {
+export function admitSession(scopes: { scope: string; limit: number }[], now = Date.now(), runId?: number): string | null {
     const day = dayOf(now)
     return tx(() => {
+        // Review M4: admission is per run, not per attempt. A run admitted once (any day) is never charged again.
+        if (runId !== undefined && one<{ d: string | null }>('SELECT admitted_day AS d FROM rv_run WHERE id = ?', runId)?.d) return null
         if (budgetRow(day, 'global').used_download_bytes >= BUDGET.dailyDownloadBytes) return 'download_bytes'
         for (const s of scopes) if (budgetRow(day, s.scope).used_sessions >= s.limit) return s.scope
         for (const s of scopes) { ensure(day, s.scope); run('UPDATE rv_budget SET used_sessions = used_sessions + 1 WHERE day_utc = ? AND scope = ?', day, s.scope) }
+        if (runId !== undefined) run('UPDATE rv_run SET admitted_day = ? WHERE id = ?', day, runId)
         return null
     })
 }
@@ -57,11 +60,14 @@ const ID = /^[A-Za-z0-9_-]{8,64}$/
  * call or cost ceiling, the per-session call ceiling, or an unknown / invalid cost.
  */
 export function reserveProvider(customId: string, runId: number, costMicros: number, provider = 'anthropic', scope = 'global', now = Date.now()): boolean {
-    if (!ID.test(customId) || !Number.isSafeInteger(costMicros) || costMicros <= 0 || costMicros > BUDGET.dailyCostMicros) return false
+    // An unpriced (self-hosted) provider reserves 0 micro-USD but still a call against the daily and per-session ceilings.
+    const unpriced = provider === 'openai_compatible'
+    if (!ID.test(customId) || !Number.isSafeInteger(costMicros) || costMicros < 0 || (costMicros === 0 && !unpriced) || costMicros > BUDGET.dailyCostMicros) return false
     const day = dayOf(now)
     return tx(() => {
-        const existing = one<{ state: string }>('SELECT state FROM rv_reservation WHERE custom_id = ?', customId)
-        if (existing) return existing.state === 'reserved' || existing.state === 'reconciled'
+        // Review B3: an id that was ever reserved is never reserved or submitted again (a reconciled one would re-bill
+        // unaccounted); a retry needs a new attempt id with its own reservation.
+        if (one('SELECT 1 FROM rv_reservation WHERE custom_id = ?', customId)) return false
         ensure(day, scope)
         const b = budgetRow(day, scope)
         if (b.reserved_llm_calls + b.used_llm_calls + 1 > BUDGET.dailyLlmCalls) return false

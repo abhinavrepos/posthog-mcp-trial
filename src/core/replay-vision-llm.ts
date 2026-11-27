@@ -17,28 +17,57 @@ import { readProviderKey } from './replay-vision-secrets.ts'
 import type { Aggregate } from './replay-vision-aggregate.ts'
 import type { ExchangeProvider as Exchange } from './replay-vision-provider.ts'
 import {
-    AnthropicProvider, ExchangeProvider, buildExplanationParams, costMicros, customIdFor, estimateInputTokens, parseProviderMessage, sessionAlias, worstCaseMicros,
+    AnthropicProvider, ExchangeProvider, OpenAICompatibleProvider, buildExplanationParams, costMicros, customIdFor, estimateInputTokens, parseProviderMessage, sessionAlias, worstCaseMicros,
     DEFAULT_MODEL, LIMITS, PROMPT_VERSION, type Explanation, type InsightFacts, type ProviderWindow, type ReplayVisionProvider,
 } from './replay-vision-provider.ts'
 
 const on = (v: string | undefined) => ['on', 'true', '1'].includes(String(v ?? '').toLowerCase())
 export const externalAnalysisAllowed = () => on(process.env.REPLAY_VISION_ALLOW_EXTERNAL) && !!selectProvider()
 
-/** The configured provider, or undefined: `exchange` needs REPLAY_VISION_EXCHANGE_DIR; `anthropic` needs a key. */
+/** Private / loopback hosts: a model there runs on the operator's own infrastructure. */
+export function isPrivateHost(url: string): boolean {
+    try {
+        const h = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, '')
+        return h === 'localhost' || h === '::1' || /^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[01])\./.test(h) || /\.(local|internal|lan)$/.test(h) || !h.includes('.')
+    } catch { return false }
+}
+/**
+ * The configured provider, or undefined. `exchange` needs REPLAY_VISION_EXCHANGE_DIR; `anthropic` a key;
+ * `openai_compatible` REPLAY_VISION_OAI_BASE_URL + REPLAY_VISION_OAI_MODEL (optional REPLAY_VISION_OAI_API_KEY,
+ * REPLAY_VISION_OAI_VISION, REPLAY_VISION_OAI_JSON_MODE=json_schema|json_object, REPLAY_VISION_OAI_TIMEOUT_MS).
+ * REPLAY_VISION_OAI_SELF_HOSTED marks it self-hosted; unset, a loopback/private base URL counts as self-hosted.
+ */
 export function selectProvider(batch = true): ReplayVisionProvider | undefined {
-    if ((process.env.REPLAY_VISION_PROVIDER || '').toLowerCase() === 'exchange') {
+    const kind = (process.env.REPLAY_VISION_PROVIDER || '').toLowerCase()
+    if (kind === 'exchange') {
         const dir = process.env.REPLAY_VISION_EXCHANGE_DIR
         return dir ? new ExchangeProvider(dir) : undefined
+    }
+    if (kind === 'openai_compatible') {
+        const baseUrl = process.env.REPLAY_VISION_OAI_BASE_URL || '', model = process.env.REPLAY_VISION_OAI_MODEL || ''
+        if (!baseUrl || !model) return undefined
+        const declared = process.env.REPLAY_VISION_OAI_SELF_HOSTED
+        try {
+            return new OpenAICompatibleProvider({
+                baseUrl, model, apiKey: process.env.REPLAY_VISION_OAI_API_KEY || undefined,
+                selfHosted: declared === undefined || declared === '' ? isPrivateHost(baseUrl) : on(declared),
+                vision: on(process.env.REPLAY_VISION_OAI_VISION),
+                jsonMode: (process.env.REPLAY_VISION_OAI_JSON_MODE || '').toLowerCase() === 'json_object' ? 'json_object' : 'json_schema',
+                timeoutMs: Math.min(600_000, Math.max(5_000, Number(process.env.REPLAY_VISION_OAI_TIMEOUT_MS) || 120_000)),
+            })
+        } catch { return undefined }
     }
     const key = readProviderKey()
     return key ? new AnthropicProvider(key, batch) : undefined
 }
 export function providerStatus(): { mode: string; detail: string } {
     const p = (process.env.REPLAY_VISION_PROVIDER || 'anthropic').toLowerCase()
-    const configured = p === 'exchange' ? !!process.env.REPLAY_VISION_EXCHANGE_DIR : !!readProviderKey()
+    const provider = selectProvider()
+    const configured = !!provider
     const allowed = on(process.env.REPLAY_VISION_ALLOW_EXTERNAL)
-    if (!allowed || !configured) return { mode: 'deterministic', detail: `${p} provider ${configured ? 'configured' : 'not configured'}; external analysis ${allowed ? 'allowed but no provider' : 'off'}: nothing leaves this server` }
-    return { mode: 'text', detail: `${p} provider, model ${DEFAULT_MODEL}; external analysis on: sanitized ±20 s windows around detected moments (allowed screen/element names, timings, coarse pointer positions, error categories, coverage) and code-computed counts are sent; never typed values, page text, URLs, identities or raw recordings` }
+    if (!allowed || !configured) return { mode: 'deterministic', detail: `${p} provider ${configured ? 'configured' : 'not configured'}; model analysis ${allowed ? 'allowed but no provider' : 'off'}: nothing is sent to a model` }
+    if (provider.selfHosted) return { mode: 'text', detail: `${p} provider (self-hosted${provider.name === 'openai_compatible' ? `, model ${process.env.REPLAY_VISION_OAI_MODEL}` : ''}): data stays on your infrastructure; full screen names, labels and (Watch fully) frames are sent to it, no redaction; calls and time stay bounded, cost 0` }
+    return { mode: 'text', detail: `${p} provider, model ${DEFAULT_MODEL}; external analysis on: sanitized ±20 s windows around detected moments (allowed screen/element names, timings, coarse pointer positions, error categories, coverage) and code-computed counts are sent; never typed values, page text, URLs, identities or raw recordings; Watch fully frames are never sent to an external provider` }
 }
 
 export function insightFacts(i: StoredInsight): InsightFacts {
@@ -56,7 +85,12 @@ export interface StageDeps {
     windowsFor(sessionId: string, offsetsMs: number[]): Promise<SanitizedWindow[]>
     now?: () => number
     salt?: string
+    /** Review M8: wall-clock deadline (epoch ms) and a cap on requests prepared, checked before each insight. */
+    deadline?: number
+    maxPrepared?: number
 }
+/** Explanation attempts per insight (each with its own id and reservation). */
+export const MAX_ATTEMPTS = 2
 export interface StageReport { prepared: number; skipped: Record<string, number>; collected: number; accepted: number; rejected: number; insufficient: number; failed: number; expired: number }
 const emptyReport = (): StageReport => ({ prepared: 0, skipped: {}, collected: 0, accepted: 0, rejected: 0, insufficient: 0, failed: 0, expired: 0 })
 const bump = (r: StageReport, k: string) => { r.skipped[k] = (r.skipped[k] ?? 0) + 1 }
@@ -67,7 +101,12 @@ export async function prepareExplanations(scopeKey: string, deps: StageDeps, lim
     const now = deps.now ?? Date.now
     const salt = deps.salt ?? PROMPT_VERSION
     for (const ins of listInsights(scopeKey, limit)) {
+        if (deps.deadline !== undefined && Date.now() >= deps.deadline) { bump(report, 'deadline'); break }
+        if (deps.maxPrepared !== undefined && report.prepared >= deps.maxPrepared) { bump(report, 'per_tick_cap'); break }
         if (one(`SELECT 1 FROM rv_llm_explanation WHERE insight_id = ? AND state IN ('intent','submitted','accepted','insufficient')`, ins.id)) { bump(report, 'already_explained'); continue }
+        // Review B3: a failed/rejected/timed-out request is never resubmitted under its id; a retry needs new evidence
+        // (a different request, hence a new id and its own reservation), at most MAX_ATTEMPTS per insight.
+        if (one<{ n: number }>('SELECT count(*) AS n FROM rv_llm_explanation WHERE insight_id = ?', ins.id)!.n >= MAX_ATTEMPTS) { bump(report, 'attempts_exhausted'); continue }
         // Up to three cited sessions, one window per session at its first cited moment.
         const bySession = new Map<string, number[]>()
         for (const c of ins.citations) if (bySession.size < 3 || bySession.has(c.session_id)) bySession.set(c.session_id, [...(bySession.get(c.session_id) ?? []), c.offset_ms])
@@ -80,9 +119,10 @@ export async function prepareExplanations(scopeKey: string, deps: StageDeps, lim
         if (!fit) { bump(report, 'input_cap'); continue }
         const params = fit.params, sentWindows = fit.sent
         const customId = customIdFor(ins.id, params)
+        if (one('SELECT 1 FROM rv_llm_explanation WHERE custom_id = ?', customId)) { bump(report, 'already_attempted'); continue }
         const runId = one<{ id: number }>(`SELECT id FROM rv_run WHERE session_id = ? AND state IN ('complete','partial') ORDER BY id DESC LIMIT 1`, ins.citations[0]!.session_id)?.id
         if (runId === undefined) { bump(report, 'no_run'); continue }
-        if (!reserveProvider(customId, runId, worstCaseMicros(params), deps.provider.name, 'global', now())) { bump(report, 'budget'); continue }
+        if (!reserveProvider(customId, runId, deps.provider.priced ? worstCaseMicros(params) : 0, deps.provider.name, 'global', now())) { bump(report, 'budget'); continue }
         const ts = new Date(now()).toISOString()
         run(`INSERT OR IGNORE INTO rv_llm_explanation(custom_id, insight_id, scope_key, run_id, provider, model, prompt_version, state, cited_json, created_at, updated_at) VALUES(?,?,?,?,?,?,?,'intent',?,?,?)`,
             customId, ins.id, scopeKey, runId, deps.provider.name, params.model, PROMPT_VERSION, JSON.stringify(sentWindows.flatMap((w) => w.window.events.map((e) => `${w.session_alias}:${e.id}`)).slice(0, 2000)), ts, ts)
@@ -90,7 +130,7 @@ export async function prepareExplanations(scopeKey: string, deps: StageDeps, lim
             const sub = await deps.provider.submit(customId, params)
             markSubmitted(customId, sub.batch_id, now())
             run(`UPDATE rv_llm_explanation SET state = 'submitted', updated_at = ? WHERE custom_id = ?`, ts, customId)
-            if (sub.immediate !== undefined) await finish(customId, { state: 'complete', message: sub.immediate }, report, deps.provider.batch)
+            if (sub.immediate !== undefined) await finish(customId, { state: 'complete', message: sub.immediate }, report, deps.provider)
             report.prepared++
         } catch (e) {
             // A local write failure (exchange) never reached a provider: release. A network error on a real
@@ -111,12 +151,12 @@ export async function collectExplanations(deps: Pick<StageDeps, 'provider' | 'no
         let p
         try { p = await deps.provider.poll(row.custom_id, row.batch_id, Date.parse(row.submitted_at ?? '') || Date.now()) } catch { continue } // provider down: try next tick
         if (p.state === 'pending') continue
-        await finish(row.custom_id, p, report, deps.provider.batch)
+        await finish(row.custom_id, p, report, deps.provider)
     }
     return report
 }
 
-async function finish(customId: string, p: Awaited<ReturnType<ReplayVisionProvider['poll']>>, report: StageReport, batch: boolean) {
+async function finish(customId: string, p: Awaited<ReturnType<ReplayVisionProvider['poll']>>, report: StageReport, pricing: Pick<ReplayVisionProvider, 'batch' | 'priced'>) {
     const ts = new Date().toISOString()
     report.collected++
     if (p.state === 'expired') {
@@ -132,7 +172,7 @@ async function finish(customId: string, p: Awaited<ReturnType<ReplayVisionProvid
         return
     }
     const parsed = parseProviderMessage(p.message)
-    const cost = costMicros(parsed.input_tokens, parsed.output_tokens, batch)
+    const cost = pricing.priced ? costMicros(parsed.input_tokens, parsed.output_tokens, pricing.batch) : 0
     markEnded(customId, { input_tokens: parsed.input_tokens, output_tokens: parsed.output_tokens, cost_micros: cost })
     reconcileProvider(customId, cost, parsed.input_tokens, parsed.output_tokens)
     const base = [parsed.input_tokens, parsed.output_tokens, cost, ts, customId] as const

@@ -247,3 +247,47 @@ test('fitWindows drops the last-cited windows until the request fits the 8k inpu
     assert.deepEqual(fit.sent.map((w) => w.session_alias), windows.slice(0, fit.sent.length).map((w) => w.session_alias))
     assert.equal(L.fitWindows(facts, [{ session_alias: 'S9', window: big(5000, 5000) }]), null)
 })
+
+test('review B3: a rejected answer is never resubmitted or re-billed; a reconciled id cannot be reserved again', async () => {
+    run('DELETE FROM rv_budget') // an earlier test fills today's call cap on purpose
+    const exDir = join(dir, 'ex-b3'), provider = new PV.ExchangeProvider(exDir, 60_000)
+    seedInsight('CLB3')
+    const deps = { provider, windowsFor: async (_s: string, o: number[]) => o.map(window) }
+    const before = B.budgetRow(B.dayOf(), 'global')
+    assert.equal((await L.prepareExplanations('client:CLB3', deps)).prepared, 1)
+    const [file] = requests(exDir), customId = file!.replace(/\.json$/, '')
+    answer(exDir, customId, { decision: 'explain', likely_cause: 'Likely cause: the Save button is broken (event 999).', fix: 'Fix: repair Save on the invoice.', cited_event_ids: ['999'], confidence: 'high', unsupported: [] })
+    assert.equal((await L.collectExplanations({ provider })).rejected, 1)
+    rmSync(join(exDir, 'requests', file!))
+    // The same evidence again: nothing is submitted, nothing reserved.
+    const again = await L.prepareExplanations('client:CLB3', deps)
+    assert.equal(again.prepared, 0)
+    assert.ok((again.skipped.already_attempted ?? 0) + (again.skipped.attempts_exhausted ?? 0) >= 1)
+    assert.equal(requests(exDir).length, 0, 'no second paid request')
+    const g = B.budgetRow(B.dayOf(), 'global')
+    assert.equal(g.used_llm_calls - before.used_llm_calls, 1, 'exactly one call accounted')
+    assert.equal(B.reserveProvider(customId, 1, 1000, 'exchange'), false, 'a reconciled id is never reserved again')
+})
+
+test('self-hosted openai_compatible: same citation guards, cost 0, still one counted call per request', async () => {
+    run('DELETE FROM rv_budget')
+    seedInsight('CLOAI')
+    let calls = 0
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+        if (String(url).endsWith('/models')) return new Response(JSON.stringify({ data: [{ id: 'qwen' }] }))
+        calls++
+        const body = JSON.parse(String(init?.body)), text = body.messages.at(-1).content as string
+        const alias = text.match(/"session":"(S[0-9a-f]{8})"/)![1]
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ decision: 'explain', likely_cause: 'Likely cause: a hidden requirement (event 999).', fix: 'Fix: show the field next to Save.', cited_event_ids: [`${alias}:999`], confidence: 'high', unsupported: [] }) }, finish_reason: 'stop' }], usage: { prompt_tokens: 900, completion_tokens: 80 } }))
+    }) as unknown as typeof fetch
+    const provider = new PV.OpenAICompatibleProvider({ baseUrl: 'http://127.0.0.1:8000/v1', model: 'qwen', selfHosted: true, vision: false, jsonMode: 'json_schema', timeoutMs: 5000, fetchImpl })
+    const before = B.budgetRow(B.dayOf(), 'global')
+    const r = await L.prepareExplanations('client:CLOAI', { provider, windowsFor: async (_s, o) => o.map(window) })
+    assert.equal(calls, 1)
+    assert.equal(r.rejected, 1, 'a citation to an event that was not sent is rejected, as for every provider')
+    assert.equal(listInsights('client:CLOAI')[0]!.cause_source, 'template')
+    const g = B.budgetRow(B.dayOf(), 'global')
+    assert.equal(g.used_llm_calls - before.used_llm_calls, 1, 'calls stay bounded')
+    assert.equal(g.estimated_cost_micros - before.estimated_cost_micros, 0, 'cost 0')
+    assert.equal(B.reserveProvider('zero-cost-ext', 1, 0, 'anthropic'), false, 'a priced provider cannot reserve 0')
+})

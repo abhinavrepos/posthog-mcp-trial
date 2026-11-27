@@ -127,9 +127,16 @@ function depsFor(provider: InstanceType<typeof PV.ExchangeProvider>) {
 }
 const message = (findings: unknown[], usage = { input_tokens: 9000, output_tokens: 300 }) => ({ type: 'message', role: 'assistant', model: 'claude-haiku-5-5', stop_reason: 'end_turn', usage, content: [{ type: 'text', text: JSON.stringify({ decision: findings.length ? 'findings' : 'none', findings }) }] })
 
-test('gates: unverified image input, watch_fully off, no client opt-in, feature or external analysis off: nothing rendered or sent', async () => {
+test('egress: an external provider never receives frames (code review B1); a self-hosted one is gated by verified image input and the admin switch, without client opt-in', async () => {
     seed()
+    delete process.env.REPLAY_VISION_EXCHANGE_SELF_HOSTED
+    const external = new PV.ExchangeProvider(join(dir, 'ex-external'), 60_000)
+    assert.equal(external.selfHosted, false)
+    assert.match((await W.watchFullyAvailability(external)).reason, /self-hosted/)
+    assert.deepEqual((await W.prepareWatchFully(depsFor(external).deps)).skipped, { image_input_unavailable: 1 })
+    process.env.REPLAY_VISION_EXCHANGE_SELF_HOSTED = 'on'
     const ex = join(dir, 'ex-gates'), provider = new PV.ExchangeProvider(ex, 60_000), { deps, renders } = depsFor(provider)
+    assert.equal(provider.selfHosted, true)
     const { mkdirSync } = await import('node:fs'); mkdirSync(ex, { recursive: true })
     assert.equal((await W.watchFullyAvailability(provider)).available, false, 'no capabilities.json: unverified, so unavailable')
     assert.deepEqual((await W.prepareWatchFully(deps)).skipped, { image_input_unavailable: 1 })
@@ -141,18 +148,20 @@ test('gates: unverified image input, watch_fully off, no client opt-in, feature 
     assert.equal((await W.watchFullyAvailability(provider)).available, true)
     assert.equal((await W.prepareWatchFully(deps)).prepared, 0, 'watch_fully is off by default')
     assert.equal(W.setWatchFully(2, true), false, 'client watches cannot be watched fully')
-    assert.equal(W.setWatchFully(1, true), true)
-    assert.equal((await W.prepareWatchFully(deps)).prepared, 0, 'client C1 has no vision opt-in')
-    run(`INSERT INTO rv_client_policy(client_id, vision_opt_in, updated_by, updated_at) VALUES('C1',1,'admin',?)`, new Date().toISOString())
     assert.deepEqual((await W.prepareWatchFully({ ...deps, enabled: false })).skipped, { feature_off: 1 })
     assert.deepEqual((await W.prepareWatchFully({ ...deps, externalAllowed: false })).skipped, { external_analysis_off: 1 })
     assert.equal(renders(), 0)
     assert.ok(!existsSync(join(ex, 'requests')) || readdirSync(join(ex, 'requests')).length === 0)
     assert.equal(one<{ n: number }>('SELECT count(*) AS n FROM rv_reservation')!.n, 0, 'nothing reserved')
+    // Self-hosted: the admin's per-user switch is enough; no client vision opt-in row exists.
+    assert.equal(W.setWatchFully(1, true), true)
+    assert.equal(one<{ n: number }>('SELECT count(*) AS n FROM rv_client_policy')!.n, 0)
+    assert.equal((await W.prepareWatchFully(deps)).prepared, 1)
 })
 
 test('end to end through the exchange: reserve, exact image request, no resubmission, validated V1 findings stored, budget reconciled once', async () => {
     seed()
+    process.env.REPLAY_VISION_EXCHANGE_SELF_HOSTED = 'on' // frames go only to a self-hosted model
     const ex = join(dir, 'ex-e2e'), provider = new PV.ExchangeProvider(ex, 60_000), { deps } = depsFor(provider)
     const { mkdirSync } = await import('node:fs'); mkdirSync(ex, { recursive: true })
     writeFileSync(join(ex, 'capabilities.json'), JSON.stringify({ model: 'claude-haiku-5-5', source: 'models.retrieve', image_input: true, checked_at: new Date().toISOString() }))
@@ -188,6 +197,7 @@ test('end to end through the exchange: reserve, exact image request, no resubmis
 
 test('no answer before the deadline releases the reservation; a full budget refuses before sending', async () => {
     seed()
+    process.env.REPLAY_VISION_EXCHANGE_SELF_HOSTED = 'on' // frames go only to a self-hosted model
     const ex = join(dir, 'ex-timeout'), provider = new PV.ExchangeProvider(ex, 1), { deps } = depsFor(provider)
     const { mkdirSync } = await import('node:fs'); mkdirSync(ex, { recursive: true })
     writeFileSync(join(ex, 'capabilities.json'), JSON.stringify({ model: 'claude-haiku-5-5', source: 'models.retrieve', image_input: true, checked_at: new Date().toISOString() }))

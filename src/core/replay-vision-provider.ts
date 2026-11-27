@@ -110,8 +110,12 @@ export function parseProviderMessage(raw: unknown): ParsedResponse {
 
 export type JobPoll = { state: 'pending' } | { state: 'complete'; message: unknown } | { state: 'failed'; error: string } | { state: 'expired' }
 export interface ReplayVisionProvider {
-    readonly name: 'anthropic' | 'exchange'
+    readonly name: 'anthropic' | 'exchange' | 'openai_compatible'
     readonly batch: boolean
+    /** Egress policy: true when the model runs on the operator's own infrastructure (data does not leave it). */
+    readonly selfHosted: boolean
+    /** False for providers without per-token charges (self-hosted): cost is 0, calls and time stay bounded. */
+    readonly priced: boolean
     /** Submit one request under a stable custom id; returns a provider batch id when there is one. Must be idempotent for the exchange provider. */
     submit(customId: string, params: Anthropic.MessageCreateParamsNonStreaming): Promise<{ batch_id: string | null; immediate?: unknown }>
     /** Check a submitted request. */
@@ -121,6 +125,8 @@ export interface ReplayVisionProvider {
 
 export class AnthropicProvider implements ReplayVisionProvider {
     readonly name = 'anthropic' as const
+    readonly selfHosted = false
+    readonly priced = true
     private client: Anthropic
     /** batch=true for scheduled Monitor work (Batch API), false for bounded on-demand calls. */
     constructor(apiKey: string, readonly batch = true) {
@@ -154,6 +160,9 @@ export class AnthropicProvider implements ReplayVisionProvider {
 export class ExchangeProvider implements ReplayVisionProvider {
     readonly name = 'exchange' as const
     readonly batch = false
+    readonly priced = true
+    /** An exchange answered by a model on the operator's own infrastructure may be declared self-hosted. */
+    readonly selfHosted = ['on', 'true', '1'].includes(String(process.env.REPLAY_VISION_EXCHANGE_SELF_HOSTED ?? '').toLowerCase())
     constructor(readonly dir: string, readonly timeoutMs = Number(process.env.REPLAY_VISION_EXCHANGE_TIMEOUT_MS) || 15 * 60_000) {}
     private safe(id: string) { if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) throw new Error('invalid_custom_id'); return id }
     async submit(customId: string, params: Anthropic.MessageCreateParamsNonStreaming) {
@@ -199,5 +208,77 @@ export class ExchangeProvider implements ReplayVisionProvider {
             if (c.model === model && c.source === 'models.retrieve' && typeof c.image_input === 'boolean' && fresh) return { text: true, batch: false, image_input: c.image_input, verified: true }
         } catch { /* no or invalid file: unverified */ }
         return { text: true, batch: false, image_input: false, verified: false }
+    }
+}
+
+/**
+ * OpenAI-compatible chat completions (vLLM, Ollama, LM Studio, TGI, ...): base URL + model + optional key. The request
+ * is the same Anthropic-shaped params object the other providers send, converted 1:1 (system, text, base64 PNG images
+ * as data URLs, max_tokens, the JSON schema as response_format); the answer is converted back to a Messages-API-shaped
+ * object so every parser, citation guard and rubric applies unchanged. Synchronous (no batch), bounded by a timeout.
+ */
+export interface OpenAICompatibleOptions { baseUrl: string; model: string; apiKey?: string; selfHosted: boolean; vision: boolean; jsonMode: 'json_schema' | 'json_object'; timeoutMs: number; fetchImpl?: typeof fetch }
+export class OpenAICompatibleProvider implements ReplayVisionProvider {
+    readonly name = 'openai_compatible' as const
+    readonly batch = false
+    readonly priced = false
+    readonly selfHosted: boolean
+    constructor(readonly opts: OpenAICompatibleOptions) {
+        if (!/^https?:\/\/[^\s]+$/.test(opts.baseUrl)) throw new Error('openai_compatible: base URL must be http(s)')
+        if (!/^[\w.:/@-]{1,200}$/.test(opts.model)) throw new Error('openai_compatible: invalid model name')
+        this.selfHosted = opts.selfHosted
+    }
+    private url(path: string) { return this.opts.baseUrl.replace(/\/+$/, '') + path }
+    private headers(): Record<string, string> { return { 'content-type': 'application/json', ...(this.opts.apiKey ? { authorization: `Bearer ${this.opts.apiKey}` } : {}) } }
+    /** The chat-completions body for an Anthropic-shaped params object (exported for tests via toChatBody). */
+    chatBody(params: Anthropic.MessageCreateParamsNonStreaming) { return toChatBody(params, this.opts.model, this.opts.jsonMode) }
+    async submit(_customId: string, params: Anthropic.MessageCreateParamsNonStreaming) {
+        const f = this.opts.fetchImpl ?? fetch
+        const r = await f(this.url('/chat/completions'), { method: 'POST', headers: this.headers(), body: JSON.stringify(this.chatBody(params)), signal: AbortSignal.timeout(this.opts.timeoutMs) })
+        const text = await r.text()
+        if (text.length > LIMITS.maxResponseBytes * 4) throw new Error('openai_compatible: response too large')
+        if (!r.ok) throw new Error(`openai_compatible: HTTP ${r.status}`)
+        return { batch_id: null, immediate: fromChatResponse(JSON.parse(text), this.opts.model) }
+    }
+    async poll(): Promise<JobPoll> { return { state: 'failed', error: 'synchronous_provider' } }
+    /** The model must be served (GET /models); image input is the operator's declaration (REPLAY_VISION_OAI_VISION). */
+    async capabilities(model: string = this.opts.model) {
+        const f = this.opts.fetchImpl ?? fetch
+        try {
+            const r = await f(this.url('/models'), { headers: this.headers(), signal: AbortSignal.timeout(Math.min(10_000, this.opts.timeoutMs)) })
+            const j = r.ok ? await r.json() as { data?: { id?: string }[] } : null
+            const served = !!j?.data?.some((m) => m?.id === this.opts.model)
+            return { text: served, batch: false, image_input: served && this.opts.vision, verified: served }
+        } catch { return { text: false, batch: false, image_input: false, verified: false } }
+        void model
+    }
+}
+type ChatPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
+export function toChatBody(params: Anthropic.MessageCreateParamsNonStreaming, model: string, jsonMode: 'json_schema' | 'json_object') {
+    const messages: { role: string; content: string | ChatPart[] }[] = []
+    if (typeof params.system === 'string' && params.system) messages.push({ role: 'system', content: params.system })
+    for (const m of params.messages) {
+        const parts: ChatPart[] = []
+        for (const b of (typeof m.content === 'string' ? [{ type: 'text' as const, text: m.content }] : m.content)) {
+            if (b.type === 'text') parts.push({ type: 'text', text: b.text })
+            else if (b.type === 'image' && b.source.type === 'base64') parts.push({ type: 'image_url', image_url: { url: `data:${b.source.media_type};base64,${b.source.data}` } })
+        }
+        messages.push({ role: m.role, content: parts.length === 1 && parts[0]!.type === 'text' ? parts[0]!.text : parts })
+    }
+    const schema = (params.output_config as { format?: { schema?: Record<string, unknown> } } | undefined)?.format?.schema
+    return {
+        model, messages, max_tokens: params.max_tokens, temperature: 0,
+        ...(schema ? { response_format: jsonMode === 'json_schema' ? { type: 'json_schema', json_schema: { name: 'replay_vision', strict: true, schema } } : { type: 'json_object' } } : {}),
+    }
+}
+export function fromChatResponse(j: unknown, model: string): unknown {
+    const r = j as { choices?: { message?: { content?: unknown; refusal?: unknown }; finish_reason?: string }[]; usage?: { prompt_tokens?: number; completion_tokens?: number } }
+    const c = r?.choices?.[0]
+    const text = typeof c?.message?.content === 'string' ? c.message.content : ''
+    return {
+        type: 'message', role: 'assistant', model,
+        content: text ? [{ type: 'text', text }] : [],
+        stop_reason: c?.message?.refusal ? 'refusal' : c?.finish_reason === 'length' ? 'max_tokens' : 'end_turn',
+        usage: { input_tokens: Math.max(0, Number(r?.usage?.prompt_tokens) || 0), output_tokens: Math.max(0, Number(r?.usage?.completion_tokens) || 0) },
     }
 }

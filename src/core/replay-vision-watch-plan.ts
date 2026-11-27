@@ -18,6 +18,8 @@ export const WATCH_LIMITS = Object.freeze({
     maxClipS: 40,             // one render range
     maxEvents: 400,           // sanitized timeline events sent with the frames
     nearbyBeforeMs: 2_000, nearbyAfterMs: 500,
+    renderDeadlineMs: 180_000, // review M7: rendering all frames of one session, end to end
+    frameTimeoutMs: 20_000,    // one ffmpeg frame extraction
 })
 export type WatchLimits = typeof WATCH_LIMITS
 
