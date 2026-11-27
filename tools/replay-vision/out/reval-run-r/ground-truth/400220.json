@@ -1,0 +1,59 @@
+{
+  "plan": {
+    "seed": 400220,
+    "phase": "calibration",
+    "user": "RVCAL2",
+    "persona": "Hurried",
+    "workflow": "deal"
+  },
+  "session_id": "01a21a8d-6947-7b17-8ffc-be4cfa0331ee",
+  "distinct_id": "C1DEV|01|SEM|RVCAL2",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_deal",
+      "ok": true,
+      "at": 1795741807700
+    },
+    {
+      "name": "trade_date",
+      "ok": true,
+      "at": 1795741808213
+    },
+    {
+      "name": "counterparty",
+      "ok": true,
+      "at": 1795741808595
+    },
+    {
+      "name": "notional",
+      "ok": true,
+      "at": 1795741809048
+    },
+    {
+      "name": "cashflow_tab",
+      "ok": true,
+      "at": 1795741810234
+    },
+    {
+      "name": "recalc",
+      "ok": true,
+      "at": 1795741811216
+    },
+    {
+      "name": "terms_tab",
+      "ok": true,
+      "at": 1795741812293
+    },
+    {
+      "name": "saved",
+      "ok": true,
+      "at": 1795741813218
+    },
+    {
+      "name": "closed",
+      "ok": true,
+      "at": 1795741815151
+    }
+  ]
+}

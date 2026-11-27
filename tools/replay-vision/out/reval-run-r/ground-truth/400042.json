@@ -1,0 +1,54 @@
+{
+  "plan": {
+    "seed": 400042,
+    "phase": "calibration",
+    "user": "RVCAL4",
+    "persona": "Explorer",
+    "workflow": "amortisation"
+  },
+  "session_id": "01a21a83-f724-7344-8f85-543d088540bc",
+  "distinct_id": "C1DEV|01|SEM|RVCAL4",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_loan",
+      "ok": true,
+      "at": 1795741194035
+    },
+    {
+      "name": "amortisation_tab",
+      "ok": true,
+      "at": 1795741194960
+    },
+    {
+      "name": "closed_loan",
+      "ok": true,
+      "at": 1795741197939
+    },
+    {
+      "name": "opened_report",
+      "ok": true,
+      "at": 1795741200700
+    },
+    {
+      "name": "report_params",
+      "ok": true,
+      "at": 1795741202841
+    },
+    {
+      "name": "report_run",
+      "ok": true,
+      "at": 1795741204303
+    },
+    {
+      "name": "report_scrolled",
+      "ok": true,
+      "at": 1795741207349
+    },
+    {
+      "name": "report_export",
+      "ok": true,
+      "at": 1795741209030
+    }
+  ]
+}

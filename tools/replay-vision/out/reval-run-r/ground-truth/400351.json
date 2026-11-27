@@ -1,0 +1,74 @@
+{
+  "plan": {
+    "seed": 400351,
+    "phase": "calibration",
+    "user": "RVCAL5",
+    "persona": "Returning",
+    "workflow": "hedge"
+  },
+  "session_id": "01a21a96-9880-7690-8b3f-dfc41195aaf9",
+  "distinct_id": "C1DEV|01|SEM|RVCAL5",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_hedge",
+      "ok": true,
+      "at": 1795742410018
+    },
+    {
+      "name": "hedge_fields",
+      "ok": true,
+      "at": 1795742411880
+    },
+    {
+      "name": "effectiveness_tab",
+      "ok": true,
+      "at": 1795742412809
+    },
+    {
+      "name": "documentation_tab",
+      "ok": true,
+      "at": 1795742414004
+    },
+    {
+      "name": "designation_tab",
+      "ok": true,
+      "at": 1795742414873
+    },
+    {
+      "name": "saved",
+      "ok": true,
+      "at": 1795742415578
+    },
+    {
+      "name": "approved",
+      "ok": true,
+      "at": 1795742417368
+    },
+    {
+      "name": "closed",
+      "ok": true,
+      "at": 1795742419279
+    },
+    {
+      "name": "opened_report",
+      "ok": true,
+      "at": 1795742421707
+    },
+    {
+      "name": "report_params",
+      "ok": true,
+      "at": 1795742423321
+    },
+    {
+      "name": "report_run",
+      "ok": true,
+      "at": 1795742424343
+    },
+    {
+      "name": "report_export",
+      "ok": true,
+      "at": 1795742427063
+    }
+  ]
+}

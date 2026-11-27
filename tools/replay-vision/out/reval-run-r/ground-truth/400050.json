@@ -1,0 +1,59 @@
+{
+  "plan": {
+    "seed": 400050,
+    "phase": "calibration",
+    "user": "RVCAL5",
+    "persona": "Returning",
+    "workflow": "deal"
+  },
+  "session_id": "01a21a84-628a-77fa-a9ea-ce53b151bfb2",
+  "distinct_id": "C1DEV|01|SEM|RVCAL5",
+  "truth": [],
+  "steps": [
+    {
+      "name": "opened_deal",
+      "ok": true,
+      "at": 1795741216334
+    },
+    {
+      "name": "trade_date",
+      "ok": true,
+      "at": 1795741216991
+    },
+    {
+      "name": "counterparty",
+      "ok": true,
+      "at": 1795741217474
+    },
+    {
+      "name": "notional",
+      "ok": true,
+      "at": 1795741218171
+    },
+    {
+      "name": "cashflow_tab",
+      "ok": true,
+      "at": 1795741219020
+    },
+    {
+      "name": "recalc",
+      "ok": true,
+      "at": 1795741219756
+    },
+    {
+      "name": "terms_tab",
+      "ok": true,
+      "at": 1795741220692
+    },
+    {
+      "name": "saved",
+      "ok": true,
+      "at": 1795741221478
+    },
+    {
+      "name": "closed",
+      "ok": true,
+      "at": 1795741223700
+    }
+  ]
+}
