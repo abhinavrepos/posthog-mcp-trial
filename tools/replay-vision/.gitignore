@@ -4,5 +4,7 @@ out/*
 !out/erpnext-run-c/
 !out/erpnext-dev/
 !out/reval-run-r/
+!out/erpnext-run-d/
+!out/reval-run-r2/
 out/*/snapshots/
 out/*/pipeline.db*

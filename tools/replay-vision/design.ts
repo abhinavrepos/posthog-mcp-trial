@@ -33,8 +33,9 @@ export const COHORTS:Cohort[]=[
 export const CALIBRATION_REPEATS=4
 /** Held-out seed bases. Run A/B: controls 2000x0, cohorts 2200xx. Run C (fresh held-out after the v6 freeze):
  * controls 3000x0, cohorts 3200xx, and cohort users rotated by 3 so user-cohort pairings differ from run A. */
-export type HeldoutRun='A'|'C'
-export const RUN_SEEDS:Record<HeldoutRun,{control:number;cohort:number;rotate:number}>={A:{control:200000,cohort:220000,rotate:0},C:{control:300000,cohort:320000,rotate:3}}
+export type HeldoutRun='A'|'C'|'D'
+// Run D (final v9 confirmation): controls 6000x0, cohorts 6200xx, rotation 1.
+export const RUN_SEEDS:Record<HeldoutRun,{control:number;cohort:number;rotate:number}>={A:{control:200000,cohort:220000,rotate:0},C:{control:300000,cohort:320000,rotate:3},D:{control:600000,cohort:620000,rotate:1}}
 export const cohortSeed=(run:HeldoutRun,i:number,j:number)=>RUN_SEEDS[run].cohort+i*10+j
 export const controlSeeds=(run:HeldoutRun)=>Array.from({length:18},(_,i)=>RUN_SEEDS[run].control+Math.floor(i/3)*10+i%3)
 export function plans(smoke:false|'invoice'|'purchase'=false,run:HeldoutRun='A'):{calibration:Plan[];heldout:Plan[]}{

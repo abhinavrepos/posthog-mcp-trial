@@ -31,13 +31,17 @@ export const R_COHORTS: RevalCohort[] = [
 /** Elements a correct Reval insight may name (fixed before results; '*' = element not required, detector must match). */
 export const R_ACCEPTED: Record<string, string[]> = { validation_loop: ['save'], dead_button: ['apply'], hesitation: ['principal amount', 'notional'], revisit: ['*'], scroll_hunt: ['*'], slow_wait: ['*'] }
 /** Calibration seeds 400000+, held-out controls 500000+, held-out cohorts 520000+ (disjoint from every ERPNext seed). */
-export function revalPlans(smoke = false): { calibration: RevalPlan[]; heldout: RevalPlan[] } {
+/** Held-out seed bases: run R controls 5000x0 / cohorts 5200xx; run R2 (final v9 confirmation) 7000x0 / 7200xx, users rotated by 2. */
+export type RevalRun = 'R' | 'R2'
+export const R_RUN_SEEDS: Record<RevalRun, { control: number; cohort: number; rotate: number }> = { R: { control: 500000, cohort: 520000, rotate: 0 }, R2: { control: 700000, cohort: 720000, rotate: 2 } }
+export function revalPlans(smoke = false, run: RevalRun = 'R'): { calibration: RevalPlan[]; heldout: RevalPlan[] } {
     if (smoke) return { calibration: [], heldout: [{ seed: 771201, phase: 'heldout', user: 'RVSMOKE0', persona: 'Careful', workflow: 'deal', injection: 'validation_loop', dose: 2, planned_severity: 'High', cohort: 'smoke' }] }
     const calibration: RevalPlan[] = [], heldout: RevalPlan[] = []
     for (let r = 0; r < R_CALIBRATION_REPEATS; r++) for (let u = 0; u < 6; u++) for (let w = 0; w < 3; w++) calibration.push({ seed: 400000 + r * 100 + u * 10 + w, phase: 'calibration', user: `RVCAL${u}`, persona: R_PERSONAS[u]!, workflow: R_WORKFLOWS[w]! })
-    for (let u = 0; u < 6; u++) for (let w = 0; w < 3; w++) heldout.push({ seed: 500000 + u * 10 + w, phase: 'heldout', user: `RVEVAL${u}`, persona: R_PERSONAS[u]!, workflow: R_WORKFLOWS[w]! })
-    R_COHORTS.forEach((k, i) => { for (let j = 0; j < k.users; j++) { const u = (i + j) % 6; heldout.push({ seed: 520000 + i * 10 + j, phase: 'heldout', user: `RVEVAL${u}`, persona: R_PERSONAS[u]!, workflow: k.workflow, injection: k.injection, dose: k.dose, planned_severity: k.planned ?? 'Low', cohort: k.id, cohort_users: k.users }) } })
+    for (let u = 0; u < 6; u++) for (let w = 0; w < 3; w++) heldout.push({ seed: R_RUN_SEEDS[run].control + u * 10 + w, phase: 'heldout', user: `RVEVAL${u}`, persona: R_PERSONAS[u]!, workflow: R_WORKFLOWS[w]! })
+    R_COHORTS.forEach((k, i) => { for (let j = 0; j < k.users; j++) { const u = (i + j + R_RUN_SEEDS[run].rotate) % 6; heldout.push({ seed: R_RUN_SEEDS[run].cohort + i * 10 + j, phase: 'heldout', user: `RVEVAL${u}`, persona: R_PERSONAS[u]!, workflow: k.workflow, injection: k.injection, dose: k.dose, planned_severity: k.planned ?? 'Low', cohort: k.id, cohort_users: k.users }) } })
     return { calibration, heldout }
 }
-export const R_CONTROL_SEEDS = Array.from({ length: 18 }, (_, i) => 500000 + Math.floor(i / 3) * 10 + i % 3)
-export const rCohortSeed = (i: number, j: number) => 520000 + i * 10 + j
+export const rControlSeeds = (run: RevalRun = 'R') => Array.from({ length: 18 }, (_, i) => R_RUN_SEEDS[run].control + Math.floor(i / 3) * 10 + i % 3)
+export const R_CONTROL_SEEDS = rControlSeeds('R')
+export const rCohortSeed = (i: number, j: number, run: RevalRun = 'R') => R_RUN_SEEDS[run].cohort + i * 10 + j

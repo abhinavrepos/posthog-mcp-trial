@@ -17,8 +17,8 @@ import {plans as designPlans,devPlans,COHORTS,controlSeeds,cohortSeed,type Heldo
 
 const base=dirname(fileURLToPath(import.meta.url)),smoke=process.argv.includes('--smoke')||process.argv.includes('--smoke-purchase'),dev=process.argv.includes('--dev')
 // --run-c: fresh held-out set (new seeds) in out/erpnext-run-c; calibration sessions and the snapshot cache are shared with out/erpnext-v2.
-const heldoutRun:HeldoutRun=process.argv.includes('--run-c')?'C':'A'
-const out=join(base,'out',process.argv.includes('--smoke-purchase')?'smoke-purchase':smoke?'smoke':dev?'erpnext-dev':heldoutRun==='C'?'erpnext-run-c':'erpnext-v2'),c=process.argv.includes('--llm-pass2')?{host:'',projectId:'',personalKey:'',token:'',app:''}:labConfig()
+const heldoutRun:HeldoutRun=process.argv.includes('--run-d')?'D':process.argv.includes('--run-c')?'C':'A'
+const out=join(base,'out',process.argv.includes('--smoke-purchase')?'smoke-purchase':smoke?'smoke':dev?'erpnext-dev':heldoutRun==='D'?'erpnext-run-d':heldoutRun==='C'?'erpnext-run-c':'erpnext-v2'),c=process.argv.includes('--llm-pass2')?{host:'',projectId:'',personalKey:'',token:'',app:''}:labConfig()
 const shared=join(base,'out','erpnext-v2')
 process.env.POSTHOG_HOST=c.host;process.env.POSTHOG_PROJECT_ID=c.projectId;process.env.POSTHOG_PERSONAL_API_KEY=c.personalKey;process.env.POSTHOG_PROJECT_TOKEN=c.token
 // The injected scroll-hunt target is a lab label, added to the product's label vocabulary for this run only.
@@ -34,7 +34,7 @@ async function startProxy(){const p=spawn(process.execPath,['--import','tsx',joi
 /** Captures of the current design only, last attempt per seed (the pilot seeds 2100xx are not part of it). */
 async function currentCaptures():Promise<Captured[]>{
  const p=plans(),seeds=new Set([...p.calibration,...p.heldout].map(x=>x.seed)),bySeed=new Map<number,Captured>()
- const files=heldoutRun==='C'?[join(shared,'sessions.jsonl'),join(out,'sessions.jsonl')]:[join(out,'sessions.jsonl')]
+ const files=heldoutRun!=='A'?[join(shared,'sessions.jsonl'),join(out,'sessions.jsonl')]:[join(out,'sessions.jsonl')]
  for(const f of files)for(const x of await load<Captured>(f))if(seeds.has(x.plan.seed)&&(f===join(out,'sessions.jsonl')||x.plan.phase==='calibration'))bySeed.set(x.plan.seed,x)
  return [...bySeed.values()]
 }
@@ -49,7 +49,7 @@ async function capture(){
   const capturesFile=join(out,'sessions.jsonl'),readinessFile=join(out,'readiness.jsonl')
   const captures=await load<Captured>(capturesFile),readiness=await load<Readiness>(readinessFile)
   // Run C reuses the calibration sessions captured for run A (calibration data, never held-out).
-  for(const phase of (heldoutRun==='C'?['heldout']:['calibration','heldout']) as ('calibration'|'heldout')[]){
+  for(const phase of (heldoutRun!=='A'?['heldout']:['calibration','heldout']) as ('calibration'|'heldout')[]){
    for(const p of plan[phase]){
     if(captures.some(x=>x.plan.seed===p.seed&&x.session_id))continue
     const result=await drivePlan(c,p,fixtures)
@@ -75,7 +75,7 @@ async function evaluate(){
  const {score,calibrationSummary}=await import('./score.ts')
  const {writeReport}=await import('./report.ts')
  // Run C: the config + calibration baselines were frozen (--freeze-only) before any run C session was analysed; refuse to score on a different hash.
- const preRegistered=heldoutRun==='C'?JSON.parse(await readFile(join(out,'frozen-config.json'),'utf8')).hash as string:undefined
+ const preRegistered=heldoutRun!=='A'?JSON.parse(await readFile(join(out,'frozen-config.json'),'utf8')).hash as string:undefined
  const pipeline=await runPipeline(out,captures,COHORTS.map((k,i)=>({id:k.id,seeds:Array.from({length:k.users},(_,j)=>cohortSeed(heldoutRun,i,j))})),CONTROL_SEEDS,process.argv.includes('--llm-pass1'),join(shared,'snapshots'),{expectHash:preRegistered})
  await writeFile(join(out,'pipeline.json'),JSON.stringify(pipeline))
  const held=score(captures,pipeline,COHORTS,CONTROL_SEEDS),cal=calibrationSummary(captures,pipeline)

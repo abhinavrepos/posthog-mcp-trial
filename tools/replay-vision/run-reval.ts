@@ -13,10 +13,13 @@ import puppeteer from 'puppeteer'
 import { checkApplication, labConfig, recordingOptIn } from './setup.ts'
 import type { Readiness } from './capture.ts'
 import { driveReval, HESITATION_LABEL, type RevalCaptured } from './reval-personas.ts'
-import { R_ACCEPTED, R_CALIBRATION_REPEATS, R_COHORTS, R_CONTROL_SEEDS, rCohortSeed, revalPlans } from './reval-design.ts'
+import { R_ACCEPTED, R_CALIBRATION_REPEATS, R_COHORTS, rControlSeeds, rCohortSeed, revalPlans, type RevalRun } from './reval-design.ts'
+const plansFor = (smoke = false) => revalPlans(smoke, rrun)
 
 const base = dirname(fileURLToPath(import.meta.url)), smoke = process.argv.includes('--smoke')
-const out = join(base, 'out', smoke ? 'reval-smoke' : 'reval-run-r'), c = labConfig()
+// --run-r2: fresh held-out (new seeds) in out/reval-run-r2; calibration sessions and snapshot cache are shared with out/reval-run-r.
+const rrun: RevalRun = process.argv.includes('--run-r2') ? 'R2' : 'R'
+const out = join(base, 'out', smoke ? 'reval-smoke' : rrun === 'R2' ? 'reval-run-r2' : 'reval-run-r'), shared = join(base, 'out', 'reval-run-r'), c = labConfig()
 const repo = join(base, '..', '..')
 Object.assign(process.env, { POSTHOG_HOST: c.host, POSTHOG_PROJECT_ID: c.projectId, POSTHOG_PERSONAL_API_KEY: c.personalKey, POSTHOG_PROJECT_TOKEN: c.token, APP_EVENTS_FILE: join(repo, 'config/app-events.reval.json') })
 const { SCREENS } = await import('../reval-sim/screens.ts')
@@ -24,8 +27,9 @@ process.env.REPLAY_VISION_LABELS = [...new Set([process.env.REPLAY_VISION_LABELS
 
 async function load<T>(file: string): Promise<T[]> { try { return (await readFile(file, 'utf8')).split('\n').filter(Boolean).map((x) => JSON.parse(x)) } catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return []; throw e } }
 async function currentCaptures(): Promise<RevalCaptured[]> {
-    const p = revalPlans(smoke), seeds = new Set([...p.calibration, ...p.heldout].map((x) => x.seed)), by = new Map<number, RevalCaptured>()
-    for (const x of await load<RevalCaptured>(join(out, 'sessions.jsonl'))) if (seeds.has(x.plan.seed)) by.set(x.plan.seed, x)
+    const p = plansFor(smoke), seeds = new Set([...p.calibration, ...p.heldout].map((x) => x.seed)), by = new Map<number, RevalCaptured>()
+    const files = rrun === 'R2' ? [join(shared, 'sessions.jsonl'), join(out, 'sessions.jsonl')] : [join(out, 'sessions.jsonl')]
+    for (const f of files) for (const x of await load<RevalCaptured>(f)) if (seeds.has(x.plan.seed) && (f === join(out, 'sessions.jsonl') || x.plan.phase === 'calibration')) by.set(x.plan.seed, x)
     return [...by.values()]
 }
 async function capture() {
@@ -38,11 +42,11 @@ async function capture() {
     try {
         await recordingOptIn(c, true)
         const { captureSession } = await import('./capture.ts')
-        const plan = revalPlans(smoke)
+        const plan = plansFor(smoke)
         const capturesFile = join(out, 'sessions.jsonl'), readinessFile = join(out, 'readiness.jsonl')
         const captures = await load<RevalCaptured>(capturesFile), readiness = await load<Readiness>(readinessFile)
         // --calibration-only: capture calibration, analyse and freeze before a single held-out session exists.
-        for (const phase of (process.argv.includes('--calibration-only') ? ['calibration'] : ['calibration', 'heldout']) as ('calibration' | 'heldout')[]) {
+        for (const phase of (process.argv.includes('--calibration-only') ? ['calibration'] : rrun === 'R2' ? ['heldout'] : ['calibration', 'heldout']) as ('calibration' | 'heldout')[]) {
             for (const p of plan[phase]) {
                 if (captures.some((x) => x.plan.seed === p.seed && x.session_id)) continue
                 const r = await driveReval(c, reval.url, p, browser)
@@ -61,7 +65,7 @@ async function capture() {
     } finally { await browser.close().catch(() => {}); await reval.stop(); await recordingOptIn(c, previous).catch((e) => console.error('recording_opt_in_restore_failed', (e as Error).message)) }
 }
 const reportApp = () => ({
-    title: 'Reval simulator (run R)',
+    title: `Reval simulator (run ${rrun})`,
     workflows: ['deal', 'hedge', 'amortisation'],
     done: (x: { plan: { workflow: string; injection?: string }; steps: { name: string; ok: boolean }[] }) => x.plan.workflow === 'deal' ? x.plan.injection === 'validation_loop' ? x.steps.some((s) => s.name === 'cap_given_up' && s.ok) : x.steps.some((s) => s.name === 'saved' && s.ok)
         : x.plan.workflow === 'hedge' ? x.plan.injection === 'slow_wait' ? x.steps.some((s) => s.name === 'opened_hedge' && s.ok) : x.steps.some((s) => s.name === 'report_export' && s.ok)
@@ -80,16 +84,16 @@ async function evaluate(freezeOnly: boolean) {
     const t0 = Date.now(), captures = await currentCaptures()
     const { runPipeline } = await import('./pipeline.ts')
     if (freezeOnly) {
-        const p = await runPipeline(out, captures.filter((x) => x.plan.phase === 'calibration') as never, [], [], false, join(out, 'snapshots'), { freezeOnly: true })
+        const p = await runPipeline(out, captures.filter((x) => x.plan.phase === 'calibration') as never, [], [], false, (rrun === 'R2' ? join(shared, 'snapshots') : join(out, 'snapshots')), { freezeOnly: true })
         console.log(JSON.stringify({ frozen: p.frozen })); return
     }
     const preRegistered = JSON.parse(await readFile(join(out, 'frozen-config.json'), 'utf8')).hash as string
-    const pipeline = await runPipeline(out, captures as never, R_COHORTS.map((k, i) => ({ id: k.id, seeds: Array.from({ length: k.users }, (_, j) => rCohortSeed(i, j)) })), R_CONTROL_SEEDS, process.argv.includes('--llm-pass1'), join(out, 'snapshots'), { expectHash: preRegistered })
+    const pipeline = await runPipeline(out, captures as never, R_COHORTS.map((k, i) => ({ id: k.id, seeds: Array.from({ length: k.users }, (_, j) => rCohortSeed(i, j, rrun)) })), rControlSeeds(rrun), process.argv.includes('--llm-pass1'), (rrun === 'R2' ? join(shared, 'snapshots') : join(out, 'snapshots')), { expectHash: preRegistered })
     await writeFile(join(out, 'pipeline.json'), JSON.stringify(pipeline))
     await writeFile(join(out, 'session-ids.json'), JSON.stringify(captures.map((x) => ({ seed: x.plan.seed, phase: x.plan.phase, persona: x.plan.persona, user: x.plan.user, distinct_id: x.distinct_id, workflow: x.plan.workflow, injection: x.plan.injection ?? null, cohort: x.plan.cohort ?? null, session_id: x.session_id })), null, 1))
     const { score, calibrationSummary } = await import('./score.ts'), { writeReport } = await import('./report.ts')
     const cohorts = R_COHORTS.map((k) => ({ id: k.id, injection: k.injection as never, workflow: k.workflow as never, users: k.users, dose: k.dose, planned: k.planned }))
-    const held = score(captures as never, pipeline, cohorts, R_CONTROL_SEEDS, R_ACCEPTED), cal = calibrationSummary(captures as never, pipeline)
+    const held = score(captures as never, pipeline, cohorts, rControlSeeds(rrun), R_ACCEPTED), cal = calibrationSummary(captures as never, pipeline)
     await writeFile(join(out, 'heldout-score.json'), JSON.stringify(held, null, 1)); await writeFile(join(out, 'calibration-score.json'), JSON.stringify(cal, null, 1))
     await writeReport(out, captures as never, pipeline, held, cal, { evaluate_ms: Date.now() - t0, peak_rss_mib: Math.round(process.resourceUsage().maxRSS / 1024) }, reportApp() as never)
     console.log(JSON.stringify({ evaluated: out, recall: held.recall, precision_moment_level: held.precision_moment_level }))
