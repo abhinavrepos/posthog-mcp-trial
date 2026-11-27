@@ -142,6 +142,11 @@
     ],
     "messageOutcome": "error",
     "noticeOutcome": "completed",
+    "replaySuccess": {
+        "noticeAfterSubmit": true,
+        "closeAfterSubmit": true,
+        "noticeMatch": ["added|saved|success|approved"]
+    },
     "generatedIds": [
         "^[a-z]+(-\\d+)+(-[A-Za-z]+)?$",
         "^id\\d+$",

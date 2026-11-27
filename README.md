@@ -43,6 +43,8 @@ PostHog tools require its upstream MCP URL/key. Survey tools require its survey 
 
 Use `.env.example` and `config/app-events.reval.json`. Event/property names come from `APP_EVENTS_FILE`. Client identity uses `CLIENT_FROM_DISTINCT_ID=N`, otherwise `PROP_CLIENT_ID`. The user part is configured by `{user}` in `distinctIdParts`.
 
+Replay Vision D5 uses the optional `replaySuccess` map in `config/app-events.*.json` for apps that do not navigate from a new form to a saved-record URL. `noticeAfterSubmit` treats a matching notice/toast after Save as success; `noticeMatch` is a list of case-insensitive regular expressions checked against the configured button/action-name property (an empty list accepts any notice). `closeAfterSubmit` treats a screen CLOSE after Save as success when no later visible error occurs. Configure only signals that the app actually emits; an edited screen exited without a configured success signal remains a D5 abandonment candidate.
+
 For the owner's IDs (`C1DEV|01|SEM|SEMOPS`), set `CLIENT_FROM_DISTINCT_ID=3`; the provided map identifies user part 4. `sem ops` resolves to client SEM with matched user SEMOPS, and session finding preserves that user filter. Screen names come from `dialog_name` and `tab_name`, codes from `dialog_id`; actions come from `action` and `action_name`.
 
 Run with `node --import tsx src/service/server.ts`. Check with `npx tsc --noEmit` and `npm test -- --test-concurrency=1`. The clip queue defaults to five concurrent renders and two per person. SQLite keeps access, audits, clips, survey metadata, jobs and pinned snapshots. Historical database migrations remain compatible with installed databases; retired history files are not read.

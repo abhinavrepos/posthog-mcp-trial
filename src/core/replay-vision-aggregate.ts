@@ -39,11 +39,11 @@ const WEAK = new Set<DetectorCode>(['D8', 'D9', 'S2', 'D15'])
 export const SINGLE_MOMENT_KINDS = new Set<DetectorCode>(['D1', 'D3', 'D4', 'D5'])
 const sevRank: Record<Severity, number> = { High: 2, Medium: 1, Low: 0 }
 
-export function humanScreen(key: string): string {
+export function humanScreen(key: string, visibleName?: string): string {
     if (key.startsWith('/')) return `page "${key}"`
     const [doc, kind, sub] = key.split(':')
     if (!kind) return key
-    const name = (doc ?? '').replace(/\b\w/g, (c) => c.toUpperCase())
+    const name = visibleName && kind === 'screen' && !/^(unknown|undefined|null)$/i.test(visibleName) ? visibleName : (doc ?? '').replace(/\b\w/g, (c) => c.toUpperCase())
     return `${name} (${kind === 'new' ? 'new' : kind === 'form' ? 'saved form' : kind}${sub ? ', ' + sub : ''})`
 }
 const s = (ms: number) => (Math.abs(ms) < 10_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`)
@@ -53,7 +53,7 @@ const num = (m: Moment, k: string) => Number(m.candidate.facts[k])
 
 /** Behaviour / likely cause / fix for one family, from code-computed numbers only. */
 function describe(family: string, g: Moment[], screen: string, el: string, U: number, sessions: number): { behaviour: string; cause: string; fix: string } {
-    const where = humanScreen(screen)
+    const where = humanScreen(screen,g[0]?.candidate.screen_name)
     const users = `${U} user${U === 1 ? '' : 's'}`
     switch (family) {
         case 'validation': return {
@@ -113,10 +113,11 @@ function describe(family: string, g: Moment[], screen: string, el: string, U: nu
         }
         case 'loop': {
             const via = String(g[0]!.candidate.facts.via)
+            const viaName = humanScreen(via, String(g[0]!.candidate.facts.via_name || ''))
             return {
-                behaviour: `${users} went from ${where} to ${humanScreen(via)} and straight back ${range(g.map((m) => num(m, 'loops')))} times in one task, staying ${range(g.map((m) => num(m, 'dwell_b_ms')), s)} on ${humanScreen(via)} (${sessions} sessions)`,
-                cause: `Likely cause: information needed to finish ${where} is only shown on ${humanScreen(via)}, so users leave to look it up (${range(g.map((m) => num(m, 'loops')))} round trips per task).`,
-                fix: `Fix: show the needed ${humanScreen(via)} details on ${where}, e.g. as a preview next to the linked field, so users need not leave the form.`,
+                behaviour: `${users} went from ${where} to ${viaName} and straight back ${range(g.map((m) => num(m, 'loops')))} times in one task, staying ${range(g.map((m) => num(m, 'dwell_b_ms')), s)} on ${viaName} (${sessions} sessions)`,
+                cause: `Likely cause: information needed to finish ${where} is only shown on ${viaName}, so users leave to look it up (${range(g.map((m) => num(m, 'loops')))} round trips per task).`,
+                fix: `Fix: show the needed ${viaName} details on ${where}, e.g. as a preview next to the linked field, so users need not leave the form.`,
             }
         }
         case 'reopen': return {
@@ -219,7 +220,7 @@ export function aggregateInsights(moments: Moment[], reach: Map<string, Reach | 
         const lostText = T > 0 ? `median ${s(T)} lost per affected user` : 'no measurable time lost'
         const outcome = abandonedUsers ? `${abandonedUsers} of ${U} affected users abandoned the form without saving; ${lostText}` : `No abandonment observed; ${lostText}`
         const draft: InsightDraft = {
-            screen: c.screen, element: c.element, behaviour: text.behaviour, users_affected: U, users_reached: N, sessions_affected: sessions.size, citations,
+            screen: c.screen, screen_name: c.screen_name, element: c.element, behaviour: text.behaviour, users_affected: U, users_reached: N, sessions_affected: sessions.size, citations,
             outcome, time_lost_ms: T, cause: text.cause, fix: text.fix, signals: [...kinds].sort(), confidence, limitations, severity: severity.severity, single_session: U === 1, ...(strongSingle ? { single_moment: true } : {}),
         }
         const rubric = validateInsight(draft, group.map((m) => ({ session_id: m.session_id, candidate: m.candidate })))
@@ -242,5 +243,5 @@ export function formatInsight(d: InsightDraft, formatUrl: (c: InsightDraft['cita
     const reach = d.single_session ? 'single session' : `${d.users_affected} of ${d.users_reached ?? 'unknown'} users / ${d.sessions_affected} sessions`
     const t = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`
     const evidence = d.citations.map((c) => `${formatUrl(c)} @${t(c.offset_ms)}`).join(', ')
-    return `[${d.severity}] ${humanScreen(d.screen)} › ${d.element}: ${reach}: ${d.behaviour.replace(/^\d+ users? /, '')}; ${d.outcome}. ${d.cause} ${d.fix} Evidence: ${evidence}. Signals: ${d.signals.join('+')}, confidence ${d.confidence}.`
+    return `[${d.severity}] ${humanScreen(d.screen, d.screen_name)} › ${d.element}: ${reach}: ${d.behaviour.replace(/^\d+ users? /, '')}; ${d.outcome}. ${d.cause} ${d.fix} Evidence: ${evidence}. Signals: ${d.signals.join('+')}, confidence ${d.confidence}.`
 }

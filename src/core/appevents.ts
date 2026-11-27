@@ -25,6 +25,7 @@ export interface AppEvents {
     noticeOutcome: Outcome
     generatedIds: string[]
     aliases: Record<string, string>
+    replaySuccess: { noticeAfterSubmit: boolean; closeAfterSubmit: boolean; noticeMatch: string[] }
 }
 
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/
@@ -85,6 +86,7 @@ export function parseAppEvents(raw: unknown, source = 'APP_EVENTS_FILE'): AppEve
         noticeOutcome: outcome(r.noticeOutcome, 'completed'),
         generatedIds: regexes(r.generatedIds, 'generatedIds'),
         aliases: Object.fromEntries(Object.entries(r.aliases || {}).map(([k, v]) => [k, String(v)])),
+        replaySuccess: { noticeAfterSubmit: r.replaySuccess?.noticeAfterSubmit === true, closeAfterSubmit: r.replaySuccess?.closeAfterSubmit === true, noticeMatch: regexes(r.replaySuccess?.noticeMatch, 'replaySuccess.noticeMatch') },
     }
 }
 

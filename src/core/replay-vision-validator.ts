@@ -9,7 +9,7 @@ import type { Severity } from './replay-vision-severity.ts'
 
 export interface Citation { session_id: string; offset_ms: number; event_ids: string[]; url: string; signal?: string }
 export interface InsightDraft {
-    screen: string; element: string; behaviour: string; users_affected: number; users_reached: number | null; sessions_affected: number
+    screen: string; screen_name?: string; element: string; behaviour: string; users_affected: number; users_reached: number | null; sessions_affected: number
     citations: Citation[]; outcome: string; time_lost_ms: number; cause: string; fix: string; signals: string[]
     confidence: 'high'|'med'|'low'; limitations: string[]; severity: Severity; single_session?: boolean
     /** One strong D1/D3/D4/D5 moment in one session: the only case where one citation suffices, and only at Low. */

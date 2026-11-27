@@ -62,6 +62,15 @@ test('R1 counts A→B→A loops per task and respects the population dwell media
     assert.equal(one.facts.single_lookup, true)
 })
 
+test('v9: CLOSE returns remain R1 round trips but only explicit opens count for R2', () => {
+    const t = tl([nav(0, 'ir swap:screen'), nav(3000, 'counterparty:screen'), { ...nav(5000, 'ir swap:screen'), navigation_reason: 'return' },
+        nav(8000, 'counterparty:screen'), { ...nav(10_000, 'ir swap:screen'), navigation_reason: 'return' }])
+    assert.equal(detectCandidates(t).find(c => c.kind === 'R1')?.facts.loops, 2)
+    assert.ok(!detectCandidates(t).some(c => c.kind === 'R2' && c.screen === 'ir swap:screen'))
+    const reopened = tl([nav(0, 'ir swap:screen'), nav(3000, 'counterparty:screen'), nav(5000, 'ir swap:screen'), nav(8000, 'counterparty:screen'), nav(10_000, 'ir swap:screen')])
+    assert.equal(detectCandidates(reopened).find(c => c.kind === 'R2' && c.screen === 'ir swap:screen')?.facts.reopens, 3)
+})
+
 test('same-route navigation within 2 s is one visit; a task ends at the saved-record transition', () => {
     const v = screenVisits(tl([nav(0, 'a:new'), nav(800, 'a:new'), nav(1500, 'a:new'), nav(9000, 'b:list')]).items)
     assert.equal(v.length, 2)
@@ -368,6 +377,25 @@ test('v7: D14 ignores a click without a mousedown on the same element (a script 
     assert.ok(detectCandidates(user).some((c) => c.kind === 'D14' && c.element === 'Save'))
     // No mousedowns recorded at all: undetectable, the old behaviour stays.
     assert.ok(detectCandidates(tl([nav(0, 'purchase order:new'), save(1000, 5), save(5000, 5)])).some((c) => c.kind === 'D14'))
+})
+
+test('v9: a toolbar menu toggle is a visible state change for D14', () => {
+    const base = [nav(0, 'ir swap:screen'), click(1000, 'Trades', { tag: 'span' }), click(4000, 'Trades', { tag: 'span' })]
+    assert.ok(detectCandidates(tl(base)).some(c => c.kind === 'D14' && c.element === 'Trades'))
+    for (const changed of ['aria-expanded', 'menu visibility', 'menu removal']) {
+        const t = tl([base[0]!, base[1]!, { offset_ms: 2000, kind: 'mutation', state_change: 'menu' }, base[2]!])
+        assert.ok(!detectCandidates(t).some(c => c.kind === 'D14' && c.element === 'Trades'), changed)
+    }
+})
+
+test('v9: app success toast or CLOSE after Save suppresses D5, while an unsaved exit remains abandonment', () => {
+    const start = [nav(0, 'ir swap:screen'), edit(1000, 'Notional'), click(2000, 'Save')]
+    const exit = nav(6000, 'trade list:screen')
+    assert.ok(detectCandidates(tl([...start, exit])).some(c => c.kind === 'D5'))
+    for (const signal of [{ offset_ms: 3000, kind: 'app_action', label: 'save_success' }, { offset_ms: 6000, kind: 'app_action', label: 'screen_close', screen: 'ir swap:screen' }] as Partial<Item>[]) {
+        assert.ok(!detectCandidates(tl([...start, signal, exit])).some(c => c.kind === 'D5'))
+    }
+    assert.ok(detectCandidates(tl([...start, { offset_ms: 3000, kind: 'app_action', label: 'save_success' }, verr(4000), exit])).some(c => c.kind === 'D5'))
 })
 
 test('D6: focus that arrived by Tab while the user clicked elsewhere (Save) before typing is not hesitation', () => {

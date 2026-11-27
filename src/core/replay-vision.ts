@@ -39,13 +39,13 @@ export function appVocabulary():string[]{
 export function resolveAppEvent(r:Record<string,unknown>,a:ReturnType<typeof appEvents>):AppEventInput{
   const e:AppEventInput={timestamp:String(r.timestamp),event:String(r.event),path:String(r.path||'')}
   if(!a)return e
-  const dialog=String(r.dialog??''),name=String(r.dialog_name??''),action=String(r.action??'').toUpperCase()
+  const dialog=String(r.dialog??''),name=String(r.dialog_name??''),action=String(r.action??'').toUpperCase(),button=String(r.button??'')
   const special=new Set([...a.dialogs.messages,...a.dialogs.notices,...a.dialogs.menu])
   if(a.dialogs.messages.includes(dialog))e.error=a.messageOutcome==='error'
-  else if(a.dialogs.notices.includes(dialog))e.notice=true
+  else if(a.dialogs.notices.includes(dialog)){e.notice=true;e.success=a.replaySuccess.noticeAfterSubmit&&(a.replaySuccess.noticeMatch.length===0||a.replaySuccess.noticeMatch.some(x=>new RegExp(x,'i').test(button)))}
   else if(e.event===a.events.screen&&dialog&&!/^(undefined|null)$/i.test(dialog)&&!special.has(dialog)){
-    if(a.screenActions.open.map(x=>x.toUpperCase()).includes(action)){e.screen=appScreenKey(dialog,name);e.nav='open'}
-    else if(a.screenActions.close.map(x=>x.toUpperCase()).includes(action)){e.screen=appScreenKey(dialog,name);e.nav='close'}
+    if(a.screenActions.open.map(x=>x.toUpperCase()).includes(action)){e.screen=appScreenKey(dialog,name);e.screen_name=name;e.nav='open'}
+    else if(a.screenActions.close.map(x=>x.toUpperCase()).includes(action)){e.screen=appScreenKey(dialog,name);e.screen_name=name;e.nav='close';e.success=a.replaySuccess.closeAfterSubmit}
   }
   return e
 }
@@ -55,7 +55,7 @@ export function resolveAppEvent(r:Record<string,unknown>,a:ReturnType<typeof app
  */
 export async function replayAppEvents(sessionId:string):Promise<AppEventInput[]> {
   const a=configuredApp(),p=a?.properties
-  const extra=a&&p?.dialog?`,toString(properties.${p.dialog.name}) AS dialog,${p.dialogName?`toString(properties.${p.dialogName.name})`:"''"} AS dialog_name,${p.action?`toString(properties.${p.action.name})`:"''"} AS action`:''
+  const extra=a&&p?.dialog?`,toString(properties.${p.dialog.name}) AS dialog,${p.dialogName?`toString(properties.${p.dialogName.name})`:"''"} AS dialog_name,${p.action?`toString(properties.${p.action.name})`:"''"} AS action,${p.button?`toString(properties.${p.button.name})`:"''"} AS button`:''
   let app_events:AppEventInput[]=[]
   try {
     const rows=await hogql(`SELECT timestamp,event,toString(properties.$pathname) AS path${extra} FROM events WHERE toString(properties.$session_id)={sid} AND timestamp>=now()-INTERVAL 30 DAY ORDER BY timestamp LIMIT 500`,{sid:sessionId},{timeoutMs:10_000,retries:0})

@@ -10,7 +10,7 @@
 import type { Timeline, TimelineItem } from './replay-timeline.ts'
 
 export const DETECTOR_CONFIG = Object.freeze({
-    version: 'rv-d1-15-r1-r2-s1-s3-v8',
+    version: 'rv-d1-15-r1-r2-s1-s3-v9',
     rageClicks: 3, rageGapMs: 1000, rageManhattanPx: 30,
     deadResponseMs: 2500, deadScrollMs: 100,
     errorClickMs: 1000,
@@ -32,7 +32,7 @@ export type DetectorConfig = typeof DETECTOR_CONFIG
 export type DetectorCode = 'D1'|'D2'|'D3'|'D4'|'D5'|'D6'|'D7'|'D8'|'D9'|'D10'|'R1'|'R2'|'D12'|'S1'|'S2'|'S3'|'D14'|'D15'|'V1'
 export interface Candidate {
     kind: DetectorCode; start_ms: number; end_ms: number; score: number
-    screen: string; element: string; step: string; event_ids: string[]
+    screen: string; screen_name?: string; element: string; step: string; event_ids: string[]
     facts: Record<string, number|string|boolean>; limitations: string[]; strength: 'strong'|'medium'|'weak'
 }
 /** Population context from the baseline (optional). */
@@ -53,7 +53,7 @@ export const SUBMIT_LABELS = new Set(['Save', 'Submit', 'Save & Submit'])
 const HELP_LABELS = new Set(['Help', 'Search'])
 const UNDO_LABELS = new Set(['Cancel', 'Undo'])
 
-export interface Visit { screen: string; start: number; end: number; id: string; index: number }
+export interface Visit { screen: string; start: number; end: number; id: string; index: number; reason?: 'open'|'return' }
 const byTime = (a: TimelineItem, b: TimelineItem) => a.offset_ms - b.offset_ms || a.event_id.localeCompare(b.event_id, 'en', { numeric: true })
 const manhattan = (a: TimelineItem, b: TimelineItem) => Math.abs((a.x ?? 0) - (b.x ?? 0)) + Math.abs((a.y ?? 0) - (b.y ?? 0))
 const isInput = (e: TimelineItem) => e.kind === 'click' || e.kind === 'input_activity' || e.kind === 'focus' || e.kind === 'scroll'
@@ -96,7 +96,7 @@ export function screenVisits(events: TimelineItem[], cfg: DetectorConfig = DETEC
         const prev = visits.at(-1)
         if (prev && prev.screen === e.screen && e.offset_ms - lastNavAt <= cfg.revisitMergeMs) { lastNavAt = e.offset_ms; continue }
         lastNavAt = e.offset_ms
-        visits.push({ screen: e.screen, start: e.offset_ms, end: e.offset_ms, id: e.event_id, index: visits.length })
+        visits.push({ screen: e.screen, start: e.offset_ms, end: e.offset_ms, id: e.event_id, index: visits.length, reason: e.navigation_reason })
     }
     const sessionEnd = events.at(-1)?.offset_ms ?? 0
     for (let i = 0; i < visits.length; i++) visits[i]!.end = visits[i + 1]?.start ?? Math.max(visits[i]!.start, sessionEnd)
@@ -129,6 +129,7 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
     const events = timeline.items.slice().sort(byTime)
     const limitations = timeline.coverage.state === 'complete' ? [] : [timeline.coverage.state, ...timeline.coverage.reasons.slice(0, 4)]
     const visits = screenVisits(events, cfg)
+    const visibleNames = new Map(events.filter(e=>e.kind==='navigation'&&e.screen&&e.screen_name).map(e=>[e.screen!,e.screen_name!]))
     // Attribute each event to the visit it happened in (navigation events keep their own screen).
     let vi = -1
     const screenAt = new Map<TimelineItem, string>()
@@ -143,7 +144,7 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
         const last = group.reduce((a, b) => (b.offset_ms > a.offset_ms ? b : a), group[0]!)
         out.push({
             kind, start_ms: first.offset_ms, end_ms: last.offset_ms, score: group.length,
-            screen: screen ?? scr(first), element: element || first.label || 'unknown_element',
+            screen: screen ?? scr(first), screen_name: visibleNames.get(screen ?? scr(first)), element: element || first.label || 'unknown_element',
             step: step || (kind === 'R1' || kind === 'R2' ? 'Navigation' : kind.startsWith('S') ? 'Scroll' : first.label ? (SUBMIT_LABELS.has(first.label) ? first.label : `Use ${first.label}`) : 'unknown_step'),
             event_ids: [...new Set(group.map((e) => e.event_id))].slice(0, 8), facts, limitations, strength: STRENGTH[kind],
         })
@@ -263,15 +264,17 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
     // The session tail is uncertain (tail loss at unload) and never counts as abandonment.
     for (let i = 0; i + 1 < visits.length; i++) {
         const v = visits[i]!, next = visits[i + 1]!
-        if (!v.screen.endsWith(':new') || next.screen === doctypeOf(v.screen) + ':form') continue
+        if (!(v.screen.endsWith(':new') || v.screen.endsWith(':screen')) || next.screen === doctypeOf(v.screen) + ':form') continue
         const attemptEdits = edits.between(v.start, next.start, true)
         if (!attemptEdits.length) continue
         const lastEdit = attemptEdits.at(-1)!
         if (next.start - lastEdit.offset_ms < cfg.abandonQuietMs) continue
         // Only an error shown after a Save/Submit attempt is a validation error; Frappe also marks a required field red
         // (has-error-mandatory) while it is briefly empty during typing, which is not a rejected attempt.
-        const firstSubmit = primary.between(v.start, next.start, true).find((e) => !!e.label && SUBMIT_LABELS.has(e.label))
-        const lastError = firstSubmit ? visibleErrors.between(firstSubmit.offset_ms, next.start, true).at(-1) : undefined
+        const lastSubmit = primary.between(v.start, next.start, true).filter((e) => !!e.label && SUBMIT_LABELS.has(e.label)).at(-1)
+        const lastError = lastSubmit ? visibleErrors.between(lastSubmit.offset_ms, next.start, true).at(-1) : undefined
+        const success = lastSubmit && events.some(e=>e.kind==='app_action' && (e.label==='save_success' || e.label==='screen_close') && e.offset_ms>=lastSubmit.offset_ms && e.offset_ms<=next.start && (e.label!=='screen_close'||e.screen===v.screen))
+        if(success && !lastError)continue
         const afterFriction = out.some((c) => c.screen === v.screen && (c.kind === 'D3' || c.kind === 'D4' || c.kind === 'D10') && c.start_ms >= v.start && c.end_ms <= next.start)
         const lastField = attemptEdits.slice().reverse().find((e) => e.label)?.label
         add('D5', [attemptEdits[0]!, ...(lastError ? [lastError] : []), lastEdit], { edits: new Set(attemptEdits.map((e) => `${e.window_id}|${e.node_id}`)).size, input_events: attemptEdits.length, success_observed: false, exit_to: next.screen, after_friction: afterFriction, last_error: !!lastError, last_field: lastField ?? 'unknown', lost_ms: next.start - v.start }, lastField ?? 'Form', 'Abandon form', v.screen)
@@ -354,14 +357,14 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
             const [screen, via] = key.split('|') as [string, string]
             const lost = l.dwell.reduce((s, x) => s + x, 0)
             const median = ctx.screenDwellMedianMs?.[via]
-            add('R1', l.items, { loops: l.n, via, dwell_b_ms: Math.round(lost / l.n), population_median_ms: median ?? -1, calibrated: median !== undefined, single_lookup: l.n === 1, lost_ms: lost }, via, 'Navigation', screen)
+            add('R1', l.items, { loops: l.n, via, via_name: visibleNames.get(via) ?? '', dwell_b_ms: Math.round(lost / l.n), population_median_ms: median ?? -1, calibrated: median !== undefined, single_lookup: l.n === 1, lost_ms: lost }, visibleNames.get(via) ?? via, 'Navigation', screen)
         }
         const counts = new Map<string, Visit[]>()
-        for (const v of task) counts.set(v.screen, [...(counts.get(v.screen) ?? []), v])
+        for (const v of task) if(v.reason!=='return') counts.set(v.screen, [...(counts.get(v.screen) ?? []), v])
         for (const [screen, vv] of counts) {
             if (vv.length < cfg.reopens) continue
             const items = vv.map((v) => navById.get(v.id)).filter((e): e is TimelineItem => !!e)
-            add('R2', items, { reopens: vv.length, lost_ms: 0 }, screen, 'Navigation', screen)
+            add('R2', items, { reopens: vv.length, lost_ms: 0 }, visibleNames.get(screen) ?? screen, 'Navigation', screen)
         }
     }
 
@@ -418,7 +421,7 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
         if (!a.label || a.label !== b.label || loopSubmits.has(b) || rage.has(b) || gap <= cfg.repeatMinMs || gap >= cfg.repeatMaxMs) continue
         if (isFieldEntry(a) || isFieldEntry(b)) continue // clicking into a field again is not a repeated command
         if (pressesSeen && (!pressedBefore(a) || !pressedBefore(b))) continue // a script's element.click() has no mousedown: not a user repeat
-        if (navs.any(a.offset_ms, b.offset_ms) || errors.any(a.offset_ms, b.offset_ms)) continue
+        if (navs.any(a.offset_ms, b.offset_ms) || errors.any(a.offset_ms, b.offset_ms) || events.some(e=>e.offset_ms>a.offset_ms&&e.offset_ms<b.offset_ms&&e.state_change==='menu')) continue
         add('D14', [a, b], { repeat_ms: gap, pattern: 'repeat', lost_ms: gap }, a.label)
     }
     for (const save of out.filter((x) => x.kind === 'D10').map((x) => x.end_ms)) {

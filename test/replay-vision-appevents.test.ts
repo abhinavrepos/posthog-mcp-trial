@@ -13,6 +13,7 @@ const { parseAppEvents } = await import('../src/core/appevents.ts')
 const { resolveAppEvent, appVocabulary } = await import('../src/core/replay-vision.ts')
 const { readTimeline, appScreenKey } = await import('../src/core/replay-timeline.ts')
 const { detectCandidates } = await import('../src/core/replay-vision-detectors.ts')
+const { humanScreen, formatInsight } = await import('../src/core/replay-vision-aggregate.ts')
 const reval = parseAppEvents(JSON.parse(readFileSync(process.env.APP_EVENTS_FILE, 'utf8')))
 const base = Date.parse('2026-11-27T09:00:00Z'), iso = (ms: number) => new Date(base + ms).toISOString()
 
@@ -21,10 +22,16 @@ test('Reval events resolve to screen opens/closes (visible dialog name), message
     assert.equal(appScreenKey('DlgDetailIRSwap', 'UNKNOWN'), 'dlgdetailirswap:screen')
     const r = (event: string, dialog: string, dialog_name: string, action: string) => resolveAppEvent({ timestamp: iso(0), event, path: '/', dialog, dialog_name, action }, reval)
     assert.deepEqual([r('PageView', 'DlgDetailIRSwap', 'IR Swap', 'OPEN').screen, r('PageView', 'DlgDetailIRSwap', 'IR Swap', 'OPEN').nav], ['ir swap:screen', 'open'])
+    assert.equal(r('PageView', 'DlgDetailIRSwap', 'IR Swap', 'OPEN').screen_name, 'IR Swap')
+    assert.equal(humanScreen('ir swap:screen', 'IR Swap'), 'IR Swap (screen)')
+    assert.match(formatInsight({ screen: 'ir swap:screen', screen_name: 'IR Swap', element: 'Save', behaviour: '1 user retried Save', users_affected: 1, users_reached: 1, sessions_affected: 1, citations: [], outcome: 'No abandonment observed', time_lost_ms: 0, cause: 'Likely cause: Save is slow.', fix: 'Fix: show progress on Save.', signals: ['D10'], confidence: 'low', limitations: [], severity: 'Low' }), /^\[Low\] IR Swap \(screen\)/)
     assert.equal(r('PageView', 'DlgDetailIRSwap', 'IR Swap', 'CLOSE').nav, 'close')
+    assert.equal(r('PageView', 'DlgDetailIRSwap', 'IR Swap', 'CLOSE').success, true)
     assert.equal(r('PageView', 'undefined', 'undefined', 'OPEN').screen, undefined, 'a tab change inside a dialog is not a screen')
     assert.equal(r('Event', 'messagebox', 'UNKNOWN', '').error, true)
     assert.equal(r('Event', 'toast', 'UNKNOWN', '').notice, true)
+    assert.equal(resolveAppEvent({ timestamp: iso(0), event: 'Event', dialog: 'toast', button: '["Trade Added"]' }, reval).success, true)
+    assert.equal(resolveAppEvent({ timestamp: iso(0), event: 'Event', dialog: 'toast', button: '["Loading"]' }, reval).success, false)
     assert.equal(r('Event', 'DlgDetailIRSwap', 'IR Swap', '').screen, undefined, 'interactions are not navigation')
     assert.equal(resolveAppEvent({ timestamp: iso(0), event: '$pageview', path: '/x' }, null).screen, undefined)
     const v = appVocabulary()
@@ -50,6 +57,7 @@ test('timeline: Reval screens from app events, CLOSE returns to the previous ope
     ]
     const t = await readTimeline(file, { start_time: iso(0), app_events: app, labels: appVocabulary() })
     assert.deepEqual(t.items.filter((e) => e.kind === 'navigation').map((e) => e.screen), ['ir swap:screen', 'counterparty:screen', 'ir swap:screen'])
+    assert.deepEqual(t.items.filter((e) => e.kind === 'navigation').map((e) => e.navigation_reason), ['open', 'open', 'return'])
     assert.ok(t.items.some((e) => e.kind === 'error' && e.error_kind === 'visible' && e.source === 'app'))
     assert.deepEqual(t.items.filter((e) => e.kind === 'click' && e.interaction === 2).map((e) => e.label), ['Trade Date', 'Recalc Cashflow'])
     assert.ok(t.items.every((e, i, a) => i === 0 || a[i - 1]!.offset_ms <= e.offset_ms), 'items are in time order with app events merged')
@@ -70,6 +78,26 @@ test('a Save rejected twice by a Reval message box with edits between is a D4 va
     const t = await readTimeline(file, { start_time: iso(0), app_events: app, labels: appVocabulary() })
     const d4 = detectCandidates(t).find((c) => c.kind === 'D4')
     assert.ok(d4 && d4.screen === 'cap / floor:screen' && d4.element === 'Save' && Number(d4.facts.cycles) >= 2)
+})
+
+test('Ext menu show/hide and aria-expanded mutations prevent a D14 repeated-command finding', async () => {
+    const ev = (ms: number, type: number, data: unknown) => ['w', { timestamp: base + ms, type, data }]
+    const root = { id: 1, type: 2, tagName: 'div', childNodes: [
+        { id: 10, type: 2, tagName: 'a', attributes: { class: 'x-btn', role: 'button', 'aria-label': 'Trades', 'aria-expanded': 'false' } },
+        { id: 20, type: 2, tagName: 'div', attributes: { class: 'x-menu', style: 'display:none' } },
+    ] }
+    const run = async (change: Record<string, unknown>) => {
+        const rows = [ev(0, 4, { href: 'http://reval/', width: 1000, height: 800 }), ev(1, 2, { node: root }),
+            ev(1000, 3, { source: 2, type: 2, id: 10 }), ev(2000, 3, { source: 0, adds: [], removes: [], texts: [], attributes: [change] }),
+            ev(4000, 3, { source: 2, type: 2, id: 10 })]
+        const file = join(dir, `menu-${Object.keys(change.attributes as object)[0]}.jsonl`)
+        writeFileSync(file, rows.map(x => JSON.stringify(x)).join('\n') + '\n')
+        const t = await readTimeline(file, { start_time: iso(0), app_events: [{ timestamp: iso(100), event: 'PageView', screen: 'ir swap:screen', screen_name: 'IR Swap', nav: 'open' }], labels: appVocabulary() })
+        assert.ok(t.items.some(e => e.state_change === 'menu'))
+        assert.ok(!detectCandidates(t).some(c => c.kind === 'D14' && c.element === 'Trades'))
+    }
+    await run({ id: 10, attributes: { 'aria-expanded': 'true' } })
+    await run({ id: 20, attributes: { style: 'display:block' } })
 })
 
 test('Ext masks (shapes from a Reval simulator recording): a load mask hidden and reused is one wait each time; modal backdrops and hidden progress bars are no waits', async () => {
