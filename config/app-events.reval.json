@@ -145,7 +145,14 @@
     "replaySuccess": {
         "noticeAfterSubmit": true,
         "closeAfterSubmit": true,
-        "noticeMatch": ["added|saved|success|approved"]
+        "noticeMatch": ["added|saved|success|approved"],
+        "completion": [
+            {
+                "dialogMatch": "Reqv$",
+                "buttons": ["Run", "Export", "XLS Export", "XLSX Export", "CSV Export"],
+                "note": "a report (its dialog id is the report menu id, ending in Reqv) is complete once run or exported; it has no Save"
+            }
+        ]
     },
     "generatedIds": [
         "^[a-z]+(-\\d+)+(-[A-Za-z]+)?$",

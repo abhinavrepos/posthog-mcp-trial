@@ -41,7 +41,7 @@ export function appScreenKey(dialog: string, name?: string): string {
     return `${n || 'unknown'}:screen`
 }
 /** One application event as the timeline uses it; screen/nav/error/notice are resolved from APP_EVENTS_FILE by the caller. */
-export interface AppEventInput { timestamp: string; event: string; path?: string; screen?: string; screen_name?: string; nav?: 'open' | 'close'; error?: boolean; notice?: boolean; success?: boolean }
+export interface AppEventInput { timestamp: string; event: string; path?: string; screen?: string; screen_name?: string; nav?: 'open' | 'close'; error?: boolean; notice?: boolean; success?: boolean; completion?: boolean }
 export function screenKey(route: string, title = ''): string {
     let path = '/'
     try { path = new URL(route, 'http://local.invalid').pathname } catch {}
@@ -217,6 +217,7 @@ export async function readTimeline(file: string, metadata: {start_time:string;ap
         // opened screen that is still open (Ext MDI re-activates it without an event). Message boxes are visible errors.
         else if(app.screen&&app.nav==='open'){const at=openStack.findIndex(x=>x.key===app.screen);if(at>=0)openStack.splice(at,1);openStack.push({key:app.screen,name:app.screen_name});screens.add(app.screen);items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app-screen',kind:'navigation',source:'app',screen:app.screen,screen_name:app.screen_name,navigation_reason:'open'})}
         else if(app.screen&&app.nav==='close'){if(app.success)items.push({event_id:`app:${i}:success`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app',kind:'app_action',source:'app',label:'screen_close',screen:app.screen});const at=openStack.findLastIndex(x=>x.key===app.screen);if(at>=0){const wasActive=at===openStack.length-1;openStack.splice(at,1);const back=openStack.at(-1);if(wasActive&&back)items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app-screen',kind:'navigation',source:'app',screen:back.key,screen_name:back.name,navigation_reason:'return'})}}
+        else if(app.screen&&app.completion)items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app',kind:'app_action',source:'app',label:'screen_complete',screen:app.screen})
         else if(app.success)items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app',kind:'app_action',source:'app',label:'save_success'});else if(app.error)items.push({event_id:`app:${i}`,offset_ms:Math.max(0,ms),raw_offset_ms:ms,window_id:'app',kind:'error',error_kind:'visible',source:'app',error_text:'application message'})
     }
     if(!coverage.full_snapshot_seen || !coverage.meta_seen || skipNodes || coverage.bad_lines/Math.max(1,coverage.lines)>.01) {if(coverage.state==='complete')coverage.state='partial';if(!coverage.full_snapshot_seen)coverage.reasons.push('missing_snapshot')}

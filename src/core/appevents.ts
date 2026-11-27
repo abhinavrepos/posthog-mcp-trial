@@ -25,7 +25,8 @@ export interface AppEvents {
     noticeOutcome: Outcome
     generatedIds: string[]
     aliases: Record<string, string>
-    replaySuccess: { noticeAfterSubmit: boolean; closeAfterSubmit: boolean; noticeMatch: string[] }
+    /** completion: actions that complete a screen without a save (e.g. a report's Run/Export); dialogMatch is a regex on the dialog id. */
+    replaySuccess: { noticeAfterSubmit: boolean; closeAfterSubmit: boolean; noticeMatch: string[]; completion: { dialogMatch: string; buttons: string[] }[] }
 }
 
 const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/
@@ -86,7 +87,8 @@ export function parseAppEvents(raw: unknown, source = 'APP_EVENTS_FILE'): AppEve
         noticeOutcome: outcome(r.noticeOutcome, 'completed'),
         generatedIds: regexes(r.generatedIds, 'generatedIds'),
         aliases: Object.fromEntries(Object.entries(r.aliases || {}).map(([k, v]) => [k, String(v)])),
-        replaySuccess: { noticeAfterSubmit: r.replaySuccess?.noticeAfterSubmit === true, closeAfterSubmit: r.replaySuccess?.closeAfterSubmit === true, noticeMatch: regexes(r.replaySuccess?.noticeMatch, 'replaySuccess.noticeMatch') },
+        replaySuccess: { noticeAfterSubmit: r.replaySuccess?.noticeAfterSubmit === true, closeAfterSubmit: r.replaySuccess?.closeAfterSubmit === true, noticeMatch: regexes(r.replaySuccess?.noticeMatch, 'replaySuccess.noticeMatch'),
+            completion: (() => { const c = r.replaySuccess?.completion; if (c === undefined) return []; if (!Array.isArray(c)) throw bad('replaySuccess.completion must be a list'); return c.slice(0, 20).map((x: any, i: number) => ({ dialogMatch: regexes([x?.dialogMatch], `replaySuccess.completion[${i}].dialogMatch`)[0]!, buttons: list(x?.buttons, `replaySuccess.completion[${i}].buttons`) })) })() },
     }
 }
 

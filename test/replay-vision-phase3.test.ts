@@ -404,3 +404,41 @@ test('D6: focus that arrived by Tab while the user clicked elsewhere (Save) befo
     const h = tl([nav(0, 'cap / floor:screen'), { ...focus(1000, 'Notional'), node_id: 52 }, { offset_ms: 5800, kind: 'input_activity', label: 'Notional', node_id: 52 }])
     assert.ok(kinds(detectCandidates(h)).includes('D6'), 'a real pause still counts')
 })
+
+test('v10 D5: a form is followed across returns to it, so a lookup screen in between is not an exit', () => {
+    const ret = (t: number, screen: string): Partial<Item> => ({ ...nav(t, screen), navigation_reason: 'return' })
+    const toast = (t: number): Partial<Item> => ({ offset_ms: t, kind: 'app_action', label: 'save_success' })
+    const d5 = (items: Partial<Item>[]) => detectCandidates(tl(items)).filter(c => c.kind === 'D5')
+    // Run R2 I7 shape: edit, look the counterparty up twice (open + close -> return), edit, Save with toast, leave.
+    const lookup = [nav(0, 'ir swap:screen'), edit(1000, 'Trade Date'), edit(2000, 'Counterparty'), nav(3500, 'counterparty:screen'), ret(6000, 'ir swap:screen'),
+        nav(7500, 'counterparty:screen'), ret(10_000, 'ir swap:screen'), edit(11_000, 'Notional'), click(12_500, 'Save')]
+    assert.deepEqual(d5([...lookup, toast(13_000), nav(16_000, 'trade list:screen')]), [], 'saved after returning: no abandonment')
+    // Never saved: one D5 for the whole attempt (not one per visit), exit is the screen after the last return.
+    const open = d5([...lookup, nav(16_000, 'trade list:screen')])
+    assert.equal(open.length, 1)
+    assert.equal(open[0]!.facts.exit_to, 'trade list:screen')
+    assert.equal(open[0]!.facts.edits, 3)
+    assert.equal(open[0]!.element, 'Notional')
+    // Edits made on the lookup screen do not belong to the form.
+    // (A search typed on the lookup and then closed is the lookup's own question, unchanged from v9.)
+    assert.deepEqual(d5([nav(0, 'ir swap:screen'), nav(2000, 'counterparty:screen'), edit(3000, 'Search'), ret(5000, 'ir swap:screen'), nav(9000, 'trade list:screen')]).filter(c => c.screen === 'ir swap:screen'), [])
+    // A fresh OPEN of the same screen (no return) is a new attempt: the first attempt still exits to the lookup (v9 behaviour).
+    const fresh = d5([nav(0, 'ir swap:screen'), edit(1000, 'Trade Date'), nav(3500, 'counterparty:screen'), nav(6000, 'ir swap:screen'), nav(9000, 'trade list:screen')])
+    assert.deepEqual(fresh.map(c => c.facts.exit_to), ['counterparty:screen'])
+    // URL-routed apps (ERPNext) have no returns: unchanged.
+    assert.deepEqual(d5([nav(0, 'sales invoice:new'), edit(1000, 'Customer'), nav(4000, 'customer:list'), nav(7000, 'sales invoice:new'), nav(9000, 'item:list')]).map(c => c.facts.exit_to), ['customer:list'])
+    // The session tail after the last return is still uncertain and never abandonment.
+    assert.deepEqual(d5(lookup), [])
+})
+
+test('v10 D5: a configured completion action of the screen (report Run/Export) completes it; another screen\'s or one followed by an error does not', () => {
+    const done = (t: number, screen = 'cashflow report:screen'): Partial<Item> => ({ offset_ms: t, kind: 'app_action', label: 'screen_complete', screen })
+    const report = [nav(0, 'cashflow report:screen'), edit(1000, 'Portfolio'), edit(2000, 'From Date')]
+    const exit = nav(9000, 'trade list:screen')
+    const d5 = (items: Partial<Item>[]) => detectCandidates(tl(items)).filter(c => c.kind === 'D5')
+    assert.equal(d5([...report, exit]).length, 1, 'parameters filled, never run: abandonment')
+    assert.deepEqual(d5([...report, click(3000, 'Run'), done(3100), click(5000, 'XLSX Export'), done(5100), exit]), [], 'run and exported: complete')
+    assert.equal(d5([...report, done(3100, 'hedge designation:screen'), exit]).length, 1, 'completion of a different screen')
+    assert.equal(d5([...report, done(3100), verr(4000), exit]).length, 1, 'completion followed by a visible error')
+    assert.equal(d5([...report, done(500), edit(3000, 'To Date'), exit]).length, 0, 'completion inside the visit counts (the attempt completed once)')
+})

@@ -47,6 +47,8 @@ export function resolveAppEvent(r:Record<string,unknown>,a:ReturnType<typeof app
     if(a.screenActions.open.map(x=>x.toUpperCase()).includes(action)){e.screen=appScreenKey(dialog,name);e.screen_name=name;e.nav='open'}
     else if(a.screenActions.close.map(x=>x.toUpperCase()).includes(action)){e.screen=appScreenKey(dialog,name);e.screen_name=name;e.nav='close';e.success=a.replaySuccess.closeAfterSubmit}
   }
+  // v10: a configured completion action (e.g. Run/Export in a report dialog) completes that screen without a save.
+  else if(e.event===a.events.interaction&&dialog&&!special.has(dialog)&&button&&a.replaySuccess.completion.some(c=>new RegExp(c.dialogMatch).test(dialog)&&c.buttons.some(b=>b.toLowerCase()===button.toLowerCase()))){e.screen=appScreenKey(dialog,name);e.screen_name=name;e.completion=true}
   return e
 }
 /**

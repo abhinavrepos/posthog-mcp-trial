@@ -10,7 +10,7 @@
 import type { Timeline, TimelineItem } from './replay-timeline.ts'
 
 export const DETECTOR_CONFIG = Object.freeze({
-    version: 'rv-d1-15-r1-r2-s1-s3-v9',
+    version: 'rv-d1-15-r1-r2-s1-s3-v10',
     rageClicks: 3, rageGapMs: 1000, rageManhattanPx: 30,
     deadResponseMs: 2500, deadScrollMs: 100,
     errorClickMs: 1000,
@@ -262,10 +262,24 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
 
     // D5 abandonment: a new form with ≥1 edit, then exit to another screen without the saved-record transition.
     // The session tail is uncertain (tail loss at unload) and never counts as abandonment.
+    // v10: an attempt follows the screen across returns to it (an app CLOSE of a lookup screen re-activates the form:
+    // navigation_reason 'return'), so a lookup tab in between is not an exit; the exit is the first screen after the last
+    // return. Edits count only while the form itself is the active screen.
+    const followed = new Set<number>()
     for (let i = 0; i + 1 < visits.length; i++) {
-        const v = visits[i]!, next = visits[i + 1]!
+        if (followed.has(i)) continue
+        const v = visits[i]!
+        let last = i
+        for (let n = i + 1; n < visits.length; n++) {
+            if (visits[n]!.screen !== v.screen) continue
+            if (visits[n]!.reason !== 'return') break
+            last = n; followed.add(n)
+        }
+        const next = visits[last + 1]
+        if (!next) continue
         if (!(v.screen.endsWith(':new') || v.screen.endsWith(':screen')) || next.screen === doctypeOf(v.screen) + ':form') continue
-        const attemptEdits = edits.between(v.start, next.start, true)
+        const own = visits.slice(i, last + 1).filter((u) => u.screen === v.screen)
+        const attemptEdits = own.flatMap((u) => edits.between(u.start, u === visits[last] ? next.start : u.end, true))
         if (!attemptEdits.length) continue
         const lastEdit = attemptEdits.at(-1)!
         if (next.start - lastEdit.offset_ms < cfg.abandonQuietMs) continue
@@ -275,6 +289,10 @@ export function detectCandidates(timeline: Timeline, cfg: DetectorConfig = DETEC
         const lastError = lastSubmit ? visibleErrors.between(lastSubmit.offset_ms, next.start, true).at(-1) : undefined
         const success = lastSubmit && events.some(e=>e.kind==='app_action' && (e.label==='save_success' || e.label==='screen_close') && e.offset_ms>=lastSubmit.offset_ms && e.offset_ms<=next.start && (e.label!=='screen_close'||e.screen===v.screen))
         if(success && !lastError)continue
+        // v10: a configured completion action of this screen (app success map, e.g. a report's Run or Export) completes
+        // the attempt, unless a visible error follows it before the exit.
+        const completed = events.filter((e) => e.kind === 'app_action' && e.label === 'screen_complete' && e.screen === v.screen && e.offset_ms >= v.start && e.offset_ms <= next.start).at(-1)
+        if (completed && !visibleErrors.between(completed.offset_ms, next.start, true).length) continue
         const afterFriction = out.some((c) => c.screen === v.screen && (c.kind === 'D3' || c.kind === 'D4' || c.kind === 'D10') && c.start_ms >= v.start && c.end_ms <= next.start)
         const lastField = attemptEdits.slice().reverse().find((e) => e.label)?.label
         add('D5', [attemptEdits[0]!, ...(lastError ? [lastError] : []), lastEdit], { edits: new Set(attemptEdits.map((e) => `${e.window_id}|${e.node_id}`)).size, input_events: attemptEdits.length, success_observed: false, exit_to: next.screen, after_friction: afterFriction, last_error: !!lastError, last_field: lastField ?? 'unknown', lost_ms: next.start - v.start }, lastField ?? 'Form', 'Abandon form', v.screen)

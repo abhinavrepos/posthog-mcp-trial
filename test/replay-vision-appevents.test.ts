@@ -115,3 +115,36 @@ test('Ext masks (shapes from a Reval simulator recording): a load mask hidden an
     const t = await readTimeline(file, { start_time: iso(0) })
     assert.deepEqual(t.items.filter((e) => e.kind === 'coverage').map((e) => `${e.offset_ms}:${e.label}`), ['1000:wait_start', '1300:wait_end', '4000:wait_start', '4300:wait_end'])
 })
+
+test('v10: report Run/Export resolve to a completion of that report screen (app success map); other dialogs and buttons do not', async () => {
+    const r = (dialog: string, dialog_name: string, button: string, event = 'Event') => resolveAppEvent({ timestamp: iso(0), event, path: '/', dialog, dialog_name, action: '', button }, reval)
+    for (const b of ['Run', 'Export', 'XLSX Export', 'xlsx export']) {
+        const e = r('CashflowReqv', 'Cashflow Report', b)
+        assert.deepEqual([e.completion, e.screen, e.nav], [true, 'cashflow report:screen', undefined], b)
+    }
+    assert.equal(r('CashflowReqv', 'Cashflow Report', 'Save').completion, undefined, 'not a completion button')
+    assert.equal(r('DlgDetailIRSwap', 'IR Swap', 'Run').completion, undefined, 'not a report dialog')
+    assert.equal(r('CashflowReqv', 'Cashflow Report', 'Run', 'PageView').completion, undefined, 'only interaction events')
+    assert.equal(r('toast', 'UNKNOWN', 'Run').completion, undefined)
+    // The map is validated and optional.
+    const raw = JSON.parse(readFileSync(process.env.APP_EVENTS_FILE!, 'utf8'))
+    assert.deepEqual(parseAppEvents({ ...raw, replaySuccess: { ...raw.replaySuccess, completion: undefined } }).replaySuccess.completion, [])
+    assert.throws(() => parseAppEvents({ ...raw, replaySuccess: { ...raw.replaySuccess, completion: [{ dialogMatch: '(', buttons: ['Run'] }] } }))
+    assert.throws(() => parseAppEvents({ ...raw, replaySuccess: { ...raw.replaySuccess, completion: [{ dialogMatch: 'Reqv$', buttons: 'Run' }] } }))
+    assert.throws(() => parseAppEvents({ ...raw, replaySuccess: { ...raw.replaySuccess, completion: {} } }))
+
+    // End to end (run R2 I6 shape): fill the report parameters, Run, Export, then open the Trade List -> no D5.
+    const root = { id: 1, type: 2, tagName: 'div', childNodes: [{ id: 10, type: 2, tagName: 'div', attributes: { class: 'x-field' }, childNodes: [{ id: 11, type: 2, tagName: 'label', attributes: { for: 'pf' }, childNodes: [{ id: 12, type: 3, textContent: 'Portfolio:' }] }, { id: 14, type: 2, tagName: 'input', attributes: { id: 'pf' } }] }] }
+    const ev = (ms: number, type: number, data: unknown) => ['w', { timestamp: base + ms, type, data }]
+    const rows = [ev(0, 4, { href: 'http://reval/', width: 1366, height: 820 }), ev(1, 2, { node: root, initialOffset: { top: 0, left: 0 } }),
+        ev(1500, 3, { source: 2, type: 5, id: 14 }), ev(1510, 3, { source: 2, type: 2, id: 14, x: 5, y: 5 }), ev(1600, 3, { source: 5, id: 14, text: '****' }), ev(9500, 3, { source: 1, positions: [{ x: 1, y: 1, id: 1, timeOffset: 0 }] })]
+    const file = join(dir, 'rep.jsonl'); writeFileSync(file, rows.map((x) => JSON.stringify(x)).join('\n') + '\n')
+    const open = (ms: number, dialog: string, name: string) => resolveAppEvent({ timestamp: iso(ms), event: 'PageView', dialog, dialog_name: name, action: 'OPEN' }, reval)
+    const press = (ms: number, b: string) => resolveAppEvent({ timestamp: iso(ms), event: 'Event', dialog: 'CashflowReqv', dialog_name: 'Cashflow Report', action: '', button: b }, reval)
+    const d5 = async (app: ReturnType<typeof open>[]) => detectCandidates(await readTimeline(file, { start_time: iso(0), app_events: app, labels: appVocabulary() })).filter((c) => c.kind === 'D5')
+    const report = open(1000, 'CashflowReqv', 'Cashflow Report'), list = open(8000, 'DlgTradeList', 'Trade List')
+    const t = await readTimeline(file, { start_time: iso(0), app_events: [report, press(3000, 'Run'), list], labels: appVocabulary() })
+    assert.ok(t.items.some((e) => e.kind === 'app_action' && e.label === 'screen_complete' && e.screen === 'cashflow report:screen'))
+    assert.deepEqual(await d5([report, press(3000, 'Run'), press(5000, 'Export'), list]), [])
+    assert.equal((await d5([report, list])).length, 1, 'without Run/Export the filled parameters are still abandoned')
+})
